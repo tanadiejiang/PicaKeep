@@ -1,0 +1,544 @@
+
+// ignore_for_file: prefer_const_constructors, avoid_unused_constructor_parameters, no_leading_underscores_for_local_identifiers
+
+enum DownloadType {
+  picacg,
+  ehentai,
+  jm,
+  hitomi,
+  htmanga,
+  nhentai,
+  copyManga,
+  komiic,
+  other,
+  favorite;
+}
+
+abstract class DownloadedItem {
+  DownloadType get type;
+
+  String get name;
+
+  List<String> get eps;
+
+  List<int> get downloadedEps;
+
+  String get id;
+
+  String get subTitle;
+
+  double? get comicSize;
+
+  DateTime? time;
+
+  List<String> get tags;
+
+  Map<String, dynamic> toJson();
+
+  set comicSize(double? value);
+
+  String? directory;
+}
+
+class DownloadedComic extends DownloadedItem {
+  String comicId;
+  String title;
+  String author;
+  String description;
+  String thumbUrl;
+  List<String> chapters;
+  List<int> downloadedChapters;
+  double? size;
+  List<String> tagList;
+
+  DownloadedComic({
+    required this.comicId,
+    required this.title,
+    required this.author,
+    this.description = '',
+    this.thumbUrl = '',
+    required this.chapters,
+    required this.downloadedChapters,
+    this.size,
+    this.tagList = const [],
+  });
+
+  @override
+  Map<String, dynamic> toJson() => {
+        "comicId": comicId,
+        "title": title,
+        "author": author,
+        "description": description,
+        "thumbUrl": thumbUrl,
+        "chapters": chapters,
+        "size": size,
+        "downloadedChapters": downloadedChapters,
+        "tagList": tagList,
+      };
+
+  DownloadedComic.fromJson(Map<String, dynamic> json)
+      : comicId = json["comicId"],
+        title = json["title"],
+        author = json["author"],
+        description = json["description"] ?? '',
+        thumbUrl = json["thumbUrl"] ?? '',
+        chapters = List<String>.from(json["chapters"]),
+        size = json["size"],
+        tagList = const [],
+        downloadedChapters = [] {
+    if (json["downloadedChapters"] != null) {
+      downloadedChapters = List<int>.from(json["downloadedChapters"]);
+    } else {
+      for (int i = 0; i < chapters.length; i++) {
+        downloadedChapters.add(i);
+      }
+    }
+    tagList = List<String>.from(json["tagList"] ?? []);
+  }
+
+  @override
+  DownloadType get type => DownloadType.picacg;
+
+  @override
+  List<int> get downloadedEps => downloadedChapters;
+
+  @override
+  List<String> get eps => chapters.where((e) => e.isNotEmpty).toList();
+
+  @override
+  String get name => title;
+
+  @override
+  String get id => comicId;
+
+  @override
+  String get subTitle => author;
+
+  @override
+  double? get comicSize => size;
+
+  @override
+  set comicSize(double? value) => size = value;
+
+  @override
+  List<String> get tags => tagList;
+}
+
+class DownloadedGallery extends DownloadedItem {
+  String galleryTitle;
+  String subtitle;
+  String uploader;
+  String link;
+  String coverPath;
+  double? size;
+  List<String> tagList;
+
+  DownloadedGallery({
+    required this.galleryTitle,
+    this.subtitle = '',
+    this.uploader = '',
+    required this.link,
+    this.coverPath = '',
+    this.size,
+    this.tagList = const [],
+  });
+
+  @override
+  Map<String, dynamic> toJson() => {
+        "galleryTitle": galleryTitle,
+        "subtitle": subtitle,
+        "uploader": uploader,
+        "link": link,
+        "coverPath": coverPath,
+        "size": size,
+        "tagList": tagList,
+      };
+
+  DownloadedGallery.fromJson(Map<String, dynamic> json)
+      : galleryTitle = json["galleryTitle"],
+        subtitle = json["subtitle"] ?? '',
+        uploader = json["uploader"] ?? '',
+        link = json["link"],
+        coverPath = json["coverPath"] ?? '',
+        size = json["size"],
+        tagList = List<String>.from(json["tagList"] ?? []);
+
+  @override
+  DownloadType get type => DownloadType.ehentai;
+
+  @override
+  List<int> get downloadedEps => [0];
+
+  @override
+  List<String> get eps => ["EP 1"];
+
+  @override
+  String get name => subtitle.isNotEmpty ? subtitle : galleryTitle;
+
+  @override
+  String get id {
+    final match = RegExp(r"g/(\d+)/(\w+)").firstMatch(link);
+    if (match != null) {
+      return "${match.group(1)}-${match.group(2)}";
+    }
+    return link;
+  }
+
+  @override
+  String get subTitle => uploader;
+
+  @override
+  double? get comicSize => size;
+
+  @override
+  set comicSize(double? value) => size = value;
+
+  @override
+  List<String> get tags => tagList;
+}
+
+class DownloadedJmComic extends DownloadedItem {
+  String comicId;
+  @override
+  String name;
+  String author;
+  double? size;
+  List<int> downloadedChapters;
+  List<String> epNames;
+  List<String> tagList;
+
+  DownloadedJmComic({
+    required this.comicId,
+    required this.name,
+    this.author = '',
+    this.size,
+    required this.downloadedChapters,
+    this.epNames = const [],
+    this.tagList = const [],
+  });
+
+  Map<String, dynamic> toMap() => {
+        "comicId": comicId,
+        "name": name,
+        "author": author,
+        "size": size,
+        "downloadedChapters": downloadedChapters,
+        "epNames": epNames,
+        "tagList": tagList,
+      };
+
+  DownloadedJmComic.fromMap(Map<String, dynamic> map)
+      : comicId = map["comicId"],
+        name = map["name"],
+        author = map["author"] ?? '',
+        size = map["size"],
+        epNames = const [],
+        tagList = const [],
+        downloadedChapters = [] {
+    if (map["downloadedChapters"] != null) {
+      downloadedChapters = List<int>.from(map["downloadedChapters"]);
+    }
+    epNames = List<String>.from(map["epNames"] ?? []);
+    tagList = List<String>.from(map["tagList"] ?? []);
+  }
+
+  @override
+  DownloadType get type => DownloadType.jm;
+
+  @override
+  List<int> get downloadedEps => downloadedChapters;
+
+  @override
+  List<String> get eps => epNames.isEmpty
+      ? List<String>.generate(
+          downloadedChapters.isEmpty ? 1 : downloadedChapters.length,
+          (index) => "\u7B2C${index + 1}\u7AE0")
+      : epNames;
+
+  @override
+  String get id => "jm$comicId";
+
+  @override
+  String get subTitle => author;
+
+  @override
+  double? get comicSize => size;
+
+  @override
+  Map<String, dynamic> toJson() => toMap();
+
+  @override
+  set comicSize(double? value) => size = value;
+
+  @override
+  List<String> get tags => tagList;
+}
+
+class DownloadedHitomiComic extends DownloadedItem {
+  String comicId;
+  @override
+  String name;
+  List<String> artists;
+  List<String> tagList;
+  double? size;
+  String cover;
+  String link;
+
+  DownloadedHitomiComic({
+    required this.comicId,
+    required this.name,
+    this.artists = const [],
+    this.tagList = const [],
+    this.size,
+    this.cover = '',
+    required this.link,
+  });
+
+  Map<String, dynamic> toMap() => {
+        "comicId": comicId,
+        "name": name,
+        "artists": artists,
+        "tagList": tagList,
+        "size": size,
+        "cover": cover,
+        "link": link,
+      };
+
+  DownloadedHitomiComic.fromMap(Map<String, dynamic> map)
+      : comicId = map["comicId"],
+        name = map["name"],
+        artists = List<String>.from(map["artists"] ?? []),
+        tagList = List<String>.from(map["tagList"] ?? []),
+        size = map["size"],
+        cover = map["cover"] ?? '',
+        link = map["link"] ?? '';
+
+  @override
+  double? get comicSize => size;
+
+  @override
+  List<int> get downloadedEps => [0];
+
+  @override
+  List<String> get eps => ["\u7B2C\u4E00\u7AE0"];
+
+  @override
+  String get id => "hitomi$comicId";
+
+  @override
+
+
+  @override
+  String get subTitle => artists.isEmpty ? "\u672A\u77E5" : artists.first;
+
+  @override
+  DownloadType get type => DownloadType.hitomi;
+
+  @override
+  Map<String, dynamic> toJson() => toMap();
+
+  @override
+  set comicSize(double? value) => size = value;
+
+  @override
+  List<String> get tags => tagList;
+}
+
+class DownloadedHtComic extends DownloadedItem {
+  String comicId;
+  @override
+  String name;
+  String uploader;
+  String coverPath;
+  double? size;
+  List<String> tagList;
+
+  DownloadedHtComic({
+    required this.comicId,
+    required this.name,
+    this.uploader = '',
+    this.coverPath = '',
+    this.size,
+    this.tagList = const [],
+  });
+
+  @override
+  double? get comicSize => size;
+
+  @override
+  List<int> get downloadedEps => [0];
+
+  @override
+  List<String> get eps => ["EP 1"];
+
+  @override
+  String get id => "Ht$comicId";
+
+  @override
+  String get subTitle => uploader;
+
+  @override
+  DownloadType get type => DownloadType.htmanga;
+
+  @override
+  Map<String, dynamic> toJson() => {
+        "comicId": comicId,
+        "name": name,
+        "uploader": uploader,
+        "coverPath": coverPath,
+        "size": size,
+        "tagList": tagList,
+      };
+
+  DownloadedHtComic.fromJson(Map<String, dynamic> json)
+      : comicId = json["comicId"],
+        name = json["name"],
+        uploader = json["uploader"] ?? '',
+        coverPath = json["coverPath"] ?? '',
+        size = json["size"],
+        tagList = List<String>.from(json["tagList"] ?? []);
+
+  @override
+  set comicSize(double? value) => size = value;
+
+  @override
+  List<String> get tags => tagList;
+}
+
+class NhentaiDownloadedComic extends DownloadedItem {
+  final String comicID;
+  final String title;
+  final double? size;
+  final String cover;
+
+  NhentaiDownloadedComic({
+    required this.comicID,
+    required this.title,
+    this.size,
+    this.cover = '',
+    this.tags = const [],
+  });
+
+  @override
+  double? get comicSize => size;
+
+  @override
+  List<int> get downloadedEps => [0];
+
+  @override
+  List<String> get eps => ["\u7B2C\u4E00\u7AE0"];
+
+  @override
+  String get id => comicID;
+
+  @override
+  String get name => title;
+
+  @override
+  String get subTitle => "";
+
+  @override
+  DownloadType get type => DownloadType.nhentai;
+
+  @override
+  Map<String, dynamic> toJson() => {
+        "comicID": comicID,
+        "title": title,
+        "size": size,
+        "cover": cover,
+        "tags": tags,
+      };
+
+  NhentaiDownloadedComic.fromJson(Map<String, dynamic> json)
+      : comicID = json["comicID"],
+        title = json["title"],
+        size = json["size"],
+        tags = List<String>.from(json["tags"] ?? []),
+        cover = json["cover"] ?? '';
+
+  @override
+  set comicSize(double? value) {}
+
+  @override
+  List<String> tags;
+}
+
+class CustomDownloadedItem extends DownloadedItem {
+  @override
+  double? comicSize;
+
+  @override
+  final List<int> downloadedEps;
+
+  final Map<String, String>? chapters;
+
+  @override
+  List<String> get eps => chapters?.values.toList() ?? ["EP 1"];
+
+  final String comicId;
+
+  @override
+  final String id;
+
+  @override
+  final String name;
+
+  @override
+  final String subTitle;
+
+  @override
+  final List<String> tags;
+
+  @override
+  DownloadType get type => DownloadType.other;
+
+  final String sourceKey;
+
+  final String sourceName;
+
+  final String cover;
+
+  CustomDownloadedItem({
+    this.comicSize,
+    required this.downloadedEps,
+    this.chapters,
+    required this.id,
+    required this.name,
+    required this.subTitle,
+    required this.tags,
+    required this.sourceKey,
+    required this.sourceName,
+    required this.cover,
+    required this.comicId,
+  });
+
+  @override
+  Map<String, dynamic> toJson() => {
+        "comicSize": comicSize,
+        "downloadedEps": downloadedEps,
+        "chapters": chapters,
+        "id": id,
+        "name": name,
+        "subTitle": subTitle,
+        "tags": tags,
+        "sourceKey": sourceKey,
+        "sourceName": sourceName,
+        "cover": cover,
+        "comicId": comicId,
+      };
+
+  CustomDownloadedItem.fromJson(Map<String, dynamic> json)
+      : comicSize = json["comicSize"],
+        downloadedEps = List<int>.from(json["downloadedEps"]),
+        chapters = json["chapters"] != null
+            ? Map<String, String>.from(json["chapters"])
+            : null,
+        id = json["id"],
+        name = json["name"],
+        subTitle = json["subTitle"] ?? '',
+        tags = List<String>.from(json["tags"] ?? []),
+        sourceKey = json["sourceKey"],
+        sourceName = json["sourceName"] ?? '',
+        cover = json["cover"] ?? '',
+        comicId = json["comicId"];
+}
