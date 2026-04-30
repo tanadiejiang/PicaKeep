@@ -132,6 +132,30 @@ class DownloadPageLogic extends StateController {
     change();
   }
 
+  Future<void> reload() async {
+    var order = '', direction = 'desc';
+    switch (appdata.settings[26][0]) {
+      case "0":
+        order = 'time';
+      case "1":
+        order = 'title';
+      case "2":
+        order = 'subtitle';
+      case "3":
+        order = 'size';
+      default:
+        throw UnimplementedError();
+    }
+    if (appdata.settings[26][1] == "1") {
+      direction = 'asc';
+    }
+    comics = DownloadManager().getAll(order, direction);
+    baseComics = comics.toList();
+    resetSelected(comics.length);
+    loading = false;
+    update();
+  }
+
   void resetSelected(int length) {
     selected = List.generate(length, (index) => false);
     selectedNum = 0;
@@ -179,7 +203,7 @@ class DownloadPage extends StatelessWidget {
     final comics = logic.comics;
     if (comics.isEmpty) {
       return SliverToBoxAdapter(
-        child: _buildEmptyState(context),
+        child: _buildEmptyState(context, logic),
       );
     }
     return SliverGrid(
@@ -676,7 +700,7 @@ class DownloadPage extends StatelessWidget {
     );
   }
 
-  Widget _buildEmptyState(BuildContext context) {
+  Widget _buildEmptyState(BuildContext context, DownloadPageLogic logic) {
     final path = DownloadManager().path ?? appdata.settings[22];
     return Center(
       child: Padding(
@@ -698,6 +722,7 @@ class DownloadPage extends StatelessWidget {
               onPressed: () async {
                 await DownloadManager().init();
                 final count = DownloadManager().scanDirectoryForComics();
+                await logic.reload();
                 if (context.mounted) {
                   ScaffoldMessenger.of(context).showSnackBar(
                     SnackBar(content: Text('扫描完成，共发现 $count 个漫画')),

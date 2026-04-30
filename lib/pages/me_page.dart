@@ -151,10 +151,10 @@ class MePage extends StatelessWidget {
 
     return _MePageCard(
       icon: const Icon(Icons.download_for_offline),
-      title: "\u5DF2\u4E0B\u8F7D($count)",
-      description: "\u5171 $count \u90E8\u6F2B\u753B",
-      onTap: () {
-        Navigator.of(context).push(
+      title: "已下载($count)",
+      description: "共 $count 部漫画",
+      onTap: () async {
+        await Navigator.of(context).push(
           MaterialPageRoute(builder: (_) => const DownloadPage()),
         );
       },

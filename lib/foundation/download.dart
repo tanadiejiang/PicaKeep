@@ -112,6 +112,32 @@ class DownloadManager with _DownloadDb {
     throw Exception("File not found");
   }
 
+  int getComicLength(String id) {
+    String downloadPath = "$path/${getDirectory(id)}/";
+    int count = 0;
+    try {
+      for (var file in Directory(downloadPath).listSync()) {
+        if (file is File && _isImageFile(file)) {
+          count++;
+        }
+      }
+    } catch (_) {}
+    return count;
+  }
+
+  int getEpLength(String id, int ep) {
+    String downloadPath = "$path/${getDirectory(id)}/$ep/";
+    int count = 0;
+    try {
+      for (var file in Directory(downloadPath).listSync()) {
+        if (file is File && _isImageFile(file)) {
+          count++;
+        }
+      }
+    } catch (_) {}
+    return count;
+  }
+
   int scanDirectoryForComics() {
     if (path == null) return 0;
     final dir = Directory(path!);
@@ -122,7 +148,7 @@ class DownloadManager with _DownloadDb {
     for (final entry in entries) {
       if (entry is! Directory) continue;
       final dirName = entry.uri.pathSegments.last;
-      if (dirName == 'download.db') continue;
+      if (dirName.isEmpty || dirName == 'download.db') continue;
 
       // Check if this directory has ANY image files (either in subdirs or flat)
       final subEntries = entry.listSync();
@@ -255,6 +281,11 @@ abstract mixin class _DownloadDb {
   }
 
   void _addToDb(DownloadedItem item, String directory, [DateTime? time]) {
+    if (item.id.isEmpty || directory.isEmpty) {
+      print(
+          '[PicaKeep] _addToDb: Skipping invalid data (empty id or directory)');
+      return;
+    }
     _db!.execute('''
       insert or replace into download
       values (?,?,?,?,?,?,?)
