@@ -1,6 +1,7 @@
 library components;
 
 import 'dart:collection';
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../foundation/app.dart';
@@ -11,6 +12,7 @@ import '../base.dart';
 part 'consts.dart';
 part 'message.dart';
 part 'navigation_bar.dart';
+part 'appbar.dart';
 
 Widget AnimatedContainerWidget({
   Key? key,

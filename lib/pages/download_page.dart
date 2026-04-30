@@ -15,6 +15,7 @@ import 'package:picakeep/tools/translations.dart';
 import 'package:picakeep/components/comic_tile.dart';
 import 'package:picakeep/components/scrollable.dart';
 import 'package:picakeep/components/layout.dart';
+import 'package:picakeep/components/components.dart';
 import 'reader/comic_reading_page.dart';
 import 'local_comic_detail_page.dart';
 
@@ -245,7 +246,7 @@ class DownloadPage extends StatelessWidget {
           },
           size: () {
             if (logic.comics[index].comicSize != null) {
-              return logic.comics[index].comicSize!.toStringAsFixed(2);
+              return "${logic.comics[index].comicSize!.toStringAsFixed(2)}MB";
             } else {
               return "未知大小".tl;
             }
@@ -265,7 +266,8 @@ class DownloadPage extends StatelessWidget {
     );
   }
 
-  void _showDesktopMenu(BuildContext context, DownloadPageLogic logic, int index, TapDownDetails details) {
+  void _showDesktopMenu(BuildContext context, DownloadPageLogic logic,
+      int index, TapDownDetails details) {
     showMenu(
       context: context,
       position: RelativeRect.fromLTRB(
@@ -441,11 +443,9 @@ class DownloadPage extends StatelessWidget {
   }
 
   Widget _buildAppbar(BuildContext context, DownloadPageLogic logic) {
-    return SliverAppBar(
-      pinned: true,
-      floating: true,
-      snap: true,
-      backgroundColor: logic.selecting
+    return SliverAppbar(
+      title: _buildTitle(context, logic),
+      color: logic.selecting
           ? Theme.of(context).colorScheme.primaryContainer
           : null,
       leading: logic.selecting
@@ -461,7 +461,6 @@ class DownloadPage extends StatelessWidget {
               icon: const Icon(Icons.close),
             )
           : null,
-      title: _buildTitle(context, logic),
       actions: _buildActions(context, logic),
     );
   }
@@ -489,10 +488,14 @@ class DownloadPage extends StatelessWidget {
                             trailing: DropdownButton<int>(
                               value: int.parse(appdata.settings[26][0]),
                               items: [
-                                DropdownMenuItem(value: 0, child: Text("时间".tl)),
-                                DropdownMenuItem(value: 1, child: Text("漫画名".tl)),
-                                DropdownMenuItem(value: 2, child: Text("作者名".tl)),
-                                DropdownMenuItem(value: 3, child: Text("大小".tl)),
+                                DropdownMenuItem(
+                                    value: 0, child: Text("时间".tl)),
+                                DropdownMenuItem(
+                                    value: 1, child: Text("漫画名".tl)),
+                                DropdownMenuItem(
+                                    value: 2, child: Text("作者名".tl)),
+                                DropdownMenuItem(
+                                    value: 3, child: Text("大小".tl)),
                               ],
                               onChanged: (i) {
                                 if (i != null) {
@@ -567,7 +570,8 @@ class DownloadPage extends StatelessWidget {
                         } else {
                           for (int i = 0; i < logic.selected.length; i++) {
                             if (logic.selected[i]) {
-                              _toComicInfoPage(App.globalContext!, logic.comics[i]);
+                              _toComicInfoPage(
+                                  App.globalContext!, logic.comics[i]);
                             }
                           }
                         }
@@ -613,7 +617,8 @@ class DownloadPage extends StatelessWidget {
     }
   }
 
-  void _addToLocalFavoriteFolder(BuildContext context, DownloadPageLogic logic) {
+  void _addToLocalFavoriteFolder(
+      BuildContext context, DownloadPageLogic logic) {
     String? folder;
     showDialog(
       context: App.globalContext!,

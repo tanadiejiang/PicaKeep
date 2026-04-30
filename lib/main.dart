@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:dynamic_color/dynamic_color.dart';
 import 'foundation/app.dart';
+import 'foundation/history.dart';
+import 'foundation/local_favorites.dart';
 import 'base.dart';
 import 'pages/main_page.dart';
 
@@ -9,6 +11,9 @@ void main() async {
 
   await App.init();
   await appdata.readData();
+
+  await HistoryManager().init();
+  await LocalFavoritesManager().init();
 
   runApp(const PicaKeepApp());
 }
