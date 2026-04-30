@@ -110,6 +110,10 @@ class _CustomSliderState extends State<CustomSlider> {
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
     final theme = _SliderDefaultsM3(context);
+    final maxMinusMin = widget.max - widget.min;
+    if (widget.divisions <= 1 || maxMinusMin == 0 || maxMinusMin.isNaN) {
+      return const SizedBox(height: 48);
+    }
     return Padding(
       padding: const EdgeInsets.fromLTRB(24, 12, 24, 12),
       child: LayoutBuilder(
@@ -123,7 +127,7 @@ class _CustomSliderState extends State<CustomSlider> {
                 dx = constrains.maxWidth - dx;
               }
               var gap = constrains.maxWidth / widget.divisions;
-              var gapValue = (widget.max - widget.min)  / widget.divisions;
+              var gapValue = maxMinusMin / widget.divisions;
               widget.onChanged.call((dx / gap).round() * gapValue + widget.min);
             },
             onVerticalDragUpdate: (details){
@@ -133,7 +137,7 @@ class _CustomSliderState extends State<CustomSlider> {
                 dx = constrains.maxWidth - dx;
               }
               var gap = constrains.maxWidth / widget.divisions;
-              var gapValue = (widget.max - widget.min)  / widget.divisions;
+              var gapValue = maxMinusMin / widget.divisions;
               widget.onChanged.call((dx / gap).round() * gapValue + widget.min);
             },
             child: SizedBox(
@@ -184,7 +188,7 @@ class _CustomSliderState extends State<CustomSlider> {
                         right: widget.reversed ? 0 : null,
                         child: Center(
                           child: Container(
-                            width: constrains.maxWidth * ((value - widget.min) / (widget.max - widget.min)),
+                            width: constrains.maxWidth * ((value - widget.min) / maxMinusMin),
                             height: 8,
                             decoration: BoxDecoration(
                                 color: theme.activeTrackColor,
@@ -196,8 +200,8 @@ class _CustomSliderState extends State<CustomSlider> {
                       Positioned(
                         top: 0,
                         bottom: 0,
-                        left: widget.reversed ? null : constrains.maxWidth * ((value - widget.min) / (widget.max - widget.min))-11,
-                        right: !widget.reversed ? null : constrains.maxWidth * ((value - widget.min) / (widget.max - widget.min))-11,
+                        left: widget.reversed ? null : constrains.maxWidth * ((value - widget.min) / maxMinusMin)-11,
+                        right: !widget.reversed ? null : constrains.maxWidth * ((value - widget.min) / maxMinusMin)-11,
                         child: Center(
                           child: Container(
                             width: 22,

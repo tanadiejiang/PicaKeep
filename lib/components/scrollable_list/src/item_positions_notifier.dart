@@ -9,5 +9,5 @@ import 'item_positions_listener.dart';
 /// Internal implementation of [ItemPositionsListener].
 class ItemPositionsNotifier implements ItemPositionsListener {
   @override
-  final ValueNotifier<List<ItemPosition>> itemPositions = ValueNotifier([]);
+  final ValueNotifier<Iterable<ItemPosition>> itemPositions = ValueNotifier([]);
 }
