@@ -5,16 +5,12 @@ import 'dart:io';
 
 import 'foundation/app.dart';
 import 'foundation/log.dart';
-import 'network/jm_network/jm_network.dart';
-import 'network/download.dart';
-import 'network/webdav.dart';
-import 'tools/extensions.dart';
-import 'tools/notification.dart';
 import 'foundation/history.dart';
 import 'foundation/local_favorites.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'foundation/def.dart';
+import 'foundation/download.dart';
 export 'foundation/def.dart';
 
 String get pathSep => Platform.pathSeparator;
@@ -190,9 +186,9 @@ class Appdata {
   Future<void> updateSettings([bool syncData = true]) async {
     var settingsFile = File("${App.dataPath}/settings");
     await settingsFile.writeAsString(jsonEncode(settings));
-    if (syncData) {
-      Webdav.uploadData();
-    }
+    if (syncData) {}
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList("settings", settings);
   }
 
   void writeFirstUse() async {
@@ -207,13 +203,7 @@ class Appdata {
   }
 
   Future<void> writeData([bool sync = true]) async {
-    if (sync) {
-      Webdav.uploadData();
-    }
-    var s = await SharedPreferences.getInstance();
     await updateSettings();
-    await s.setStringList("blockingKeyword", blockingKeyword);
-    await s.setStringList("firstUse", firstUse);
   }
 
   Future<bool> readData() async {
@@ -287,7 +277,6 @@ class Appdata {
 }
 
 var appdata = Appdata();
-var notifications = Notifications();
 
 class ReaderSettings {
   int readerType = 0;
@@ -312,7 +301,6 @@ Future<void> clearAppdata() async {
   appdata = Appdata();
   await appdata.readData();
   await eraseCache();
-  await JmNetwork().cookieJar.deleteAll();
   await LocalFavoritesManager().clearAll();
 }
 
@@ -347,44 +335,6 @@ class _Settings {
 
   set comicsListDisplayType(int value) {
     appdata.settings[25] = value.toString();
-  }
-
-  bool isComicSourceEnabled(String key) {
-    var index = builtInSources.indexOf(key);
-    if (index == -1) {
-      throw "Not Found";
-    }
-    return appdata.settings[82][index] == '1';
-  }
-
-  void setComicSourceEnabled(String key, bool enabled) {
-    var index = builtInSources.indexOf(key);
-    if (index == -1) {
-      throw "Not Found";
-    }
-    appdata.settings[82] =
-        appdata.settings[82].setValueAt(enabled ? '1' : '0', index);
-  }
-
-  List<String> get jmApiDomains => appdata.settings[85].split(',');
-
-  set jmApiDomains(List<String> domains) {
-    appdata.settings[85] = domains.join(',');
-  }
-
-  String get jmImgUrlIndex =>
-      int.parse(appdata.settings[37]) < 4 ? appdata.settings[37] : "0";
-
-  List<String> get explorePages => appdata.settings[77].split(',');
-
-  set explorePages(List<String> pages) {
-    appdata.settings[77] = pages.join(',');
-  }
-
-  List<String> get categoryPages => appdata.settings[67].split(',');
-
-  set categoryPages(List<String> pages) {
-    appdata.settings[67] = pages.join(',');
   }
 
   String get initialSearchTarget => appdata.settings[63];
@@ -433,11 +383,5 @@ class _Settings {
 
   set cacheLimit(int value) {
     appdata.settings[35] = value.toString();
-  }
-
-  List<String> get networkFavorites => appdata.settings[68].split(',');
-
-  set networkFavorites(List<String> pages) {
-    appdata.settings[68] = pages.join(',');
   }
 }

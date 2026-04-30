@@ -1,12 +1,10 @@
-﻿
+
 // ignore_for_file: avoid_unused_constructor_params, unused_element, no_leading_underscores_for_local_identifiers
 
 part of 'settings_page.dart';
 
-Widget buildExploreSettings(BuildContext context) {
-  return Scaffold(
-    body: ListView(
-      children: [
+Widget buildExploreSettings(double width, BuildContext context) {
+  return buildTwoColumnLayout(width, [
         SettingsTitle("浏览".tl),
         SelectSetting(
           title: "初始页面".tl,
@@ -95,9 +93,7 @@ Widget buildExploreSettings(BuildContext context) {
           title: "检查剪切板中的链接".tl,
           settingsIndex: 61,
         ),
-      ],
-    ),
-  );
+  ]);
 }
 
 void _setSliderValue(double value) {

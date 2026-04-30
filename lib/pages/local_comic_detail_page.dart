@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:picakeep/foundation/app.dart';
 import 'package:picakeep/foundation/download.dart';
 import 'package:picakeep/foundation/download_model.dart';
+import 'package:picakeep/foundation/local_favorites.dart';
+import 'reader/comic_reading_page.dart';
 
 class LocalComicDetailPage extends StatelessWidget {
   final DownloadedItem comic;
@@ -84,7 +87,52 @@ class LocalComicDetailPage extends StatelessWidget {
   }
 
   void _onRead({int? ep}) {
-    // Placeholder - navigate to reader
+    final hasEp = comic.eps.isNotEmpty;
+    final readingData = LocalReadingData(
+      title: comic.name,
+      id: comic.id,
+      downloadId: comic.id,
+      sourceKey: RegExp(r'^[a-zA-Z]+').stringMatch(comic.id) ?? '',
+      hasEp: hasEp,
+      eps: hasEp
+          ? {
+              for (int i = 0; i < comic.eps.length; i++)
+                comic.eps[i]: comic.eps[i]
+            }
+          : null,
+      favoriteType: _getFavoriteType(),
+    );
+
+    Navigator.of(App.globalContext!).push(MaterialPageRoute(
+      builder: (_) => ComicReadingPage(
+        readingData,
+        1,
+        ep ?? (hasEp ? 1 : 0),
+      ),
+    ));
+  }
+
+  FavoriteType _getFavoriteType() {
+    switch (comic.type) {
+      case DownloadType.picacg:
+        return FavoriteType.picacg;
+      case DownloadType.ehentai:
+        return FavoriteType.ehentai;
+      case DownloadType.jm:
+        return FavoriteType.jm;
+      case DownloadType.hitomi:
+        return FavoriteType.hitomi;
+      case DownloadType.htmanga:
+        return FavoriteType.htManga;
+      case DownloadType.nhentai:
+        return FavoriteType.nhentai;
+      case DownloadType.copyManga:
+        return FavoriteType.copyManga;
+      case DownloadType.komiic:
+        return FavoriteType.komiic;
+      default:
+        return const FavoriteType(0);
+    }
   }
 
   void _onDelete(BuildContext context) async {

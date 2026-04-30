@@ -1,14 +1,48 @@
+import 'dart:io';
+
+import 'package:file_picker/file_picker.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:picakeep/base.dart';
 import 'package:picakeep/tools/translations.dart';
-import 'package:picakeep/components/select.dart';
+import 'package:picakeep/components/select.dart' hide AnimatedContainer;
 import 'package:picakeep/foundation/app.dart';
+import 'package:picakeep/foundation/download.dart';
 import 'package:picakeep/foundation/local_favorites.dart';
+import 'package:picakeep/foundation/ui_mode.dart';
 
 part 'app_settings.dart';
 part 'explore_settings.dart';
 part 'reading_settings.dart';
 part 'local_favorite_settings.dart';
+
+Widget buildTwoColumnLayout(double width, List<Widget> children) {
+  if (width <= 600) {
+    return Column(children: children);
+  }
+  final left = <Widget>[];
+  final right = <Widget>[];
+  for (int i = 0; i < children.length; i++) {
+    final card = Card.outlined(
+      margin: EdgeInsets.zero,
+      color: Colors.transparent,
+      child: children[i],
+    );
+    if (i.isEven) {
+      left.add(card);
+    } else {
+      right.add(card);
+    }
+  }
+  return Row(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      Expanded(child: Column(children: left)),
+      const SizedBox(width: 12),
+      Expanded(child: Column(children: right)),
+    ],
+  );
+}
 
 class SettingsPage extends StatefulWidget {
   static void open([int initialPage = -1]) {
@@ -24,135 +58,391 @@ class SettingsPage extends StatefulWidget {
 }
 
 class _SettingsPageState extends State<SettingsPage> {
-  int _currentPage = -1;
+  int currentPage = -1;
 
-  final _categories = <String>["浏览", "阅读", "外观", "本地收藏", "APP", "关于"];
+  ColorScheme get colors => Theme.of(context).colorScheme;
 
-  final _icons = <IconData>[
+  bool get enableTwoViews => !UiMode.m1(context);
+
+  final categories = <String>["浏览", "阅读", "外观", "本地收藏", "APP", "关于"];
+
+  final icons = <IconData>[
     Icons.explore,
     Icons.book,
     Icons.color_lens,
     Icons.collections_bookmark_rounded,
     Icons.apps,
-    Icons.info,
+    Icons.info
   ];
+
+  double offset = 0;
+
+  late final HorizontalDragGestureRecognizer gestureRecognizer;
 
   @override
   void initState() {
+    currentPage = widget.initialPage;
+    gestureRecognizer = HorizontalDragGestureRecognizer(debugOwner: this)
+      ..onUpdate = ((details) => setState(() => offset += details.delta.dx))
+      ..onEnd = (details) async {
+        if (details.velocity.pixelsPerSecond.dx.abs() > 1 &&
+            details.velocity.pixelsPerSecond.dx >= 0) {
+          setState(() {
+            Future.delayed(const Duration(milliseconds: 300), () => offset = 0);
+            currentPage = -1;
+          });
+        } else if (offset > MediaQuery.of(context).size.width / 2) {
+          setState(() {
+            Future.delayed(const Duration(milliseconds: 300), () => offset = 0);
+            currentPage = -1;
+          });
+        } else {
+          int i = 10;
+          while (offset != 0) {
+            setState(() {
+              offset -= i;
+              i *= 10;
+              if (offset < 0) {
+                offset = 0;
+              }
+            });
+            await Future.delayed(const Duration(milliseconds: 10));
+          }
+        }
+      }
+      ..onCancel = () async {
+        int i = 10;
+        while (offset != 0) {
+          setState(() {
+            offset -= i;
+            i *= 10;
+            if (offset < 0) {
+              offset = 0;
+            }
+          });
+          await Future.delayed(const Duration(milliseconds: 10));
+        }
+      };
     super.initState();
-    _currentPage = widget.initialPage;
+  }
+
+  @override
+  dispose() {
+    super.dispose();
+    gestureRecognizer.dispose();
+    App.temporaryDisablePopGesture = false;
   }
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text("设置"),
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back),
-          onPressed: () => App.globalBack(),
-        ),
-      ),
-      body: Row(
-          children: [
+    if (currentPage != -1 && !enableTwoViews) {
+      App.temporaryDisablePopGesture = true;
+    } else {
+      App.temporaryDisablePopGesture = false;
+    }
+    return Material(
+      child: buildBody(),
+    );
+  }
+
+  Widget buildBody() {
+    if (enableTwoViews) {
+      return Row(
+        children: [
           SizedBox(
-            width: 180,
-            child: _buildCategoryList(),
+            width: 320,
+            height: double.infinity,
+            child: buildLeft(),
           ),
-          const VerticalDivider(width: 1),
-          Expanded(
-            child: _currentPage == -1
-                ? const Center(child: Text("请选择一个设置类别"))
-                : _buildPage(_currentPage),
+          Container(
+            height: double.infinity,
+            decoration: BoxDecoration(
+              border: Border(
+                left: BorderSide(
+                  color: context.colorScheme.outlineVariant,
+                  width: 0.6,
+                ),
+              ),
+            ),
           ),
+          Expanded(child: buildRight())
+        ],
+      );
+    } else {
+      return Stack(
+        children: [
+          Positioned.fill(child: buildLeft()),
+          Positioned(
+            left: offset,
+            width: MediaQuery.of(context).size.width,
+            height: MediaQuery.of(context).size.height,
+            child: Listener(
+              onPointerDown: handlePointerDown,
+              child: AnimatedSwitcher(
+                duration: const Duration(milliseconds: 300),
+                reverseDuration: const Duration(milliseconds: 300),
+                switchInCurve: Curves.fastOutSlowIn,
+                switchOutCurve: Curves.fastOutSlowIn,
+                transitionBuilder: (child, animation) {
+                  var tween = Tween<Offset>(
+                      begin: const Offset(1, 0), end: const Offset(0, 0));
+                  return SlideTransition(
+                    position: tween.animate(animation),
+                    child: child,
+                  );
+                },
+                child: currentPage == -1
+                    ? const SizedBox(key: Key("1"))
+                    : buildRight(),
+              ),
+            ),
+          )
+        ],
+      );
+    }
+  }
+
+  void handlePointerDown(PointerDownEvent event) {
+    if (event.position.dx < 20) {
+      gestureRecognizer.addPointer(event);
+    }
+  }
+
+  Widget buildLeft() {
+    return Material(
+      child: Column(
+        children: [
+          SizedBox(
+            height: MediaQuery.of(context).padding.top,
+          ),
+          SizedBox(
+            height: 56,
+            child: Row(children: [
+              const SizedBox(width: 8),
+              Tooltip(
+                message: "Back",
+                child: IconButton(
+                  icon: const Icon(Icons.arrow_back),
+                  onPressed: () => App.globalBack(),
+                ),
+              ),
+              const SizedBox(width: 24),
+              Text(
+                "设置".tl,
+                style: Theme.of(context).textTheme.headlineSmall,
+              )
+            ]),
+          ),
+          const SizedBox(height: 4),
+          Expanded(child: buildCategories())
         ],
       ),
     );
   }
 
-  Widget _buildCategoryList() {
+  Widget buildCategories() {
+    Widget buildItem(String name, int id) {
+      final bool selected = id == currentPage;
+
+      Widget content = AnimatedContainer(
+        key: ValueKey(id),
+        duration: const Duration(milliseconds: 300),
+        width: double.infinity,
+        height: 48,
+        padding: const EdgeInsets.fromLTRB(16, 0, 16, 0),
+        decoration: BoxDecoration(
+            color: selected ? colors.primaryContainer : null,
+            borderRadius: BorderRadius.circular(16)),
+        child: Row(children: [
+          Icon(icons[id]),
+          const SizedBox(width: 16),
+          Text(name, style: Theme.of(context).textTheme.titleMedium),
+          const Spacer(),
+          if (selected) const Icon(Icons.arrow_right)
+        ]),
+      );
+
+      return Padding(
+        padding: enableTwoViews
+            ? const EdgeInsets.fromLTRB(16, 0, 16, 0)
+            : EdgeInsets.zero,
+        child: InkWell(
+          onTap: () => setState(() => currentPage = id),
+          borderRadius: BorderRadius.circular(16),
+          child: content,
+        ).paddingVertical(4),
+      );
+    }
+
     return ListView.builder(
-      itemCount: _categories.length,
-      itemBuilder: (context, index) {
-        final selected = index == _currentPage;
-        return ListTile(
-          leading: Icon(_icons[index]),
-          title: Text(_categories[index]),
-          selected: selected,
-          selectedTileColor: Theme.of(context).colorScheme.primaryContainer,
-          onTap: () => setState(() => _currentPage = index),
-        );
-      },
+      padding: EdgeInsets.zero,
+      itemCount: categories.length,
+      itemBuilder: (context, index) => buildItem(categories[index].tl, index),
     );
   }
 
-  Widget _buildPage(int index) {
-    switch (index) {
-      case 0:
-        return buildExploreSettings(context);
-      case 1:
-        return const ReadingSettings();
-      case 2:
-        return _buildAppearanceSettings();
-      case 3:
-        return const LocalFavoritesSettings();
-      case 4:
-        return buildAppSettings(context);
-      case 5:
-        return _buildAbout();
-      default:
-        return const SizedBox();
+  Widget buildRight() {
+    Widget buildContent(double width) {
+      return switch (currentPage) {
+        -1 => const SizedBox(),
+        0 => buildExploreSettings(width, context),
+        1 => ReadingSettings(width: width),
+        2 => buildAppearanceSettings(width),
+        3 => LocalFavoritesSettings(width: width),
+        4 => buildAppSettings(width, context),
+        5 => buildAbout(width),
+        _ => throw UnimplementedError()
+      };
     }
+
+    if (currentPage != -1) {
+      return Material(
+        child: CustomScrollView(
+          primary: false,
+          slivers: [
+            SliverAppBar(
+                title: Text(categories[currentPage].tl),
+                automaticallyImplyLeading: false,
+                scrolledUnderElevation: enableTwoViews ? 0 : null,
+                leading: enableTwoViews
+                    ? null
+                    : IconButton(
+                        icon: const Icon(Icons.arrow_back),
+                        onPressed: () => setState(() => currentPage = -1),
+                      )),
+            SliverToBoxAdapter(
+              child: LayoutBuilder(
+                builder: (context, constraints) =>
+                    buildContent(constraints.maxWidth),
+              ),
+            )
+          ],
+        ),
+      );
+    }
+
+    return LayoutBuilder(
+      builder: (context, constraints) => buildContent(constraints.maxWidth),
+    );
   }
 
-  Widget _buildAppearanceSettings() {
-    return Scaffold(
-      body: ListView(
-        children: [
-          const SettingsTitle("外观"),
+  Widget buildAppearanceSettings(double width) => buildTwoColumnLayout(
+        width,
+        [
+          ListTile(
+            leading: const Icon(Icons.color_lens),
+            title: Text("主题选择".tl),
+            trailing: Select(
+              initialValue:
+                  (int.tryParse(appdata.settings[27]) ?? 0).toString(),
+              values: const [
+                "0",
+                "1",
+                "2",
+                "3",
+                "4",
+                "5",
+                "6",
+                "7",
+                "8",
+                "9",
+                "10",
+                "11",
+                "12"
+              ],
+              titles: const [
+                "dynamic",
+                "red",
+                "pink",
+                "purple",
+                "indigo",
+                "blue",
+                "cyan",
+                "teal",
+                "green",
+                "lime",
+                "yellow",
+                "amber",
+                "orange"
+              ],
+              onChanged: (value) {
+                appdata.settings[27] = value;
+                appdata.updateSettings();
+              },
+              width: 140,
+            ),
+          ),
           ListTile(
             leading: const Icon(Icons.dark_mode),
-            title: const Text("深色模式"),
+            title: Text("深色模式".tl),
             trailing: Select(
               initialValue: appdata.settings[32],
               values: const ["0", "1", "2"],
-              titles: const ["跟随系统", "禁用", "启用"],
+              titles: ["跟随系统".tl, "禁用".tl, "启用".tl],
               onChanged: (value) {
                 appdata.settings[32] = value;
                 appdata.updateSettings();
               },
+              width: 140,
             ),
           ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildAbout() {
-    return Scaffold(
-      body: ListView(
-        children: const [
-          SizedBox(height: 32),
-          Center(
-            child: Icon(Icons.info_outline, size: 64),
+          if (appdata.settings[32] == "0" || appdata.settings[32] == "2")
+            ListTile(
+              leading: const Icon(Icons.remove_red_eye),
+              title: Text("纯黑色模式".tl),
+              trailing: Switch(
+                value: appdata.settings[28] == "1",
+                onChanged: (value) {
+                  setState(() {
+                    appdata.settings[28] = value ? "1" : "0";
+                  });
+                  appdata.updateSettings();
+                },
+              ),
+            ),
+          Padding(
+            padding:
+                EdgeInsets.only(bottom: MediaQuery.of(context).padding.bottom),
           ),
-          SizedBox(height: 16),
-          Center(
+        ],
+      );
+
+  Widget buildAbout(double width) => buildTwoColumnLayout(
+        width,
+        [
+          const SizedBox(
+            height: 130,
+            width: double.infinity,
+            child: Center(
+              child: Icon(Icons.info_outline, size: 80),
+            ),
+          ),
+          const Center(
             child: Text(
               "PicaKeep",
               style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
             ),
           ),
-          Center(
+          const Center(
             child: Text("本地漫画阅读器 / 收藏管理器"),
           ),
-          SizedBox(height: 16),
-          Center(
-            child: Text("V1.0.0"),
+          const SizedBox(height: 8),
+          const Center(
+            child: Text("V1.0.0", style: TextStyle(fontSize: 16)),
+          ),
+          Padding(
+            padding:
+                EdgeInsets.only(bottom: MediaQuery.of(context).padding.bottom),
           ),
         ],
-      ),
-    );
+      );
+
+  void handlePopInvoked(bool didPop) {
+    if (currentPage != -1) {
+      setState(() {
+        currentPage = -1;
+      });
+    }
   }
 }
 
@@ -241,10 +531,7 @@ class SettingsTitle extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ListTile(
-      title: Text(
-        text,
-        style: const TextStyle(fontWeight: FontWeight.bold),
-      ),
+      title: Text(text),
     );
   }
 }

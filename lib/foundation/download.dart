@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:path_provider/path_provider.dart';
 import 'package:sqlite3/sqlite3.dart';
+import '../base.dart';
 import '../tools/extensions.dart';
 import 'download_model.dart';
 
@@ -20,12 +21,17 @@ class DownloadManager with _DownloadDb {
   Database? _db;
 
   Future<void> _getPath() async {
-    final appPath = await getApplicationSupportDirectory();
-    path = "${appPath.path}/download";
+    if (appdata.settings[22].isEmpty) {
+      final appPath = await getApplicationSupportDirectory();
+      path = "${appPath.path}/download";
+    } else {
+      path = appdata.settings[22];
+    }
     var dir = Directory(path!);
     if (!await dir.exists()) {
       await dir.create(recursive: true);
     }
+    print('[PicaKeep] Download path: $path');
   }
 
   Future<void> init() async {
@@ -34,6 +40,7 @@ class DownloadManager with _DownloadDb {
   }
 
   Future<void> _initDb() async {
+    _db?.dispose();
     _db = sqlite3.open("$path/download.db");
     _createTable();
   }
@@ -103,6 +110,116 @@ class DownloadManager with _DownloadDb {
       }
     }
     throw Exception("File not found");
+  }
+
+  int scanDirectoryForComics() {
+    if (path == null) return 0;
+    final dir = Directory(path!);
+    if (!dir.existsSync()) return 0;
+
+    int count = 0;
+    final entries = dir.listSync();
+    for (final entry in entries) {
+      if (entry is! Directory) continue;
+      final dirName = entry.uri.pathSegments.last;
+      if (dirName == 'download.db') continue;
+
+      // Check if this directory has ANY image files (either in subdirs or flat)
+      final subEntries = entry.listSync();
+      final hasSubdirImages =
+          subEntries.any((e) => e is Directory && _hasImageFiles(e));
+      final hasFlatImages = subEntries.any((e) => e is File && _isImageFile(e));
+
+      if (!hasSubdirImages && !hasFlatImages) continue;
+
+      if (isExists(dirName)) continue;
+
+      final chapters = <String>[];
+      final downloadedChapters = <int>[];
+
+      // Mode 1: Flat images (no chapter subdirs, images in root)
+      if (hasFlatImages && !hasSubdirImages) {
+        chapters.add('\u7B2C1\u7AE0');
+        downloadedChapters.add(0);
+      }
+      // Mode 2: Chapter subdirectories
+      else if (hasSubdirImages) {
+        for (final subEntry in subEntries) {
+          if (subEntry is Directory && _hasImageFiles(subEntry)) {
+            final chName = subEntry.uri.pathSegments.last;
+            chapters.add(chName);
+            downloadedChapters.add(chapters.length - 1);
+          }
+        }
+      }
+
+      final totalSize = entry.getMBSizeSync();
+
+      final comic = DownloadedComic(
+        comicId: dirName,
+        title: dirName,
+        author: '',
+        chapters: chapters,
+        downloadedChapters: downloadedChapters,
+        size: totalSize,
+        tagList: [],
+      );
+      comic.time = DateTime.now();
+      comic.directory = dirName;
+
+      _addToDb(comic, dirName, DateTime.now());
+      count++;
+    }
+    return count;
+  }
+
+  static bool _isImageFile(FileSystemEntity e) {
+    if (e is! File) return false;
+    final name = e.uri.pathSegments.last.toLowerCase();
+    return name.endsWith('.jpg') ||
+        name.endsWith('.jpeg') ||
+        name.endsWith('.png') ||
+        name.endsWith('.webp');
+  }
+
+  static bool _hasImageFiles(Directory dir) {
+    return dir.listSync().any((e) => _isImageFile(e));
+  }
+
+  List<DownloadedItem> getAll(
+      [String order = 'time', String direction = 'desc']) {
+    // Auto-init if _db is null (disposed after path change)
+    if (_db == null || path == null) {
+      print(
+          '[PicaKeep] getAll() called but _db=$_db, path=$path, auto-init...');
+      return [];
+    }
+
+    var result = _db!.select('''
+      select * from download
+      order by $order $direction
+    ''');
+    int success = 0;
+    int failed = 0;
+    final items = <DownloadedItem>[];
+    for (var e in result) {
+      final item = _getComicFromJson(
+        e['id'],
+        e['json'],
+        DateTime.fromMillisecondsSinceEpoch(e['time']),
+        e['directory'],
+      );
+      if (item != null) {
+        items.add(item);
+        success++;
+      } else {
+        failed++;
+      }
+    }
+    print(
+        '[PicaKeep] getAll() loaded: $success success, $failed failed, total ${result.length}');
+
+    return items;
   }
 }
 
@@ -189,24 +306,6 @@ abstract mixin class _DownloadDb {
     return result.first['count(*)'];
   }
 
-  List<DownloadedItem> getAll(
-      [String order = 'time', String direction = 'desc']) {
-    var result = _db!.select('''
-      select * from download
-      order by $order $direction
-    ''');
-    return result
-        .map(
-          (e) => _getComicFromJson(
-            e['id'],
-            e['json'],
-            DateTime.fromMillisecondsSinceEpoch(e['time']),
-            e['directory'],
-          )!,
-        )
-        .toList();
-  }
-
   static final _directoryCache = <String, String>{};
 
   String getDirectory(String id) {
@@ -233,28 +332,114 @@ abstract mixin class _DownloadDb {
 
 DownloadedItem? _getComicFromJson(
     String id, String json, DateTime time, String? directory) {
-  DownloadedItem comic;
+  DownloadedItem? comic;
   try {
     final data = jsonDecode(json) as Map<String, dynamic>;
-    if (id.contains('-') && data.containsKey("sourceKey")) {
-      comic = CustomDownloadedItem.fromJson(data);
+
+    // Primary: use ID prefix matching (consistent with original PicaComic)
+    if (id.contains('-')) {
+      // Custom sources: copy_manga, Komiic, etc.
+      try {
+        comic = CustomDownloadedItem.fromJson(data);
+      } catch (e) {
+        print(
+            '[PicaKeep] CustomDownloadedItem.fromJson failed for id="$id": $e');
+      }
     } else if (id.startsWith("jm")) {
-      comic = DownloadedJmComic.fromMap(data);
+      try {
+        comic = DownloadedJmComic.fromMap(data);
+      } catch (e) {
+        print('[PicaKeep] DownloadedJmComic.fromMap failed for id="$id": $e');
+      }
     } else if (id.startsWith("hitomi")) {
-      comic = DownloadedHitomiComic.fromMap(data);
+      try {
+        comic = DownloadedHitomiComic.fromMap(data);
+      } catch (e) {
+        print(
+            '[PicaKeep] DownloadedHitomiComic.fromMap failed for id="$id": $e');
+      }
     } else if (id.startsWith("nhentai")) {
-      comic = NhentaiDownloadedComic.fromJson(data);
+      try {
+        comic = NhentaiDownloadedComic.fromJson(data);
+      } catch (e) {
+        print(
+            '[PicaKeep] NhentaiDownloadedComic.fromJson failed for id="$id": $e');
+      }
     } else if (id.startsWith("Ht")) {
-      comic = DownloadedHtComic.fromJson(data);
+      try {
+        comic = DownloadedHtComic.fromJson(data);
+      } catch (e) {
+        print('[PicaKeep] DownloadedHtComic.fromJson failed for id="$id": $e');
+      }
     } else if (id.isNum) {
-      comic = DownloadedComic.fromJson(data);
+      // E-Hentai: pure numeric ID like "2971848"
+      try {
+        comic = DownloadedGallery.fromJson(data);
+      } catch (e) {
+        print('[PicaKeep] DownloadedGallery.fromJson failed for id="$id": $e');
+      }
     } else {
-      comic = DownloadedGallery.fromJson(data);
+      // Picacg: MongoDB ObjectId like "6595730e2ef71146c8a109a6"
+      try {
+        comic = DownloadedComic.fromJson(data);
+      } catch (e) {
+        print('[PicaKeep] DownloadedComic.fromJson failed for id="$id": $e');
+      }
     }
+
+    // Fallback: if primary parsing failed, try JSON key detection
+    if (comic == null) {
+      print(
+          '[PicaKeep] Primary parsing failed for id="$id", trying fallback...');
+      if (data.containsKey("comicItem")) {
+        try {
+          comic = DownloadedComic.fromJson(data);
+        } catch (e) {
+          print(
+              '[PicaKeep] Fallback DownloadedComic.fromJson failed for id="$id": $e');
+        }
+      } else if (data.containsKey("galleryTitle")) {
+        try {
+          comic = DownloadedGallery.fromJson(data);
+        } catch (e) {
+          print(
+              '[PicaKeep] Fallback DownloadedGallery.fromJson failed for id="$id": $e');
+        }
+      } else if (data.containsKey("comicID")) {
+        try {
+          comic = NhentaiDownloadedComic.fromJson(data);
+        } catch (e) {
+          print(
+              '[PicaKeep] Fallback NhentaiDownloadedComic.fromJson failed for id="$id": $e');
+        }
+      } else if (data.containsKey("sourceKey")) {
+        try {
+          comic = CustomDownloadedItem.fromJson(data);
+        } catch (e) {
+          print(
+              '[PicaKeep] Fallback CustomDownloadedItem.fromJson failed for id="$id": $e');
+        }
+      }
+    }
+
+    if (comic == null) {
+      print(
+          '[PicaKeep] _getComicFromJson FAILED for id="$id": unable to parse with any method');
+      final jsonSample =
+          json.length > 300 ? '${json.substring(0, 300)}...[TRUNCATED]' : json;
+      print('[PicaKeep] JSON sample: $jsonSample');
+      return null;
+    }
+
     comic.time = time;
     comic.directory = directory;
     return comic;
-  } catch (e) {
+  } catch (e, s) {
+    final jsonSample =
+        json.length > 300 ? '${json.substring(0, 300)}...[TRUNCATED]' : json;
+    print('[PicaKeep] _getComicFromJson FAILED for id="$id": $e');
+    print('[PicaKeep] Stack: $s');
+    print('[PicaKeep] JSON sample: $jsonSample');
     return null;
   }
 }

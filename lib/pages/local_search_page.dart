@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:picakeep/foundation/download.dart';
 import 'package:picakeep/foundation/download_model.dart';
 import 'package:picakeep/foundation/local_favorites.dart';
+import 'local_comic_detail_page.dart';
+import 'favorites/local_favorites.dart';
 
 class _SearchResult {
   final String title;
@@ -10,13 +12,17 @@ class _SearchResult {
   final List<String> tags;
   final String? targetId;
   final FavoriteType? favType;
+  final DownloadedItem? downloadItem;
+  final FavoriteItemWithFolderInfo? favoriteItem;
   _SearchResult(
       {required this.title,
       required this.author,
       required this.sourceLabel,
       this.tags = const [],
       this.targetId,
-      this.favType});
+      this.favType,
+      this.downloadItem,
+      this.favoriteItem});
 }
 
 class LocalSearchPage extends StatefulWidget {
@@ -49,6 +55,7 @@ class _LocalSearchPageState extends State<LocalSearchPage> {
     final results = <_SearchResult>[];
     final seenIds = <String>{};
     final favManager = LocalFavoritesManager();
+    await favManager.init();
     final favResults = favManager.search(keyword);
     for (final fav in favResults) {
       final c = fav.comic;
@@ -61,7 +68,8 @@ class _LocalSearchPageState extends State<LocalSearchPage> {
           sourceLabel: '${c.type.name} · ${fav.folder}',
           tags: c.tags,
           targetId: c.toDownloadId(),
-          favType: c.type));
+          favType: c.type,
+          favoriteItem: fav));
     }
     try {
       final dlManager = DownloadManager();
@@ -76,7 +84,8 @@ class _LocalSearchPageState extends State<LocalSearchPage> {
               author: item.subTitle,
               sourceLabel: _downloadLabel(item.type),
               tags: item.tags,
-              targetId: item.id));
+              targetId: item.id,
+              downloadItem: item));
         }
       }
     } catch (_) {}
@@ -180,8 +189,16 @@ class _LocalSearchPageState extends State<LocalSearchPage> {
         margin: const EdgeInsets.symmetric(vertical: 4, horizontal: 12),
         child: InkWell(
             onTap: () {
-              ScaffoldMessenger.of(context)
-                  .showSnackBar(SnackBar(content: Text('打开: ${r.title}')));
+              if (r.downloadItem != null) {
+                Navigator.of(context).push(MaterialPageRoute(
+                  builder: (_) => LocalComicDetailPage(comic: r.downloadItem!),
+                ));
+              } else if (r.favoriteItem != null) {
+                Navigator.of(context).push(MaterialPageRoute(
+                  builder: (_) =>
+                      LocalFavoritesPage(folderName: r.favoriteItem!.folder),
+                ));
+              }
             },
             borderRadius: BorderRadius.circular(12),
             child: Padding(
