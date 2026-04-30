@@ -29,10 +29,19 @@ abstract class ReadingData {
 
   Future<List<String>> loadEp(int ep) async {
     if(downloaded && downloadedEps.isEmpty){
-      downloadedEps = (await downloadManager.getComicOrNull(downloadId))!.downloadedEps;
+      var comic = await downloadManager.getComicOrNull(downloadId);
+      if (comic != null) {
+        downloadedEps = comic.downloadedEps;
+      }
     }
     if (downloaded && checkEpDownloaded(ep)){
-      return List.filled(1, "");
+      int length;
+      if(hasEp) {
+        length = downloadManager.getEpLength(downloadId, ep);
+      } else {
+        length = downloadManager.getComicLength(downloadId);
+      }
+      return List.filled(length > 0 ? length : 1, "");
     } else {
       return await loadEpNetwork(ep);
     }
@@ -40,7 +49,11 @@ abstract class ReadingData {
 
   Stream<List<int>> loadImage(int ep, int page, String url) async* {
     if (downloaded && checkEpDownloaded(ep)) {
-      yield [1];
+      try {
+        yield [1];
+      } catch (_) {
+        yield [];
+      }
     } else {
       yield* loadImageNetwork(ep, page, url);
     }
