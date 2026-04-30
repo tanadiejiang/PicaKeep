@@ -9,6 +9,12 @@ import 'package:picakeep/foundation/app.dart';
 import 'package:picakeep/foundation/download.dart';
 import 'package:picakeep/foundation/download_model.dart';
 import 'package:picakeep/foundation/local_favorites.dart';
+import 'package:picakeep/foundation/state_controller.dart';
+import 'package:picakeep/foundation/ui_mode.dart';
+import 'package:picakeep/tools/translations.dart';
+import 'package:picakeep/components/comic_tile.dart';
+import 'package:picakeep/components/scrollable.dart';
+import 'package:picakeep/components/layout.dart';
 import 'reader/comic_reading_page.dart';
 import 'local_comic_detail_page.dart';
 
@@ -25,10 +31,10 @@ extension ReadComic on DownloadedItem {
       title: name,
       id: id,
       downloadId: id,
-      sourceKey: RegExp(r'^[a-zA-Z]+').stringMatch(id) ?? '',
+      sourceKey: _extractSourceKey(id),
       hasEp: hasEp,
       eps: hasEp ? {for (int i = 0; i < eps.length; i++) eps[i]: eps[i]} : null,
-      favoriteType: const FavoriteType(0),
+      favoriteType: _downloadTypeToFavoriteType(type),
     );
 
     Navigator.of(App.globalContext!).push(MaterialPageRoute(
@@ -41,253 +47,631 @@ extension ReadComic on DownloadedItem {
   }
 }
 
-class DownloadPage extends StatefulWidget {
+String _extractSourceKey(String id) {
+  if (id.contains('copy_manga')) return 'copy_manga';
+  if (id.contains('Komiic')) return 'Komiic';
+  if (id.startsWith('jm')) return 'jm';
+  if (id.startsWith('nhentai')) return 'nhentai';
+  if (id.startsWith('hitomi')) return 'hitomi';
+  if (id.startsWith('Ht')) return 'htmanga';
+  if (RegExp(r'^\d+$').hasMatch(id)) return 'ehentai';
+  return 'picacg';
+}
+
+FavoriteType _downloadTypeToFavoriteType(DownloadType type) {
+  switch (type) {
+    case DownloadType.picacg:
+      return FavoriteType.picacg;
+    case DownloadType.ehentai:
+      return FavoriteType.ehentai;
+    case DownloadType.jm:
+      return FavoriteType.jm;
+    case DownloadType.hitomi:
+      return FavoriteType.hitomi;
+    case DownloadType.htmanga:
+      return FavoriteType.htManga;
+    case DownloadType.nhentai:
+      return FavoriteType.nhentai;
+    case DownloadType.copyManga:
+      return FavoriteType.copyManga;
+    case DownloadType.komiic:
+      return FavoriteType.komiic;
+    default:
+      return const FavoriteType(0);
+  }
+}
+
+class DownloadPageLogic extends StateController {
+  bool loading = true;
+  bool selecting = false;
+  int selectedNum = 0;
+  var selected = <bool>[];
+  var comics = <DownloadedItem>[];
+  var baseComics = <DownloadedItem>[];
+  bool searchMode = false;
+  bool searchInit = false;
+  String keyword = "";
+  String keyword_ = "";
+
+  void change() {
+    loading = !loading;
+    try {
+      update();
+    } catch (e) {
+      // ignore
+    }
+  }
+
+  void find() {
+    if (keyword == keyword_) {
+      return;
+    }
+    keyword_ = keyword;
+    comics.clear();
+    if (keyword == "") {
+      comics.addAll(baseComics);
+    } else {
+      for (var element in baseComics) {
+        if (element.name.toLowerCase().contains(keyword) ||
+            element.subTitle.toLowerCase().contains(keyword)) {
+          comics.add(element);
+        }
+      }
+    }
+    resetSelected(comics.length);
+  }
+
+  @override
+  void refresh() {
+    searchMode = false;
+    selecting = false;
+    selectedNum = 0;
+    selected.clear();
+    comics.clear();
+    change();
+  }
+
+  void resetSelected(int length) {
+    selected = List.generate(length, (index) => false);
+    selectedNum = 0;
+  }
+}
+
+class DownloadPage extends StatelessWidget {
   const DownloadPage({super.key});
 
   @override
-  State<DownloadPage> createState() => _DownloadPageState();
-}
-
-class _DownloadPageState extends State<DownloadPage> {
-  List<DownloadedItem> _comics = [];
-  List<DownloadedItem> _filtered = [];
-  bool _loading = true;
-  String _searchQuery = '';
-  bool _selecting = false;
-  Set<int> _selected = {};
-
-  @override
-  void initState() {
-    super.initState();
-    _loadComics();
+  Widget build(BuildContext context) {
+    return StateBuilder<DownloadPageLogic>(
+      init: DownloadPageLogic(),
+      builder: (logic) {
+        if (logic.loading) {
+          Future.wait([
+            _getComics(logic),
+            Future.delayed(const Duration(milliseconds: 300))
+          ]).then((v) {
+            logic.resetSelected(logic.comics.length);
+            logic.change();
+          });
+          return const Scaffold(
+            body: Center(
+              child: CircularProgressIndicator(),
+            ),
+          );
+        } else {
+          return Scaffold(
+            floatingActionButton: _buildFAB(context, logic),
+            body: SmoothCustomScrollView(
+              slivers: [
+                _buildAppbar(context, logic),
+                _buildComics(context, logic)
+              ],
+            ),
+          );
+        }
+      },
+    );
   }
 
-  Future<void> _loadComics() async {
-    try {
-      await DownloadManager().init();
-      final comics = DownloadManager().getAll();
-      setState(() {
-        _comics = comics;
-        _filtered = List.from(comics);
-        _loading = false;
-      });
-    } catch (e) {
-      setState(() => _loading = false);
+  Widget _buildComics(BuildContext context, DownloadPageLogic logic) {
+    logic.find();
+    final comics = logic.comics;
+    if (comics.isEmpty) {
+      return SliverToBoxAdapter(
+        child: _buildEmptyState(context),
+      );
     }
+    return SliverGrid(
+      delegate: SliverChildBuilderDelegate(
+        childCount: comics.length,
+        (context, index) {
+          return _buildItem(context, logic, index);
+        },
+      ),
+      gridDelegate: SliverGridDelegateWithComics(),
+    );
   }
 
-  void _onSearch(String query) {
-    setState(() {
-      _searchQuery = query;
-      if (query.isEmpty) {
-        _filtered = List.from(_comics);
-      } else {
-        final q = query.toLowerCase();
-        _filtered = _comics
-            .where((c) =>
-                c.name.toLowerCase().contains(q) ||
-                c.subTitle.toLowerCase().contains(q) ||
-                c.tags.any((t) => t.toLowerCase().contains(q)))
-            .toList();
-      }
-    });
+  Future<void> _getComics(DownloadPageLogic logic) async {
+    var order = '', direction = 'desc';
+    switch (appdata.settings[26][0]) {
+      case "0":
+        order = 'time';
+      case "1":
+        order = 'title';
+      case "2":
+        order = 'subtitle';
+      case "3":
+        order = 'size';
+      default:
+        throw UnimplementedError();
+    }
+    if (appdata.settings[26][1] == "1") {
+      direction = 'asc';
+    }
+    logic.comics = DownloadManager().getAll(order, direction);
+    logic.baseComics = logic.comics.toList();
   }
 
-  Future<void> _deleteSelected() async {
-    final ids = _selected.map((i) => _filtered[i].id).toList();
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('确认删除'),
-        content: Text('确定要删除 ${ids.length} 个已下载的漫画吗？'),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('取消')),
-          TextButton(
-              onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('删除')),
-        ],
+  Widget _buildItem(BuildContext context, DownloadPageLogic logic, int index) {
+    bool selected = logic.selected[index];
+    var type = logic.comics[index].type.name;
+    return Padding(
+      padding: const EdgeInsets.all(2),
+      child: Container(
+        decoration: BoxDecoration(
+          color: selected
+              ? Theme.of(context).colorScheme.surfaceContainerHighest
+              : Colors.transparent,
+          borderRadius: const BorderRadius.all(Radius.circular(16)),
+        ),
+        child: DownloadedComicTile(
+          name: logic.comics[index].name,
+          author: logic.comics[index].subTitle,
+          imagePath: DownloadManager().getCover(logic.comics[index].id),
+          type: type,
+          tag: logic.comics[index].tags,
+          onTap: () async {
+            if (logic.selecting) {
+              logic.selected[index] = !logic.selected[index];
+              logic.selected[index] ? logic.selectedNum++ : logic.selectedNum--;
+              if (logic.selectedNum == 0) {
+                logic.selecting = false;
+              }
+              logic.update();
+            } else {
+              _showInfo(index, logic, context);
+            }
+          },
+          size: () {
+            if (logic.comics[index].comicSize != null) {
+              return logic.comics[index].comicSize!.toStringAsFixed(2);
+            } else {
+              return "未知大小".tl;
+            }
+          }.call(),
+          onLongTap: () {
+            if (logic.selecting) return;
+            logic.selected[index] = true;
+            logic.selectedNum++;
+            logic.selecting = true;
+            logic.update();
+          },
+          onSecondaryTap: (details) {
+            _showDesktopMenu(context, logic, index, details);
+          },
+        ),
       ),
     );
-    if (confirmed == true) {
-      await DownloadManager().delete(ids);
-      _selected.clear();
-      _selecting = false;
-      _loadComics();
+  }
+
+  void _showDesktopMenu(BuildContext context, DownloadPageLogic logic, int index, TapDownDetails details) {
+    showMenu(
+      context: context,
+      position: RelativeRect.fromLTRB(
+        details.globalPosition.dx,
+        details.globalPosition.dy,
+        details.globalPosition.dx + 1,
+        details.globalPosition.dy + 1,
+      ),
+      items: [
+        PopupMenuItem(
+          child: Text("阅读".tl),
+          onTap: () {
+            logic.comics[index].read();
+          },
+        ),
+        PopupMenuItem(
+          child: Text("删除".tl),
+          onTap: () {
+            Future.delayed(const Duration(milliseconds: 200), () {
+              showDialog(
+                context: App.globalContext!,
+                builder: (ctx) => AlertDialog(
+                  title: Text("确认删除".tl),
+                  content: Text("此操作无法撤销, 是否继续?".tl),
+                  actions: [
+                    TextButton(
+                      onPressed: () => Navigator.pop(ctx),
+                      child: Text("取消".tl),
+                    ),
+                    TextButton(
+                      onPressed: () {
+                        Navigator.pop(ctx);
+                        DownloadManager().delete([logic.comics[index].id]);
+                        logic.comics.removeAt(index);
+                        logic.selected.removeAt(index);
+                        logic.update();
+                      },
+                      child: Text("确认".tl),
+                    ),
+                  ],
+                ),
+              );
+            });
+          },
+        ),
+        PopupMenuItem(
+          child: Text("导出".tl),
+          onTap: () => _exportComic(context, logic.comics[index]),
+        ),
+        PopupMenuItem(
+          child: Text("查看漫画详情".tl),
+          onTap: () {
+            Future.delayed(const Duration(milliseconds: 300), () {
+              _toComicInfoPage(App.globalContext!, logic.comics[index]);
+            });
+          },
+        ),
+        PopupMenuItem(
+          child: Text("复制路径".tl),
+          onTap: () {
+            Future.delayed(const Duration(milliseconds: 300), () {
+              var path =
+                  "${DownloadManager().path}/${logic.comics[index].directory ?? ''}";
+              Clipboard.setData(ClipboardData(text: path));
+            });
+          },
+        ),
+      ],
+    );
+  }
+
+  void _exportComic(BuildContext context, DownloadedItem comic) {
+    final dir = comic.directory ?? '';
+    final fullPath = "${DownloadManager().path}/$dir";
+    if (Platform.isWindows) {
+      Process.run('explorer', [fullPath]);
+    } else if (Platform.isMacOS) {
+      Process.run('open', [fullPath]);
+    } else if (Platform.isLinux) {
+      Process.run('xdg-open', [fullPath]);
     }
   }
 
-  Future<void> _addToFavorites() async {
-    final selectedComics = _selected.map((i) => _filtered[i]).toList();
-    final favManager = LocalFavoritesManager();
-    await favManager.init();
-
-    final folders = favManager.folderNames;
-    if (folders.isEmpty) {
-      final controller = TextEditingController();
-      final createResult = await showDialog<String>(
+  void _showInfo(int index, DownloadPageLogic logic, BuildContext context) {
+    if (UiMode.m1(context)) {
+      showModalBottomSheet(
         context: context,
-        builder: (ctx) => AlertDialog(
-          title: const Text('新建收藏文件夹'),
-          content: TextField(
-            controller: controller,
-            autofocus: true,
-            decoration: const InputDecoration(hintText: '请输入文件夹名称'),
+        builder: (context) {
+          return DownloadedComicInfoView(logic.comics[index], logic);
+        },
+      );
+    } else {
+      showDialog(
+        context: App.globalContext!,
+        builder: (context) => Dialog(
+          child: SizedBox(
+            width: 400,
+            height: 500,
+            child: DownloadedComicInfoView(logic.comics[index], logic),
           ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text('取消'),
-            ),
-            TextButton(
-              onPressed: () => Navigator.pop(ctx, controller.text.trim()),
-              child: const Text('确定'),
-            ),
-          ],
         ),
       );
-      if (createResult == null || createResult.isEmpty) return;
-      favManager.createFolder(createResult);
-      folders.clear();
-      folders.addAll(favManager.folderNames);
     }
+  }
 
-    final targetFolder = await showDialog<String>(
-      context: context,
-      builder: (ctx) => SimpleDialog(
-        title: const Text('选择收藏文件夹'),
-        children: folders
-            .map((f) => SimpleDialogOption(
-                  onPressed: () => Navigator.pop(ctx, f),
-                  child: Text(f),
-                ))
-            .toList(),
-      ),
-    );
-
-    if (targetFolder == null) return;
-
-    int added = 0;
-    for (final comic in selectedComics) {
-      try {
-        final favItem = FavoriteItem(
-          target: comic.id,
-          name: comic.name,
-          coverPath: '',
-          author: comic.subTitle,
-          type: _downloadTypeToFavoriteType(comic.type),
-          tags: comic.tags,
-        );
-        favManager.addComic(targetFolder, favItem);
-        added++;
-      } catch (_) {}
-    }
-
-    if (context.mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('已添加 $added 个漫画到"$targetFolder"')),
+  Widget _buildFAB(BuildContext context, DownloadPageLogic logic) =>
+      FloatingActionButton(
+        enableFeedback: true,
+        onPressed: () {
+          if (!logic.selecting) {
+            logic.selecting = true;
+            logic.update();
+          } else {
+            if (logic.selectedNum == 0) return;
+            showDialog(
+              context: context,
+              builder: (dialogContext) {
+                return AlertDialog(
+                  title: Text("删除".tl),
+                  content: Text("要删除已选择的项目吗? 此操作无法撤销".tl),
+                  actions: [
+                    TextButton(
+                      onPressed: () => App.globalBack(),
+                      child: Text("取消".tl),
+                    ),
+                    TextButton(
+                      onPressed: () async {
+                        App.globalBack();
+                        var comics = <String>[];
+                        for (int i = 0; i < logic.selected.length; i++) {
+                          if (logic.selected[i]) {
+                            comics.add(logic.comics[i].id);
+                          }
+                        }
+                        await DownloadManager().delete(comics);
+                        logic.refresh();
+                      },
+                      child: Text("确认".tl),
+                    ),
+                  ],
+                );
+              },
+            );
+          }
+        },
+        child: logic.selecting
+            ? const Icon(Icons.delete_forever_outlined)
+            : const Icon(Icons.checklist_outlined),
       );
-      setState(() {
-        _selecting = false;
-        _selected.clear();
-      });
+
+  Widget _buildTitle(BuildContext context, DownloadPageLogic logic) {
+    if (logic.searchMode && !logic.selecting) {
+      final FocusNode focusNode = FocusNode();
+      focusNode.requestFocus();
+      bool focus = logic.searchInit;
+      logic.searchInit = false;
+      return TextField(
+        focusNode: focus ? focusNode : null,
+        decoration: InputDecoration(
+          border: InputBorder.none,
+          hintText: "搜索".tl,
+        ),
+        onChanged: (s) {
+          logic.keyword = s.toLowerCase();
+          logic.update();
+        },
+      );
+    } else {
+      return logic.selecting
+          ? Text("已选择 @num 个项目".tlParams({"num": logic.selectedNum.toString()}))
+          : Text("已下载".tl);
     }
   }
 
-  FavoriteType _downloadTypeToFavoriteType(DownloadType type) {
-    switch (type) {
-      case DownloadType.picacg:
-        return FavoriteType.picacg;
-      case DownloadType.ehentai:
-        return FavoriteType.ehentai;
-      case DownloadType.jm:
-        return FavoriteType.jm;
-      case DownloadType.hitomi:
-        return FavoriteType.hitomi;
-      case DownloadType.htmanga:
-        return FavoriteType.htManga;
-      case DownloadType.nhentai:
-        return FavoriteType.nhentai;
-      case DownloadType.copyManga:
-        return FavoriteType.copyManga;
-      case DownloadType.komiic:
-        return FavoriteType.komiic;
-      default:
-        return const FavoriteType(0);
+  Widget _buildAppbar(BuildContext context, DownloadPageLogic logic) {
+    return SliverAppBar(
+      pinned: true,
+      floating: true,
+      snap: true,
+      backgroundColor: logic.selecting
+          ? Theme.of(context).colorScheme.primaryContainer
+          : null,
+      leading: logic.selecting
+          ? IconButton(
+              onPressed: () {
+                logic.selecting = false;
+                logic.selectedNum = 0;
+                for (int i = 0; i < logic.selected.length; i++) {
+                  logic.selected[i] = false;
+                }
+                logic.update();
+              },
+              icon: const Icon(Icons.close),
+            )
+          : null,
+      title: _buildTitle(context, logic),
+      actions: _buildActions(context, logic),
+    );
+  }
+
+  List<Widget> _buildActions(BuildContext context, DownloadPageLogic logic) {
+    return [
+      if (!logic.selecting && !logic.searchMode)
+        Tooltip(
+          message: "排序".tl,
+          child: IconButton(
+            icon: const Icon(Icons.sort),
+            onPressed: () async {
+              bool changed = false;
+              await showDialog(
+                context: context,
+                builder: (context) => SimpleDialog(
+                  title: Text("漫画排序模式".tl),
+                  children: [
+                    SizedBox(
+                      width: 400,
+                      child: Column(
+                        children: [
+                          ListTile(
+                            title: Text("漫画排序模式".tl),
+                            trailing: DropdownButton<int>(
+                              value: int.parse(appdata.settings[26][0]),
+                              items: [
+                                DropdownMenuItem(value: 0, child: Text("时间".tl)),
+                                DropdownMenuItem(value: 1, child: Text("漫画名".tl)),
+                                DropdownMenuItem(value: 2, child: Text("作者名".tl)),
+                                DropdownMenuItem(value: 3, child: Text("大小".tl)),
+                              ],
+                              onChanged: (i) {
+                                if (i != null) {
+                                  appdata.settings[26] = appdata.settings[26]
+                                      .replaceRange(0, 1, i.toString());
+                                  appdata.updateSettings();
+                                  changed = true;
+                                }
+                              },
+                            ),
+                          ),
+                          ListTile(
+                            title: Text("倒序".tl),
+                            trailing: Switch(
+                              value: appdata.settings[26][1] == "1",
+                              onChanged: (b) {
+                                appdata.settings[26] = appdata.settings[26]
+                                    .replaceRange(1, 2, b ? "1" : "0");
+                                appdata.updateSettings();
+                                changed = true;
+                              },
+                            ),
+                          ),
+                        ],
+                      ),
+                    )
+                  ],
+                ),
+              );
+              if (changed) {
+                logic.refresh();
+              }
+            },
+          ),
+        ),
+      if (logic.selecting)
+        Tooltip(
+          message: "更多".tl,
+          child: IconButton(
+            icon: const Icon(Icons.more_horiz),
+            onPressed: () {
+              showMenu(
+                context: context,
+                position: RelativeRect.fromLTRB(
+                  MediaQuery.of(context).size.width - 60,
+                  50,
+                  MediaQuery.of(context).size.width - 60,
+                  50,
+                ),
+                items: [
+                  PopupMenuItem(
+                    child: Text("全选".tl),
+                    onTap: () {
+                      for (int i = 0; i < logic.selected.length; i++) {
+                        logic.selected[i] = true;
+                      }
+                      logic.selectedNum = logic.comics.length;
+                      logic.update();
+                    },
+                  ),
+                  PopupMenuItem(
+                    child: Text("导出".tl),
+                    onTap: () => _exportSelected(context, logic),
+                  ),
+                  PopupMenuItem(
+                    child: Text("查看漫画详情".tl),
+                    onTap: () => Future.delayed(
+                      const Duration(milliseconds: 200),
+                      () {
+                        if (logic.selectedNum != 1) {
+                          // showToast not available in picakeep
+                        } else {
+                          for (int i = 0; i < logic.selected.length; i++) {
+                            if (logic.selected[i]) {
+                              _toComicInfoPage(App.globalContext!, logic.comics[i]);
+                            }
+                          }
+                        }
+                      },
+                    ),
+                  ),
+                  PopupMenuItem(
+                    child: Text("添加至本地收藏".tl),
+                    onTap: () => Future.delayed(
+                      const Duration(milliseconds: 200),
+                      () => _addToLocalFavoriteFolder(context, logic),
+                    ),
+                  ),
+                ],
+              );
+            },
+          ),
+        ),
+      if (!logic.selecting)
+        Tooltip(
+          message: "搜索".tl,
+          child: IconButton(
+            icon: const Icon(Icons.search),
+            onPressed: () {
+              logic.searchMode = !logic.searchMode;
+              logic.searchInit = true;
+              if (!logic.searchMode) {
+                logic.keyword = "";
+              }
+              logic.update();
+            },
+          ),
+        )
+    ];
+  }
+
+  void _exportSelected(BuildContext context, DownloadPageLogic logic) {
+    if (logic.selectedNum == 0) return;
+    for (int i = 0; i < logic.selected.length; i++) {
+      if (logic.selected[i]) {
+        _exportComic(context, logic.comics[i]);
+      }
     }
   }
 
-  String _formatSize(double? size) {
-    if (size == null) return '未知';
-    if (size > 1024) return '${(size / 1024).toStringAsFixed(1)} GB';
-    return '${size.toStringAsFixed(1)} MB';
-  }
-
-  String _formatTime(DateTime? time) {
-    if (time == null) return '';
-    return '${time.year}-${time.month.toString().padLeft(2, '0')}-${time.day.toString().padLeft(2, '0')}';
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title:
-            _selecting ? Text('已选择 ${_selected.length} 项') : const Text('已下载'),
-        actions: [
-          if (_selecting) ...[
-            IconButton(
-                icon: const Icon(Icons.select_all),
-                onPressed: () {
-                  setState(() {
-                    if (_selected.length == _filtered.length) {
-                      _selected.clear();
-                    } else {
-                      _selected = {
-                        for (var i = 0; i < _filtered.length; i++) i
-                      };
-                    }
-                  });
-                }),
-            IconButton(
-                icon: const Icon(Icons.favorite_border),
-                onPressed: _selected.isNotEmpty ? _addToFavorites : null),
-            IconButton(
-                icon: const Icon(Icons.delete),
-                onPressed: _selected.isNotEmpty ? _deleteSelected : null),
-            IconButton(
-                icon: const Icon(Icons.close),
-                onPressed: () {
-                  setState(() {
-                    _selecting = false;
-                    _selected.clear();
-                  });
-                }),
-          ] else ...[
-            IconButton(
-                icon: const Icon(Icons.search),
-                onPressed: () {
-                  showSearch(
-                      context: context,
-                      delegate: _DownloadSearchDelegate(_comics, _loadComics));
-                }),
-            IconButton(icon: const Icon(Icons.sort), onPressed: _showSortMenu),
-          ],
+  void _addToLocalFavoriteFolder(BuildContext context, DownloadPageLogic logic) {
+    String? folder;
+    showDialog(
+      context: App.globalContext!,
+      builder: (context) => SimpleDialog(
+        title: const Text("复制到..."),
+        children: [
+          SizedBox(
+            width: 400,
+            height: 132,
+            child: Column(
+              children: [
+                ListTile(
+                  title: Text("收藏夹".tl),
+                  trailing: DropdownButton<String>(
+                    hint: Text("选择收藏夹".tl),
+                    items: LocalFavoritesManager()
+                        .folderNames
+                        .map((f) => DropdownMenuItem(value: f, child: Text(f)))
+                        .toList(),
+                    onChanged: (v) => folder = v,
+                  ),
+                ),
+                const Spacer(),
+                Center(
+                  child: FilledButton(
+                    child: Text("确认".tl),
+                    onPressed: () {
+                      if (folder == null) return;
+                      for (int i = 0; i < logic.selected.length; i++) {
+                        if (logic.selected[i]) {
+                          var comic = logic.comics[i];
+                          LocalFavoritesManager().addComic(
+                            folder!,
+                            FavoriteItem(
+                              target: comic.id,
+                              name: comic.name,
+                              coverPath: '',
+                              author: comic.subTitle,
+                              type: _downloadTypeToFavoriteType(comic.type),
+                              tags: comic.tags,
+                            ),
+                          );
+                        }
+                      }
+                      App.globalBack();
+                    },
+                  ),
+                ),
+                const SizedBox(height: 16),
+              ],
+            ),
+          )
         ],
       ),
-      body: _loading
-          ? const Center(child: CircularProgressIndicator())
-          : _filtered.isEmpty
-              ? _buildEmptyState()
-              : ListView.builder(
-                  itemCount: _filtered.length,
-                  itemBuilder: (context, index) => _buildItem(index),
-                ),
     );
   }
 
-  Widget _buildEmptyState() {
+  Widget _buildEmptyState(BuildContext context) {
     final path = DownloadManager().path ?? appdata.settings[22];
     return Center(
       child: Padding(
@@ -297,8 +681,8 @@ class _DownloadPageState extends State<DownloadPage> {
           children: [
             const Icon(Icons.download_done, size: 64, color: Colors.grey),
             const SizedBox(height: 16),
-            const Text('暂无已下载的漫画',
-                style: TextStyle(fontSize: 18, color: Colors.grey)),
+            Text('暂无已下载的漫画'.tl,
+                style: const TextStyle(fontSize: 18, color: Colors.grey)),
             const SizedBox(height: 8),
             if (path.isNotEmpty)
               Text('下载目录: $path',
@@ -313,11 +697,10 @@ class _DownloadPageState extends State<DownloadPage> {
                   ScaffoldMessenger.of(context).showSnackBar(
                     SnackBar(content: Text('扫描完成，共发现 $count 个漫画')),
                   );
-                  _loadComics();
                 }
               },
               icon: const Icon(Icons.refresh),
-              label: const Text('重新扫描磁盘'),
+              label: Text('重新扫描磁盘'.tl),
             ),
             const SizedBox(height: 8),
             Text('请确保下载目录中存在 download.db 数据库文件',
@@ -329,395 +712,154 @@ class _DownloadPageState extends State<DownloadPage> {
       ),
     );
   }
+}
 
-  Widget _buildItem(int index) {
-    final comic = _filtered[index];
-    final isSelected = _selected.contains(index);
-    return Card(
-      margin: const EdgeInsets.symmetric(vertical: 4, horizontal: 12),
-      color: isSelected ? Theme.of(context).colorScheme.primaryContainer : null,
-      child: InkWell(
-        onTap: () {
-          if (_selecting) {
-            setState(() {
-              if (isSelected) {
-                _selected.remove(index);
-              } else {
-                _selected.add(index);
-              }
-              if (_selected.isEmpty) _selecting = false;
-            });
-          } else {
-            _showInfoPanel(comic);
-          }
-        },
-        onLongPress: () {
-          setState(() {
-            _selecting = true;
-            _selected.add(index);
-          });
-        },
-        onSecondaryTap: _selecting ? null : () => _showItemMenu(comic),
-        borderRadius: BorderRadius.circular(12),
-        child: ListTile(
-          leading: ClipRRect(
-            borderRadius: BorderRadius.circular(8),
-            child: SizedBox(
-              width: 56,
-              height: 72,
-              child: _buildCover(comic),
-            ),
-          ),
-          title: Text(comic.name,
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-              style:
-                  const TextStyle(fontSize: 15, fontWeight: FontWeight.w500)),
-          subtitle: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              if (comic.subTitle.isNotEmpty)
-                Text(comic.subTitle,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                        color: Theme.of(context).colorScheme.onSurfaceVariant,
-                        fontSize: 13)),
-              Text(
-                  '${_formatSize(comic.comicSize)}  ${_formatTime(comic.time)}  ${comic.eps.length} 章',
-                  style: TextStyle(
-                      color: Theme.of(context).colorScheme.outline,
-                      fontSize: 11)),
-            ],
-          ),
-          trailing: _selecting
-              ? Icon(
-                  isSelected
-                      ? Icons.check_circle
-                      : Icons.radio_button_unchecked,
-                  color:
-                      isSelected ? Theme.of(context).colorScheme.primary : null)
-              : const Icon(Icons.chevron_right),
-        ),
-      ),
-    );
-  }
+class DownloadedComicInfoView extends StatefulWidget {
+  const DownloadedComicInfoView(this.item, this.logic, {super.key});
+  final DownloadedItem item;
+  final DownloadPageLogic logic;
 
-  Widget _buildCover(DownloadedItem comic) {
-    try {
-      final coverFile = DownloadManager().getCover(comic.id);
-      if (coverFile.existsSync())
-        return Image.file(coverFile,
-            fit: BoxFit.cover,
-            errorBuilder: (_, __, ___) =>
-                const Icon(Icons.image_not_supported));
-    } catch (_) {}
-    return Container(
-        color: Theme.of(context).colorScheme.surfaceContainerHighest,
-        child: const Icon(Icons.image_not_supported_outlined));
-  }
+  @override
+  State<DownloadedComicInfoView> createState() =>
+      _DownloadedComicInfoViewState();
+}
 
-  void _showInfoPanel(DownloadedItem comic) {
-    final eps = comic.eps;
-    final downloaded = comic.downloadedEps;
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-      ),
-      builder: (ctx) => DraggableScrollableSheet(
-        initialChildSize: 0.5,
-        maxChildSize: 0.8,
-        minChildSize: 0.3,
-        expand: false,
-        builder: (ctx, scrollController) => Column(
-          children: [
-            const SizedBox(height: 12),
-            Container(
-                width: 40,
-                height: 4,
-                decoration: BoxDecoration(
-                    color: Colors.grey[300],
-                    borderRadius: BorderRadius.circular(2))),
-            const SizedBox(height: 12),
-            Text(comic.name,
-                style:
-                    const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-                textAlign: TextAlign.center),
-            const SizedBox(height: 8),
-            Expanded(
-              child: GridView.builder(
-                controller: scrollController,
-                padding: const EdgeInsets.all(12),
-                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                    crossAxisCount: 4,
-                    childAspectRatio: 2.5,
-                    crossAxisSpacing: 8,
-                    mainAxisSpacing: 8),
-                itemCount: eps.length,
-                itemBuilder: (ctx, i) => GestureDetector(
-                  onLongPress: downloaded.contains(i)
-                      ? () => _deleteSingleEpisode(ctx, comic, i)
-                      : null,
-                  child: ElevatedButton(
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: downloaded.contains(i)
-                          ? Theme.of(context).colorScheme.primaryContainer
-                          : Theme.of(context)
-                              .colorScheme
-                              .surfaceContainerHighest,
-                    ),
-                    onPressed: downloaded.contains(i)
-                        ? () {
-                            Navigator.pop(ctx);
-                            comic.read(ep: i);
-                          }
-                        : null,
-                    child: Text(eps[i],
-                        textAlign: TextAlign.center,
-                        style: const TextStyle(
-                            fontSize: 12, fontWeight: FontWeight.w500)),
-                  ),
-                ),
-              ),
-            ),
-            Padding(
-              padding: const EdgeInsets.all(12),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: OutlinedButton(
-                      onPressed: () {
-                        Navigator.pop(ctx);
-                        _toComicInfoPage(context, comic);
-                      },
-                      child: const Text('查看详情'),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: FilledButton(
-                      onPressed: () {
-                        Navigator.pop(ctx);
-                        comic.read();
-                      },
-                      child: const Text('阅读'),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
+class _DownloadedComicInfoViewState extends State<DownloadedComicInfoView> {
+  String name = "";
+  List<String> eps = [];
+  List<int> downloadedEps = [];
+  late final comic = widget.item;
 
-  Future<void> _deleteSingleEpisode(
-      BuildContext sheetCtx, DownloadedItem comic, int ep) async {
-    final confirmed = await showDialog<bool>(
+  deleteEpisode(int i) {
+    showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('删除章节'),
-        content: Text('确定要删除"${comic.eps[ep]}"吗？'),
+        title: Text("确认删除".tl),
+        content: Text("要删除这个章节吗".tl),
         actions: [
           TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('取消')),
+            onPressed: () => Navigator.pop(ctx),
+            child: Text("取消".tl),
+          ),
           TextButton(
-              onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('删除')),
+            onPressed: () async {
+              Navigator.pop(ctx);
+              var message = await DownloadManager().deleteEpisode(comic, i);
+              if (message == null) {
+                setState(() {});
+              }
+            },
+            child: Text("确认".tl),
+          ),
         ],
       ),
     );
-    if (confirmed == true) {
-      final error = await DownloadManager().deleteEpisode(comic, ep);
-      if (error != null && context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(error)),
-        );
-      }
-      Navigator.pop(sheetCtx);
-      _loadComics();
-    }
   }
 
-  void _showSortMenu() {
-    showModalBottomSheet(
-      context: context,
-      builder: (ctx) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ListTile(
-                title: const Text('按时间'),
-                onTap: () {
-                  Navigator.pop(ctx);
-                  _sortBy((a, b) =>
-                      (b.time ?? DateTime(0)).compareTo(a.time ?? DateTime(0)));
-                }),
-            ListTile(
-                title: const Text('按标题'),
-                onTap: () {
-                  Navigator.pop(ctx);
-                  _sortBy((a, b) => a.name.compareTo(b.name));
-                }),
-            ListTile(
-                title: const Text('按作者'),
-                onTap: () {
-                  Navigator.pop(ctx);
-                  _sortBy((a, b) => a.subTitle.compareTo(b.subTitle));
-                }),
-            ListTile(
-                title: const Text('按大小'),
-                onTap: () {
-                  Navigator.pop(ctx);
-                  _sortBy(
-                      (a, b) => (b.comicSize ?? 0).compareTo(a.comicSize ?? 0));
-                }),
-          ],
-        ),
-      ),
-    );
-  }
-
-  void _sortBy(int Function(DownloadedItem, DownloadedItem) compare) {
-    setState(() {
-      _comics.sort(compare);
-      if (_searchQuery.isEmpty) {
-        _filtered = List.from(_comics);
-      }
-    });
-  }
-
-  void _showItemMenu(DownloadedItem comic) {
-    showModalBottomSheet(
-      context: context,
-      builder: (ctx) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ListTile(
-              leading: const Icon(Icons.menu_book),
-              title: const Text('阅读'),
-              onTap: () {
-                Navigator.pop(ctx);
-                comic.read();
-              },
+  @override
+  Widget build(BuildContext context) {
+    getInfo();
+    return Padding(
+      padding: const EdgeInsets.only(left: 16, right: 16),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(0, 16, 0, 16),
+            child: Text(
+              name,
+              style: const TextStyle(fontSize: 22),
             ),
-            ListTile(
-              leading: const Icon(Icons.delete),
-              title: const Text('删除'),
-              onTap: () async {
-                Navigator.pop(ctx);
-                final confirmed = await showDialog<bool>(
-                  context: context,
-                  builder: (ctx) => AlertDialog(
-                    title: const Text('确认删除'),
-                    content: Text('确定要删除"${comic.name}"吗？'),
-                    actions: [
-                      TextButton(
-                          onPressed: () => Navigator.pop(ctx, false),
-                          child: const Text('取消')),
-                      TextButton(
-                          onPressed: () => Navigator.pop(ctx, true),
-                          child: const Text('删除')),
-                    ],
+          ),
+          Expanded(
+            child: GridView.builder(
+              gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+                maxCrossAxisExtent: 300,
+                childAspectRatio: 4,
+              ),
+              itemBuilder: (BuildContext context, int i) {
+                return Padding(
+                  padding: const EdgeInsets.all(4),
+                  child: InkWell(
+                    borderRadius: const BorderRadius.all(Radius.circular(16)),
+                    child: Container(
+                      decoration: BoxDecoration(
+                        borderRadius:
+                            const BorderRadius.all(Radius.circular(16)),
+                        color: downloadedEps.contains(i)
+                            ? Theme.of(context).colorScheme.primaryContainer
+                            : Theme.of(context)
+                                .colorScheme
+                                .surfaceContainerHighest,
+                      ),
+                      child: Row(
+                        children: [
+                          const SizedBox(width: 16),
+                          Expanded(
+                            child: Text(eps[i]),
+                          ),
+                          const SizedBox(width: 4),
+                          if (downloadedEps.contains(i))
+                            const Icon(Icons.download_done),
+                          const SizedBox(width: 16),
+                        ],
+                      ),
+                    ),
+                    onTap: () => readSpecifiedEps(i),
+                    onLongPress: () {
+                      deleteEpisode(i);
+                    },
+                    onSecondaryTapDown: (details) {
+                      deleteEpisode(i);
+                    },
                   ),
                 );
-                if (confirmed == true) {
-                  await DownloadManager().delete([comic.id]);
-                  _loadComics();
-                }
               },
+              itemCount: eps.length,
             ),
-            ListTile(
-              leading: const Icon(Icons.ios_share),
-              title: const Text('导出'),
-              onTap: () {
-                Navigator.pop(ctx);
-                _exportComic(comic);
-              },
+          ),
+          SizedBox(
+            height: 50,
+            child: Row(
+              children: [
+                Expanded(
+                  child: FilledButton(
+                    onPressed: () {
+                      App.globalBack();
+                      _toComicInfoPage(context, widget.item);
+                    },
+                    child: Text("查看详情".tl),
+                  ),
+                ),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: FilledButton(
+                    onPressed: () => read(),
+                    child: Text("阅读".tl),
+                  ),
+                ),
+              ],
             ),
-            ListTile(
-              leading: const Icon(Icons.info_outline),
-              title: const Text('查看详情'),
-              onTap: () {
-                Navigator.pop(ctx);
-                _toComicInfoPage(context, comic);
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.copy),
-              title: const Text('复制路径'),
-              onTap: () {
-                Navigator.pop(ctx);
-                final dir = comic.directory ?? '';
-                final fullPath = "${DownloadManager().path}/$dir";
-                Clipboard.setData(ClipboardData(text: fullPath));
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('路径已复制到剪贴板')),
-                );
-              },
-            ),
-          ],
-        ),
+          ),
+          SizedBox(
+            height: MediaQuery.of(context).padding.bottom,
+          )
+        ],
       ),
     );
   }
 
-  void _exportComic(DownloadedItem comic) {
-    final dir = comic.directory ?? '';
-    final fullPath = "${DownloadManager().path}/$dir";
-    if (Platform.isWindows) {
-      Process.run('explorer', [fullPath]);
-    } else if (Platform.isMacOS) {
-      Process.run('open', [fullPath]);
-    } else if (Platform.isLinux) {
-      Process.run('xdg-open', [fullPath]);
-    }
+  void getInfo() {
+    name = comic.name;
+    eps = comic.eps;
+    downloadedEps = comic.downloadedEps;
   }
-}
 
-class _DownloadSearchDelegate extends SearchDelegate<String> {
-  final List<DownloadedItem> comics;
-  final VoidCallback onDone;
+  void read() {
+    comic.read();
+  }
 
-  _DownloadSearchDelegate(this.comics, this.onDone);
-
-  @override
-  List<Widget>? buildActions(BuildContext context) => [
-        IconButton(icon: const Icon(Icons.clear), onPressed: () => query = ''),
-      ];
-
-  @override
-  Widget? buildLeading(BuildContext context) => IconButton(
-        icon: const Icon(Icons.arrow_back),
-        onPressed: () => close(context, ''),
-      );
-
-  @override
-  Widget buildResults(BuildContext context) => _buildSearchResults();
-
-  @override
-  Widget buildSuggestions(BuildContext context) => _buildSearchResults();
-
-  Widget _buildSearchResults() {
-    final q = query.toLowerCase();
-    final results = comics
-        .where((c) =>
-            c.name.toLowerCase().contains(q) ||
-            c.subTitle.toLowerCase().contains(q) ||
-            c.tags.any((t) => t.toLowerCase().contains(q)))
-        .toList();
-    return ListView.builder(
-      itemCount: results.length,
-      itemBuilder: (ctx, i) => ListTile(
-        title: Text(results[i].name),
-        subtitle: Text(results[i].subTitle),
-        onTap: () => close(ctx, results[i].id),
-      ),
-    );
+  void readSpecifiedEps(int i) {
+    comic.read(ep: i + 1);
   }
 }
