@@ -335,9 +335,7 @@ class _ReadingSettingsState extends State<ReadingSettings> {
               }),
             ),
           ),
-          if (!logic.data.downloaded &&
-              (logic.data.type == ReadingType.picacg ||
-                  logic.data.type == ReadingType.jm))
+          if (!logic.data.downloaded)
             ListTile(
               leading: const Icon(Icons.account_tree_sharp),
               title: Text("设置分流".tl),

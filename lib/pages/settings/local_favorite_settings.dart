@@ -1,10 +1,11 @@
-﻿
+
 // ignore_for_file: no_leading_underscores_for_local_identifiers, unused_element
 
 part of 'settings_page.dart';
 
 class LocalFavoritesSettings extends StatefulWidget {
-  const LocalFavoritesSettings({super.key});
+  LocalFavoritesSettings({this.width = 0, super.key});
+  final double width;
 
   @override
   State<LocalFavoritesSettings> createState() => _LocalFavoritesSettingsState();
@@ -28,39 +29,35 @@ class _LocalFavoritesSettingsState extends State<LocalFavoritesSettings> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      body: ListView(
-        children: [
-          SettingsTitle("本地收藏".tl),
-          NewPageSetting(
-            title: "收藏夹管理".tl,
-            page: const FolderManageSetting(),
-          ),
-          SelectSetting(
-            title: "本地收藏添加位置".tl,
-            settingsIndex: 53,
-            values: const ["0", "1"],
-            titles: ["尾部添加".tl, "首部添加".tl],
-          ),
-          SelectSetting(
-            title: "阅读后移动本地收藏".tl,
-            settingsIndex: 54,
-            values: const ["0", "1", "2"],
-            titles: [
-              "不移动".tl,
-              "尾部添加".tl,
-              "首部添加".tl,
-            ],
-          ),
-          SelectSetting(
-            title: "默认收藏夹".tl,
-            settingsIndex: 51,
-            values: _buildFolderValues(),
-            titles: _buildFolderTitles(),
-          ),
+    return buildTwoColumnLayout(widget.width, [
+      SettingsTitle("本地收藏".tl),
+      NewPageSetting(
+        title: "收藏夹管理".tl,
+        page: const FolderManageSetting(),
+      ),
+      SelectSetting(
+        title: "本地收藏添加位置".tl,
+        settingsIndex: 53,
+        values: const ["0", "1"],
+        titles: ["尾部添加".tl, "首部添加".tl],
+      ),
+      SelectSetting(
+        title: "阅读后移动本地收藏".tl,
+        settingsIndex: 54,
+        values: const ["0", "1", "2"],
+        titles: [
+          "不移动".tl,
+          "尾部添加".tl,
+          "首部添加".tl,
         ],
       ),
-    );
+      SelectSetting(
+        title: "默认收藏夹".tl,
+        settingsIndex: 51,
+        values: _buildFolderValues(),
+        titles: _buildFolderTitles(),
+      ),
+    ]);
   }
 
   List<String> _buildFolderValues() {

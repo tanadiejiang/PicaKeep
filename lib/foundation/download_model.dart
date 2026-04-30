@@ -1,4 +1,3 @@
-
 // ignore_for_file: prefer_const_constructors, avoid_unused_constructor_parameters, no_leading_underscores_for_local_identifiers
 
 enum DownloadType {
@@ -77,13 +76,14 @@ class DownloadedComic extends DownloadedItem {
       };
 
   DownloadedComic.fromJson(Map<String, dynamic> json)
-      : comicId = json["comicId"],
-        title = json["title"],
-        author = json["author"],
-        description = json["description"] ?? '',
-        thumbUrl = json["thumbUrl"] ?? '',
-        chapters = List<String>.from(json["chapters"]),
-        size = json["size"],
+      : comicId = json["comicId"] ?? json["comicItem"]?["id"] ?? '',
+        title = json["title"] ?? json["comicItem"]?["title"] ?? '',
+        author = json["author"] ?? json["comicItem"]?["author"] ?? '',
+        description =
+            json["description"] ?? json["comicItem"]?["description"] ?? '',
+        thumbUrl = json["thumbUrl"] ?? json["comicItem"]?["thumbUrl"] ?? '',
+        chapters = _parseChapters(json),
+        size = json["size"]?.toDouble(),
         tagList = const [],
         downloadedChapters = [] {
     if (json["downloadedChapters"] != null) {
@@ -93,7 +93,42 @@ class DownloadedComic extends DownloadedItem {
         downloadedChapters.add(i);
       }
     }
-    tagList = List<String>.from(json["tagList"] ?? []);
+    tagList = _parseTagsList(json["tagList"] ?? json["comicItem"]?["tags"]);
+  }
+
+  static List<String> _parseChapters(Map<String, dynamic> json) {
+    final rootChapters = json["chapters"];
+    if (rootChapters is List) {
+      return List<String>.from(rootChapters);
+    }
+    final comicItem = json["comicItem"];
+    if (comicItem is Map) {
+      final ciChapters = comicItem["chapters"];
+      if (ciChapters is List) {
+        return List<String>.from(ciChapters);
+      }
+      if (ciChapters is Map) {
+        final entries = ciChapters.entries.toList()
+          ..sort((a, b) => (int.tryParse(a.key.toString()) ?? 0)
+              .compareTo(int.tryParse(b.key.toString()) ?? 0));
+        return entries.map((e) {
+          final v = e.value;
+          if (v is Map)
+            return v["title"]?.toString() ??
+                v["name"]?.toString() ??
+                "Ch ${e.key}";
+          if (v is String) return v;
+          return "Ch ${e.key}";
+        }).toList();
+      }
+    }
+    return [];
+  }
+
+  static List<String> _parseTagsList(dynamic tags) {
+    if (tags == null) return [];
+    if (tags is List) return tags.map((e) => e.toString()).toList();
+    return [tags.toString()];
   }
 
   @override
@@ -154,14 +189,40 @@ class DownloadedGallery extends DownloadedItem {
         "tagList": tagList,
       };
 
-  DownloadedGallery.fromJson(Map<String, dynamic> json)
-      : galleryTitle = json["galleryTitle"],
-        subtitle = json["subtitle"] ?? '',
-        uploader = json["uploader"] ?? '',
-        link = json["link"],
-        coverPath = json["coverPath"] ?? '',
-        size = json["size"],
-        tagList = List<String>.from(json["tagList"] ?? []);
+  factory DownloadedGallery.fromJson(Map<String, dynamic> json) {
+    if (json.containsKey("gallery")) {
+      final g = json["gallery"] as Map<String, dynamic>;
+      return DownloadedGallery(
+        galleryTitle: g["title"] ?? g["galleryTitle"] ?? '',
+        subtitle: g["subTitle"] ?? g["subtitle"] ?? '',
+        uploader: g["uploader"] ?? '',
+        link: g["link"] ?? '',
+        coverPath: g["cover"] ?? g["coverPath"] ?? '',
+        size: json["size"]?.toDouble(),
+        tagList: _parseTags(g["tags"]),
+      );
+    }
+    return DownloadedGallery(
+      galleryTitle: json["galleryTitle"] ?? '',
+      subtitle: json["subtitle"] ?? '',
+      uploader: json["uploader"] ?? '',
+      link: json["link"] ?? '',
+      coverPath: json["coverPath"] ?? '',
+      size: json["size"]?.toDouble(),
+      tagList: _parseTags(json["tags"]),
+    );
+  }
+
+  static List<String> _parseTags(dynamic tags) {
+    if (tags == null) return [];
+    if (tags is List) return tags.map((e) => e.toString()).toList();
+    if (tags is Map)
+      return (tags as Map).values.expand((v) {
+        if (v is List) return v.map((e) => e.toString());
+        return [v.toString()];
+      }).toList();
+    return [];
+  }
 
   @override
   DownloadType get type => DownloadType.ehentai;
@@ -177,7 +238,8 @@ class DownloadedGallery extends DownloadedItem {
 
   @override
   String get id {
-    final match = RegExp(r"g/(\d+)/(\w+)").firstMatch(link);
+    // Extract gallery id from link: e-hentai.org/g/123456/abc123 -> 123456/abc123
+    var match = RegExp(r"/g/(\d+)/([a-z0-9]+)").firstMatch(link);
     if (match != null) {
       return "${match.group(1)}-${match.group(2)}";
     }
@@ -228,9 +290,9 @@ class DownloadedJmComic extends DownloadedItem {
       };
 
   DownloadedJmComic.fromMap(Map<String, dynamic> map)
-      : comicId = map["comicId"],
-        name = map["name"],
-        author = map["author"] ?? '',
+      : comicId = map["comicId"] ?? map["comic"]?["id"] ?? '',
+        name = map["name"] ?? map["comic"]?["name"] ?? '',
+        author = _parseAuthor(map["author"] ?? map["comic"]?["author"]),
         size = map["size"],
         epNames = const [],
         tagList = const [],
@@ -238,8 +300,15 @@ class DownloadedJmComic extends DownloadedItem {
     if (map["downloadedChapters"] != null) {
       downloadedChapters = List<int>.from(map["downloadedChapters"]);
     }
-    epNames = List<String>.from(map["epNames"] ?? []);
-    tagList = List<String>.from(map["tagList"] ?? []);
+    epNames =
+        List<String>.from(map["epNames"] ?? map["comic"]?["epNames"] ?? []);
+    tagList = List<String>.from(map["tagList"] ?? map["comic"]?["tags"] ?? []);
+  }
+
+  static String _parseAuthor(dynamic author) {
+    if (author == null) return '';
+    if (author is List) return author.join(", ");
+    return author.toString();
   }
 
   @override
@@ -252,7 +321,7 @@ class DownloadedJmComic extends DownloadedItem {
   List<String> get eps => epNames.isEmpty
       ? List<String>.generate(
           downloadedChapters.isEmpty ? 1 : downloadedChapters.length,
-          (index) => "\u7B2C${index + 1}\u7AE0")
+          (index) => "第${index + 1}章")
       : epNames;
 
   @override
@@ -305,8 +374,8 @@ class DownloadedHitomiComic extends DownloadedItem {
       };
 
   DownloadedHitomiComic.fromMap(Map<String, dynamic> map)
-      : comicId = map["comicId"],
-        name = map["name"],
+      : comicId = map["comicId"] ?? '',
+        name = map["name"] ?? '',
         artists = List<String>.from(map["artists"] ?? []),
         tagList = List<String>.from(map["tagList"] ?? []),
         size = map["size"],
@@ -320,16 +389,13 @@ class DownloadedHitomiComic extends DownloadedItem {
   List<int> get downloadedEps => [0];
 
   @override
-  List<String> get eps => ["\u7B2C\u4E00\u7AE0"];
+  List<String> get eps => ["第一章"];
 
   @override
   String get id => "hitomi$comicId";
 
   @override
-
-
-  @override
-  String get subTitle => artists.isEmpty ? "\u672A\u77E5" : artists.first;
+  String get subTitle => artists.isEmpty ? "未知" : artists.first;
 
   @override
   DownloadType get type => DownloadType.hitomi;
@@ -391,12 +457,13 @@ class DownloadedHtComic extends DownloadedItem {
       };
 
   DownloadedHtComic.fromJson(Map<String, dynamic> json)
-      : comicId = json["comicId"],
-        name = json["name"],
-        uploader = json["uploader"] ?? '',
-        coverPath = json["coverPath"] ?? '',
+      : comicId = json["comicId"] ?? json["comic"]?["id"] ?? '',
+        name = json["name"] ?? json["comic"]?["name"] ?? '',
+        uploader = json["uploader"] ?? json["comic"]?["uploader"] ?? '',
+        coverPath = json["coverPath"] ?? json["comic"]?["coverPath"] ?? '',
         size = json["size"],
-        tagList = List<String>.from(json["tagList"] ?? []);
+        tagList =
+            List<String>.from(json["tagList"] ?? json["comic"]?["tags"] ?? []);
 
   @override
   set comicSize(double? value) => size = value;
@@ -406,18 +473,23 @@ class DownloadedHtComic extends DownloadedItem {
 }
 
 class NhentaiDownloadedComic extends DownloadedItem {
-  final String comicID;
-  final String title;
-  final double? size;
-  final String cover;
+  String get comicID => _comicID;
+  final String _comicID;
+  String get title => _title;
+  final String _title;
+  double? size;
+  String cover;
+  List<String> tagList;
 
   NhentaiDownloadedComic({
-    required this.comicID,
-    required this.title,
+    required String comicID,
+    required String title,
     this.size,
     this.cover = '',
-    this.tags = const [],
-  });
+    List<String>? tagList,
+  })  : _comicID = comicID,
+        _title = title,
+        tagList = tagList ?? [];
 
   @override
   double? get comicSize => size;
@@ -426,7 +498,7 @@ class NhentaiDownloadedComic extends DownloadedItem {
   List<int> get downloadedEps => [0];
 
   @override
-  List<String> get eps => ["\u7B2C\u4E00\u7AE0"];
+  List<String> get eps => ["第一章"];
 
   @override
   String get id => comicID;
@@ -446,21 +518,25 @@ class NhentaiDownloadedComic extends DownloadedItem {
         "title": title,
         "size": size,
         "cover": cover,
-        "tags": tags,
+        "tags": tagList,
       };
 
-  NhentaiDownloadedComic.fromJson(Map<String, dynamic> json)
-      : comicID = json["comicID"],
-        title = json["title"],
-        size = json["size"],
-        tags = List<String>.from(json["tags"] ?? []),
-        cover = json["cover"] ?? '';
+  factory NhentaiDownloadedComic.fromJson(Map<String, dynamic> json) {
+    final comicTags = json["tags"];
+    return NhentaiDownloadedComic(
+      comicID: json["comicID"] ?? '',
+      title: json["title"] ?? '',
+      size: json["size"],
+      tagList: comicTags != null ? List<String>.from(comicTags) : const [],
+      cover: json["cover"] ?? '',
+    );
+  }
 
   @override
-  set comicSize(double? value) {}
+  set comicSize(double? value) => size = value;
 
   @override
-  List<String> tags;
+  List<String> get tags => tagList;
 }
 
 class CustomDownloadedItem extends DownloadedItem {
@@ -529,16 +605,16 @@ class CustomDownloadedItem extends DownloadedItem {
 
   CustomDownloadedItem.fromJson(Map<String, dynamic> json)
       : comicSize = json["comicSize"],
-        downloadedEps = List<int>.from(json["downloadedEps"]),
+        downloadedEps = List<int>.from(json["downloadedEps"] ?? []),
         chapters = json["chapters"] != null
             ? Map<String, String>.from(json["chapters"])
             : null,
-        id = json["id"],
-        name = json["name"],
+        id = json["id"] ?? '',
+        name = json["name"] ?? '',
         subTitle = json["subTitle"] ?? '',
         tags = List<String>.from(json["tags"] ?? []),
-        sourceKey = json["sourceKey"],
+        sourceKey = json["sourceKey"] ?? '',
         sourceName = json["sourceName"] ?? '',
         cover = json["cover"] ?? '',
-        comicId = json["comicId"];
+        comicId = json["comicId"] ?? '';
 }

@@ -15,7 +15,6 @@ class _EpsViewState extends State<EpsView> {
 
   @override
   Widget build(BuildContext context) {
-    var type = widget.data.type;
     var data = widget.data;
     var epsWidgets = <Widget>[];
     for(int index = 0; index<data.eps!.length; index++){
@@ -75,14 +74,6 @@ class _EpsViewState extends State<EpsView> {
                 const SizedBox(width: 8,),
                 Text("章节".tl, style: const TextStyle(fontSize: 18),),
                 const Spacer(),
-                if(type == ReadingType.jm)
-                  IconButton(
-                    icon: Icon(Icons.comment_outlined, color: Theme.of(context).colorScheme.secondary,),
-                    onPressed: (){
-                      showComments(context, data.eps!.keys.elementAt(logic.order-1),
-                          (logic.data as JmReadingData).commentsLength ?? 9999);
-                    },
-                  ),
                 IconButton(
                   icon: Icon(Icons.my_location_outlined, color: Theme.of(context).colorScheme.secondary,size: 23,),
                   onPressed: (){

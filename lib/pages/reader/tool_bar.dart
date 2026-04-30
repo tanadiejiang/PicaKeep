@@ -122,32 +122,7 @@ extension ToolBar on ComicReadingPage {
                             if (image != null) {
                               image = image.split("/").last;
                               var otherInfo = <String, dynamic>{};
-                              if (logic.data.type == ReadingType.ehentai) {
-                                otherInfo["gallery"] =
-                                    (logic.data as EhReadingData)
-                                        .gallery
-                                        .toJson();
-                              } else if (logic.data.type ==
-                                  ReadingType.hitomi) {
-                                otherInfo["hitomi"] =
-                                    (readingData as HitomiReadingData)
-                                        .images
-                                        .map((e) => e.toMap())
-                                        .toList();
-                                otherInfo["galleryId"] = readingData.id;
-                              } else if (logic.data.type == ReadingType.jm) {
-                                otherInfo["jmEpNames"] =
-                                    readingData.eps!.values.toList();
-                                otherInfo["epsId"] = readingData.eps!.keys
-                                    .elementAt(logic.index - 1);
-                                otherInfo["bookId"] = readingData.id;
-                              }
-                              if (logic.data.type != ComicType.other) {
-                                otherInfo["eps"] =
-                                    readingData.eps?.keys.toList() ?? [];
-                              } else {
-                                otherInfo["eps"] = readingData.eps;
-                              }
+                              otherInfo["eps"] = readingData.eps?.keys.toList() ?? [];
                               otherInfo["url"] = logic.urls[logic.index - 1];
                               var favorite = ImageFavorite(
                                   id,

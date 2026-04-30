@@ -4,6 +4,7 @@ import 'package:picakeep/foundation/download.dart';
 import 'history_page.dart';
 import 'image_favorites.dart';
 import 'tools.dart';
+import 'download_page.dart';
 
 class MePage extends StatelessWidget {
   const MePage({super.key});
@@ -80,7 +81,9 @@ class MePage extends StatelessWidget {
     return _MePageCard(
       icon: const Icon(Icons.history),
       title: "\u5386\u53F2\u8BB0\u5F55($count)",
-      description: history.isEmpty ? "\u6682\u65E0\u5386\u53F2\u8BB0\u5F55" : "\u6700\u8FD1\u6D4F\u89C8\u7684\u6F2B\u753B",
+      description: history.isEmpty
+          ? "\u6682\u65E0\u5386\u53F2\u8BB0\u5F55"
+          : "\u6700\u8FD1\u6D4F\u89C8\u7684\u6F2B\u753B",
       onTap: () {
         Navigator.of(context).push(
           MaterialPageRoute(builder: (_) => const HistoryPage()),
@@ -152,7 +155,7 @@ class MePage extends StatelessWidget {
       description: "\u5171 $count \u90E8\u6F2B\u753B",
       onTap: () {
         Navigator.of(context).push(
-          MaterialPageRoute(builder: (_) => const _DownloadPlaceholder()),
+          MaterialPageRoute(builder: (_) => const DownloadPage()),
         );
       },
     );
@@ -220,22 +223,6 @@ class _MePageCard extends StatelessWidget {
             if (child != null) child!,
           ],
         ),
-      ),
-    );
-  }
-}
-
-class _DownloadPlaceholder extends StatelessWidget {
-  const _DownloadPlaceholder();
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text("\u5DF2\u4E0B\u8F7D"),
-      ),
-      body: const Center(
-        child: Text("\u4E0B\u8F7D\u9875\u9762\u5F85\u5B9E\u73B0"),
       ),
     );
   }
