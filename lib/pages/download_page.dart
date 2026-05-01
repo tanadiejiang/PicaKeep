@@ -16,6 +16,8 @@ import 'package:picakeep/components/comic_tile.dart';
 import 'package:picakeep/components/scrollable.dart';
 import 'package:picakeep/components/layout.dart';
 import 'package:picakeep/components/components.dart';
+import 'package:picakeep/components/window_frame.dart';
+import 'package:picakeep/tools/read_history_helper.dart';
 import 'local_comic_detail_page.dart';
 
 void _toComicInfoPage(BuildContext context, DownloadedItem comic) {
@@ -25,14 +27,9 @@ void _toComicInfoPage(BuildContext context, DownloadedItem comic) {
 }
 
 extension ReadComic on DownloadedItem {
-  void read({int? ep, int? page}) {
-    final hasEp = eps.isNotEmpty;
-    final dm = DownloadManager();
-    Navigator.of(App.globalContext!).push(
-      MaterialPageRoute(
-        builder: (_) => createReadingPage(),
-      ),
-    );
+  Future<void> read({int? ep, int? page}) async {
+    await ensureHistoryBeforeRead(this);
+    await App.pushInner(() => createReadingPage());
   }
 }
 
@@ -372,15 +369,10 @@ class DownloadPage extends StatelessWidget {
         },
       );
     } else {
-      showDialog(
-        context: App.globalContext!,
-        builder: (context) => Dialog(
-          child: SizedBox(
-            width: 400,
-            height: 500,
-            child: DownloadedComicInfoView(logic.comics[index], logic),
-          ),
-        ),
+      showSideBar(
+        context,
+        DownloadedComicInfoView(logic.comics[index], logic),
+        useSurfaceTintColor: true,
       );
     }
   }
@@ -594,7 +586,7 @@ class DownloadPage extends StatelessWidget {
                     child: Text("添加至本地收藏".tl),
                     onTap: () => Future.delayed(
                       const Duration(milliseconds: 200),
-                      () => _addToLocalFavoriteFolder(context, logic),
+                      () => _addToLocalFavoriteFolder(logic),
                     ),
                   ),
                 ],
@@ -629,8 +621,7 @@ class DownloadPage extends StatelessWidget {
     }
   }
 
-  void _addToLocalFavoriteFolder(
-      BuildContext context, DownloadPageLogic logic) {
+  void _addToLocalFavoriteFolder(DownloadPageLogic logic) {
     String? folder;
     showDialog(
       context: App.globalContext!,

@@ -3,6 +3,7 @@ import 'package:picakeep/base.dart';
 import 'package:picakeep/foundation/download.dart';
 import 'package:picakeep/foundation/download_model.dart';
 import 'package:picakeep/foundation/local_favorites.dart';
+import 'package:picakeep/tools/read_history_helper.dart';
 import 'package:picakeep/tools/translations.dart';
 import 'package:picakeep/tools/tags_translation.dart';
 import 'package:picakeep/foundation/app.dart';
@@ -85,30 +86,32 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
     );
   }
 
-  void _onRead({int? ep, int? page}) {
+  Future<void> _onRead({int? ep, int? page}) async {
+    await ensureHistoryBeforeRead(widget.comic);
     final hasEp = widget.comic.eps.isNotEmpty;
+    final epsMap = <String, String>{};
+    if (hasEp) {
+      for (int i = 0; i < widget.comic.eps.length; i++) {
+        epsMap['${i + 1}'] = widget.comic.eps[i];
+      }
+    }
     final readingData = LocalReadingData(
       title: widget.comic.name,
       id: widget.comic.id,
       downloadId: widget.comic.id,
       sourceKey: _extractSourceKey(widget.comic.id),
       hasEp: hasEp,
-      eps: hasEp
-          ? {
-              for (int i = 0; i < widget.comic.eps.length; i++)
-                widget.comic.eps[i]: widget.comic.eps[i]
-            }
-          : null,
+      comicType: comicTypeForDownloadType(widget.comic.type),
+      eps: hasEp ? epsMap : null,
       favoriteType: _downloadTypeToFavoriteType(widget.comic.type),
     );
+    readingData.downloadedEps = widget.comic.downloadedEps;
 
-    Navigator.of(App.globalContext!).push(MaterialPageRoute(
-      builder: (_) => ComicReadingPage(
-        readingData,
-        page ?? 1,
-        ep ?? (hasEp ? 1 : 0),
-      ),
-    ));
+    await App.pushInner(() => ComicReadingPage(
+          readingData,
+          page ?? 1,
+          ep ?? (hasEp ? 1 : 0),
+        ));
   }
 
   void _onDelete() async {

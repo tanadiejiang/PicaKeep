@@ -16,6 +16,7 @@ void main() async {
 
   await HistoryManager().init();
   await LocalFavoritesManager().init();
+  await downloadManager.init();
 
   runApp(const PicaKeepApp());
 }
@@ -74,14 +75,7 @@ class _PicaKeepAppState extends State<PicaKeepApp> {
             useMaterial3: true,
           ),
           themeMode: _getThemeMode(),
-          onGenerateRoute: (settings) {
-            return MaterialPageRoute(
-              builder: (context) {
-                App.mainNavigatorKey = GlobalKey<NavigatorState>();
-                return const MainPage();
-              },
-            );
-          },
+          home: const MainPage(),
         );
       },
     );

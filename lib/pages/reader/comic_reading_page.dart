@@ -60,7 +60,7 @@ class ComicReadingPage extends StatelessWidget {
 
   final int initialEp;
 
-  ReadingType get type => ReadingType.values[0];
+  ReadingType get type => readingData.comicType;
 
   ComicReadingPage(this.readingData, this.initialPage, this.initialEp,
       {super.key}) {
@@ -73,31 +73,35 @@ class ComicReadingPage extends StatelessWidget {
   }
 
   _updateHistory(ComicReadingPageLogic? logic, bool updateMePage) {
+    if (history == null || logic == null) {
+      return;
+    }
+    final h = history!;
     if (readingData.hasEp) {
-      if (logic!.order == 1 && logic.index == 1) {
-        history?.ep = 0;
-        history?.page = 0;
+      if (logic.order == 1 && logic.index == 1) {
+        h.ep = 0;
+        h.page = 0;
       } else {
         if (logic.order == readingData.eps?.length &&
             logic.index == logic.length) {
-          history?.ep = 0;
-          history?.page = 0;
+          h.ep = 0;
+          h.page = 0;
         } else {
-          history?.ep = logic.order;
-          history?.page = logic.index;
+          h.ep = logic.order;
+          h.page = logic.index;
         }
       }
     } else {
-      if (logic!.index == 1) {
-        history?.ep = 0;
-        history?.page = 0;
+      if (logic.index == 1) {
+        h.ep = 0;
+        h.page = 0;
       } else {
-        history?.ep = 1;
-        history?.page = logic.index;
+        h.ep = 1;
+        h.page = logic.index;
       }
     }
-    history!.maxPage = logic.length;
-    HistoryManager().saveReadHistory(history!, updateMePage);
+    h.maxPage = logic.length;
+    HistoryManager().saveReadHistory(h, updateMePage);
   }
 
   bool get useDarkBackground => appdata.appSettings.useDarkBackground;

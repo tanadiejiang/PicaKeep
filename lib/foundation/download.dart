@@ -21,6 +21,7 @@ class DownloadManager with _DownloadDb {
   Database? _db;
 
   Future<void> _getPath() async {
+    _DownloadDb.clearDirectoryCache();
     if (appdata.settings[22].isEmpty) {
       final appPath = await getApplicationSupportDirectory();
       path = "${appPath.path}/download";
@@ -48,6 +49,45 @@ class DownloadManager with _DownloadDb {
   void dispose() {
     _db?.dispose();
     _db = null;
+  }
+
+  String _comicPath(String relativeDir) => '${path!}$pathSep$relativeDir';
+
+  bool _dirExists(String relativeDir) {
+    if (path == null) return false;
+    try {
+      return Directory(_comicPath(relativeDir)).existsSync();
+    } catch (_) {
+      return false;
+    }
+  }
+
+  String _resolveDirectoryForId(String id, String rawFromDb) {
+    if (path == null || _db == null) {
+      return _DownloadDb.sanitizeFileName(
+          rawFromDb.trim().isNotEmpty ? rawFromDb : id);
+    }
+    final raw = rawFromDb.trim();
+    final sanitized = _DownloadDb.sanitizeFileName(
+        raw.isNotEmpty ? raw : id);
+    if (_dirExists(sanitized)) return sanitized;
+    if (raw.isNotEmpty && raw != sanitized && _dirExists(raw)) return raw;
+    try {
+      final parent = Directory(path!);
+      if (!parent.existsSync()) return sanitized;
+      final lowerSan = sanitized.toLowerCase();
+      final lowerRaw = raw.toLowerCase();
+      for (final e in parent.listSync()) {
+        if (e is! Directory) continue;
+        final name = e.uri.pathSegments.isEmpty
+            ? ''
+            : e.uri.pathSegments.lastWhere((s) => s.isNotEmpty, orElse: () => '');
+        if (name.isEmpty || name == 'download.db') continue;
+        final ln = name.toLowerCase();
+        if (ln == lowerSan || ln == lowerRaw) return name;
+      }
+    } catch (_) {}
+    return sanitized;
   }
 
   String generateId(String source, String id) {
@@ -92,28 +132,42 @@ class DownloadManager with _DownloadDb {
   }
 
   File getCover(String id) {
-    return File("$path/${getDirectory(id)}/cover.jpg");
+    final dir = getDirectory(id);
+    final root = _comicPath(dir);
+    for (final name in ['cover.jpg', 'cover.webp', 'cover.png']) {
+      final f = File('$root$pathSep$name');
+      if (f.existsSync()) return f;
+    }
+    try {
+      final d = Directory(root);
+      if (d.existsSync()) {
+        for (final e in d.listSync()) {
+          if (e is File && _isImageFile(e)) return e;
+        }
+      }
+    } catch (_) {}
+    return File('$root${pathSep}cover.jpg');
   }
 
   File getImage(String id, int ep, int index) {
-    String downloadPath;
-    if (ep == 0) {
-      downloadPath = "$path/${getDirectory(id)}/";
-    } else {
-      downloadPath = "$path/${getDirectory(id)}/$ep/";
-    }
-    for (var file in Directory(downloadPath).listSync()) {
-      if (file is File &&
-          file.uri.pathSegments.last.replaceFirst(RegExp(r"\..+"), "") ==
-              index.toString()) {
-        return file;
+    final dir = getDirectory(id);
+    final downloadPath = ep == 0
+        ? '${_comicPath(dir)}$pathSep'
+        : '${_comicPath(dir)}$pathSep$ep$pathSep';
+    try {
+      for (var file in Directory(downloadPath).listSync()) {
+        if (file is File &&
+            file.uri.pathSegments.last.replaceFirst(RegExp(r"\..+"), "") ==
+                index.toString()) {
+          return file;
+        }
       }
-    }
+    } catch (_) {}
     throw Exception("File not found");
   }
 
   int getComicLength(String id) {
-    String downloadPath = "$path/${getDirectory(id)}/";
+    final downloadPath = '${_comicPath(getDirectory(id))}$pathSep';
     int count = 0;
     try {
       for (var file in Directory(downloadPath).listSync()) {
@@ -126,7 +180,7 @@ class DownloadManager with _DownloadDb {
   }
 
   int getEpLength(String id, int ep) {
-    String downloadPath = "$path/${getDirectory(id)}/$ep/";
+    final downloadPath = '${_comicPath(getDirectory(id))}$pathSep$ep$pathSep';
     int count = 0;
     try {
       for (var file in Directory(downloadPath).listSync()) {
@@ -340,7 +394,14 @@ abstract mixin class _DownloadDb {
 
   static final _directoryCache = <String, String>{};
 
+  static void clearDirectoryCache() {
+    _directoryCache.clear();
+  }
+
   String getDirectory(String id) {
+    if (_db == null) {
+      return sanitizeFileName(id);
+    }
     var directory = _directoryCache[id];
     if (directory == null) {
       var result = _db!.select('''
@@ -348,13 +409,11 @@ abstract mixin class _DownloadDb {
         where id = ?
       ''', [id]);
       if (result.isEmpty) {
-        return _sanitizeFileName(id);
+        return sanitizeFileName(id);
       }
-      directory = result.first['directory'] as String?;
-      if (directory == null || directory.isEmpty) {
-        return _sanitizeFileName(id);
-      }
-      directory = _sanitizeFileName(directory);
+      final rawDb = result.first['directory'] as String? ?? '';
+      directory =
+          (this as DownloadManager)._resolveDirectoryForId(id, rawDb);
       if (_directoryCache.length > 50) {
         _directoryCache.remove(_directoryCache.keys.first);
       }
@@ -363,7 +422,7 @@ abstract mixin class _DownloadDb {
     return directory;
   }
 
-  static String _sanitizeFileName(String name) {
+  static String sanitizeFileName(String name) {
     if (name.isEmpty) return 'unknown';
     String sanitized = name;
     sanitized = sanitized.replaceAll(RegExp(r'[<>:"/\\|?*\u0000-\u001F]'), '_');
@@ -371,8 +430,9 @@ abstract mixin class _DownloadDb {
         sanitized.replaceAll(RegExp(r'[\u3000-\u303F\uFF00-\uFFEF]'), '_');
     sanitized = sanitized.replaceAll(RegExp(r'[【】《》「」『』〔〕【】〘〙〚〛]'), '_');
     sanitized = sanitized.replaceAll(RegExp(r'[（）]'), '_');
-    if (sanitized.isEmpty)
+    if (sanitized.isEmpty) {
       return 'unknown_${DateTime.now().millisecondsSinceEpoch}';
+    }
     return sanitized;
   }
 }

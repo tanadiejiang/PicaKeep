@@ -11,6 +11,8 @@ abstract class ReadingData {
 
   String get sourceKey;
 
+  ComicType get comicType;
+
   bool get hasEp;
 
   Map<String, String>? get eps;
@@ -96,12 +98,16 @@ class LocalReadingData extends ReadingData {
   @override
   final FavoriteType favoriteType;
 
+  @override
+  final ComicType comicType;
+
   LocalReadingData({
     required this.title,
     required this.id,
     required this.downloadId,
     required this.sourceKey,
     required this.hasEp,
+    required this.comicType,
     this.eps,
     this.favoriteType = const FavoriteType(0),
   });

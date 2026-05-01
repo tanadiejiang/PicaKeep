@@ -2,7 +2,30 @@
 
 import 'package:flutter/material.dart';
 import '../pages/reader/comic_reading_page.dart';
+import 'def.dart';
 import 'local_favorites.dart';
+
+ComicType comicTypeForDownloadType(DownloadType type) {
+  switch (type) {
+    case DownloadType.picacg:
+      return ComicType.picacg;
+    case DownloadType.ehentai:
+      return ComicType.ehentai;
+    case DownloadType.jm:
+      return ComicType.jm;
+    case DownloadType.hitomi:
+      return ComicType.hitomi;
+    case DownloadType.htmanga:
+      return ComicType.htManga;
+    case DownloadType.nhentai:
+      return ComicType.nhentai;
+    case DownloadType.copyManga:
+    case DownloadType.komiic:
+    case DownloadType.other:
+    case DownloadType.favorite:
+      return ComicType.other;
+  }
+}
 
 enum DownloadType {
   picacg,
@@ -172,10 +195,11 @@ class DownloadedComic extends DownloadedItem {
     }
     var data = LocalReadingData(
       title: title,
-      id: comicId,
-      downloadId: comicId,
+      id: id,
+      downloadId: id,
       sourceKey: 'picacg',
       hasEp: chapters.isNotEmpty,
+      comicType: comicTypeForDownloadType(DownloadType.picacg),
       eps: epsMap,
       favoriteType: FavoriteType.picacg,
     );
@@ -241,11 +265,12 @@ class DownloadedGallery extends DownloadedItem {
   static List<String> _parseTags(dynamic tags) {
     if (tags == null) return [];
     if (tags is List) return tags.map((e) => e.toString()).toList();
-    if (tags is Map)
-      return (tags as Map).values.expand((v) {
+    if (tags is Map) {
+      return tags.values.expand((v) {
         if (v is List) return v.map((e) => e.toString());
         return [v.toString()];
       }).toList();
+    }
     return [];
   }
 
@@ -290,6 +315,7 @@ class DownloadedGallery extends DownloadedItem {
       downloadId: id,
       sourceKey: 'ehentai',
       hasEp: true,
+      comicType: comicTypeForDownloadType(DownloadType.ehentai),
       eps: {"1": "EP 1"},
       favoriteType: FavoriteType.ehentai,
     );
@@ -398,6 +424,7 @@ class DownloadedJmComic extends DownloadedItem {
       downloadId: id,
       sourceKey: 'jm',
       hasEp: epsMap.isNotEmpty,
+      comicType: comicTypeForDownloadType(DownloadType.jm),
       eps: epsMap,
       favoriteType: FavoriteType.jm,
     );
@@ -480,6 +507,7 @@ class DownloadedHitomiComic extends DownloadedItem {
       downloadId: id,
       sourceKey: 'hitomi',
       hasEp: true,
+      comicType: comicTypeForDownloadType(DownloadType.hitomi),
       eps: {"1": "第一章"},
       favoriteType: FavoriteType.hitomi,
     );
@@ -557,6 +585,7 @@ class DownloadedHtComic extends DownloadedItem {
       downloadId: id,
       sourceKey: 'htmanga',
       hasEp: true,
+      comicType: comicTypeForDownloadType(DownloadType.htmanga),
       eps: {"1": "EP 1"},
       favoriteType: FavoriteType.htManga,
     );
@@ -639,6 +668,7 @@ class NhentaiDownloadedComic extends DownloadedItem {
       downloadId: id,
       sourceKey: 'nhentai',
       hasEp: true,
+      comicType: comicTypeForDownloadType(DownloadType.nhentai),
       eps: {"1": "第一章"},
       favoriteType: FavoriteType.nhentai,
     );
@@ -748,6 +778,7 @@ class CustomDownloadedItem extends DownloadedItem {
       downloadId: id,
       sourceKey: sourceKey,
       hasEp: epsMap.isNotEmpty,
+      comicType: comicTypeForDownloadType(type),
       eps: epsMap,
       favoriteType: favType,
     );
