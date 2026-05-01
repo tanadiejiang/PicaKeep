@@ -107,7 +107,7 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
     );
     readingData.downloadedEps = widget.comic.downloadedEps;
 
-    await App.pushInner(() => ComicReadingPage(
+    await App.openReader(() => ComicReadingPage(
           readingData,
           page ?? 1,
           ep ?? (hasEp ? 1 : 0),

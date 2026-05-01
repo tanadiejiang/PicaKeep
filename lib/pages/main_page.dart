@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:picakeep/foundation/app.dart';
 import 'package:picakeep/foundation/app_page_route.dart';
+import 'package:picakeep/foundation/main_page_hub.dart';
+import 'package:picakeep/foundation/state_controller.dart';
 import 'package:picakeep/tools/local_app_links.dart';
 import '../base.dart';
 import '../components/components.dart';
@@ -22,7 +24,7 @@ class _MainPageState extends State<MainPage> {
   final _navigatorKey = GlobalKey<NavigatorState>();
 
   late final List<Widget> _pages = [
-    const MePage(),
+    MePage(),
     const MainFavoritesPage(),
   ];
 
@@ -34,6 +36,16 @@ class _MainPageState extends State<MainPage> {
   void initState() {
     super.initState();
     App.mainNavigatorKey = _navigatorKey;
+    StateController.putIfNotExists(MainPageHub());
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      StateController.find<MainPageHub>().pushPage = (pageBuilder) {
+        final ctx = _navigatorKey.currentContext;
+        if (ctx != null && ctx.mounted) {
+          App.to(ctx, pageBuilder);
+        }
+      };
+    });
     checkClipboard();
   }
 

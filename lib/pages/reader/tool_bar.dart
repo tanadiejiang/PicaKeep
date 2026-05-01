@@ -233,15 +233,9 @@ extension ToolBar on ComicReadingPage {
         max: logic.urls.length.toDouble(),
         divisions: logic.urls.length - 1,
         onChanged: (i) {
-          if (logic.readingMethod == ReadingMethod.topToBottomContinuously) {
-            logic.jumpToPage(i.toInt());
-            logic.index = i.toInt();
-            logic.update();
-          } else {
-            logic.index = i.toInt();
-            logic.jumpToPage(i.toInt());
-            logic.update();
-          }
+          logic.index = i.toInt();
+          logic.jumpToPage(i.toInt());
+          logic.update(["ToolBar"]);
         },
       );
     } else {

@@ -18,6 +18,7 @@ import 'package:picakeep/components/window_frame.dart';
 import 'package:picakeep/foundation/image_loader/base_image_provider.dart';
 import 'package:picakeep/foundation/image_loader/file_image_loader.dart';
 import 'package:picakeep/foundation/image_loader/stream_image_provider.dart';
+import 'package:picakeep/foundation/image_favorites.dart';
 import 'package:picakeep/foundation/local_favorites.dart';
 import 'package:picakeep/base.dart';
 import 'package:picakeep/tools/keep_screen_on.dart';
@@ -29,6 +30,7 @@ import '../../foundation/app.dart';
 import '../../foundation/ui_mode.dart';
 import '../../tools/key_down_event.dart';
 import 'package:picakeep/tools/translations.dart';
+import 'package:window_manager/window_manager.dart';
 
 part 'eps_view.dart';
 
@@ -420,7 +422,7 @@ class ComicReadingPage extends StatelessWidget {
     int? res;
     await showDialog(
         context: App.globalContext!,
-        builder: (context) {
+        builder: (dialogContext) {
           return SimpleDialog(
             title: Text("选择屏幕上的图片".tl),
             children: [
@@ -435,7 +437,7 @@ class ComicReadingPage extends StatelessWidget {
                         title: Text((item.index + 1).toString()),
                         onTap: () {
                           res = item.index;
-                          App.globalBack();
+                          Navigator.of(dialogContext).pop();
                         },
                         trailing: const Icon(Icons.arrow_right),
                       )
