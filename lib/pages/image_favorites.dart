@@ -70,14 +70,8 @@ class _FavoriteImageTile extends StatelessWidget {
   final VoidCallback onDelete;
 
   void _onTap(BuildContext context) {
-    final file = File("${App.dataPath}/images/${image.imagePath}");
-    if (!file.existsSync()) return;
-
-    // Parse source key and target from image ID
-    final parts = image.id.split('-');
-    final sourceKey = parts.first;
-
-    // Reconstruct eps map from otherInfo
+    // Use stored info from otherInfo (set by tool_bar.dart when favoriting)
+    final sourceKey = (image.otherInfo['sourceKey'] as String?) ?? '';
     final epsList = (image.otherInfo['eps'] as List?)?.cast<String>() ?? [];
     final eps = <String, String>{};
     for (var i = 0; i < epsList.length; i++) {
@@ -87,7 +81,7 @@ class _FavoriteImageTile extends StatelessWidget {
     final data = LocalReadingData(
       title: image.title,
       id: image.id,
-      downloadId: image.id,
+      downloadId: image.otherInfo['downloadId'] as String? ?? image.id,
       sourceKey: sourceKey,
       hasEp: eps.isNotEmpty,
       comicType: ComicType.other,
@@ -99,7 +93,7 @@ class _FavoriteImageTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final file = File("${App.dataPath}/images/${image.imagePath}");
+    final file = File(image.imagePath);
     final hasImage = file.existsSync();
 
     return Padding(
