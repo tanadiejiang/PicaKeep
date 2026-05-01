@@ -1,5 +1,6 @@
-// ignore_for_file: unused_element
+// ignore_for_file: unused_element, unused_import
 
+import 'dart:async';
 import 'dart:io' show Platform, Process;
 
 import 'package:flutter/material.dart';
@@ -9,14 +10,12 @@ import 'package:picakeep/foundation/app.dart';
 import 'package:picakeep/foundation/download.dart';
 import 'package:picakeep/foundation/download_model.dart';
 import 'package:picakeep/foundation/local_favorites.dart';
-import 'package:picakeep/foundation/state_controller.dart';
 import 'package:picakeep/foundation/ui_mode.dart';
 import 'package:picakeep/tools/translations.dart';
 import 'package:picakeep/components/comic_tile.dart';
 import 'package:picakeep/components/scrollable.dart';
 import 'package:picakeep/components/layout.dart';
 import 'package:picakeep/components/components.dart';
-import 'reader/comic_reading_page.dart';
 import 'local_comic_detail_page.dart';
 
 void _toComicInfoPage(BuildContext context, DownloadedItem comic) {
@@ -28,23 +27,12 @@ void _toComicInfoPage(BuildContext context, DownloadedItem comic) {
 extension ReadComic on DownloadedItem {
   void read({int? ep, int? page}) {
     final hasEp = eps.isNotEmpty;
-    final readingData = LocalReadingData(
-      title: name,
-      id: id,
-      downloadId: id,
-      sourceKey: _extractSourceKey(id),
-      hasEp: hasEp,
-      eps: hasEp ? {for (int i = 0; i < eps.length; i++) eps[i]: eps[i]} : null,
-      favoriteType: _downloadTypeToFavoriteType(type),
-    );
-
-    Navigator.of(App.globalContext!).push(MaterialPageRoute(
-      builder: (_) => ComicReadingPage(
-        readingData,
-        page ?? 1,
-        ep ?? (hasEp ? 1 : 0),
+    final dm = DownloadManager();
+    Navigator.of(App.globalContext!).push(
+      MaterialPageRoute(
+        builder: (_) => createReadingPage(),
       ),
-    ));
+    );
   }
 }
 

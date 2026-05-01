@@ -1,6 +1,8 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:picakeep/foundation/history.dart';
 import 'package:picakeep/foundation/download.dart';
+import 'package:picakeep/tools/translations.dart';
 import 'history_page.dart';
 import 'image_favorites.dart';
 import 'tools.dart';
@@ -13,15 +15,15 @@ class MePage extends StatelessWidget {
   Widget build(BuildContext context) {
     return SizedBox.expand(
       child: LayoutBuilder(
-        builder: (context, constraints) {
-          final width = constraints.maxWidth;
-          final shouldShowTwoPanel = width > 600;
+        builder: (context, constrains) {
+          final width = constrains.maxWidth;
+          bool shouldShowTwoPanel = width > 600;
           return SingleChildScrollView(
             padding: const EdgeInsets.symmetric(horizontal: 12),
             child: Column(
               children: [
                 const SizedBox(height: 12),
-                buildHistory(context),
+                _buildHistoryCard(context),
                 if (shouldShowTwoPanel)
                   Row(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -30,7 +32,7 @@ class MePage extends StatelessWidget {
                         child: Column(
                           children: [
                             const SizedBox(height: 12),
-                            buildDownload(context),
+                            _buildDownloadCard(context),
                           ],
                         ),
                       ),
@@ -39,9 +41,9 @@ class MePage extends StatelessWidget {
                         child: Column(
                           children: [
                             const SizedBox(height: 12),
-                            buildImageFavorite(context),
+                            _buildImageFavoriteCard(context),
                             const SizedBox(height: 12),
-                            buildTools(context),
+                            _buildToolsCard(context),
                           ],
                         ),
                       ),
@@ -49,11 +51,11 @@ class MePage extends StatelessWidget {
                   )
                 else ...[
                   const SizedBox(height: 12),
-                  buildDownload(context),
+                  _buildDownloadCard(context),
                   const SizedBox(height: 12),
-                  buildImageFavorite(context),
+                  _buildImageFavoriteCard(context),
                   const SizedBox(height: 12),
-                  buildTools(context),
+                  _buildToolsCard(context),
                 ],
               ],
             ),
@@ -63,127 +65,154 @@ class MePage extends StatelessWidget {
     );
   }
 
-  Widget buildHistory(BuildContext context) {
-    List<History> history;
+  Widget _buildHistoryCard(BuildContext context) {
+    List<History> history = [];
     try {
       history = HistoryManager().getRecent();
-    } catch (_) {
-      history = [];
+    } catch (e) {
+      print('[PicaKeep] MePage: HistoryManager.getRecent() failed: $e');
     }
-
-    int count;
-    try {
-      count = HistoryManager().count();
-    } catch (_) {
-      count = 0;
-    }
-
-    return _MePageCard(
-      icon: const Icon(Icons.history),
-      title: "\u5386\u53F2\u8BB0\u5F55($count)",
-      description: history.isEmpty
-          ? "\u6682\u65E0\u5386\u53F2\u8BB0\u5F55"
-          : "\u6700\u8FD1\u6D4F\u89C8\u7684\u6F2B\u753B",
-      onTap: () {
-        Navigator.of(context).push(
-          MaterialPageRoute(builder: (_) => const HistoryPage()),
-        );
-      },
-      child: history.isEmpty
-          ? null
-          : SizedBox(
-              height: 128,
-              child: ListView.builder(
-                scrollDirection: Axis.horizontal,
-                itemCount: history.length,
-                itemBuilder: (context, index) {
-                  final item = history[index];
-                  return Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 8),
-                    child: Column(
-                      children: [
-                        Container(
-                          width: 80,
-                          height: 100,
-                          decoration: BoxDecoration(
-                            borderRadius: BorderRadius.circular(8),
-                            color: Theme.of(context)
-                                .colorScheme
-                                .secondaryContainer,
-                          ),
-                          clipBehavior: Clip.antiAlias,
-                          child: Center(
-                            child: Icon(
-                              Icons.auto_stories,
-                              size: 32,
-                              color: Theme.of(context)
-                                  .colorScheme
-                                  .onSecondaryContainer,
-                            ),
-                          ),
-                        ),
-                        const SizedBox(height: 4),
-                        SizedBox(
-                          width: 80,
-                          child: Text(
-                            item.title,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(fontSize: 12),
-                          ),
-                        ),
-                      ],
-                    ),
-                  );
-                },
+    return InkWell(
+      onTap: () => Navigator.of(context).push(
+        MaterialPageRoute(builder: (_) => const HistoryPage()),
+      ),
+      mouseCursor: SystemMouseCursors.click,
+      borderRadius: BorderRadius.circular(12),
+      child: Card.outlined(
+        margin: EdgeInsets.zero,
+        color: Colors.transparent,
+        child: Container(
+          margin: EdgeInsets.zero,
+          width: double.infinity,
+          child: Column(
+            children: [
+              ListTile(
+                leading: const Icon(Icons.history),
+                title: Text("历史记录".tl),
+                trailing: const Icon(Icons.chevron_right),
+                mouseCursor: SystemMouseCursors.click,
               ),
-            ),
+              SizedBox(
+                height: 128,
+                child: ListView.builder(
+                  scrollDirection: Axis.horizontal,
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  itemCount: history.length,
+                  itemBuilder: (context, index) {
+                    return InkWell(
+                      onTap: () => _openComicFromHistory(context, history[index]),
+                      borderRadius: BorderRadius.circular(8),
+                      child: Container(
+                        width: 96,
+                        height: 128,
+                        margin: const EdgeInsets.symmetric(horizontal: 8),
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(8),
+                          color: Theme.of(context).colorScheme.secondaryContainer,
+                        ),
+                        clipBehavior: Clip.antiAlias,
+                        child: _buildCoverImage(context, history[index]),
+                      ),
+                    );
+                  },
+                ),
+              ),
+              const SizedBox(height: 12),
+            ],
+          ),
+        ),
+      ),
     );
   }
 
-  Widget buildDownload(BuildContext context) {
-    int count;
-    try {
-      count = DownloadManager().total;
-    } catch (_) {
-      count = 0;
+  Widget _buildCoverImage(BuildContext context, History item) {
+    final cover = item.cover;
+    if (cover.isEmpty) {
+      return Center(
+        child: Icon(
+          Icons.auto_stories,
+          size: 32,
+          color: Theme.of(context).colorScheme.onSecondaryContainer,
+        ),
+      );
     }
+    if (cover.startsWith('/') || cover.contains(':\\')) {
+      return Image.file(
+        File(cover),
+        width: 96,
+        height: 128,
+        fit: BoxFit.cover,
+        filterQuality: FilterQuality.medium,
+        errorBuilder: (context, error, stackTrace) {
+          return Center(
+            child: Icon(
+              Icons.auto_stories,
+              size: 32,
+              color: Theme.of(context).colorScheme.onSecondaryContainer,
+            ),
+          );
+        },
+      );
+    }
+    return Center(
+      child: Icon(
+        Icons.auto_stories,
+        size: 32,
+        color: Theme.of(context).colorScheme.onSecondaryContainer,
+      ),
+    );
+  }
 
+  void _openComicFromHistory(BuildContext context, History history) async {
+    try {
+      var comic = await DownloadManager().getComicOrNull(history.target);
+      if (comic != null) {
+        if (!context.mounted) return;
+        Navigator.of(context).push(
+          MaterialPageRoute(builder: (_) => comic.createReadingPage()),
+        );
+      }
+    } catch (e) {
+      print('[PicaKeep] MePage: _openComicFromHistory failed: $e');
+    }
+  }
+
+  Widget _buildDownloadCard(BuildContext context) {
+    int total = 0;
+    try {
+      total = DownloadManager().total;
+    } catch (e) {
+      print('[PicaKeep] MePage: DownloadManager().total failed: $e');
+    }
     return _MePageCard(
       icon: const Icon(Icons.download_for_offline),
-      title: "已下载($count)",
-      description: "共 $count 部漫画",
-      onTap: () async {
-        await Navigator.of(context).push(
-          MaterialPageRoute(builder: (_) => const DownloadPage()),
-        );
-      },
+      title: "已下载".tl,
+      description: "共 @a 部漫画".tlParams({"a": total.toString()}),
+      onTap: () => Navigator.of(context).push(
+        MaterialPageRoute(builder: (_) => const DownloadPage()),
+      ),
     );
   }
 
-  Widget buildImageFavorite(BuildContext context) {
+  Widget _buildImageFavoriteCard(BuildContext context) {
     return _MePageCard(
       icon: const Icon(Icons.image),
-      title: "\u56FE\u7247\u6536\u85CF",
-      description: "0 \u6761\u56FE\u7247\u6536\u85CF",
-      onTap: () {
-        Navigator.of(context).push(
-          MaterialPageRoute(builder: (_) => const ImageFavoritesPage()),
-        );
-      },
+      title: "图片收藏".tl,
+      description: "@a 条图片收藏".tlParams({"a": "0"}),
+      onTap: () => Navigator.of(context).push(
+        MaterialPageRoute(builder: (_) => const ImageFavoritesPage()),
+      ),
     );
   }
 
-  Widget buildTools(BuildContext context) {
+  Widget _buildToolsCard(BuildContext context) {
     return _MePageCard(
       icon: const Icon(Icons.build_circle),
-      title: "\u5DE5\u5177",
-      description: "\u672C\u5730\u5DE5\u5177",
-      onTap: () {
-        Navigator.of(context).push(
-          MaterialPageRoute(builder: (_) => const ToolsPage()),
-        );
-      },
+      title: "工具".tl,
+      description: "本地工具".tl,
+      onTap: () => Navigator.of(context).push(
+        MaterialPageRoute(builder: (_) => const ToolsPage()),
+      ),
     );
   }
 }
@@ -219,6 +248,10 @@ class _MePageCard extends StatelessWidget {
               title: Text(title),
               trailing: const Icon(Icons.chevron_right),
               mouseCursor: SystemMouseCursors.click,
+            ),
+            Padding(
+              padding: const EdgeInsets.only(left: 16, bottom: 16, top: 8),
+              child: Text(description),
             ),
             if (child != null) child!,
           ],

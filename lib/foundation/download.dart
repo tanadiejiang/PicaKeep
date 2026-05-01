@@ -331,10 +331,11 @@ abstract mixin class _DownloadDb {
   }
 
   int get total {
+    if (_db == null) return 0;
     var result = _db!.select('''
       select count(*) from download
     ''');
-    return result.first['count(*)'];
+    return result.first['count(*)'] ?? 0;
   }
 
   static final _directoryCache = <String, String>{};
@@ -346,7 +347,13 @@ abstract mixin class _DownloadDb {
         select directory from download
         where id = ?
       ''', [id]);
-      directory = result.first['directory'] as String;
+      if (result.isEmpty) {
+        return _sanitizeFileName(id);
+      }
+      directory = result.first['directory'] as String?;
+      if (directory == null || directory.isEmpty) {
+        return _sanitizeFileName(id);
+      }
       directory = _sanitizeFileName(directory);
       if (_directoryCache.length > 50) {
         _directoryCache.remove(_directoryCache.keys.first);
@@ -357,7 +364,16 @@ abstract mixin class _DownloadDb {
   }
 
   static String _sanitizeFileName(String name) {
-    return name.replaceAll(RegExp(r'[<>:"/\\|?*]'), '_');
+    if (name.isEmpty) return 'unknown';
+    String sanitized = name;
+    sanitized = sanitized.replaceAll(RegExp(r'[<>:"/\\|?*\u0000-\u001F]'), '_');
+    sanitized =
+        sanitized.replaceAll(RegExp(r'[\u3000-\u303F\uFF00-\uFFEF]'), '_');
+    sanitized = sanitized.replaceAll(RegExp(r'[【】《》「」『』〔〕【】〘〙〚〛]'), '_');
+    sanitized = sanitized.replaceAll(RegExp(r'[（）]'), '_');
+    if (sanitized.isEmpty)
+      return 'unknown_${DateTime.now().millisecondsSinceEpoch}';
+    return sanitized;
   }
 }
 

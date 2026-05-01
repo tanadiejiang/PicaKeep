@@ -1,5 +1,9 @@
 // ignore_for_file: prefer_const_constructors, avoid_unused_constructor_parameters, no_leading_underscores_for_local_identifiers
 
+import 'package:flutter/material.dart';
+import '../pages/reader/comic_reading_page.dart';
+import 'local_favorites.dart';
+
 enum DownloadType {
   picacg,
   ehentai,
@@ -37,6 +41,8 @@ abstract class DownloadedItem {
   set comicSize(double? value);
 
   String? directory;
+
+  Widget createReadingPage();
 }
 
 class DownloadedComic extends DownloadedItem {
@@ -157,6 +163,25 @@ class DownloadedComic extends DownloadedItem {
 
   @override
   List<String> get tags => tagList;
+
+  @override
+  Widget createReadingPage() {
+    var epsMap = <String, String>{};
+    for (int i = 0; i < chapters.length; i++) {
+      epsMap[(i + 1).toString()] = chapters[i];
+    }
+    var data = LocalReadingData(
+      title: title,
+      id: comicId,
+      downloadId: comicId,
+      sourceKey: 'picacg',
+      hasEp: chapters.isNotEmpty,
+      eps: epsMap,
+      favoriteType: FavoriteType.picacg,
+    );
+    data.downloadedEps = downloadedChapters;
+    return ComicReadingPage(data, 1, 1);
+  }
 }
 
 class DownloadedGallery extends DownloadedItem {
@@ -238,7 +263,6 @@ class DownloadedGallery extends DownloadedItem {
 
   @override
   String get id {
-    // Extract gallery id from link: e-hentai.org/g/123456/abc123 -> 123456/abc123
     var match = RegExp(r"/g/(\d+)/([a-z0-9]+)").firstMatch(link);
     if (match != null) {
       return "${match.group(1)}-${match.group(2)}";
@@ -257,6 +281,21 @@ class DownloadedGallery extends DownloadedItem {
 
   @override
   List<String> get tags => tagList;
+
+  @override
+  Widget createReadingPage() {
+    var data = LocalReadingData(
+      title: name,
+      id: id,
+      downloadId: id,
+      sourceKey: 'ehentai',
+      hasEp: true,
+      eps: {"1": "EP 1"},
+      favoriteType: FavoriteType.ehentai,
+    );
+    data.downloadedEps = [0];
+    return ComicReadingPage(data, 1, 1);
+  }
 }
 
 class DownloadedJmComic extends DownloadedItem {
@@ -341,6 +380,30 @@ class DownloadedJmComic extends DownloadedItem {
 
   @override
   List<String> get tags => tagList;
+
+  @override
+  Widget createReadingPage() {
+    var epsMap = <String, String>{};
+    for (int i = 0; i < epNames.length; i++) {
+      epsMap[(i + 1).toString()] = epNames[i];
+    }
+    if (epsMap.isEmpty) {
+      for (int i = 0; i < downloadedChapters.length; i++) {
+        epsMap[(i + 1).toString()] = "第${i + 1}章";
+      }
+    }
+    var data = LocalReadingData(
+      title: name,
+      id: id,
+      downloadId: id,
+      sourceKey: 'jm',
+      hasEp: epsMap.isNotEmpty,
+      eps: epsMap,
+      favoriteType: FavoriteType.jm,
+    );
+    data.downloadedEps = downloadedChapters;
+    return ComicReadingPage(data, 1, 1);
+  }
 }
 
 class DownloadedHitomiComic extends DownloadedItem {
@@ -408,6 +471,21 @@ class DownloadedHitomiComic extends DownloadedItem {
 
   @override
   List<String> get tags => tagList;
+
+  @override
+  Widget createReadingPage() {
+    var data = LocalReadingData(
+      title: name,
+      id: id,
+      downloadId: id,
+      sourceKey: 'hitomi',
+      hasEp: true,
+      eps: {"1": "第一章"},
+      favoriteType: FavoriteType.hitomi,
+    );
+    data.downloadedEps = [0];
+    return ComicReadingPage(data, 1, 1);
+  }
 }
 
 class DownloadedHtComic extends DownloadedItem {
@@ -470,6 +548,21 @@ class DownloadedHtComic extends DownloadedItem {
 
   @override
   List<String> get tags => tagList;
+
+  @override
+  Widget createReadingPage() {
+    var data = LocalReadingData(
+      title: name,
+      id: id,
+      downloadId: id,
+      sourceKey: 'htmanga',
+      hasEp: true,
+      eps: {"1": "EP 1"},
+      favoriteType: FavoriteType.htManga,
+    );
+    data.downloadedEps = [0];
+    return ComicReadingPage(data, 1, 1);
+  }
 }
 
 class NhentaiDownloadedComic extends DownloadedItem {
@@ -501,7 +594,7 @@ class NhentaiDownloadedComic extends DownloadedItem {
   List<String> get eps => ["第一章"];
 
   @override
-  String get id => comicID;
+  String get id => "nhentai$comicID";
 
   @override
   String get name => title;
@@ -537,6 +630,21 @@ class NhentaiDownloadedComic extends DownloadedItem {
 
   @override
   List<String> get tags => tagList;
+
+  @override
+  Widget createReadingPage() {
+    var data = LocalReadingData(
+      title: name,
+      id: id,
+      downloadId: id,
+      sourceKey: 'nhentai',
+      hasEp: true,
+      eps: {"1": "第一章"},
+      favoriteType: FavoriteType.nhentai,
+    );
+    data.downloadedEps = [0];
+    return ComicReadingPage(data, 1, 1);
+  }
 }
 
 class CustomDownloadedItem extends DownloadedItem {
@@ -617,4 +725,33 @@ class CustomDownloadedItem extends DownloadedItem {
         sourceName = json["sourceName"] ?? '',
         cover = json["cover"] ?? '',
         comicId = json["comicId"] ?? '';
+
+  @override
+  Widget createReadingPage() {
+    var epsMap = <String, String>{};
+    if (chapters != null) {
+      epsMap.addAll(chapters!);
+    } else {
+      epsMap["1"] = "EP 1";
+    }
+    FavoriteType favType;
+    if (sourceKey == 'copy_manga') {
+      favType = FavoriteType.copyManga;
+    } else if (sourceKey == 'Komiic') {
+      favType = FavoriteType.komiic;
+    } else {
+      favType = const FavoriteType(0);
+    }
+    var data = LocalReadingData(
+      title: name,
+      id: id,
+      downloadId: id,
+      sourceKey: sourceKey,
+      hasEp: epsMap.isNotEmpty,
+      eps: epsMap,
+      favoriteType: favType,
+    );
+    data.downloadedEps = downloadedEps;
+    return ComicReadingPage(data, 1, 1);
+  }
 }
