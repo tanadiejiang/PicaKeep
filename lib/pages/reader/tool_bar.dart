@@ -120,10 +120,11 @@ extension ToolBar on ComicReadingPage {
                                 "${logic.data.sourceKey}-${logic.data.id}";
                             var image = await _persistentCurrentImage();
                             if (image != null) {
-                              image = image.split("/").last;
                               var otherInfo = <String, dynamic>{};
                               otherInfo["eps"] = readingData.eps?.keys.toList() ?? [];
                               otherInfo["url"] = logic.urls[logic.index - 1];
+                              otherInfo["sourceKey"] = logic.data.sourceKey;
+                              otherInfo["downloadId"] = logic.data.downloadId;
                               var favorite = ImageFavorite(
                                   id,
                                   image,

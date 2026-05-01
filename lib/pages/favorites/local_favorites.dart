@@ -283,9 +283,9 @@ class _LocalFavoritesPageState extends State<LocalFavoritesPage> {
         try {
           final dm = DownloadManager();
           final id = comic.toDownloadId();
-          if (dm.isExists(id)) {
+          if (dm.isExists(id) && dm.path != null) {
             final dirPath = dm.getDirectory(id);
-            final dir = Directory(dirPath);
+            final dir = Directory("${dm.path}/$dirPath");
             int totalSize = 0;
             for (final entity in dir.listSync(recursive: true)) {
               if (entity is File) {
