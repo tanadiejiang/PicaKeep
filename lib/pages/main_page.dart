@@ -3,7 +3,6 @@ import 'package:flutter/services.dart';
 import 'package:picakeep/foundation/app.dart';
 import 'package:picakeep/foundation/app_page_route.dart';
 import 'package:picakeep/foundation/main_page_hub.dart';
-import 'package:picakeep/foundation/state_controller.dart';
 import 'package:picakeep/tools/local_app_links.dart';
 import '../base.dart';
 import '../components/components.dart';
@@ -24,7 +23,7 @@ class _MainPageState extends State<MainPage> {
   final _navigatorKey = GlobalKey<NavigatorState>();
 
   late final List<Widget> _pages = [
-    MePage(),
+    const MePage(),
     const MainFavoritesPage(),
   ];
 

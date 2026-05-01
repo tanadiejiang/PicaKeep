@@ -1,5 +1,4 @@
 ﻿import 'dart:async';
-import 'dart:collection';
 import 'dart:ui' as ui;
 import 'dart:typed_data' show Uint8List;
 import 'package:flutter/foundation.dart';
@@ -50,7 +49,7 @@ abstract class BaseImageProvider<T extends BaseImageProvider<T>>
     }
   }
 
-  static final _cache = LinkedHashMap<String, Uint8List>();
+  static final _cache = <String, Uint8List>{};
 
   static var _cacheSize = 0;
 

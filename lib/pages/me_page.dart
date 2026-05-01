@@ -4,7 +4,6 @@ import 'package:picakeep/foundation/app.dart';
 import 'package:picakeep/foundation/history.dart';
 import 'package:picakeep/foundation/download.dart';
 import 'package:picakeep/tools/translations.dart';
-import 'package:picakeep/foundation/state_controller.dart';
 import 'package:picakeep/tools/read_history_helper.dart';
 import 'package:picakeep/foundation/image_favorites.dart';
 import 'history_page.dart';
@@ -224,7 +223,13 @@ class _MePageState extends State<MePage> {
       description: "@a 条图片收藏".tlParams({"a": "${ImageFavoriteManager.length}"}),
       onTap: () => Navigator.of(context).push(
         MaterialPageRoute(builder: (_) => const ImageFavoritesPage()),
-      ),
+      ).then((_) {
+        // Defer setState until after the route transition completes, so the
+        // widget tree is fully restored and the count reflects DB changes.
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) setState(() {});
+        });
+      }),
     );
   }
 

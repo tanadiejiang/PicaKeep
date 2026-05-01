@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:typed_data' show Uint8List;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/painting.dart';
 import 'package:picakeep/foundation/image_loader/base_image_provider.dart';
