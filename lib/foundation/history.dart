@@ -2,6 +2,7 @@
 
 import 'package:path_provider/path_provider.dart';
 import 'package:sqlite3/sqlite3.dart';
+import '../foundation/state_controller.dart';
 
 final class HistoryType {
   static HistoryType get picacg => const HistoryType(0);
@@ -171,7 +172,7 @@ class HistoryManager {
   }
 
   Future<void> saveReadHistory(History history,
-      [bool updateMePage = false]) async {
+      [bool updateMePage = true]) async {
     _db.execute("""
       update history
       set time = ${DateTime.now().millisecondsSinceEpoch}, ep = ?, page = ?, readEpisode = ?, max_page = ?
@@ -183,6 +184,11 @@ class HistoryManager {
       history.maxPage,
       history.target
     ]);
+    if (updateMePage) {
+      Future.microtask(() {
+        StateController.findOrNull(tag: "me_page")?.update();
+      });
+    }
   }
 
   void readDataFromJson(dynamic json) {

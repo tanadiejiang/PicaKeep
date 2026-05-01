@@ -1,5 +1,7 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:picakeep/foundation/history.dart';
+import 'package:picakeep/foundation/download.dart';
 
 class HistoryPage extends StatefulWidget {
   const HistoryPage({super.key});
@@ -29,13 +31,13 @@ class _HistoryPageState extends State<HistoryPage> {
     showDialog(
       context: context,
       builder: (dialogContext) => AlertDialog(
-        title: const Text("\u6E05\u9664\u8BB0\u5F55"),
+        title: const Text("清除记录"),
         content:
-            const Text("\u8981\u6E05\u9664\u5386\u53F2\u8BB0\u5F55\u5417?"),
+            const Text("要清除历史记录吗?"),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(dialogContext).pop(),
-            child: const Text("\u53D6\u6D88"),
+            child: const Text("取消"),
           ),
           TextButton(
             onPressed: () {
@@ -47,7 +49,7 @@ class _HistoryPageState extends State<HistoryPage> {
               });
               Navigator.of(dialogContext).pop();
             },
-            child: const Text("\u6E05\u9664"),
+            child: const Text("清除"),
           ),
         ],
       ),
@@ -58,13 +60,13 @@ class _HistoryPageState extends State<HistoryPage> {
     showDialog(
       context: context,
       builder: (dialogContext) => AlertDialog(
-        title: const Text("\u5220\u9664"),
+        title: const Text("删除"),
         content: const Text(
-            "\u8981\u5220\u9664\u8FD9\u6761\u5386\u53F2\u8BB0\u5F55\u5417"),
+            "要删除这条历史记录吗"),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(dialogContext).pop(),
-            child: const Text("\u53D6\u6D88"),
+            child: const Text("取消"),
           ),
           TextButton(
             onPressed: () {
@@ -76,7 +78,7 @@ class _HistoryPageState extends State<HistoryPage> {
               });
               Navigator.of(dialogContext).pop();
             },
-            child: const Text("\u5220\u9664"),
+            child: const Text("删除"),
           ),
         ],
       ),
@@ -86,30 +88,86 @@ class _HistoryPageState extends State<HistoryPage> {
   String _formatTime(DateTime time) {
     final now = DateTime.now();
     final diff = now.difference(time);
-    if (diff.inMinutes < 1) return "\u521A\u521A";
-    if (diff.inMinutes < 60) return "${diff.inMinutes}\u5206\u949F\u524D";
-    if (diff.inHours < 24) return "${diff.inHours}\u5C0F\u65F6\u524D";
-    if (diff.inDays < 7) return "${diff.inDays}\u5929\u524D";
+    if (diff.inMinutes < 1) return "刚刚";
+    if (diff.inMinutes < 60) return "${diff.inMinutes}分钟前";
+    if (diff.inHours < 24) return "${diff.inHours}小时前";
+    if (diff.inDays < 7) return "${diff.inDays}天前";
     return "${time.year}-${time.month.toString().padLeft(2, '0')}-${time.day.toString().padLeft(2, '0')}";
+  }
+
+  Widget _buildCover(History item) {
+    final cover = item.cover;
+    if (cover.isEmpty) {
+      return Center(
+        child: Icon(
+          Icons.auto_stories,
+          size: 24,
+          color: Theme.of(context).colorScheme.onSecondaryContainer,
+        ),
+      );
+    }
+    if (cover.startsWith('/') || cover.contains(':\\')) {
+      return Image.file(
+        File(cover),
+        width: 48,
+        height: 48,
+        fit: BoxFit.cover,
+        filterQuality: FilterQuality.medium,
+        errorBuilder: (context, error, stackTrace) {
+          return Center(
+            child: Icon(
+              Icons.auto_stories,
+              size: 24,
+              color: Theme.of(context).colorScheme.onSecondaryContainer,
+            ),
+          );
+        },
+      );
+    }
+    return Center(
+      child: Icon(
+        Icons.auto_stories,
+        size: 24,
+        color: Theme.of(context).colorScheme.onSecondaryContainer,
+      ),
+    );
+  }
+
+  void _openComic(History item) async {
+    var comic = await DownloadManager().getComicOrNull(item.target);
+    if (comic != null) {
+      if (!mounted) return;
+      Navigator.of(context).push(
+        MaterialPageRoute(builder: (_) => comic.createReadingPage()),
+      );
+    } else {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("未找到该漫画"),
+          duration: Duration(seconds: 1),
+        ),
+      );
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text("\u5386\u53F2\u8BB0\u5F55(${_items.length})"),
+        title: Text("历史记录(${_items.length})"),
         actions: [
           if (_items.isNotEmpty)
             IconButton(
               icon: const Icon(Icons.delete_forever),
-              tooltip: "\u6E05\u9664",
+              tooltip: "清除",
               onPressed: _clearAll,
             ),
         ],
       ),
       body: _items.isEmpty
           ? const Center(
-              child: Text("\u6682\u65E0\u5386\u53F2\u8BB0\u5F55"),
+              child: Text("暂无历史记录"),
             )
           : ListView.builder(
               itemCount: _items.length,
@@ -123,14 +181,8 @@ class _HistoryPageState extends State<HistoryPage> {
                       borderRadius: BorderRadius.circular(4),
                       color: Theme.of(context).colorScheme.secondaryContainer,
                     ),
-                    child: Center(
-                      child: Icon(
-                        Icons.auto_stories,
-                        size: 24,
-                        color:
-                            Theme.of(context).colorScheme.onSecondaryContainer,
-                      ),
-                    ),
+                    clipBehavior: Clip.antiAlias,
+                    child: _buildCover(item),
                   ),
                   title: Text(
                     item.title,
@@ -147,20 +199,13 @@ class _HistoryPageState extends State<HistoryPage> {
                           overflow: TextOverflow.ellipsis,
                         ),
                       Text(
-                        "${item.type.name} \u00B7 ${_formatTime(item.time)}",
+                        "${item.type.name} · ${_formatTime(item.time)}",
                         style: const TextStyle(fontSize: 12),
                       ),
                     ],
                   ),
                   trailing: const Icon(Icons.chevron_right),
-                  onTap: () {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text("\u6253\u5F00\u9605\u8BFB\u5668"),
-                        duration: Duration(seconds: 1),
-                      ),
-                    );
-                  },
+                  onTap: () => _openComic(item),
                   onLongPress: () => _removeItem(index),
                 );
               },
