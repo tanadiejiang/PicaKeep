@@ -6,6 +6,7 @@ import 'foundation/local_favorites.dart';
 import 'tools/translations.dart';
 import 'base.dart';
 import 'pages/main_page.dart';
+import 'components/window_frame.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -18,7 +19,11 @@ void main() async {
   await LocalFavoritesManager().init();
   await downloadManager.init();
 
+  await initWindowManagerIfDesktop();
+
   runApp(const PicaKeepApp());
+
+  await showWindowWhenReady();
 }
 
 class PicaKeepApp extends StatefulWidget {
@@ -59,6 +64,15 @@ class _PicaKeepAppState extends State<PicaKeepApp> {
           title: 'PicaKeep',
           navigatorKey: App.navigatorKey,
           debugShowCheckedModeBanner: false,
+          builder: (context, child) {
+            if (child == null) {
+              return const SizedBox.shrink();
+            }
+            if (App.isDesktop) {
+              return WindowFrame(child: child);
+            }
+            return child;
+          },
           theme: ThemeData(
             colorScheme:
                 lightDynamic ?? ColorScheme.fromSeed(seedColor: Colors.blue),

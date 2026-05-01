@@ -4,14 +4,34 @@ import 'package:picakeep/foundation/app.dart';
 import 'package:picakeep/foundation/history.dart';
 import 'package:picakeep/foundation/download.dart';
 import 'package:picakeep/tools/translations.dart';
+import 'package:picakeep/foundation/state_controller.dart';
 import 'package:picakeep/tools/read_history_helper.dart';
 import 'history_page.dart';
 import 'image_favorites.dart';
 import 'tools.dart';
 import 'download_page.dart';
 
-class MePage extends StatelessWidget {
+class MePage extends StatefulWidget {
   const MePage({super.key});
+
+  @override
+  State<MePage> createState() => _MePageState();
+}
+
+class _MePageState extends State<MePage> {
+  @override
+  void initState() {
+    super.initState();
+    StateController.putSimpleController(() {
+      if (mounted) setState(() {});
+    }, "me_page");
+  }
+
+  @override
+  void dispose() {
+    StateController.remove<SimpleController>("me_page");
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -172,7 +192,7 @@ class MePage extends StatelessWidget {
         if (!context.mounted) return;
         await ensureHistoryBeforeRead(comic);
         if (!context.mounted) return;
-        await App.pushInner(() => comic.createReadingPage());
+        await App.openReader(() => comic.createReadingPage());
       }
     } catch (e) {
       print('[PicaKeep] MePage: _openComicFromHistory failed: $e');

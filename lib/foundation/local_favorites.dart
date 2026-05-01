@@ -73,10 +73,10 @@ class FavoriteItem {
       1: target,
       2: "jm$target",
       3: "hitomi$target",
-      4: "ht$target",
+      4: "Ht$target",
       6: "nhentai$target",
-      7: "copymanga-$target",
-      8: "komiic-$target",
+      7: "copy_manga-$target",
+      8: "Komiic-$target",
     };
     return idMap[type.key] ?? "other-$target";
   }
@@ -518,43 +518,4 @@ class LocalFavoritesManager {
   }
 
   void onReadEnd(String favoriteId, FavoriteType favoriteType) {}
-}
-
-class ImageFavorite {
-  final String id;
-  final String name;
-  final String author;
-  final FavoriteType type;
-  final String coverPath;
-  final List<String> tags;
-
-  ImageFavorite(String id, String cover, String title, int ep, int page, Map<String, dynamic> otherInfo)
-      : id = id,
-        coverPath = cover,
-        name = title,
-        author = otherInfo['author']?.toString() ?? '',
-        type = FavoriteType.hitomi,
-        tags = (otherInfo['tags'] as List?)?.cast<String>() ?? [];
-}
-
-class ImageFavoriteManager {
-  static ImageFavoriteManager? _instance;
-
-  factory ImageFavoriteManager() => _instance ??= ImageFavoriteManager._();
-
-  ImageFavoriteManager._();
-
-  void addImageFavorite(ImageFavorite favorite) {}
-
-  void removeImageFavorite(ImageFavorite favorite) {}
-  
-  static bool exist(String id, int ep, int page) => false;
-  
-  static Future<void> add(ImageFavorite favorite) async {}
-  
-  static Future<void> delete(ImageFavorite favorite) async {}
-  
-  static ImageFavorite fromHitomiFile(String id, String name, String author, String type, String coverPath, String hash) {
-    return ImageFavorite(id, coverPath, name, 0, 0, {'author': author, 'type': type});
-  }
 }

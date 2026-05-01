@@ -139,6 +139,9 @@ class HistoryManager {
 
   int get length => _db.select("select count(*) from history;").first[0] as int;
 
+  /// Shared DB handle (also hosts `image_favorites` table).
+  Database get database => _db;
+
   Map<String, bool>? _cachedHistory;
 
   Future<void> init() async {
@@ -170,6 +173,18 @@ class HistoryManager {
         add column max_page int;
       """);
     }
+
+    _db.execute("""
+      CREATE TABLE IF NOT EXISTS image_favorites (
+        id TEXT,
+        title TEXT NOT NULL,
+        cover TEXT NOT NULL,
+        ep INTEGER NOT NULL,
+        page INTEGER NOT NULL,
+        other TEXT NOT NULL,
+        PRIMARY KEY (id, ep, page)
+      );
+    """);
   }
 
   Future<void> addHistory(History newItem) async {
@@ -218,7 +233,7 @@ class HistoryManager {
     ]);
     if (updateMePage) {
       Future.microtask(() {
-        StateController.findOrNull(tag: "me_page")?.update();
+        StateController.findOrNull<SimpleController>(tag: "me_page")?.update();
       });
     }
   }

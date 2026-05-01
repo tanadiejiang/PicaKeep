@@ -29,7 +29,7 @@ void _toComicInfoPage(BuildContext context, DownloadedItem comic) {
 extension ReadComic on DownloadedItem {
   Future<void> read({int? ep, int? page}) async {
     await ensureHistoryBeforeRead(this);
-    await App.pushInner(() => createReadingPage());
+    await App.openReader(() => createReadingPage());
   }
 }
 
@@ -658,7 +658,10 @@ class DownloadPage extends StatelessWidget {
                             FavoriteItem(
                               target: comic.id,
                               name: comic.name,
-                              coverPath: '',
+                              coverPath: () {
+                                final cover = DownloadManager().getCover(comic.id);
+                                return cover.path;
+                              }(),
                               author: comic.subTitle,
                               type: _downloadTypeToFavoriteType(comic.type),
                               tags: comic.tags,

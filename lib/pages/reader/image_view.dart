@@ -40,25 +40,27 @@ extension ImageExt on ComicReadingPage {
             ? const NeverScrollableScrollPhysics()
             : const ClampingScrollPhysics(),
         itemBuilder: (context, index) {
-          double width = MediaQuery.of(context).size.width;
-          double height = MediaQuery.of(context).size.height;
+          return LayoutBuilder(builder: (context, constraints) {
+            double width = constraints.maxWidth;
+            double height = constraints.maxHeight;
 
-          double imageWidth = width;
+            double imageWidth = width;
 
-          if (height / width < 1.2 && appdata.settings[43] == "1") {
-            imageWidth = height / 1.2;
-          }
+            if (height / width < 1.2 && appdata.settings[43] == "1") {
+              imageWidth = height / 1.2;
+            }
 
-          precacheComicImage(logic, context, index + 1, target);
+            precacheComicImage(logic, context, index + 1, target);
 
-          ImageProvider image = createImageProvider(type, logic, index, target);
-          return ComicImage(
-            filterQuality: FilterQuality.medium,
-            image: image,
-            width: imageWidth,
-            height: imageWidth * 1.2,
-            fit: BoxFit.cover,
-          );
+            ImageProvider image = createImageProvider(type, logic, index, target);
+            return ComicImage(
+              filterQuality: FilterQuality.medium,
+              image: image,
+              width: imageWidth,
+              height: imageWidth * 1.2,
+              fit: BoxFit.cover,
+            );
+          });
         },
       );
     }

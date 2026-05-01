@@ -86,6 +86,10 @@ class App {
     return Navigator.of(globalContext!).push<T>(AppPageRoute(builder: (context) => page()));
   }
 
+  /// Full-screen reader on the root stack (matches PicaComic); ensures [globalBack] closes the reader.
+  static Future<T?> openReader<T extends Object?>(Widget Function() page) =>
+      globalTo<T>(page);
+
   /// Prefer the tab [Navigator] when present (matches PicaComic main stack).
   static BuildContext get innerOrGlobalContext =>
       mainNavigatorKey?.currentContext ?? globalContext!;

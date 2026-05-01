@@ -69,7 +69,15 @@ class _SliderDefaultsM3 extends SliderThemeData {
 }
 
 class CustomSlider extends StatefulWidget {
-  const CustomSlider({required this.min, required this.max, required this.value, required this.divisions, required this.onChanged, this.reversed = false, super.key});
+  const CustomSlider({
+    required this.min,
+    required this.max,
+    required this.value,
+    required this.divisions,
+    required this.onChanged,
+    this.reversed = false,
+    super.key,
+  });
 
   final double min;
 

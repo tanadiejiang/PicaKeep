@@ -334,17 +334,37 @@ class ComicReadingPageLogic extends StateController {
 
   bool isFullScreen = false;
 
-  void fullscreen(){
+  void fullscreen() {
+    if (App.isDesktop) {
+      () async {
+        try {
+          final next = !(await windowManager.isFullScreen());
+          await windowManager.setFullScreen(next);
+          isFullScreen = next;
+          focusNode.requestFocus();
+          if (next) {
+            StateController.findOrNull<WindowFrameController>()
+                ?.hideWindowFrame();
+          } else {
+            StateController.findOrNull<WindowFrameController>()
+                ?.showWindowFrame();
+          }
+          update(["ToolBar"]);
+        } catch (_) {}
+      }();
+      return;
+    }
     const channel = MethodChannel("pica_comic/full_screen");
     channel.invokeMethod("set", !isFullScreen);
     isFullScreen = !isFullScreen;
     focusNode.requestFocus();
 
-    if(isFullScreen){
-      StateController.find<WindowFrameController>().hideWindowFrame();
+    if (isFullScreen) {
+      StateController.findOrNull<WindowFrameController>()?.hideWindowFrame();
     } else {
-      StateController.find<WindowFrameController>().showWindowFrame();
+      StateController.findOrNull<WindowFrameController>()?.showWindowFrame();
     }
+    update(["ToolBar"]);
   }
 
   void handleKeyboard(KeyEvent event) {
