@@ -6,6 +6,7 @@ import 'package:picakeep/foundation/download.dart';
 import 'package:picakeep/tools/translations.dart';
 import 'package:picakeep/foundation/state_controller.dart';
 import 'package:picakeep/tools/read_history_helper.dart';
+import 'package:picakeep/foundation/image_favorites.dart';
 import 'history_page.dart';
 import 'image_favorites.dart';
 import 'tools.dart';
@@ -192,7 +193,7 @@ class _MePageState extends State<MePage> {
         if (!context.mounted) return;
         await ensureHistoryBeforeRead(comic);
         if (!context.mounted) return;
-        await App.openReader(() => comic.createReadingPage());
+        await App.openReader(() => comic.createReadingPage(ep: history.ep, page: history.page));
       }
     } catch (e) {
       print('[PicaKeep] MePage: _openComicFromHistory failed: $e');
@@ -220,7 +221,7 @@ class _MePageState extends State<MePage> {
     return _MePageCard(
       icon: const Icon(Icons.image),
       title: "图片收藏".tl,
-      description: "@a 条图片收藏".tlParams({"a": "0"}),
+      description: "@a 条图片收藏".tlParams({"a": "${ImageFavoriteManager.length}"}),
       onTap: () => Navigator.of(context).push(
         MaterialPageRoute(builder: (_) => const ImageFavoritesPage()),
       ),
@@ -245,14 +246,12 @@ class _MePageCard extends StatelessWidget {
     required this.title,
     required this.description,
     required this.onTap,
-    this.child,
   });
 
   final Widget icon;
   final String title;
   final String description;
   final VoidCallback onTap;
-  final Widget? child;
 
   @override
   Widget build(BuildContext context) {
@@ -275,7 +274,6 @@ class _MePageCard extends StatelessWidget {
               padding: const EdgeInsets.only(left: 16, bottom: 16, top: 8),
               child: Text(description),
             ),
-            if (child != null) child!,
           ],
         ),
       ),

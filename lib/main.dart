@@ -47,7 +47,7 @@ class _PicaKeepAppState extends State<PicaKeepApp> {
   }
 
   ColorScheme _getPureBlack(ColorScheme scheme) {
-    if (appdata.settings[28] == '1' && _getThemeMode() == ThemeMode.dark) {
+    if (appdata.settings[84] == '1' && _getThemeMode() == ThemeMode.dark) {
       return scheme.copyWith(
         surface: Colors.black,
         surfaceContainerHighest: const Color(0xFF121212),
@@ -83,7 +83,7 @@ class _PicaKeepAppState extends State<PicaKeepApp> {
                 ColorScheme.fromSeed(
                     seedColor: Colors.blue, brightness: Brightness.dark)),
             scaffoldBackgroundColor:
-                appdata.settings[28] == '1' && _getThemeMode() == ThemeMode.dark
+                appdata.settings[84] == '1' && _getThemeMode() == ThemeMode.dark
                     ? Colors.black
                     : null,
             useMaterial3: true,

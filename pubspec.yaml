@@ -27,7 +27,6 @@ dependencies:
   sqlite3: 2.1.0
   sliver_tools: ^0.2.12
   collection: ^1.18.0
-  uuid: ^3.0.7
   file_picker: ^8.0.0
   window_manager: ^0.4.2
   share_plus: ^7.2.2
@@ -45,4 +44,3 @@ flutter:
     - assets/tags.json
     - assets/translation.json
     - assets/tags_tw.json
-    - assets/init.js

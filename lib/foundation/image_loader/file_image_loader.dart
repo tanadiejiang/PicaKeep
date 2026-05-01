@@ -1,7 +1,4 @@
 import 'dart:async';
-import 'dart:io';
-import 'dart:typed_data' show Uint8List;
-import 'dart:ui' show Codec, ImmutableBuffer;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/painting.dart';
 import 'package:picakeep/foundation/image_loader/base_image_provider.dart';
@@ -20,16 +17,6 @@ class FileImageProvider extends BaseImageProvider<FileImageProvider> {
   @override
   Future<FileImageProvider> obtainKey(ImageConfiguration configuration) {
     return SynchronousFuture<FileImageProvider>(this);
-  }
-
-  Future<Codec> _loadAsync(
-    FileImageProvider key,
-    ImageDecoderCallback decode,
-  ) async {
-    final manager = DownloadManager();
-    await manager.init();
-    final file = manager.getImage(downloadId, ep, page);
-    return decode(await ImmutableBuffer.fromFilePath(file.path));
   }
 
   @override

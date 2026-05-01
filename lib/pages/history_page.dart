@@ -117,7 +117,7 @@ class _HistoryPageState extends State<HistoryPage> {
       if (!mounted) return;
       await ensureHistoryBeforeRead(comic);
       if (!mounted) return;
-      await App.openReader(() => comic.createReadingPage());
+      await App.openReader(() => comic.createReadingPage(ep: item.ep, page: item.page));
     } else {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(

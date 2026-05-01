@@ -285,17 +285,15 @@ class _LocalFavoritesPageState extends State<LocalFavoritesPage> {
           final id = comic.toDownloadId();
           if (dm.isExists(id)) {
             final dirPath = dm.getDirectory(id);
-            if (dirPath != null) {
-              final dir = Directory(dirPath);
-              int totalSize = 0;
-              for (final entity in dir.listSync(recursive: true)) {
-                if (entity is File) {
-                  totalSize += entity.lengthSync();
-                }
+            final dir = Directory(dirPath);
+            int totalSize = 0;
+            for (final entity in dir.listSync(recursive: true)) {
+              if (entity is File) {
+                totalSize += entity.lengthSync();
               }
-              if (totalSize > 0) {
-                return '${(totalSize / (1024 * 1024)).toStringAsFixed(1)} MB';
-              }
+            }
+            if (totalSize > 0) {
+              return '${(totalSize / (1024 * 1024)).toStringAsFixed(1)} MB';
             }
           }
         } catch (_) {}

@@ -391,10 +391,10 @@ class _SettingsPageState extends State<SettingsPage> {
               leading: const Icon(Icons.remove_red_eye),
               title: Text("纯黑色模式".tl),
               trailing: Switch(
-                value: appdata.settings[28] == "1",
+                value: appdata.settings[84] == "1",
                 onChanged: (value) {
                   setState(() {
-                    appdata.settings[28] = value ? "1" : "0";
+                    appdata.settings[84] = value ? "1" : "0";
                   });
                   appdata.updateSettings();
                 },

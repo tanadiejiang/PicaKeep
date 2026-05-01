@@ -38,7 +38,7 @@ abstract class BaseImageProvider<T extends BaseImageProvider<T>>
       if (data == null || data.isEmpty) {
         throw Exception('Empty image data');
       }
-      final buffer = await ui.ImmutableBuffer.fromUint8List(data!);
+      final buffer = await ui.ImmutableBuffer.fromUint8List(data);
       return await decode(buffer);
     } catch (e) {
       scheduleMicrotask(() {
