@@ -65,7 +65,7 @@ abstract class DownloadedItem {
 
   String? directory;
 
-  Widget createReadingPage();
+  Widget createReadingPage({int? ep, int? page});
 }
 
 class DownloadedComic extends DownloadedItem {
@@ -188,7 +188,7 @@ class DownloadedComic extends DownloadedItem {
   List<String> get tags => tagList;
 
   @override
-  Widget createReadingPage() {
+  Widget createReadingPage({int? ep, int? page}) {
     var epsMap = <String, String>{};
     for (int i = 0; i < chapters.length; i++) {
       epsMap[(i + 1).toString()] = chapters[i];
@@ -204,7 +204,7 @@ class DownloadedComic extends DownloadedItem {
       favoriteType: FavoriteType.picacg,
     );
     data.downloadedEps = downloadedChapters;
-    return ComicReadingPage(data, 1, 1);
+    return ComicReadingPage(data, ep ?? 1, page ?? 1);
   }
 }
 
@@ -308,7 +308,7 @@ class DownloadedGallery extends DownloadedItem {
   List<String> get tags => tagList;
 
   @override
-  Widget createReadingPage() {
+  Widget createReadingPage({int? ep, int? page}) {
     var data = LocalReadingData(
       title: name,
       id: id,
@@ -320,7 +320,7 @@ class DownloadedGallery extends DownloadedItem {
       favoriteType: FavoriteType.ehentai,
     );
     data.downloadedEps = [0];
-    return ComicReadingPage(data, 1, 1);
+    return ComicReadingPage(data, ep ?? 1, page ?? 1);
   }
 }
 
@@ -408,7 +408,7 @@ class DownloadedJmComic extends DownloadedItem {
   List<String> get tags => tagList;
 
   @override
-  Widget createReadingPage() {
+  Widget createReadingPage({int? ep, int? page}) {
     var epsMap = <String, String>{};
     for (int i = 0; i < epNames.length; i++) {
       epsMap[(i + 1).toString()] = epNames[i];
@@ -429,7 +429,7 @@ class DownloadedJmComic extends DownloadedItem {
       favoriteType: FavoriteType.jm,
     );
     data.downloadedEps = downloadedChapters;
-    return ComicReadingPage(data, 1, 1);
+    return ComicReadingPage(data, ep ?? 1, page ?? 1);
   }
 }
 
@@ -500,7 +500,7 @@ class DownloadedHitomiComic extends DownloadedItem {
   List<String> get tags => tagList;
 
   @override
-  Widget createReadingPage() {
+  Widget createReadingPage({int? ep, int? page}) {
     var data = LocalReadingData(
       title: name,
       id: id,
@@ -512,7 +512,7 @@ class DownloadedHitomiComic extends DownloadedItem {
       favoriteType: FavoriteType.hitomi,
     );
     data.downloadedEps = [0];
-    return ComicReadingPage(data, 1, 1);
+    return ComicReadingPage(data, ep ?? 1, page ?? 1);
   }
 }
 
@@ -578,7 +578,7 @@ class DownloadedHtComic extends DownloadedItem {
   List<String> get tags => tagList;
 
   @override
-  Widget createReadingPage() {
+  Widget createReadingPage({int? ep, int? page}) {
     var data = LocalReadingData(
       title: name,
       id: id,
@@ -590,7 +590,7 @@ class DownloadedHtComic extends DownloadedItem {
       favoriteType: FavoriteType.htManga,
     );
     data.downloadedEps = [0];
-    return ComicReadingPage(data, 1, 1);
+    return ComicReadingPage(data, ep ?? 1, page ?? 1);
   }
 }
 
@@ -661,7 +661,7 @@ class NhentaiDownloadedComic extends DownloadedItem {
   List<String> get tags => tagList;
 
   @override
-  Widget createReadingPage() {
+  Widget createReadingPage({int? ep, int? page}) {
     var data = LocalReadingData(
       title: name,
       id: id,
@@ -673,7 +673,7 @@ class NhentaiDownloadedComic extends DownloadedItem {
       favoriteType: FavoriteType.nhentai,
     );
     data.downloadedEps = [0];
-    return ComicReadingPage(data, 1, 1);
+    return ComicReadingPage(data, ep ?? 1, page ?? 1);
   }
 }
 
@@ -757,7 +757,7 @@ class CustomDownloadedItem extends DownloadedItem {
         comicId = json["comicId"] ?? '';
 
   @override
-  Widget createReadingPage() {
+  Widget createReadingPage({int? ep, int? page}) {
     var epsMap = <String, String>{};
     if (chapters != null) {
       epsMap.addAll(chapters!);
@@ -783,6 +783,6 @@ class CustomDownloadedItem extends DownloadedItem {
       favoriteType: favType,
     );
     data.downloadedEps = downloadedEps;
-    return ComicReadingPage(data, 1, 1);
+    return ComicReadingPage(data, ep ?? 1, page ?? 1);
   }
 }

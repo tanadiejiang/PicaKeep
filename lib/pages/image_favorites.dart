@@ -222,36 +222,3 @@ class _FavoriteImageTile extends StatelessWidget {
   }
 }
 
-class _FullScreenImage extends StatelessWidget {
-  const _FullScreenImage({
-    required this.imagePath,
-    required this.title,
-  });
-
-  final String imagePath;
-  final String title;
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Colors.black,
-      appBar: AppBar(
-        backgroundColor: Colors.black,
-        foregroundColor: Colors.white,
-        title: Text(title, style: const TextStyle(fontSize: 16)),
-      ),
-      body: Center(
-        child: InteractiveViewer(
-          maxScale: 5.0,
-          child: Image.file(
-            File(imagePath),
-            fit: BoxFit.contain,
-            errorBuilder: (_, __, ___) => const Center(
-              child: Icon(Icons.broken_image, color: Colors.white54, size: 64),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}

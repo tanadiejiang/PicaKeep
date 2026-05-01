@@ -1,5 +1,3 @@
-// ignore_for_file: unused_element, unused_import
-
 import 'dart:async';
 import 'dart:io' show Platform, Process;
 
@@ -29,19 +27,8 @@ void _toComicInfoPage(BuildContext context, DownloadedItem comic) {
 extension ReadComic on DownloadedItem {
   Future<void> read({int? ep, int? page}) async {
     await ensureHistoryBeforeRead(this);
-    await App.openReader(() => createReadingPage());
+    await App.openReader(() => createReadingPage(ep: ep, page: page));
   }
-}
-
-String _extractSourceKey(String id) {
-  if (id.contains('copy_manga')) return 'copy_manga';
-  if (id.contains('Komiic')) return 'Komiic';
-  if (id.startsWith('jm')) return 'jm';
-  if (id.startsWith('nhentai')) return 'nhentai';
-  if (id.startsWith('hitomi')) return 'hitomi';
-  if (id.startsWith('Ht')) return 'htmanga';
-  if (RegExp(r'^\d+$').hasMatch(id)) return 'ehentai';
-  return 'picacg';
 }
 
 FavoriteType _downloadTypeToFavoriteType(DownloadType type) {
