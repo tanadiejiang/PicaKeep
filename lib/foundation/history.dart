@@ -12,6 +12,9 @@ final class HistoryType {
   static HistoryType get htmanga => const HistoryType(4);
   static HistoryType get nhentai => const HistoryType(6);
 
+  /// Local / other sources (copy_manga, Komiic, etc.)
+  static HistoryType get other => const HistoryType(5);
+
   final int value;
 
   String get name {
@@ -21,6 +24,7 @@ final class HistoryType {
       2: "jm",
       3: "hitomi",
       4: "htmanga",
+      5: "other",
       6: "nhentai",
     };
     return nameMap[value] ?? "Unknown";
@@ -92,6 +96,34 @@ class History {
             .where((element) => element != "")
             .map((e) => int.parse(e))),
         maxPage = row["max_page"];
+
+  /// Ensure a DB row exists for this reading session ([ComicReadingPage] uses [target] == [readingData.id]).
+  static Future<History> ensureForLocalRead({
+    required String target,
+    required HistoryType type,
+    required String title,
+    required String subtitle,
+    required String cover,
+    int ep = 0,
+    int page = 0,
+  }) async {
+    final existing = HistoryManager().findSync(target);
+    if (existing != null) {
+      return existing;
+    }
+    final h = History(
+      type,
+      DateTime.now(),
+      title,
+      subtitle,
+      cover,
+      ep,
+      page,
+      target,
+    );
+    await HistoryManager().addHistory(h);
+    return HistoryManager().findSync(target)!;
+  }
 }
 
 class HistoryManager {

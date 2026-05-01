@@ -1,8 +1,10 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:picakeep/foundation/app.dart';
 import 'package:picakeep/foundation/history.dart';
 import 'package:picakeep/foundation/download.dart';
 import 'package:picakeep/tools/translations.dart';
+import 'package:picakeep/tools/read_history_helper.dart';
 import 'history_page.dart';
 import 'image_favorites.dart';
 import 'tools.dart';
@@ -168,9 +170,9 @@ class MePage extends StatelessWidget {
       var comic = await DownloadManager().getComicOrNull(history.target);
       if (comic != null) {
         if (!context.mounted) return;
-        Navigator.of(context).push(
-          MaterialPageRoute(builder: (_) => comic.createReadingPage()),
-        );
+        await ensureHistoryBeforeRead(comic);
+        if (!context.mounted) return;
+        await App.pushInner(() => comic.createReadingPage());
       }
     } catch (e) {
       print('[PicaKeep] MePage: _openComicFromHistory failed: $e');

@@ -86,6 +86,15 @@ class App {
     return Navigator.of(globalContext!).push<T>(AppPageRoute(builder: (context) => page()));
   }
 
+  /// Prefer the tab [Navigator] when present (matches PicaComic main stack).
+  static BuildContext get innerOrGlobalContext =>
+      mainNavigatorKey?.currentContext ?? globalContext!;
+
+  static Future<T?> pushInner<T extends Object?>(Widget Function() page) {
+    return Navigator.of(innerOrGlobalContext)
+        .push<T>(AppPageRoute(builder: (context) => page()));
+  }
+
   static bool get enablePopGesture => isIOS;
 
   static String? _currentRoute() {

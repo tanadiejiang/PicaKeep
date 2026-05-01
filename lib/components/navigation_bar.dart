@@ -151,8 +151,11 @@ class _NaviPaneState extends State<NaviPane>
     onRebuild(context);
     return _NaviPopScope(
       action: () {
-        if (App.mainNavigatorKey!.currentState!.canPop()) {
-          App.mainNavigatorKey!.currentState!.pop();
+        final mainState = App.mainNavigatorKey?.currentState;
+        if (mainState != null && mainState.canPop()) {
+          mainState.pop();
+        } else if (App.navigatorKey.currentState?.canPop() == true) {
+          App.navigatorKey.currentState!.pop();
         } else {
           SystemNavigator.pop();
         }

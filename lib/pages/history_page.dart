@@ -1,7 +1,9 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:picakeep/foundation/history.dart';
+import 'package:picakeep/foundation/app.dart';
 import 'package:picakeep/foundation/download.dart';
+import 'package:picakeep/tools/read_history_helper.dart';
 
 class HistoryPage extends StatefulWidget {
   const HistoryPage({super.key});
@@ -137,9 +139,9 @@ class _HistoryPageState extends State<HistoryPage> {
     var comic = await DownloadManager().getComicOrNull(item.target);
     if (comic != null) {
       if (!mounted) return;
-      Navigator.of(context).push(
-        MaterialPageRoute(builder: (_) => comic.createReadingPage()),
-      );
+      await ensureHistoryBeforeRead(comic);
+      if (!mounted) return;
+      await App.pushInner(() => comic.createReadingPage());
     } else {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(

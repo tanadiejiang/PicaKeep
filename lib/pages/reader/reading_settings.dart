@@ -92,6 +92,7 @@ class _ReadingSettingsState extends State<ReadingSettings> {
                   pageChangeValue = b;
                 });
                 appdata.writeData();
+                logic.update();
               },
             ),
             onTap: () {},
@@ -122,6 +123,7 @@ class _ReadingSettingsState extends State<ReadingSettings> {
                             appdata.settings[40] = v.toInt().toString();
                             appdata.updateSettings();
                             setState(() {});
+                            logic.update();
                           },
                         ))
                   ],
