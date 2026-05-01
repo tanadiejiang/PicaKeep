@@ -2,7 +2,7 @@
 
 ## 执行进度 (2026-03-14 更新)
 
-✅ **全部 6 阶段已完成** — `flutter analyze` 零 warnings/errors, `flutter build windows` 成功 (33.2s)
+✅ **全部 6 阶段已完成** — `flutter analyze` 36 info (0 warnings, 0 errors), 远低于 100 目标
 
 | 阶段 | 状态 | 关键修复 |
 |------|------|---------|
@@ -13,7 +13,16 @@
 | P5 功能补全 | ✅ | 多语言加载正常, 图片收藏计数动态化 |
 | P6 编译验证 | ✅ | `pub get` + `analyze` + `build windows` 全通过 |
 
-### 本轮追加修复 (2026-03-14)
+### 本轮追加修复 (2026-03-14 #2)
+
+| 问题 | 根因 | 修复文件 |
+|------|------|---------|
+| 收藏夹不显示大小 + 无法点击 | `toDownloadId()` 双前缀: target 已存完整 DB ID (如 `copy_manga-abc123`), 再次拼接前缀 → `copy_manga-copy_manga-abc123` 无法匹配 | `foundation/local_favorites.dart` |
+| 图片收藏数量返回'我'页未同步 | `then` 回调在路由过渡期 setState 可能不刷新 → 改用 `addPostFrameCallback` 延迟刷新 | `pages/me_page.dart` |
+| 图片收藏封面不显示 | 旧数据 bare filename 的 fallback 拼接对全路径也生效, 产生错误路径 → 仅对无路径分隔符的值添加前缀 | `pages/image_favorites.dart` |
+| flutter analyze 从 43 降至 36 | 移除 4 个 unnecessary_import、1 个 unused_import、修复 prefer_collection_literals、const constructors、curly_braces | `layout.dart`, `main_page.dart`, `me_page.dart`, `stream_image_provider.dart`, `base_image_provider.dart`, `download_model.dart` |
+
+### 上次追加修复 (2026-03-14 #1)
 
 | 问题 | 根因 | 修复文件 |
 |------|------|---------|

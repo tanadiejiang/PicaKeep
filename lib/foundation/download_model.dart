@@ -142,11 +142,12 @@ class DownloadedComic extends DownloadedItem {
               .compareTo(int.tryParse(b.key.toString()) ?? 0));
         return entries.map((e) {
           final v = e.value;
-          if (v is Map)
+          if (v is Map) {
             return v["title"]?.toString() ??
                 v["name"]?.toString() ??
                 "Ch ${e.key}";
-          if (v is String) return v;
+          }
+          if (v is String) { return v; }
           return "Ch ${e.key}";
         }).toList();
       }

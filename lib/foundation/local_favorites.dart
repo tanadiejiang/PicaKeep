@@ -67,18 +67,28 @@ class FavoriteItem {
     required this.tags,
   });
 
+  /// Convert favorite target to download DB ID.
+  /// Since `_addToLocalFavoriteFolder` stores `comic.id` (the full download DB ID)
+  /// as `target`, this method must detect whether `target` already contains the
+  /// source prefix to avoid double-prefixing (e.g. "copy_manga-copy_manga-xxx").
   String toDownloadId() {
-    final idMap = <int, String>{
-      0: target,
-      1: target,
-      2: "jm$target",
-      3: "hitomi$target",
-      4: "Ht$target",
-      6: "nhentai$target",
-      7: "copy_manga-$target",
-      8: "Komiic-$target",
+    // For types 0 (picacg) and 1 (ehentai): target IS the download ID.
+    if (type.key == 0 || type.key == 1) return target;
+
+    // For types 2–6: simple prefix without separator.
+    const simplePrefixes = <int, String>{
+      2: 'jm', 3: 'hitomi', 4: 'Ht', 6: 'nhentai',
     };
-    return idMap[type.key] ?? "other-$target";
+    final sp = simplePrefixes[type.key];
+    if (sp != null) return target.startsWith(sp) ? target : '$sp$target';
+
+    // For type 7 (copyManga): prefix "copy_manga-"
+    if (type.key == 7) return target.startsWith('copy_manga-') ? target : 'copy_manga-$target';
+
+    // For type 8 (Komiic): prefix "Komiic-"
+    if (type.key == 8) return target.startsWith('Komiic-') ? target : 'Komiic-$target';
+
+    return target;
   }
 
   Map<String, dynamic> toJson() => {

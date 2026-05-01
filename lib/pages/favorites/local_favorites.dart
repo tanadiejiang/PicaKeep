@@ -48,6 +48,8 @@ class _LocalFavoritesPageState extends State<LocalFavoritesPage> {
 
   Future<void> _loadComics() async {
     await _favManager.init();
+    // Ensure DownloadManager singleton is initialized so size / click work correctly
+    await DownloadManager().init();
     final comics = _favManager.getAllComics(widget.folderName);
     _applySort(comics);
     setState(() {
@@ -283,17 +285,19 @@ class _LocalFavoritesPageState extends State<LocalFavoritesPage> {
         try {
           final dm = DownloadManager();
           final id = comic.toDownloadId();
-          if (dm.isExists(id) && dm.path != null) {
+          if (dm.path != null && dm.isExists(id)) {
             final dirPath = dm.getDirectory(id);
             final dir = Directory("${dm.path}/$dirPath");
-            int totalSize = 0;
-            for (final entity in dir.listSync(recursive: true)) {
-              if (entity is File) {
-                totalSize += entity.lengthSync();
+            if (dir.existsSync()) {
+              int totalSize = 0;
+              for (final entity in dir.listSync(recursive: true)) {
+                if (entity is File) {
+                  totalSize += entity.lengthSync();
+                }
               }
-            }
-            if (totalSize > 0) {
-              return '${(totalSize / (1024 * 1024)).toStringAsFixed(1)} MB';
+              if (totalSize > 0) {
+                return '${(totalSize / (1024 * 1024)).toStringAsFixed(1)} MB';
+              }
             }
           }
         } catch (_) {}

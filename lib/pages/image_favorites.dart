@@ -93,7 +93,14 @@ class _FavoriteImageTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final file = File(image.imagePath);
+    // Try stored path as-is (new format: full path from persistentCurrentImage).
+    var file = File(image.imagePath);
+    if (!file.existsSync()) {
+      // Old format: bare filename without directory — prepend images dir.
+      if (!image.imagePath.contains('/') && !image.imagePath.contains('\\')) {
+        file = File("${App.dataPath}/images/${image.imagePath}");
+      }
+    }
     final hasImage = file.existsSync();
 
     return Padding(
