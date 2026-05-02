@@ -1,6 +1,6 @@
 # PicaKeep 开发计划 v3 — 基于半成品现状
 
-## 执行进度 (2026-05-02 更新 v5)
+## 执行进度 (2026-03-14 更新 v6)
 
 ✅ **全部修复完成** — `flutter analyze` **0 issues**
 
@@ -13,7 +13,21 @@
 | P5 功能补全 | ✅ | 多语言加载正常, 图片收藏计数动态化 |
 | P6 编译验证 | ✅ | `pub get` + `analyze` + `build windows` 全通过 |
 
-### 本轮修复 (2026-05-02) — 收藏页对齐 + 阅读器图片收藏 + 设置页视觉
+### 本轮修复 (2026-03-14 v6) — 收藏页重写 + 全警告清零
+
+| 问题 | 根因 | 修复文件 |
+|------|------|---------|
+| 收藏页 `editTags` 未定义 | PicaKeep `foundation/local_favorites.dart` 缺少 `editTags` 方法 | `foundation/local_favorites.dart` |
+| `dl.read()` 未定义 | `ReadComic` 扩展在 `download_page.dart` 中但未导入 | `pages/favorites/local_favorites.dart` |
+| `base.dart` 未使用导入 | 重构残留 | `pages/favorites/local_favorites.dart` |
+| 不必要的字符串插值 | `'${comic.type.name}'` 应为 `comic.type.name` | `pages/favorites/local_favorites.dart` |
+| `sort_child_properties_last` (3处) | `PopupMenuItem` 中 `child:` 应在 `onTap:` 之后 | `pages/favorites/local_favorites.dart` |
+| `onLongTap` 可空类型不匹配 | `DownloadedComicTile.onLongTap` 不可空但传入 `null` | `pages/favorites/local_favorites.dart` |
+| `await_only_futures` + `use_of_void_result` | `_FavSearchDelegate.onOpen` 为 `void` 但被 `await` | `pages/favorites/local_favorites.dart` |
+| `LocalFavoritesPage` 未定义 | `local_search_page.dart` 引用已改名类 → `LocalFavoritesFolder` | `pages/local_search_page.dart` |
+| 未使用导入 | `local_search_page.dart` 导入不存在引用的文件 | `pages/local_search_page.dart` |
+
+### 本轮追加修复 (2026-03-14 #5) — 收藏页对齐 + 阅读器图片收藏 + 设置页视觉
 
 | 问题 | 根因 | 修复文件 |
 |------|------|---------|

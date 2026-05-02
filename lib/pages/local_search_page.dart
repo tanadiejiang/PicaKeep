@@ -203,7 +203,7 @@ class _LocalSearchPageState extends State<LocalSearchPage> {
             tag: c.tags,
             onTap: () {
               App.pushInner(
-                () => LocalFavoritesPage(folderName: r.favoriteItem!.folder),
+                () => LocalFavoritesFolder(folderName: r.favoriteItem!.folder),
               );
             },
             size: '—',
@@ -220,7 +220,7 @@ class _LocalSearchPageState extends State<LocalSearchPage> {
           child: InkWell(
             onTap: () {
               App.pushInner(
-                () => LocalFavoritesPage(folderName: r.favoriteItem!.folder),
+                () => LocalFavoritesFolder(folderName: r.favoriteItem!.folder),
               );
             },
             borderRadius: BorderRadius.circular(16),
