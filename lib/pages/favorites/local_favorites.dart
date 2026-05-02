@@ -143,32 +143,57 @@ class _LocalFavoritesPageState extends State<LocalFavoritesPage> {
     return f.existsSync() ? f : File('');
   }
 
+  bool _isDownloaded(FavoriteItem comic) {
+    try {
+      final dm = DownloadManager();
+      var id = comic.toDownloadId();
+      if (!dm.isExists(id) && id != comic.target && dm.isExists(comic.target)) {
+        id = comic.target;
+      }
+      return dm.isExists(id);
+    } catch (_) {
+      return false;
+    }
+  }
+
   void _showComicMenu(FavoriteItem comic) {
-    showModalBottomSheet(
+    showDialog(
       context: context,
-      builder: (ctx) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ListTile(
-              leading: const Icon(Icons.menu_book),
-              title: const Text('阅读'),
-              onTap: () {
-                Navigator.pop(ctx);
-                _openComic(comic);
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.delete_outline),
-              title: const Text('取消收藏'),
-              onTap: () {
-                Navigator.pop(ctx);
-                _favManager.deleteComic(widget.folderName, comic);
-                _loadComics();
-              },
-            ),
-            const SizedBox(height: 8),
-          ],
+      builder: (ctx) => Dialog(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 400),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+                child: Text(
+                  comic.name.replaceAll("\n", ""),
+                  style: const TextStyle(fontSize: 22),
+                ),
+              ),
+              const Divider(),
+              ListTile(
+                leading: const Icon(Icons.menu_book),
+                title: const Text('阅读'),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _openComic(comic);
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.delete_outline),
+                title: const Text('取消收藏'),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _favManager.deleteComic(widget.folderName, comic);
+                  _loadComics();
+                },
+              ),
+              const SizedBox(height: 16),
+            ],
+          ),
         ),
       ),
     );
@@ -306,7 +331,7 @@ class _LocalFavoritesPageState extends State<LocalFavoritesPage> {
       name: comic.name,
       author: comic.author,
       imagePath: cover.path.isNotEmpty ? cover : File(''),
-      type: comic.type.name,
+      type: _isDownloaded(comic) ? '已下载' : comic.type.name,
       tag: comic.tags,
       onTap: () {
         if (_selecting) {
@@ -346,7 +371,11 @@ class _LocalFavoritesPageState extends State<LocalFavoritesPage> {
           _showComicMenu(comic);
         }
       },
-      onSecondaryTap: (_) {},
+      onSecondaryTap: (_) {
+        if (!_selecting) {
+          _showComicMenu(comic);
+        }
+      },
     );
   }
 }

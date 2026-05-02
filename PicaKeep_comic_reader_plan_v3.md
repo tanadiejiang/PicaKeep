@@ -1,8 +1,8 @@
 # PicaKeep 开发计划 v3 — 基于半成品现状
 
-## 执行进度 (2026-03-14 最终更新 v4)
+## 执行进度 (2026-05-02 更新 v5)
 
-✅ **全部修复完成** — `dart analyze` **0 issues**, `flutter analyze` **0 issues**
+✅ **全部修复完成** — `flutter analyze` **0 issues**
 
 | 阶段 | 状态 | 关键修复 |
 |------|------|---------|
@@ -12,6 +12,16 @@
 | P4 数据兼容 | ✅ | download.db / local_favorite.db / history 表结构一致 |
 | P5 功能补全 | ✅ | 多语言加载正常, 图片收藏计数动态化 |
 | P6 编译验证 | ✅ | `pub get` + `analyze` + `build windows` 全通过 |
+
+### 本轮修复 (2026-05-02) — 收藏页对齐 + 阅读器图片收藏 + 设置页视觉
+
+| 问题 | 根因 | 修复文件 |
+|------|------|---------|
+| 收藏页长按菜单为底部弹出（与原项目对话框风格不一致） | `_showComicMenu` 使用 `showModalBottomSheet`，原项目使用 `showDialog` | `pages/favorites/local_favorites.dart` |
+| 收藏页无下载状态徽章 | 缺少 `_isDownloaded` 辅助方法，`_buildTile` 未检查下载状态 | `pages/favorites/local_favorites.dart` |
+| 收藏页右键菜单无响应 | `onSecondaryTap: (_) {}` 空实现 | `pages/favorites/local_favorites.dart` |
+| 阅读器单页模式下收藏图片无反应 | `_persistentCurrentImage` 依赖 `checkEpDownloaded`，当 `downloadedEps` 未填充时跳过直接文件读取，回退到空数据 stream 加载 | `pages/reader/comic_reading_page.dart` |
+| 设置页关于部分视觉不一致 | 图标和文字布局与原项目有差异 | `pages/settings/settings_page.dart` |
 
 ### 本轮追加修复 (2026-03-14 #4) — 修复历史记录/图片收藏/收藏页
 

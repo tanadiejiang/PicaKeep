@@ -414,7 +414,7 @@ class _SettingsPageState extends State<SettingsPage> {
             height: 130,
             width: double.infinity,
             child: Center(
-              child: Icon(Icons.info_outline, size: 80),
+              child: Icon(Icons.book_rounded, size: 80),
             ),
           ),
           const Center(
@@ -424,11 +424,11 @@ class _SettingsPageState extends State<SettingsPage> {
             ),
           ),
           const Center(
-            child: Text("本地漫画阅读器 / 收藏管理器"),
-          ),
-          const SizedBox(height: 8),
-          const Center(
             child: Text("V1.0.0", style: TextStyle(fontSize: 16)),
+          ),
+          const SizedBox(height: 4),
+          const Center(
+            child: Text("本地漫画阅读器 / 收藏管理器"),
           ),
           Padding(
             padding:
