@@ -6,8 +6,10 @@ import 'package:picakeep/components/comic_tile.dart';
 import 'package:picakeep/components/layout.dart';
 import 'package:picakeep/foundation/app.dart';
 import 'package:picakeep/foundation/download.dart';
+import 'package:picakeep/foundation/download_model.dart';
 import 'package:picakeep/foundation/local_favorites.dart';
 import 'package:picakeep/pages/download_page.dart';
+import 'package:picakeep/pages/local_comic_detail_page.dart';
 import 'package:picakeep/tools/read_history_helper.dart';
 import 'package:picakeep/tools/tags_translation.dart';
 import 'package:picakeep/tools/translations.dart';
@@ -17,31 +19,53 @@ import 'package:picakeep/tools/translations.dart';
 // ============================================================
 
 class OpenFavoriteComicHelper {
+  static Future<DownloadedItem?> _resolveDownloadedItem(FavoriteItem comic) async {
+    final dm = DownloadManager();
+    await dm.init();
+    var id = comic.toDownloadId();
+    if (!dm.isExists(id) && id != comic.target && dm.isExists(comic.target)) {
+      id = comic.target;
+    }
+    if (!dm.isExists(id)) {
+      if (App.globalContext?.mounted ?? false) {
+        ScaffoldMessenger.of(App.globalContext!).showSnackBar(
+          SnackBar(content: Text('未找到本地下载: $id')),
+        );
+      }
+      return null;
+    }
+    final dl = await dm.getComicOrNull(id);
+    if (dl == null) {
+      if (App.globalContext?.mounted ?? false) {
+        ScaffoldMessenger.of(App.globalContext!).showSnackBar(
+          const SnackBar(content: Text('无法打开该漫画')),
+        );
+      }
+      return null;
+    }
+    return dl;
+  }
+
   static Future<void> open(FavoriteItem comic) async {
     try {
-      final dm = DownloadManager();
-      await dm.init();
-      var id = comic.toDownloadId();
-      if (!dm.isExists(id) &&
-          id != comic.target &&
-          dm.isExists(comic.target)) {
-        id = comic.target;
-      }
-      if (!dm.isExists(id)) {
-        if (App.globalContext?.mounted ?? false) {
-          ScaffoldMessenger.of(App.globalContext!).showSnackBar(
-            SnackBar(content: Text('未找到本地下载: $id')),
-          );
-        }
+      final dl = await _resolveDownloadedItem(comic);
+      if (dl == null) {
         return;
       }
-      final dl = await dm.getComicOrNull(id);
+      App.pushInner(() => LocalComicDetailPage(comic: dl));
+    } catch (e) {
+      if (App.globalContext?.mounted ?? false) {
+        ScaffoldMessenger.of(App.globalContext!).showSnackBar(
+          SnackBar(content: Text('打开失败: $e')),
+        );
+      }
+    }
+  }
+
+  static Future<void> read(FavoriteItem comic) async {
+    try {
+      final dl = await _resolveDownloadedItem(comic);
       if (dl == null) {
-        if (App.globalContext?.mounted ?? false) {
-          ScaffoldMessenger.of(App.globalContext!).showSnackBar(
-            const SnackBar(content: Text('无法打开该漫画')),
-          );
-        }
         return;
       }
       await ensureHistoryBeforeRead(dl);
@@ -68,6 +92,7 @@ class LocalFavoriteTile extends StatelessWidget {
     required this.onDelete,
     required this.enableLongPressed,
     this.onTap,
+    this.onLongPressed,
   });
 
   final FavoriteItem comic;
@@ -75,6 +100,7 @@ class LocalFavoriteTile extends StatelessWidget {
   final VoidCallback onDelete;
   final bool enableLongPressed;
   final bool Function()? onTap;
+  final VoidCallback? onLongPressed;
 
   // ---- badge ----
   bool get _isDownloaded {
@@ -94,7 +120,7 @@ class LocalFavoriteTile extends StatelessWidget {
 
   String? get badge => _isDownloaded ? '已下载'.tl : null;
 
-  String get description => comic.type.name;
+  String get description => '${comic.time} | ${comic.type.name}';
 
   // ---- cover image ----
   File get _coverFile {
@@ -147,45 +173,9 @@ class LocalFavoriteTile extends StatelessWidget {
   }
 
   // ---- open comic ----
-  Future<void> _openComic() async {
-    try {
-      final dm = DownloadManager();
-      await dm.init();
-      var id = comic.toDownloadId();
-      if (!dm.isExists(id) &&
-          id != comic.target &&
-          dm.isExists(comic.target)) {
-        id = comic.target;
-      }
-      if (!dm.isExists(id)) {
-        if (App.globalContext?.mounted ?? false) {
-          ScaffoldMessenger.of(App.globalContext!).showSnackBar(
-            SnackBar(content: Text('未找到本地下载: $id')),
-          );
-        }
-        return;
-      }
-      final dl = await dm.getComicOrNull(id);
-      if (dl == null) {
-        if (App.globalContext?.mounted ?? false) {
-          ScaffoldMessenger.of(App.globalContext!).showSnackBar(
-            const SnackBar(content: Text('无法打开该漫画')),
-          );
-        }
-        return;
-      }
-      await ensureHistoryBeforeRead(dl);
-      await dl.read();
-    } catch (e) {
-      if (App.globalContext?.mounted ?? false) {
-        ScaffoldMessenger.of(App.globalContext!).showSnackBar(
-          SnackBar(content: Text('打开失败: $e')),
-        );
-      }
-    }
-  }
+  Future<void> _openComic() => OpenFavoriteComicHelper.open(comic);
 
-  void _read() => _openComic();
+  Future<void> _read() => OpenFavoriteComicHelper.read(comic);
 
   // ---- copy to folder ----
   void _copyTo() {
@@ -443,7 +433,9 @@ class LocalFavoriteTile extends StatelessWidget {
     _openComic();
   }
 
-  // ---- build ----
+  void openMenu() => _showLongPressMenu();
+
+  // ---- build (matches PicaComic's ComicTile rendering) ----
   @override
   Widget build(BuildContext context) {
     final cover = _coverFile;
@@ -451,41 +443,133 @@ class LocalFavoriteTile extends StatelessWidget {
       name: comic.name,
       author: comic.author,
       imagePath: cover.path.isNotEmpty ? cover : File(''),
-      type: badge ?? comic.type.name,
+      type: badge,
       tag: _generateTags(comic.tags),
       onTap: _handleTap,
-      size: _isDownloaded ? _computeSize() : '—',
-      onLongTap: enableLongPressed ? _showLongPressMenu : () {},
+      size: description,
+      onLongTap: enableLongPressed
+          ? (onLongPressed ?? _showLongPressMenu)
+          : () {},
       onSecondaryTap: _showDesktopMenu,
     );
   }
+}
 
-  String _computeSize() {
-    try {
-      final dm = DownloadManager();
-      var id = comic.toDownloadId();
-      if (!dm.isExists(id) &&
-          id != comic.target &&
-          dm.isExists(comic.target)) {
-        id = comic.target;
-      }
-      if (dm.path != null && dm.isExists(id)) {
-        final dirPath = dm.getDirectory(id);
-        final dir = Directory('${dm.path}/$dirPath');
-        if (dir.existsSync()) {
-          int totalSize = 0;
-          for (final entity in dir.listSync(recursive: true)) {
-            if (entity is File) {
-              totalSize += entity.lengthSync();
-            }
+// ============================================================
+// ComicsPageView — embedded folder content for MainFavoritesPage
+// ============================================================
+
+class ComicsPageView extends StatefulWidget {
+  const ComicsPageView({
+    super.key,
+    required this.folder,
+    required this.selectedComics,
+    required this.onClick,
+    required this.onLongPressed,
+    this.onRegisterMenu,
+  });
+
+  final String folder;
+  final List<FavoriteItem> selectedComics;
+  final bool Function(FavoriteItem comic) onClick;
+  final void Function(FavoriteItem comic) onLongPressed;
+  final void Function(FavoriteItem comic, VoidCallback showMenu)? onRegisterMenu;
+
+  @override
+  State<ComicsPageView> createState() => _ComicsPageViewState();
+}
+
+class _ComicsPageViewState extends State<ComicsPageView> {
+  final _scrollController = ScrollController();
+  List<FavoriteItem> _comics = [];
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadComics();
+  }
+
+  @override
+  void didUpdateWidget(covariant ComicsPageView oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.folder != widget.folder) {
+      _loadComics();
+    }
+  }
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _loadComics() async {
+    await LocalFavoritesManager().init();
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _comics = LocalFavoritesManager().getAllComics(widget.folder);
+      _loading = false;
+    });
+  }
+
+  void _refreshAfterDelete(FavoriteItem comic) {
+    setState(() {
+      _comics = LocalFavoritesManager().getAllComics(widget.folder);
+    });
+    widget.selectedComics.remove(comic);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_loading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    if (_comics.isEmpty) {
+      return Center(child: Text('这里什么都没有'.tl));
+    }
+
+    return Scrollbar(
+      controller: _scrollController,
+      interactive: true,
+      child: GridView.builder(
+        controller: _scrollController,
+        gridDelegate: SliverGridDelegateWithComics(),
+        itemCount: _comics.length,
+        padding: const EdgeInsets.only(bottom: 80, left: 4, right: 4, top: 4),
+        itemBuilder: (context, index) {
+          final comic = _comics[index];
+          final tile = LocalFavoriteTile(
+            key: ValueKey('${comic.type.key}_${comic.target}'),
+            comic: comic,
+            folderName: widget.folder,
+            onDelete: () => _refreshAfterDelete(comic),
+            enableLongPressed: true,
+            onTap: () => widget.onClick(comic),
+            onLongPressed: () => widget.onLongPressed(comic),
+          );
+          widget.onRegisterMenu?.call(comic, tile.openMenu);
+
+          Color? color;
+          if (widget.selectedComics.contains(comic)) {
+            color = Theme.of(context).colorScheme.surfaceContainerHighest;
           }
-          if (totalSize > 0) {
-            return '${(totalSize / (1024 * 1024)).toStringAsFixed(1)} MB';
-          }
-        }
-      }
-    } catch (_) {}
-    return '—';
+
+          return AnimatedContainer(
+            duration: const Duration(milliseconds: 160),
+            margin: const EdgeInsets.symmetric(vertical: 2, horizontal: 4),
+            decoration: BoxDecoration(
+              color: color,
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: tile,
+          );
+        },
+      ),
+    );
   }
 }
 

@@ -40,7 +40,7 @@ class DownloadedComicTile extends StatelessWidget {
   final void Function() onTap;
   final void Function() onLongTap;
   final void Function(TapDownDetails details) onSecondaryTap;
-  final String type;
+  final String? type;
   final List<String> tag;
 
   List<String>? get tags => tag.map((e) => _translateTag(e)).toList();
