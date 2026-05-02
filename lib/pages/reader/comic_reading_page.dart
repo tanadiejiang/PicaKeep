@@ -491,10 +491,19 @@ class ComicReadingPage extends StatelessWidget {
       return null;
     }
 
-    // For downloaded images, read the actual file directly instead of
-    // using the loadImage stream which only yields a placeholder [1].
-    if (readingData.downloaded && readingData.checkEpDownloaded(logic.order)) {
+    // For downloaded images, always try direct file read first.
+    // Don't depend on checkEpDownloaded — downloadedEps may not
+    // be populated yet, but the files are already on disk.
+    if (readingData.downloaded) {
       try {
+        // Ensure downloadedEps is populated for checkEpDownloaded
+        if (readingData.downloadedEps.isEmpty) {
+          final comic =
+              await downloadManager.getComicOrNull(readingData.downloadId);
+          if (comic != null) {
+            readingData.downloadedEps = comic.downloadedEps;
+          }
+        }
         final file = downloadManager.getImage(
           readingData.downloadId,
           readingData.hasEp ? logic.order : 0,
@@ -504,7 +513,7 @@ class ComicReadingPage extends StatelessWidget {
           return persistentCurrentImage(file);
         }
       } catch (_) {
-        // Fall through to stream-based loading for network images
+        // Fall through to stream-based loading as last resort
       }
     }
 
