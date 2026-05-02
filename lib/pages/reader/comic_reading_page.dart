@@ -1,4 +1,4 @@
-library pica_reader;
+﻿library pica_reader;
 
 import 'dart:async';
 import 'dart:io';
@@ -241,7 +241,7 @@ class ComicReadingPage extends StatelessWidget {
                         right: 0,
                         child: IgnorePointer(
                           child: ColoredBox(
-                            color: Colors.black.withOpacity(0.2),
+                            color: Colors.black.withValues(alpha: 0.2),
                           ),
                         ),
                       ),
@@ -491,6 +491,23 @@ class ComicReadingPage extends StatelessWidget {
       return null;
     }
 
+    // For downloaded images, read the actual file directly instead of
+    // using the loadImage stream which only yields a placeholder [1].
+    if (readingData.downloaded && readingData.checkEpDownloaded(logic.order)) {
+      try {
+        final file = downloadManager.getImage(
+          readingData.downloadId,
+          readingData.hasEp ? logic.order : 0,
+          index,
+        );
+        if (file.existsSync()) {
+          return persistentCurrentImage(file);
+        }
+      } catch (_) {
+        // Fall through to stream-based loading for network images
+      }
+    }
+
     var file = await _getFileFromStream(
         readingData.loadImage(logic.order, index, logic.urls[index]));
 
@@ -565,7 +582,7 @@ class ComicReadingPage extends StatelessWidget {
                           color: Theme.of(App.globalContext!)
                               .colorScheme
                               .surfaceTint
-                              .withOpacity(0.2),
+                              .withValues(alpha: 0.2),
                           child: const SizedBox.expand(),
                         ),
                       )

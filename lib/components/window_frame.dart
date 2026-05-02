@@ -89,8 +89,8 @@ class WindowFrame extends StatelessWidget {
                             buildMenuButton(controller, context)
                                 .toAlign(Alignment.centerLeft)
                           else
-                            DragToMoveArea(
-                              child: const SizedBox(
+                            const DragToMoveArea(
+                              child: SizedBox(
                                 height: double.infinity,
                                 width: 16,
                               ),

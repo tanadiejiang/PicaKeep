@@ -1,4 +1,4 @@
-part of pica_reader;
+﻿part of pica_reader;
 
 extension ToolBar on ComicReadingPage {
   bool get isReversed => appdata.settings[9] == "2" || appdata.settings[9] == "6";
@@ -324,7 +324,7 @@ extension ToolBar on ComicReadingPage {
                   surfaceTintColor: Theme.of(context).colorScheme.surfaceTint,
                   elevation: 3,
                   shadowColor:
-                      Theme.of(context).colorScheme.shadow.withOpacity(0.3),
+                      Theme.of(context).colorScheme.shadow.withValues(alpha: 0.3),
                   child: SizedBox(
                     width: MediaQuery.of(context).size.width,
                     child: Row(

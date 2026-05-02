@@ -14,7 +14,7 @@ part 'message.dart';
 part 'navigation_bar.dart';
 part 'appbar.dart';
 
-Widget AnimatedContainerWidget({
+Widget animatedContainerWidget({
   Key? key,
   Duration duration = const Duration(milliseconds: 200),
   VoidCallback? onEnd,
@@ -33,7 +33,7 @@ class Button extends StatelessWidget {
 
   const Button({super.key, this.onPressed, this.icon, this.size, this.color});
 
-  Button.icon({
+  const Button.icon({
     super.key,
     this.onPressed,
     this.icon,

@@ -3,7 +3,7 @@
 part of 'settings_page.dart';
 
 class ReadingSettings extends StatelessWidget {
-  ReadingSettings({this.width = 0, super.key});
+  const ReadingSettings({this.width = 0, super.key});
   final double width;
 
   @override

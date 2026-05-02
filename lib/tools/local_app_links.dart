@@ -10,14 +10,18 @@ bool canHandleLocal(String text) {
   final uri = Uri.tryParse(text);
   if (uri == null) return false;
   final host = uri.host;
-  if (host.contains('picacomic.com') || host.contains('picacg'))
+  if (host.contains('picacomic.com') || host.contains('picacg')) {
     return _extractPicacgId(uri) != null;
-  if (host.contains('e-hentai.org') || host.contains('exhentai.org'))
+  }
+  if (host.contains('e-hentai.org') || host.contains('exhentai.org')) {
     return uri.path.contains('/g/');
-  if (host.contains('nhentai.net') || host.contains('nhentai'))
+  }
+  if (host.contains('nhentai.net') || host.contains('nhentai')) {
     return uri.path.contains('/g/');
-  if (host.contains('18comic') || host.contains('jmcomic'))
+  }
+  if (host.contains('18comic') || host.contains('jmcomic')) {
     return _extractJmId(uri) != null;
+  }
   if (host.contains('hitomi.la')) return _extractHitomiId(uri) != null;
   return false;
 }
@@ -68,45 +72,50 @@ _ParsedLink? _parseUrl(String url) {
   final host = uri.host;
   if (host.contains('picacomic.com') || host.contains('picacg')) {
     final id = _extractPicacgId(uri);
-    if (id != null)
+    if (id != null) {
       return _ParsedLink(
           dlId: id,
           rawId: id,
           favType: FavoriteType.picacg,
           sourceName: 'Picacg');
+    }
   }
   if (host.contains('e-hentai.org') || host.contains('exhentai.org')) {
     final id = _extractEhId(uri);
-    if (id != null)
+    if (id != null) {
       return _ParsedLink(
           dlId: id,
           rawId: id,
           favType: FavoriteType.ehentai,
           sourceName: 'E-Hentai');
+    }
   }
   if (host.contains('nhentai.net') || host.contains('nhentai')) {
     final id = _extractNhentaiId(uri);
-    if (id != null)
+    if (id != null) {
       return _ParsedLink(
           dlId: 'nhentai$id',
           rawId: id,
           favType: FavoriteType.nhentai,
           sourceName: 'NHentai');
+    }
   }
   if (host.contains('18comic') || host.contains('jmcomic')) {
     final id = _extractJmId(uri);
-    if (id != null)
+    if (id != null) {
       return _ParsedLink(
           dlId: 'jm$id', rawId: id, favType: FavoriteType.jm, sourceName: '禁漫');
+    }
   }
   if (host.contains('hitomi.la')) {
     final id = _extractHitomiId(uri);
-    if (id != null)
+    if (id != null) {
       return _ParsedLink(
           dlId: 'hitomi$id',
           rawId: id,
           favType: FavoriteType.hitomi,
           sourceName: 'Hitomi');
+    }
   }
   return null;
 }

@@ -74,27 +74,38 @@ class _LocalFavoritesPageState extends State<LocalFavoritesPage> {
 
   Future<void> _openComic(FavoriteItem comic) async {
     if (_selecting) return;
-    final dm = DownloadManager();
-    await dm.init();
-    final id = comic.toDownloadId();
-    if (!dm.isExists(id)) {
+    try {
+      final dm = DownloadManager();
+      await dm.init();
+      var id = comic.toDownloadId();
+      // Fallback: if toDownloadId doesn't match, try raw target
+      if (!dm.isExists(id) && id != comic.target && dm.isExists(comic.target)) {
+        id = comic.target;
+      }
+      if (!dm.isExists(id)) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('未找到本地下载: $id')),
+        );
+        return;
+      }
+      final dl = await dm.getComicOrNull(id);
+      if (dl == null) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('无法打开该漫画')),
+        );
+        return;
+      }
+      await ensureHistoryBeforeRead(dl);
+      if (!mounted) return;
+      await dl.read();
+    } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('未找到本地下载: $id')),
+        SnackBar(content: Text('打开失败: $e')),
       );
-      return;
     }
-    final dl = await dm.getComicOrNull(id);
-    if (dl == null) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('无法打开该漫画')),
-      );
-      return;
-    }
-    await ensureHistoryBeforeRead(dl);
-    if (!mounted) return;
-    await dl.read();
   }
 
   void _removeSelected() {
@@ -114,14 +125,6 @@ class _LocalFavoritesPageState extends State<LocalFavoritesPage> {
     });
   }
 
-  void _enterSelectMode(int index) {
-    setState(() {
-      _selecting = true;
-      _selected = List.filled(_comics.length, false);
-      _selected[index] = true;
-    });
-  }
-
   void _toggleSelectMode() {
     setState(() {
       _selecting = !_selecting;
@@ -138,6 +141,37 @@ class _LocalFavoritesPageState extends State<LocalFavoritesPage> {
     if (p.isEmpty) return File('');
     final f = File(p);
     return f.existsSync() ? f : File('');
+  }
+
+  void _showComicMenu(FavoriteItem comic) {
+    showModalBottomSheet(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.menu_book),
+              title: const Text('阅读'),
+              onTap: () {
+                Navigator.pop(ctx);
+                _openComic(comic);
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.delete_outline),
+              title: const Text('取消收藏'),
+              onTap: () {
+                Navigator.pop(ctx);
+                _favManager.deleteComic(widget.folderName, comic);
+                _loadComics();
+              },
+            ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
   }
 
   @override
@@ -284,7 +318,11 @@ class _LocalFavoritesPageState extends State<LocalFavoritesPage> {
       size: () {
         try {
           final dm = DownloadManager();
-          final id = comic.toDownloadId();
+          var id = comic.toDownloadId();
+          // Fallback: if toDownloadId doesn't match, try raw target
+          if (!dm.isExists(id) && id != comic.target && dm.isExists(comic.target)) {
+            id = comic.target;
+          }
           if (dm.path != null && dm.isExists(id)) {
             final dirPath = dm.getDirectory(id);
             final dir = Directory("${dm.path}/$dirPath");
@@ -305,7 +343,7 @@ class _LocalFavoritesPageState extends State<LocalFavoritesPage> {
       }(),
       onLongTap: () {
         if (!_selecting) {
-          _enterSelectMode(_comics.indexOf(comic));
+          _showComicMenu(comic);
         }
       },
       onSecondaryTap: (_) {},

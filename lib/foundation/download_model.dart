@@ -205,7 +205,7 @@ class DownloadedComic extends DownloadedItem {
       favoriteType: FavoriteType.picacg,
     );
     data.downloadedEps = downloadedChapters;
-    return ComicReadingPage(data, ep ?? 1, page ?? 1);
+    return ComicReadingPage(data, page ?? 1, ep ?? 1);
   }
 }
 
@@ -321,7 +321,7 @@ class DownloadedGallery extends DownloadedItem {
       favoriteType: FavoriteType.ehentai,
     );
     data.downloadedEps = [0];
-    return ComicReadingPage(data, ep ?? 1, page ?? 1);
+    return ComicReadingPage(data, page ?? 1, ep ?? 1);
   }
 }
 
@@ -430,7 +430,7 @@ class DownloadedJmComic extends DownloadedItem {
       favoriteType: FavoriteType.jm,
     );
     data.downloadedEps = downloadedChapters;
-    return ComicReadingPage(data, ep ?? 1, page ?? 1);
+    return ComicReadingPage(data, page ?? 1, ep ?? 1);
   }
 }
 
@@ -513,7 +513,7 @@ class DownloadedHitomiComic extends DownloadedItem {
       favoriteType: FavoriteType.hitomi,
     );
     data.downloadedEps = [0];
-    return ComicReadingPage(data, ep ?? 1, page ?? 1);
+    return ComicReadingPage(data, page ?? 1, ep ?? 1);
   }
 }
 
@@ -591,7 +591,7 @@ class DownloadedHtComic extends DownloadedItem {
       favoriteType: FavoriteType.htManga,
     );
     data.downloadedEps = [0];
-    return ComicReadingPage(data, ep ?? 1, page ?? 1);
+    return ComicReadingPage(data, page ?? 1, ep ?? 1);
   }
 }
 
@@ -674,7 +674,7 @@ class NhentaiDownloadedComic extends DownloadedItem {
       favoriteType: FavoriteType.nhentai,
     );
     data.downloadedEps = [0];
-    return ComicReadingPage(data, ep ?? 1, page ?? 1);
+    return ComicReadingPage(data, page ?? 1, ep ?? 1);
   }
 }
 
@@ -784,6 +784,6 @@ class CustomDownloadedItem extends DownloadedItem {
       favoriteType: favType,
     );
     data.downloadedEps = downloadedEps;
-    return ComicReadingPage(data, ep ?? 1, page ?? 1);
+    return ComicReadingPage(data, page ?? 1, ep ?? 1);
   }
 }

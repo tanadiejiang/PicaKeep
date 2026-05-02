@@ -91,8 +91,38 @@ class _FavoriteImageTile extends StatelessWidget {
     App.globalTo(() => ComicReadingPage(data, image.page, image.ep));
   }
 
+  Widget _buildPlaceholder(BuildContext context) {
+    return Stack(
+      children: [
+        Positioned.fill(
+          child: Container(
+            decoration: BoxDecoration(
+              color: Theme.of(context).colorScheme.secondaryContainer,
+              borderRadius: BorderRadius.circular(8),
+            ),
+            clipBehavior: Clip.antiAlias,
+            child: const Center(child: Icon(Icons.image_not_supported)),
+          ),
+        ),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    // Handle empty path gracefully (may come from old migration data)
+    if (image.imagePath.isEmpty) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+        child: Material(
+          color: Colors.transparent,
+          borderRadius: BorderRadius.circular(8),
+          elevation: 1,
+          child: _buildPlaceholder(context),
+        ),
+      );
+    }
+
     // Try stored path as-is (new format: full path from persistentCurrentImage).
     var file = File(image.imagePath);
     if (!file.existsSync()) {

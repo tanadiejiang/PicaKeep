@@ -472,21 +472,25 @@ class _ReadingSettingsState extends State<ReadingSettings> {
             ],
           ),
         ),
-        ...List.generate(
-            6,
-            (index) => ListTile(
-                  trailing: Radio<int>(
-                    value: index + 1,
-                    groupValue: value,
-                    onChanged: (i) {
-                      setValue(i!);
-                    },
-                  ),
-                  title: Text(options[index]),
-                  onTap: () {
-                    setValue(index + 1);
-                  },
-                ))
+        RadioGroup<int>(
+          groupValue: value,
+          onChanged: (int? i) {
+            if (i != null) setValue(i);
+          },
+          child: Column(
+            children: List.generate(
+                6,
+                (index) => ListTile(
+                      trailing: Radio<int>(
+                        value: index + 1,
+                      ),
+                      title: Text(options[index]),
+                      onTap: () {
+                        setValue(index + 1);
+                      },
+                    )),
+          ),
+        ),
       ],
     );
   }
