@@ -4,7 +4,7 @@
 part of 'settings_page.dart';
 
 class LocalFavoritesSettings extends StatefulWidget {
-  LocalFavoritesSettings({this.width = 0, super.key});
+  const LocalFavoritesSettings({this.width = 0, super.key});
   final double width;
 
   @override

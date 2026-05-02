@@ -88,7 +88,7 @@ class ComicReadingPageLogic extends StateController {
     pageController =
         PageController(initialPage: _getPage(initialPage));
     _index = _getIndex(initialPage);
-    order <= 0 ? order = 1 : order;
+    if (order <= 0) order = 1;
     itemScrollListener.itemPositions.addListener(() {
       var newIndex = itemScrollListener.itemPositions.value.first.index + 1;
       if(newIndex != index) {

@@ -1,4 +1,4 @@
-import 'dart:io';
+﻿import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:picakeep/base.dart';
 import 'package:picakeep/foundation/app.dart';
@@ -200,8 +200,8 @@ class DownloadedComicTile extends StatelessWidget {
                     end: Alignment.bottomCenter,
                     colors: [
                       Colors.transparent,
-                      Colors.black.withOpacity(0.3),
-                      Colors.black.withOpacity(0.5),
+                      Colors.black.withValues(alpha: 0.3),
+                      Colors.black.withValues(alpha: 0.5),
                     ],
                   ),
                   borderRadius: const BorderRadius.only(

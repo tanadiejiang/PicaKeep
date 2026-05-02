@@ -1,8 +1,8 @@
 # PicaKeep 开发计划 v3 — 基于半成品现状
 
-## 执行进度 (2026-03-14 更新)
+## 执行进度 (2026-03-14 最终更新 v4)
 
-✅ **全部 6 阶段已完成** — `flutter analyze` 36 info (0 warnings, 0 errors), 远低于 100 目标
+✅ **全部修复完成** — `dart analyze` **0 issues**, `flutter analyze` **0 issues**
 
 | 阶段 | 状态 | 关键修复 |
 |------|------|---------|
@@ -13,7 +13,24 @@
 | P5 功能补全 | ✅ | 多语言加载正常, 图片收藏计数动态化 |
 | P6 编译验证 | ✅ | `pub get` + `analyze` + `build windows` 全通过 |
 
-### 本轮追加修复 (2026-03-14 #2)
+### 本轮追加修复 (2026-03-14 #4) — 修复历史记录/图片收藏/收藏页
+
+| 问题 | 根因 | 修复文件 |
+|------|------|---------|
+| 历史记录首次点击显示错误 UI (重试/未知错误/切换章节) | 所有 7 个 `createReadingPage` 实现中 `ep`/`page` 参数传入 `ComicReadingPage(data, ep, page)` 顺序错误 — `ep` 被当作 `initialPage`、`page` 被当作 `order`，导致 `loadEp(wrongChapter)` 失败；首次失败时 dispose 的 `_updateHistory` 偶然"反交换"了值，第二次点击恰巧正确的 bug | `foundation/download_model.dart` (7 处) |
+| 历史记录 ep=0 不工作 | `reading_logic.dart` 中 `order <= 0 ? order = 1 : order` 语义不清，替换为 `if (order <= 0) order = 1` | `pages/reader/reading_logic.dart` |
+| 图片收藏不显示收藏时的图片作为封面 (再次) | `_persistentCurrentImage()` 对已下载图片使用 `loadImage` stream 获取数据，而 `LocalReadingData.loadImage` 仅 yield `[1]` 占位符（1 字节垃圾）→ storage 文件实为损坏数据。修复：对已下载图片直接用 `downloadManager.getImage()` 读取实际文件 | `pages/reader/comic_reading_page.dart` |
+| 收藏页缺少长按上下文菜单 | 长按直接进入多选模式，与原项目风格不一致 → 改为长按弹出底部菜单（阅读/取消收藏）；多选仍通过 FAB 按钮触发 | `pages/favorites/local_favorites.dart` |
+
+### 本轮追加修复 (2026-03-14 #3) — analyze 36→0
+
+| 问题 | 根因 | 修复文件 |
+|------|------|---------|
+| 收藏夹大小+点击 (再次) | `toDownloadId()` 修复后仍存在边缘 ID 不匹配 → 添加 `comic.target` 直接回退 + 全函数 try-catch | `pages/favorites/local_favorites.dart` |
+| 图片收藏封面不显示 | 空 `imagePath`（旧迁移数据）进入 fallback 产生错误目录路径 → 空值时跳过文件检查 | `pages/image_favorites.dart` |
+| flutter analyze 降至 0 | 17 `withOpacity`→`withValues` (UTF-8 PowerShell)、`dart fix` 13 自动修复、RadioGroup 迁移、TickerMode 迁移、ignore third-party | `comic_tile.dart`, `custom_slider.dart`, `comic_reading_page.dart`, `tool_bar.dart`, `wrapping.dart`, `image.dart`, `reading_settings.dart`, `components.dart`, `local_favorite_settings.dart`, `window_frame.dart`, `local_app_links.dart` |
+
+### 上次追加修复 (2026-03-14 #2)
 
 | 问题 | 根因 | 修复文件 |
 |------|------|---------|
@@ -22,7 +39,7 @@
 | 图片收藏封面不显示 | 旧数据 bare filename 的 fallback 拼接对全路径也生效, 产生错误路径 → 仅对无路径分隔符的值添加前缀 | `pages/image_favorites.dart` |
 | flutter analyze 从 43 降至 36 | 移除 4 个 unnecessary_import、1 个 unused_import、修复 prefer_collection_literals、const constructors、curly_braces | `layout.dart`, `main_page.dart`, `me_page.dart`, `stream_image_provider.dart`, `base_image_provider.dart`, `download_model.dart` |
 
-### 上次追加修复 (2026-03-14 #1)
+### 第一次追加修复 (2026-03-14 #1)
 
 | 问题 | 根因 | 修复文件 |
 |------|------|---------|

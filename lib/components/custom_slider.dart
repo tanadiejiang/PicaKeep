@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 
 /// copied from flutter source
 class _SliderDefaultsM3 extends SliderThemeData {
@@ -15,45 +15,45 @@ class _SliderDefaultsM3 extends SliderThemeData {
   Color? get inactiveTrackColor => _colors.surfaceContainerHighest;
 
   @override
-  Color? get secondaryActiveTrackColor => _colors.primary.withOpacity(0.54);
+  Color? get secondaryActiveTrackColor => _colors.primary.withValues(alpha: 0.54);
 
   @override
-  Color? get disabledActiveTrackColor => _colors.onSurface.withOpacity(0.38);
+  Color? get disabledActiveTrackColor => _colors.onSurface.withValues(alpha: 0.38);
 
   @override
-  Color? get disabledInactiveTrackColor => _colors.onSurface.withOpacity(0.12);
+  Color? get disabledInactiveTrackColor => _colors.onSurface.withValues(alpha: 0.12);
 
   @override
-  Color? get disabledSecondaryActiveTrackColor => _colors.onSurface.withOpacity(0.12);
+  Color? get disabledSecondaryActiveTrackColor => _colors.onSurface.withValues(alpha: 0.12);
 
   @override
-  Color? get activeTickMarkColor => _colors.onPrimary.withOpacity(0.38);
+  Color? get activeTickMarkColor => _colors.onPrimary.withValues(alpha: 0.38);
 
   @override
-  Color? get inactiveTickMarkColor => _colors.onSurfaceVariant.withOpacity(0.38);
+  Color? get inactiveTickMarkColor => _colors.onSurfaceVariant.withValues(alpha: 0.38);
 
   @override
-  Color? get disabledActiveTickMarkColor => _colors.onSurface.withOpacity(0.38);
+  Color? get disabledActiveTickMarkColor => _colors.onSurface.withValues(alpha: 0.38);
 
   @override
-  Color? get disabledInactiveTickMarkColor => _colors.onSurface.withOpacity(0.38);
+  Color? get disabledInactiveTickMarkColor => _colors.onSurface.withValues(alpha: 0.38);
 
   @override
   Color? get thumbColor => _colors.primary;
 
   @override
-  Color? get disabledThumbColor => Color.alphaBlend(_colors.onSurface.withOpacity(0.38), _colors.surface);
+  Color? get disabledThumbColor => Color.alphaBlend(_colors.onSurface.withValues(alpha: 0.38), _colors.surface);
 
   @override
   Color? get overlayColor => WidgetStateColor.resolveWith((Set<WidgetState> states) {
     if (states.contains(WidgetState.hovered)) {
-      return _colors.primary.withOpacity(0.08);
+      return _colors.primary.withValues(alpha: 0.08);
     }
     if (states.contains(WidgetState.focused)) {
-      return _colors.primary.withOpacity(0.12);
+      return _colors.primary.withValues(alpha: 0.12);
     }
     if (states.contains(WidgetState.dragged)) {
-      return _colors.primary.withOpacity(0.12);
+      return _colors.primary.withValues(alpha: 0.12);
     }
 
     return Colors.transparent;
