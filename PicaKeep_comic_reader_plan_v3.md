@@ -1,6 +1,6 @@
 # PicaKeep 开发计划 v3 — 基于半成品现状
 
-## 执行进度 (2026-03-14 更新 v6)
+## 执行进度 (2026-03-14 更新 v7)
 
 ✅ **全部修复完成** — `flutter analyze` **0 issues**
 
@@ -12,6 +12,18 @@
 | P4 数据兼容 | ✅ | download.db / local_favorite.db / history 表结构一致 |
 | P5 功能补全 | ✅ | 多语言加载正常, 图片收藏计数动态化 |
 | P6 编译验证 | ✅ | `pub get` + `analyze` + `build windows` 全通过 |
+
+### 本轮修复 (2026-03-14 v7) — 收藏页真正重写：视觉样式+页面结构对齐原项目
+
+| 问题 | 根因 | 修复文件 |
+|------|------|---------|
+| 收藏页 tile description 只显示来源类型，不显示时间 | PicaComic 的 `description` 格式为 `"${time} \| ${type}"`，PicaKeep 仅为 `type` | `pages/favorites/local_favorites.dart` |
+| 未下载时 tile 显示来源类型为 badge | PicaComic 只在已下载时显示"已下载"badge，未下载时无 badge | `pages/favorites/local_favorites.dart` |
+| tile size 字段传了文件大小而非 description | PicaComic 的 description 是时间+类型，PicaKeep 传了计算出的文件大小覆盖了 description | `pages/favorites/local_favorites.dart` |
+| 收藏页主结构为分离的列表页+网格页 | PicaComic 是单页 Stack 布局：顶部栏+文件夹下拉抽屉+内容区，PicaKeep 是两个独立页面 | `pages/favorites/main_favorites_page.dart` |
+| 文件夹列表视觉不匹配 | PicaComic 使用 SliverGrid + 计数 badge + 长按菜单，PicaKeep 使用 Card+ListTile | `pages/favorites/main_favorites_page.dart` |
+| 缺少文件夹下拉切换交互 | PicaComic 顶部栏点击展开/收起文件夹抽屉，PicaKeep 无此交互 | `pages/favorites/main_favorites_page.dart` |
+| type 参数可空性不匹配 | `DownloadedComicTile.type` 为 non-nullable `String`，但 badge 为 `String?` | `components/comic_tile.dart` |
 
 ### 本轮修复 (2026-03-14 v6) — 收藏页重写 + 全警告清零
 
