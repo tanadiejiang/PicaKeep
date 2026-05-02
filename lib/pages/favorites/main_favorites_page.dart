@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:picakeep/foundation/local_favorites.dart';
+import 'package:picakeep/tools/translations.dart';
 import 'local_favorites.dart';
 
 class MainFavoritesPage extends StatefulWidget {
@@ -29,65 +30,18 @@ class _MainFavoritesPageState extends State<MainFavoritesPage> {
   }
 
   void _createFolder() {
-    final controller = TextEditingController();
     showDialog(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('新建文件夹'),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          decoration: const InputDecoration(hintText: '请输入文件夹名称'),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('取消'),
-          ),
-          TextButton(
-            onPressed: () {
-              final name = controller.text.trim();
-              if (name.isNotEmpty) {
-                _favManager.createFolder(name);
-                _loadFolders();
-                Navigator.pop(ctx);
-              }
-            },
-            child: const Text('确定'),
-          ),
-        ],
-      ),
+      builder: (_) => CreateFolderDialog(onCreated: _loadFolders),
     );
   }
 
   void _renameFolder(int index) {
-    final controller = TextEditingController(text: _folders[index]);
     showDialog(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('重命名文件夹'),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          decoration: const InputDecoration(hintText: '请输入新名称'),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('取消'),
-          ),
-          TextButton(
-            onPressed: () {
-              final name = controller.text.trim();
-              if (name.isNotEmpty) {
-                _favManager.rename(_folders[index], name);
-                _loadFolders();
-                Navigator.pop(ctx);
-              }
-            },
-            child: const Text('确定'),
-          ),
-        ],
+      builder: (_) => RenameFolderDialog(
+        oldName: _folders[index],
+        onRenamed: _loadFolders,
       ),
     );
   }
@@ -104,12 +58,13 @@ class _MainFavoritesPageState extends State<MainFavoritesPage> {
             child: const Text('取消'),
           ),
           TextButton(
-              onPressed: () {
-                _favManager.deleteFolder(_folders[index]);
-                _loadFolders();
-                Navigator.pop(ctx);
-              },
-              child: const Text('删除')),
+            onPressed: () {
+              _favManager.deleteFolder(_folders[index]);
+              _loadFolders();
+              Navigator.pop(ctx);
+            },
+            child: const Text('删除'),
+          ),
         ],
       ),
     );
@@ -119,7 +74,7 @@ class _MainFavoritesPageState extends State<MainFavoritesPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('收藏'),
+        title: Text('收藏'.tl),
         actions: [
           IconButton(
             icon: const Icon(Icons.create_new_folder),
@@ -137,12 +92,12 @@ class _MainFavoritesPageState extends State<MainFavoritesPage> {
                       const Icon(Icons.folder_off,
                           size: 64, color: Colors.grey),
                       const SizedBox(height: 16),
-                      const Text('暂无收藏文件夹'),
+                      Text('暂无收藏文件夹'.tl),
                       const SizedBox(height: 16),
                       FilledButton.icon(
                         onPressed: _createFolder,
                         icon: const Icon(Icons.add),
-                        label: const Text('新建文件夹'),
+                        label: Text('新建文件夹'.tl),
                       ),
                     ],
                   ),
@@ -163,10 +118,8 @@ class _MainFavoritesPageState extends State<MainFavoritesPage> {
                             switch (value) {
                               case 'rename':
                                 _renameFolder(index);
-                                break;
                               case 'delete':
                                 _deleteFolder(index);
-                                break;
                             }
                           },
                           itemBuilder: (ctx) => [
@@ -181,7 +134,7 @@ class _MainFavoritesPageState extends State<MainFavoritesPage> {
                             context,
                             MaterialPageRoute(
                               builder: (_) =>
-                                  LocalFavoritesPage(folderName: folder),
+                                  LocalFavoritesFolder(folderName: folder),
                             ),
                           );
                         },

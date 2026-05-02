@@ -439,6 +439,14 @@ class LocalFavoritesManager {
     _emitFolders();
   }
 
+  void editTags(String target, String folder, List<String> tags) {
+    _db.execute("""
+      update "$folder"
+      set tags = ?
+      where target == ?;
+    """, [tags.join(','), target]);
+  }
+
   List<FavoriteItem> getAllComics(String folder) {
     var rows = _db.select("""
       select * from "$folder"

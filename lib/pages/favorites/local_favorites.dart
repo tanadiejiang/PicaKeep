@@ -7,21 +7,503 @@ import 'package:picakeep/components/layout.dart';
 import 'package:picakeep/foundation/app.dart';
 import 'package:picakeep/foundation/download.dart';
 import 'package:picakeep/foundation/local_favorites.dart';
-import '../download_page.dart';
+import 'package:picakeep/pages/download_page.dart';
 import 'package:picakeep/tools/read_history_helper.dart';
+import 'package:picakeep/tools/tags_translation.dart';
 import 'package:picakeep/tools/translations.dart';
 
-class LocalFavoritesPage extends StatefulWidget {
+// ============================================================
+// OpenFavoriteComicHelper — reusable comic opener
+// ============================================================
+
+class OpenFavoriteComicHelper {
+  static Future<void> open(FavoriteItem comic) async {
+    try {
+      final dm = DownloadManager();
+      await dm.init();
+      var id = comic.toDownloadId();
+      if (!dm.isExists(id) &&
+          id != comic.target &&
+          dm.isExists(comic.target)) {
+        id = comic.target;
+      }
+      if (!dm.isExists(id)) {
+        if (App.globalContext?.mounted ?? false) {
+          ScaffoldMessenger.of(App.globalContext!).showSnackBar(
+            SnackBar(content: Text('未找到本地下载: $id')),
+          );
+        }
+        return;
+      }
+      final dl = await dm.getComicOrNull(id);
+      if (dl == null) {
+        if (App.globalContext?.mounted ?? false) {
+          ScaffoldMessenger.of(App.globalContext!).showSnackBar(
+            const SnackBar(content: Text('无法打开该漫画')),
+          );
+        }
+        return;
+      }
+      await ensureHistoryBeforeRead(dl);
+      await dl.read();
+    } catch (e) {
+      if (App.globalContext?.mounted ?? false) {
+        ScaffoldMessenger.of(App.globalContext!).showSnackBar(
+          SnackBar(content: Text('打开失败: $e')),
+        );
+      }
+    }
+  }
+}
+
+// ============================================================
+// LocalFavoriteTile — matches PicaComic's LocalFavoriteTile
+// ============================================================
+
+class LocalFavoriteTile extends StatelessWidget {
+  const LocalFavoriteTile({
+    super.key,
+    required this.comic,
+    required this.folderName,
+    required this.onDelete,
+    required this.enableLongPressed,
+    this.onTap,
+  });
+
+  final FavoriteItem comic;
   final String folderName;
-  const LocalFavoritesPage({super.key, required this.folderName});
+  final VoidCallback onDelete;
+  final bool enableLongPressed;
+  final bool Function()? onTap;
+
+  // ---- badge ----
+  bool get _isDownloaded {
+    try {
+      final dm = DownloadManager();
+      var id = comic.toDownloadId();
+      if (!dm.isExists(id) &&
+          id != comic.target &&
+          dm.isExists(comic.target)) {
+        id = comic.target;
+      }
+      return dm.isExists(id);
+    } catch (_) {
+      return false;
+    }
+  }
+
+  String? get badge => _isDownloaded ? '已下载'.tl : null;
+
+  String get description => comic.type.name;
+
+  // ---- cover image ----
+  File get _coverFile {
+    final p = comic.coverPath.trim();
+    if (p.isEmpty) return File('');
+    final f = File(p);
+    return f.existsSync() ? f : File('');
+  }
+
+  // ---- tags (Chinese translation) ----
+  List<String> _generateTags(List<String> tags) {
+    if (App.locale.languageCode != 'zh') return tags;
+    final res = <String>[];
+    final res2 = <String>[];
+    for (var tag in tags) {
+      if (tag.contains(':')) {
+        final splits = tag.split(':');
+        const lowLevelKey = ['character', 'artist', 'cosplayer', 'group'];
+        if (lowLevelKey.contains(splits[0])) {
+          res2.add(_translateTag(splits[1]));
+        } else {
+          res.add(_translateTag(splits[1]));
+        }
+      } else {
+        var name = tag;
+        if (name.contains('♀')) {
+          name = '${_translateTag(name.replaceFirst(' ♀', ''))}♀';
+        } else if (name.contains('♂')) {
+          name = '${_translateTag(name.replaceFirst(' ♂', ''))}♂';
+        } else {
+          name = _translateTag(name);
+        }
+        res.add(name);
+      }
+    }
+    return res + res2;
+  }
+
+  String _translateTag(String tag) {
+    try {
+      for (final map in tagTranslations.values) {
+        for (final entry in map.entries) {
+          if (entry.key.toLowerCase() == tag.toLowerCase()) {
+            return entry.value.isNotEmpty ? entry.value.first : tag;
+          }
+        }
+      }
+    } catch (_) {}
+    return tag;
+  }
+
+  // ---- open comic ----
+  Future<void> _openComic() async {
+    try {
+      final dm = DownloadManager();
+      await dm.init();
+      var id = comic.toDownloadId();
+      if (!dm.isExists(id) &&
+          id != comic.target &&
+          dm.isExists(comic.target)) {
+        id = comic.target;
+      }
+      if (!dm.isExists(id)) {
+        if (App.globalContext?.mounted ?? false) {
+          ScaffoldMessenger.of(App.globalContext!).showSnackBar(
+            SnackBar(content: Text('未找到本地下载: $id')),
+          );
+        }
+        return;
+      }
+      final dl = await dm.getComicOrNull(id);
+      if (dl == null) {
+        if (App.globalContext?.mounted ?? false) {
+          ScaffoldMessenger.of(App.globalContext!).showSnackBar(
+            const SnackBar(content: Text('无法打开该漫画')),
+          );
+        }
+        return;
+      }
+      await ensureHistoryBeforeRead(dl);
+      await dl.read();
+    } catch (e) {
+      if (App.globalContext?.mounted ?? false) {
+        ScaffoldMessenger.of(App.globalContext!).showSnackBar(
+          SnackBar(content: Text('打开失败: $e')),
+        );
+      }
+    }
+  }
+
+  void _read() => _openComic();
+
+  // ---- copy to folder ----
+  void _copyTo() {
+    String? folder;
+    showDialog(
+      context: App.globalContext!,
+      builder: (ctx) => SimpleDialog(
+        title: Text('复制到'.tl),
+        children: [
+          SizedBox(
+            width: 280,
+            height: 132,
+            child: Column(
+              children: [
+                ListTile(
+                  title: Text('收藏夹'.tl),
+                  trailing: DropdownButton<String?>(
+                    value: folder,
+                    hint: const Text('选择文件夹'),
+                    items: LocalFavoritesManager()
+                        .folderNames
+                        .map((f) => DropdownMenuItem(
+                              value: f,
+                              child: Text(f),
+                            ))
+                        .toList(),
+                    onChanged: (v) {
+                      folder = v;
+                      (ctx as Element).markNeedsBuild();
+                    },
+                  ),
+                ),
+                const Spacer(),
+                Center(
+                  child: FilledButton(
+                    child: Text('确认'.tl),
+                    onPressed: () {
+                      if (folder != null) {
+                        LocalFavoritesManager()
+                            .addComic(folder!, comic);
+                        Navigator.pop(ctx);
+                      }
+                    },
+                  ),
+                ),
+                const SizedBox(height: 16),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ---- edit tags ----
+  void _editTags() {
+    showDialog(
+      context: App.globalContext!,
+      builder: (ctx) {
+        var tags = List<String>.from(comic.tags);
+        final controller = TextEditingController();
+        return StatefulBuilder(
+          builder: (context, setState) => SimpleDialog(
+            title: Text('编辑标签'.tl),
+            children: [
+              SizedBox(
+                width: 400,
+                child: Column(
+                  children: [
+                    Wrap(
+                      children: tags
+                          .map((e) => Container(
+                                margin: const EdgeInsets.all(4),
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 8, vertical: 6),
+                                decoration: BoxDecoration(
+                                  color: Theme.of(context)
+                                      .colorScheme
+                                      .secondaryContainer,
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Text(e),
+                                    const SizedBox(width: 4),
+                                    InkWell(
+                                      borderRadius: BorderRadius.circular(10),
+                                      child: const Icon(Icons.close, size: 20),
+                                      onTap: () {
+                                        tags.remove(e);
+                                        setState(() {});
+                                      },
+                                    ),
+                                  ],
+                                ),
+                              ))
+                          .toList(),
+                    ),
+                    const SizedBox(height: 8),
+                    SizedBox(
+                      height: 56,
+                      child: TextField(
+                        controller: controller,
+                        decoration: InputDecoration(
+                          border: const UnderlineInputBorder(),
+                          suffix: IconButton(
+                            icon: const Icon(Icons.add),
+                            onPressed: () {
+                              final value = controller.text;
+                              if (value.isNotEmpty) {
+                                controller.clear();
+                                tags.add(value);
+                                setState(() {});
+                              }
+                            },
+                          ),
+                        ),
+                        onSubmitted: (value) {
+                          if (value.isNotEmpty) {
+                            tags.add(value);
+                            controller.clear();
+                            setState(() {});
+                          }
+                        },
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    Center(
+                      child: FilledButton(
+                        onPressed: () {
+                          LocalFavoritesManager()
+                              .editTags(comic.target, folderName, tags);
+                          Navigator.pop(ctx);
+                          onDelete();
+                        },
+                        child: Text('提交'.tl),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  // ---- long-press dialog (matches PicaComic's showMenu) ----
+  void _showLongPressMenu() {
+    showDialog(
+      context: App.globalContext!,
+      builder: (ctx) => Dialog(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 400),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+                child: SelectableText(
+                  comic.name.replaceAll('\n', ''),
+                  style: const TextStyle(fontSize: 22),
+                ),
+              ),
+              const Divider(),
+              ListTile(
+                leading: const Icon(Icons.article),
+                title: Text('查看详情'.tl),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _openComic();
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.bookmark_remove),
+                title: Text('取消收藏'.tl),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  LocalFavoritesManager().deleteComic(folderName, comic);
+                  onDelete();
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.chrome_reader_mode_rounded),
+                title: Text('阅读'.tl),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _read();
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.copy),
+                title: Text('复制到'.tl),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _copyTo();
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.edit_note),
+                title: Text('编辑标签'.tl),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _editTags();
+                },
+              ),
+              const SizedBox(height: 16),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  // ---- right-click menu ----
+  void _showDesktopMenu(TapDownDetails details) {
+    final offset = details.globalPosition;
+    showMenu(
+      context: App.globalContext!,
+      position: RelativeRect.fromLTRB(
+          offset.dx, offset.dy, offset.dx, offset.dy),
+      items: [
+        PopupMenuItem(
+          onTap: _read,
+          child: Text('阅读'.tl),
+        ),
+        PopupMenuItem(
+          onTap: () {
+            LocalFavoritesManager().deleteComic(folderName, comic);
+            onDelete();
+          },
+          child: Text('取消收藏'.tl),
+        ),
+        PopupMenuItem(
+          onTap: _copyTo,
+          child: Text('复制到'.tl),
+        ),
+        PopupMenuItem(
+          onTap: _editTags,
+          child: Text('编辑标签'.tl),
+        ),
+      ],
+    );
+  }
+
+  // ---- onTap ----
+  void _handleTap() {
+    if (onTap != null) {
+      final res = onTap!();
+      if (res) return;
+    }
+    _openComic();
+  }
+
+  // ---- build ----
+  @override
+  Widget build(BuildContext context) {
+    final cover = _coverFile;
+    return DownloadedComicTile(
+      name: comic.name,
+      author: comic.author,
+      imagePath: cover.path.isNotEmpty ? cover : File(''),
+      type: badge ?? comic.type.name,
+      tag: _generateTags(comic.tags),
+      onTap: _handleTap,
+      size: _isDownloaded ? _computeSize() : '—',
+      onLongTap: enableLongPressed ? _showLongPressMenu : () {},
+      onSecondaryTap: _showDesktopMenu,
+    );
+  }
+
+  String _computeSize() {
+    try {
+      final dm = DownloadManager();
+      var id = comic.toDownloadId();
+      if (!dm.isExists(id) &&
+          id != comic.target &&
+          dm.isExists(comic.target)) {
+        id = comic.target;
+      }
+      if (dm.path != null && dm.isExists(id)) {
+        final dirPath = dm.getDirectory(id);
+        final dir = Directory('${dm.path}/$dirPath');
+        if (dir.existsSync()) {
+          int totalSize = 0;
+          for (final entity in dir.listSync(recursive: true)) {
+            if (entity is File) {
+              totalSize += entity.lengthSync();
+            }
+          }
+          if (totalSize > 0) {
+            return '${(totalSize / (1024 * 1024)).toStringAsFixed(1)} MB';
+          }
+        }
+      }
+    } catch (_) {}
+    return '—';
+  }
+}
+
+// ============================================================
+// LocalFavoritesFolder — matches PicaComic's LocalFavoritesFolder
+// ============================================================
+
+class LocalFavoritesFolder extends StatefulWidget {
+  final String folderName;
+  const LocalFavoritesFolder({super.key, required this.folderName});
 
   @override
-  State<LocalFavoritesPage> createState() => _LocalFavoritesPageState();
+  State<LocalFavoritesFolder> createState() => _LocalFavoritesFolderState();
 }
 
 enum _SortMode { name, author, time }
 
-class _LocalFavoritesPageState extends State<LocalFavoritesPage> {
+class _LocalFavoritesFolderState extends State<LocalFavoritesFolder> {
   final _favManager = LocalFavoritesManager();
   final _scrollController = ScrollController();
   List<FavoriteItem> _comics = [];
@@ -48,7 +530,6 @@ class _LocalFavoritesPageState extends State<LocalFavoritesPage> {
 
   Future<void> _loadComics() async {
     await _favManager.init();
-    // Ensure DownloadManager singleton is initialized so size / click work correctly
     await DownloadManager().init();
     final comics = _favManager.getAllComics(widget.folderName);
     _applySort(comics);
@@ -62,58 +543,17 @@ class _LocalFavoritesPageState extends State<LocalFavoritesPage> {
     switch (_sortMode) {
       case _SortMode.name:
         comics.sort((a, b) => a.name.compareTo(b.name));
-        break;
       case _SortMode.author:
         comics.sort((a, b) => a.author.compareTo(b.author));
-        break;
       case _SortMode.time:
-        // Keep original order from database (time-descending)
-        break;
-    }
-  }
-
-  Future<void> _openComic(FavoriteItem comic) async {
-    if (_selecting) return;
-    try {
-      final dm = DownloadManager();
-      await dm.init();
-      var id = comic.toDownloadId();
-      // Fallback: if toDownloadId doesn't match, try raw target
-      if (!dm.isExists(id) && id != comic.target && dm.isExists(comic.target)) {
-        id = comic.target;
-      }
-      if (!dm.isExists(id)) {
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('未找到本地下载: $id')),
-        );
-        return;
-      }
-      final dl = await dm.getComicOrNull(id);
-      if (dl == null) {
-        if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('无法打开该漫画')),
-        );
-        return;
-      }
-      await ensureHistoryBeforeRead(dl);
-      if (!mounted) return;
-      await dl.read();
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('打开失败: $e')),
-      );
+        break; // keep DB order (time-descending)
     }
   }
 
   void _removeSelected() {
     final toRemove = <FavoriteItem>[];
     for (var i = 0; i < _comics.length; i++) {
-      if (_selected[i]) {
-        toRemove.add(_comics[i]);
-      }
+      if (_selected[i]) toRemove.add(_comics[i]);
     }
     for (final comic in toRemove) {
       _favManager.deleteComic(widget.folderName, comic);
@@ -136,67 +576,11 @@ class _LocalFavoritesPageState extends State<LocalFavoritesPage> {
     });
   }
 
-  File _coverFile(FavoriteItem comic) {
-    final p = comic.coverPath.trim();
-    if (p.isEmpty) return File('');
-    final f = File(p);
-    return f.existsSync() ? f : File('');
-  }
-
-  bool _isDownloaded(FavoriteItem comic) {
-    try {
-      final dm = DownloadManager();
-      var id = comic.toDownloadId();
-      if (!dm.isExists(id) && id != comic.target && dm.isExists(comic.target)) {
-        id = comic.target;
-      }
-      return dm.isExists(id);
-    } catch (_) {
-      return false;
-    }
-  }
-
-  void _showComicMenu(FavoriteItem comic) {
-    showDialog(
-      context: context,
-      builder: (ctx) => Dialog(
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 400),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-                child: Text(
-                  comic.name.replaceAll("\n", ""),
-                  style: const TextStyle(fontSize: 22),
-                ),
-              ),
-              const Divider(),
-              ListTile(
-                leading: const Icon(Icons.menu_book),
-                title: const Text('阅读'),
-                onTap: () {
-                  Navigator.pop(ctx);
-                  _openComic(comic);
-                },
-              ),
-              ListTile(
-                leading: const Icon(Icons.delete_outline),
-                title: const Text('取消收藏'),
-                onTap: () {
-                  Navigator.pop(ctx);
-                  _favManager.deleteComic(widget.folderName, comic);
-                  _loadComics();
-                },
-              ),
-              const SizedBox(height: 16),
-            ],
-          ),
-        ),
-      ),
-    );
+  void _onDeleteOne() {
+    setState(() {
+      _comics = _favManager.getAllComics(widget.folderName);
+      _orderDirty = true;
+    });
   }
 
   @override
@@ -214,7 +598,8 @@ class _LocalFavoritesPageState extends State<LocalFavoritesPage> {
                   context: context,
                   builder: (ctx) => AlertDialog(
                     title: const Text('删除'),
-                    content: Text('确定要删除选中的 ${_selected.where((e) => e).length} 部漫画吗？'),
+                    content: Text(
+                        '确定要删除选中的 ${_selected.where((e) => e).length} 部漫画吗？'),
                     actions: [
                       TextButton(
                         onPressed: () => Navigator.pop(ctx),
@@ -236,15 +621,14 @@ class _LocalFavoritesPageState extends State<LocalFavoritesPage> {
             icon: const Icon(Icons.sort),
             tooltip: '排序'.tl,
             onSelected: (mode) {
-              setState(() {
-                _sortMode = mode;
-              });
+              setState(() => _sortMode = mode);
               _loadComics();
             },
             itemBuilder: (context) => [
               const PopupMenuItem(value: _SortMode.time, child: Text('按时间')),
               const PopupMenuItem(value: _SortMode.name, child: Text('按标题')),
-              const PopupMenuItem(value: _SortMode.author, child: Text('按作者')),
+              const PopupMenuItem(
+                  value: _SortMode.author, child: Text('按作者')),
             ],
           ),
           IconButton(
@@ -252,7 +636,10 @@ class _LocalFavoritesPageState extends State<LocalFavoritesPage> {
             onPressed: () {
               showSearch(
                 context: context,
-                delegate: _FavSearchDelegate(_comics, (c) => _openComic(c)),
+                delegate:
+                    _FavSearchDelegate(_comics, (c) async {
+                      await OpenFavoriteComicHelper.open(c);
+                    }),
               );
             },
           ),
@@ -281,12 +668,14 @@ class _LocalFavoritesPageState extends State<LocalFavoritesPage> {
                     if (_selecting) return;
                     setState(() {
                       _orderDirty = true;
-                      _comics = reorderFunc(_comics) as List<FavoriteItem>;
+                      _comics =
+                          reorderFunc(_comics) as List<FavoriteItem>;
                     });
                   },
                   dragChildBoxDecoration: BoxDecoration(
                     borderRadius: BorderRadius.circular(16),
-                    color: Theme.of(context).colorScheme.surfaceContainerHigh,
+                    color:
+                        Theme.of(context).colorScheme.surfaceContainerHigh,
                   ),
                   builder: (children) {
                     return GridView(
@@ -305,7 +694,12 @@ class _LocalFavoritesPageState extends State<LocalFavoritesPage> {
                       padding: const EdgeInsets.all(2),
                       child: Stack(
                         children: [
-                          _buildTile(_comics[index]),
+                          LocalFavoriteTile(
+                            comic: _comics[index],
+                            folderName: widget.folderName,
+                            onDelete: _onDeleteOne,
+                            enableLongPressed: !_selecting,
+                          ),
                           if (_selecting)
                             Positioned(
                               top: 4,
@@ -313,7 +707,8 @@ class _LocalFavoritesPageState extends State<LocalFavoritesPage> {
                               child: Checkbox(
                                 value: _selected[index],
                                 onChanged: (v) {
-                                  setState(() => _selected[index] = v ?? false);
+                                  setState(
+                                      () => _selected[index] = v ?? false);
                                 },
                               ),
                             ),
@@ -324,61 +719,165 @@ class _LocalFavoritesPageState extends State<LocalFavoritesPage> {
                 ),
     );
   }
+}
 
-  Widget _buildTile(FavoriteItem comic) {
-    final cover = _coverFile(comic);
-    return DownloadedComicTile(
-      name: comic.name,
-      author: comic.author,
-      imagePath: cover.path.isNotEmpty ? cover : File(''),
-      type: _isDownloaded(comic) ? '已下载' : comic.type.name,
-      tag: comic.tags,
-      onTap: () {
-        if (_selecting) {
-          // Toggle selection through the Checkbox handler instead
-          return;
-        }
-        _openComic(comic);
-      },
-      size: () {
-        try {
-          final dm = DownloadManager();
-          var id = comic.toDownloadId();
-          // Fallback: if toDownloadId doesn't match, try raw target
-          if (!dm.isExists(id) && id != comic.target && dm.isExists(comic.target)) {
-            id = comic.target;
-          }
-          if (dm.path != null && dm.isExists(id)) {
-            final dirPath = dm.getDirectory(id);
-            final dir = Directory("${dm.path}/$dirPath");
-            if (dir.existsSync()) {
-              int totalSize = 0;
-              for (final entity in dir.listSync(recursive: true)) {
-                if (entity is File) {
-                  totalSize += entity.lengthSync();
-                }
+// ============================================================
+// Folder management dialogs
+// ============================================================
+
+class CreateFolderDialog extends StatelessWidget {
+  final VoidCallback onCreated;
+  const CreateFolderDialog({super.key, required this.onCreated});
+
+  @override
+  Widget build(BuildContext context) {
+    final controller = TextEditingController();
+    return SimpleDialog(
+      title: Text('新建文件夹'.tl),
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(20, 0, 20, 0),
+          child: TextField(
+            controller: controller,
+            autofocus: true,
+            decoration: InputDecoration(
+              border: const OutlineInputBorder(),
+              labelText: '名称'.tl,
+            ),
+            onSubmitted: (value) {
+              if (value.trim().isNotEmpty) {
+                LocalFavoritesManager().createFolder(value.trim());
+                Navigator.pop(context);
+                onCreated();
               }
-              if (totalSize > 0) {
-                return '${(totalSize / (1024 * 1024)).toStringAsFixed(1)} MB';
+            },
+          ),
+        ),
+        const SizedBox(height: 16),
+        Center(
+          child: FilledButton(
+            onPressed: () {
+              final name = controller.text.trim();
+              if (name.isNotEmpty) {
+                LocalFavoritesManager().createFolder(name);
+                Navigator.pop(context);
+                onCreated();
               }
-            }
-          }
-        } catch (_) {}
-        return '—';
-      }(),
-      onLongTap: () {
-        if (!_selecting) {
-          _showComicMenu(comic);
-        }
-      },
-      onSecondaryTap: (_) {
-        if (!_selecting) {
-          _showComicMenu(comic);
-        }
-      },
+            },
+            child: Text('确定'.tl),
+          ),
+        ),
+        const SizedBox(height: 8),
+      ],
     );
   }
 }
+
+class RenameFolderDialog extends StatelessWidget {
+  final String oldName;
+  final VoidCallback onRenamed;
+  const RenameFolderDialog(
+      {super.key, required this.oldName, required this.onRenamed});
+
+  @override
+  Widget build(BuildContext context) {
+    final controller = TextEditingController(text: oldName);
+    return SimpleDialog(
+      title: Text('重命名'.tl),
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(20, 0, 20, 0),
+          child: TextField(
+            controller: controller,
+            autofocus: true,
+            decoration: InputDecoration(
+              border: const OutlineInputBorder(),
+              labelText: '名称'.tl,
+            ),
+            onSubmitted: (value) {
+              if (value.trim().isNotEmpty) {
+                LocalFavoritesManager().rename(oldName, value.trim());
+                Navigator.pop(context);
+                onRenamed();
+              }
+            },
+          ),
+        ),
+        const SizedBox(height: 16),
+        Center(
+          child: FilledButton(
+            onPressed: () {
+              final name = controller.text.trim();
+              if (name.isNotEmpty) {
+                LocalFavoritesManager().rename(oldName, name);
+                Navigator.pop(context);
+                onRenamed();
+              }
+            },
+            child: Text('确定'.tl),
+          ),
+        ),
+        const SizedBox(height: 8),
+      ],
+    );
+  }
+}
+
+void copyAllTo(String source, List<FavoriteItem> comics) {
+  String? folder;
+  showDialog(
+    context: App.globalContext!,
+    builder: (ctx) => SimpleDialog(
+      title: Text('复制到'.tl),
+      children: [
+        SizedBox(
+          width: 280,
+          height: 132,
+          child: Column(
+            children: [
+              ListTile(
+                title: Text('收藏夹'.tl),
+                trailing: DropdownButton<String?>(
+                  value: folder,
+                  hint: const Text('选择文件夹'),
+                  items: LocalFavoritesManager()
+                      .folderNames
+                      .map((f) =>
+                          DropdownMenuItem(value: f, child: Text(f)))
+                      .toList(),
+                  onChanged: (v) {
+                    folder = v;
+                    (ctx as Element).markNeedsBuild();
+                  },
+                ),
+              ),
+              const Spacer(),
+              Center(
+                child: FilledButton(
+                  child: Text('确认'.tl),
+                  onPressed: () {
+                    if (folder != null) {
+                      for (var comic in comics) {
+                        LocalFavoritesManager()
+                            .addComic(folder!, comic);
+                      }
+                      Navigator.pop(ctx);
+                    }
+                  },
+                ),
+              ),
+              const SizedBox(height: 16),
+            ],
+          ),
+        ),
+      ],
+    ),
+  );
+}
+
+// ============================================================
+// In-folder search
+// ============================================================
 
 class _FavSearchDelegate extends SearchDelegate<void> {
   final List<FavoriteItem> comics;
@@ -388,7 +887,8 @@ class _FavSearchDelegate extends SearchDelegate<void> {
 
   @override
   List<Widget>? buildActions(BuildContext context) => [
-        IconButton(icon: const Icon(Icons.clear), onPressed: () => query = ''),
+        IconButton(
+            icon: const Icon(Icons.clear), onPressed: () => query = ''),
       ];
 
   @override
