@@ -5,7 +5,6 @@ part of 'settings_page.dart';
 
 Widget buildExploreSettings(double width, BuildContext context) {
   return buildTwoColumnLayout(width, [
-        SettingsTitle("浏览".tl),
         SelectSetting(
           title: "初始页面".tl,
           settingsIndex: 23,

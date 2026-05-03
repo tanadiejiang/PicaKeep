@@ -1,9 +1,11 @@
 import 'dart:io';
 import 'dart:ui';
 import 'package:flutter/material.dart';
+import 'package:flutter_displaymode/flutter_displaymode.dart';
 import 'package:path_provider/path_provider.dart';
 import 'app_page_route.dart';
 import 'log.dart';
+import 'state_controller.dart';
 import '../base.dart';
 
 export 'state_controller.dart';
@@ -24,6 +26,19 @@ class App {
   static final navigatorKey = GlobalKey<NavigatorState>();
 
   static GlobalKey<NavigatorState>? mainNavigatorKey;
+
+  static VoidCallback? updater;
+
+  static final ValueNotifier<int> localDataVersion = ValueNotifier(0);
+
+  static void notifyLocalDataChanged() {
+    localDataVersion.value++;
+    updater?.call();
+    Future.microtask(
+      () => StateController.findOrNull<SimpleController>(tag: 'me_page')
+          ?.update(),
+    );
+  }
 
   static UiModes uiMode([BuildContext? context]) {
     context ??= globalContext;
@@ -110,6 +125,19 @@ class App {
   static bool get canPop => Navigator.of(globalContext!).canPop();
 
   static bool temporaryDisablePopGesture = false;
+
+  static Future<void> applyDisplayModePreference() async {
+    if (!isAndroid) {
+      return;
+    }
+    try {
+      if (appdata.settings[38] == "1") {
+        await FlutterDisplayMode.setHighRefreshRate();
+      } else {
+        await FlutterDisplayMode.setLowRefreshRate();
+      }
+    } catch (_) {}
+  }
 
   static Locale get locale {
     Locale deviceLocale = PlatformDispatcher.instance.locale;

@@ -1,29 +1,51 @@
 # PicaKeep 开发计划 v3 — 基于半成品现状
 
-## 执行进度 (2026-03-14 更新 v7)
+## 执行进度 (2026-03-14 更新 v10)
 
-✅ **全部修复完成** — `flutter analyze` **0 issues**
+✅ **当前核心改造已完成** — `flutter analyze` **0 issues**
 
 | 阶段 | 状态 | 关键修复 |
 |------|------|---------|
 | P1 编译清理 | ✅ | 移除 9 warnings, 删除 `uuid`/`init.js`, 清理死代码 |
 | P2 阅读器历史 | ✅ | `createReadingPage({int? ep, int? page})` 7 子类, 3 调用点 |
-| P3 设置对齐 | ✅ | 纯黑模式 index [28]→[84] (3处), explore 无在线残留 |
+| P3 设置对齐 | ✅ | 纯黑模式 index [28]→[84]，浏览无在线残留，设置页分组与本地项顺序对齐 |
 | P4 数据兼容 | ✅ | download.db / local_favorite.db / history 表结构一致 |
-| P5 功能补全 | ✅ | 多语言加载正常, 图片收藏计数动态化 |
+| P5 功能补全 | ✅ | 收藏页本地搜索拆分、排序实时刷新、点击行为可配置、数据管理联动 |
 | P6 编译验证 | ✅ | `pub get` + `analyze` + `build windows` 全通过 |
 
-### 本轮修复 (2026-03-14 v7) — 收藏页真正重写：视觉样式+页面结构对齐原项目
+### 本轮修复 (2026-03-14 v10) — 设置分组标题与本地刷新链路收口
 
 | 问题 | 根因 | 修复文件 |
 |------|------|---------|
-| 收藏页 tile description 只显示来源类型，不显示时间 | PicaComic 的 `description` 格式为 `"${time} \| ${type}"`，PicaKeep 仅为 `type` | `pages/favorites/local_favorites.dart` |
-| 未下载时 tile 显示来源类型为 badge | PicaComic 只在已下载时显示"已下载"badge，未下载时无 badge | `pages/favorites/local_favorites.dart` |
-| tile size 字段传了文件大小而非 description | PicaComic 的 description 是时间+类型，PicaKeep 传了计算出的文件大小覆盖了 description | `pages/favorites/local_favorites.dart` |
-| 收藏页主结构为分离的列表页+网格页 | PicaComic 是单页 Stack 布局：顶部栏+文件夹下拉抽屉+内容区，PicaKeep 是两个独立页面 | `pages/favorites/main_favorites_page.dart` |
-| 文件夹列表视觉不匹配 | PicaComic 使用 SliverGrid + 计数 badge + 长按菜单，PicaKeep 使用 Card+ListTile | `pages/favorites/main_favorites_page.dart` |
-| 缺少文件夹下拉切换交互 | PicaComic 顶部栏点击展开/收起文件夹抽屉，PicaKeep 无此交互 | `pages/favorites/main_favorites_page.dart` |
-| type 参数可空性不匹配 | `DownloadedComicTile.type` 为 non-nullable `String`，但 badge 为 `String?` | `components/comic_tile.dart` |
+| 设置页 APP 分组标题出现在内容区中间，不符合原项目左对齐表现 | 当前 `SettingsTitle` 使用自定义 `Padding + Text`，偏离原项目 `ListTile` 标题布局 | `pages/settings/settings_page.dart` |
+| “刷新本地漫画 / 重新扫描磁盘”执行后看起来没有刷新 | 只重载了数据对象，没有向已打开的下载页、收藏页和“我”页广播本地数据变更 | `foundation/app.dart`, `pages/download_page.dart`, `pages/favorites/main_favorites_page.dart`, `pages/favorites/local_favorites.dart`, `pages/settings/app_settings.dart` |
+| 本地收藏数据重复初始化后可能继续持有旧的 SQLite 连接 | `LocalFavoritesManager.init()` 重开数据库前未先释放旧连接，设置页刷新链路又直接丢弃缓存实例 | `foundation/local_favorites.dart`, `pages/settings/settings_page.dart` |
+| 本轮验证结果 | `flutter analyze` 已再次验证为 0 issues | `D:/Flutter_Projucts/PicaComic/PicaKeep` |
+
+### 本轮修复 (2026-03-14 v9) — APP/外观/权限实际功能补齐
+
+| 问题 | 根因 | 修复文件 |
+|------|------|---------|
+| 设置页顶部出现“阅读/阅读”“浏览/浏览”等重复标题 | 一级分类页内容仍保留与 AppBar 同名的内层标题 | `pages/settings/explore_settings.dart`, `pages/settings/reading_settings.dart`, `pages/settings/local_favorite_settings.dart`, `pages/settings/settings_page.dart` |
+| 外观页只有设置项文本，缺少原项目里的即时生效与高刷新率能力 | 主题/深色/纯黑切换未触发全局刷新，Android 高刷新率项未接入真实逻辑 | `pages/settings/settings_page.dart`, `main.dart` |
+| APP 页日志、语言、权限管理只有占位或半实现 | 日志页无数据操作，语言切换不触发整应用刷新，权限页未接入截图保护/身份验证 | `pages/settings/app_settings.dart`, `pages/auth_page.dart`, `main.dart`, `tools/block_screenshot.dart` |
+| 下载目录切换后不会自动执行磁盘扫描 | 下载目录保存后只写入设置，没有直接复用重新扫描链路 | `pages/settings/app_settings.dart` |
+| “重新扫描磁盘”仍藏在二级页，数据管理命名不符合需求 | APP 页仍保留旧的二级数据管理入口 | `pages/settings/app_settings.dart` |
+| APP 页缓存大小限制没有实际意义 | 当前工程没有消费 `settings[35]` 作为真实缓存限制 | `pages/settings/app_settings.dart` |
+| 启用身份验证后只会影响下次启动，返回前台不会重新锁定 | 应用入口未观察生命周期，也没有认证页恢复逻辑 | `main.dart`, `pages/auth_page.dart` |
+
+### 本轮修复 (2026-03-14 v8) — 收藏页本地化补全 + 设置页一致性复刻
+
+| 问题 | 根因 | 修复文件 |
+|------|------|---------|
+| 收藏页“搜索收藏”混入本地下载全量结果 | 本地搜索页原本固定同时搜索收藏和下载 | `pages/local_search_page.dart`, `pages/favorites/main_favorites_page.dart` |
+| 收藏页“搜索全部”只是提示，不是真正入口 | 主收藏页未接到本地下载专用搜索页 | `pages/favorites/main_favorites_page.dart` |
+| 收藏夹内搜索未与主收藏页搜索语义统一 | 文件夹页仍使用旧的 `SearchDelegate` 本地过滤 | `pages/favorites/local_favorites.dart`, `pages/local_search_page.dart` |
+| 收藏页点击漫画未遵循设置里的点击行为 | `LocalFavoriteTile._handleTap()` 默认总是打开详情 | `pages/favorites/local_favorites.dart` |
+| 收藏夹排序返回时位置不能立即刷新 | 文件夹顺序仅在页面销毁时保存，返回时机不稳定 | `pages/favorites/main_favorites_page.dart` |
+| 下载目录切换后本地数据缓存未联动刷新 | 只更新了 settings，没有重置下载/收藏缓存 | `pages/settings/settings_page.dart`, `pages/settings/app_settings.dart` |
+| 数据管理入口与原本地语义不一致 | 仍使用泛化“数据管理/刷新数据”命名 | `pages/settings/app_settings.dart` |
+| 设置页外观与本地收藏分组层级不够贴近原项目 | 外观缺少分组标题，本地收藏项顺序未按本地使用逻辑排列 | `pages/settings/settings_page.dart`, `pages/settings/local_favorite_settings.dart` |
 
 ### 本轮修复 (2026-03-14 v6) — 收藏页重写 + 全警告清零
 

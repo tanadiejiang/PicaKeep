@@ -32,6 +32,11 @@ dependencies:
   share_plus: ^7.2.2
   file_selector: ^1.0.3
   flutter_image_gallery_saver: ^1.1.3
+  local_auth: ^2.3.0
+
+dependency_overrides:
+  local_auth_windows:
+    path: packages/local_auth_windows_stub
 
 dev_dependencies:
   flutter_test:

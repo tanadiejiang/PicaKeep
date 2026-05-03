@@ -65,6 +65,35 @@ class DownloadPageLogic extends StateController {
   bool searchInit = false;
   String keyword = "";
   String keyword_ = "";
+  VoidCallback? _localDataListener;
+  bool _isRefreshingFromLocalData = false;
+
+  void bindLocalDataRefresh() {
+    _localDataListener ??= () async {
+      if (_isRefreshingFromLocalData) {
+        return;
+      }
+      _isRefreshingFromLocalData = true;
+      try {
+        loading = true;
+        update();
+        await DownloadManager().init();
+        await reload();
+      } finally {
+        _isRefreshingFromLocalData = false;
+      }
+    };
+    App.localDataVersion.addListener(_localDataListener!);
+  }
+
+  void unbindLocalDataRefresh() {
+    final listener = _localDataListener;
+    if (listener == null) {
+      return;
+    }
+    App.localDataVersion.removeListener(listener);
+    _localDataListener = null;
+  }
 
   void change() {
     loading = !loading;
@@ -141,6 +170,8 @@ class DownloadPage extends StatelessWidget {
   Widget build(BuildContext context) {
     return StateBuilder<DownloadPageLogic>(
       init: DownloadPageLogic(),
+      initState: (logic) => logic.bindLocalDataRefresh(),
+      dispose: (logic) => logic.unbindLocalDataRefresh(),
       builder: (logic) {
         if (logic.loading) {
           Future.wait([

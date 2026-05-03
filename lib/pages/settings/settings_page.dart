@@ -1,47 +1,37 @@
 import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
+import 'package:file_selector/file_selector.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:local_auth/local_auth.dart';
 import 'package:picakeep/base.dart';
 import 'package:picakeep/tools/translations.dart';
 import 'package:picakeep/components/select.dart' hide AnimatedContainer;
 import 'package:picakeep/foundation/app.dart';
 import 'package:picakeep/foundation/download.dart';
 import 'package:picakeep/foundation/local_favorites.dart';
+import 'package:picakeep/foundation/log.dart';
 import 'package:picakeep/foundation/ui_mode.dart';
+import 'package:picakeep/pages/auth_page.dart';
+import 'package:picakeep/tools/block_screenshot.dart';
+import 'package:share_plus/share_plus.dart';
 
 part 'app_settings.dart';
 part 'explore_settings.dart';
 part 'reading_settings.dart';
 part 'local_favorite_settings.dart';
 
+void refreshLocalDataCaches() {
+  DownloadManager().dispose();
+  LocalFavoritesManager().dispose();
+}
+
+const double _settingsWideLayoutBreakpoint = 900;
+
 Widget buildTwoColumnLayout(double width, List<Widget> children) {
-  if (width <= 600) {
-    return Column(children: children);
-  }
-  final left = <Widget>[];
-  final right = <Widget>[];
-  for (int i = 0; i < children.length; i++) {
-    final card = Card.outlined(
-      margin: EdgeInsets.zero,
-      color: Colors.transparent,
-      child: children[i],
-    );
-    if (i.isEven) {
-      left.add(card);
-    } else {
-      right.add(card);
-    }
-  }
-  return Row(
-    crossAxisAlignment: CrossAxisAlignment.start,
-    children: [
-      Expanded(child: Column(children: left)),
-      const SizedBox(width: 12),
-      Expanded(child: Column(children: right)),
-    ],
-  );
+  return Column(children: children);
 }
 
 class SettingsPage extends StatefulWidget {
@@ -62,7 +52,8 @@ class _SettingsPageState extends State<SettingsPage> {
 
   ColorScheme get colors => Theme.of(context).colorScheme;
 
-  bool get enableTwoViews => !UiMode.m1(context);
+  bool get enableTwoViews =>
+      !UiMode.m1(context) && MediaQuery.of(context).size.width >= _settingsWideLayoutBreakpoint;
 
   final categories = <String>["浏览", "阅读", "外观", "本地收藏", "APP", "关于"];
 
@@ -155,17 +146,17 @@ class _SettingsPageState extends State<SettingsPage> {
             child: buildLeft(),
           ),
           Container(
+            width: 0.6,
             height: double.infinity,
-            decoration: BoxDecoration(
-              border: Border(
-                left: BorderSide(
-                  color: context.colorScheme.outlineVariant,
-                  width: 0.6,
-                ),
-              ),
-            ),
+            color: context.colorScheme.outlineVariant,
           ),
-          Expanded(child: buildRight())
+          Expanded(
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                return buildRight(constraints.maxWidth);
+              },
+            ),
+          )
         ],
       );
     } else {
@@ -193,7 +184,7 @@ class _SettingsPageState extends State<SettingsPage> {
                 },
                 child: currentPage == -1
                     ? const SizedBox(key: Key("1"))
-                    : buildRight(),
+                    : buildRight(MediaQuery.of(context).size.width),
               ),
             ),
           )
@@ -281,7 +272,7 @@ class _SettingsPageState extends State<SettingsPage> {
     );
   }
 
-  Widget buildRight() {
+  Widget buildRight(double availableWidth) {
     Widget buildContent(double width) {
       return switch (currentPage) {
         -1 => const SizedBox(),
@@ -311,19 +302,14 @@ class _SettingsPageState extends State<SettingsPage> {
                         onPressed: () => setState(() => currentPage = -1),
                       )),
             SliverToBoxAdapter(
-              child: LayoutBuilder(
-                builder: (context, constraints) =>
-                    buildContent(constraints.maxWidth),
-              ),
+              child: buildContent(availableWidth),
             )
           ],
         ),
       );
     }
 
-    return LayoutBuilder(
-      builder: (context, constraints) => buildContent(constraints.maxWidth),
-    );
+    return buildContent(availableWidth);
   }
 
   Widget buildAppearanceSettings(double width) => buildTwoColumnLayout(
@@ -368,6 +354,7 @@ class _SettingsPageState extends State<SettingsPage> {
               onChanged: (value) {
                 appdata.settings[27] = value;
                 appdata.updateSettings();
+                App.updater?.call();
               },
               width: 140,
             ),
@@ -380,8 +367,11 @@ class _SettingsPageState extends State<SettingsPage> {
               values: const ["0", "1", "2"],
               titles: ["跟随系统".tl, "禁用".tl, "启用".tl],
               onChanged: (value) {
-                appdata.settings[32] = value;
+                setState(() {
+                  appdata.settings[32] = value;
+                });
                 appdata.updateSettings();
+                App.updater?.call();
               },
               width: 140,
             ),
@@ -397,6 +387,49 @@ class _SettingsPageState extends State<SettingsPage> {
                     appdata.settings[84] = value ? "1" : "0";
                   });
                   appdata.updateSettings();
+                  App.updater?.call();
+                },
+              ),
+            ),
+          if (App.isAndroid)
+            ListTile(
+              leading: const Icon(Icons.smart_screen_outlined),
+              title: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text("高刷新率模式".tl),
+                  const SizedBox(width: 4),
+                  InkWell(
+                    borderRadius: BorderRadius.circular(18),
+                    onTap: () {
+                      showDialog<void>(
+                        context: context,
+                        builder: (dialogContext) => AlertDialog(
+                          title: Text("高刷新率模式".tl),
+                          content: Text(
+                            "尝试强制设置高刷新率，可能不起作用".tl,
+                          ),
+                          actions: [
+                            TextButton(
+                              onPressed: () => Navigator.of(dialogContext).pop(),
+                              child: Text("确定".tl),
+                            ),
+                          ],
+                        ),
+                      );
+                    },
+                    child: const Icon(Icons.info_outline, size: 18),
+                  ),
+                ],
+              ),
+              trailing: Switch(
+                value: appdata.settings[38] == "1",
+                onChanged: (value) async {
+                  setState(() {
+                    appdata.settings[38] = value ? "1" : "0";
+                  });
+                  await appdata.updateSettings();
+                  await App.applyDisplayModePreference();
                 },
               ),
             ),

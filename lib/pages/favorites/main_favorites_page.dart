@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_reorderable_grid_view/widgets/reorderable_builder.dart';
+import 'package:picakeep/foundation/app.dart';
 import 'package:picakeep/foundation/local_favorites.dart';
 import 'package:picakeep/tools/translations.dart';
 
@@ -19,7 +20,18 @@ class _MainFavoritesPageState extends State<MainFavoritesPage> {
   @override
   void initState() {
     super.initState();
+    App.localDataVersion.addListener(_handleLocalDataRefresh);
     _loadFolders();
+  }
+
+  @override
+  void dispose() {
+    App.localDataVersion.removeListener(_handleLocalDataRefresh);
+    super.dispose();
+  }
+
+  void _handleLocalDataRefresh() {
+    _refresh();
   }
 
   Future<void> _loadFolders() async {
@@ -32,18 +44,23 @@ class _MainFavoritesPageState extends State<MainFavoritesPage> {
     });
   }
 
-  void _refresh() {
+  Future<void> _refresh() async {
+    await LocalFavoritesManager().init();
     if (!mounted) {
       return;
     }
-    setState(() {});
+    setState(() {
+      _loading = false;
+    });
   }
 
   void _createFolder() {
     showDialog(
       context: context,
       builder: (_) => CreateFolderDialog(
-        onCreated: _refresh,
+        onCreated: () {
+          _refresh();
+        },
       ),
     );
   }
@@ -53,7 +70,9 @@ class _MainFavoritesPageState extends State<MainFavoritesPage> {
       context: context,
       builder: (_) => RenameFolderDialog(
         oldName: folder,
-        onRenamed: _refresh,
+        onRenamed: () {
+          _refresh();
+        },
       ),
     );
   }
@@ -127,10 +146,26 @@ class _MainFavoritesPageState extends State<MainFavoritesPage> {
         .then((_) => _refresh());
   }
 
-  void _openSearch() {
+  void _openFavoritesSearch() {
     Navigator.of(context)
         .push(
-          MaterialPageRoute(builder: (_) => const LocalSearchPage()),
+          MaterialPageRoute(
+            builder: (_) => const LocalSearchPage(
+              searchType: LocalSearchType.favoritesOnly,
+            ),
+          ),
+        )
+        .then((_) => _refresh());
+  }
+
+  void _openDownloadedSearch() {
+    Navigator.of(context)
+        .push(
+          MaterialPageRoute(
+            builder: (_) => const LocalSearchPage(
+              searchType: LocalSearchType.downloadsOnly,
+            ),
+          ),
         )
         .then((_) => _refresh());
   }
@@ -181,8 +216,13 @@ class _MainFavoritesPageState extends State<MainFavoritesPage> {
                 ),
                 _ActionItem(
                   icon: Icons.search,
-                  label: '搜索'.tl,
-                  onTap: _openSearch,
+                  label: '搜索收藏'.tl,
+                  onTap: _openFavoritesSearch,
+                ),
+                _ActionItem(
+                  icon: Icons.manage_search,
+                  label: '搜索全部'.tl,
+                  onTap: _openDownloadedSearch,
                 ),
                 _ActionItem(
                   icon: Icons.reorder,
@@ -346,15 +386,21 @@ class _FoldersReorderPageState extends State<_FoldersReorderPage> {
   final _scrollController = ScrollController();
   bool changed = false;
 
+  void _saveOrder() {
+    if (!changed) {
+      return;
+    }
+    final order = <String, int>{};
+    for (int i = 0; i < folders.length; i++) {
+      order[folders[i]] = i;
+    }
+    LocalFavoritesManager().updateOrder(order);
+    changed = false;
+  }
+
   @override
   void dispose() {
-    if (changed) {
-      final order = <String, int>{};
-      for (int i = 0; i < folders.length; i++) {
-        order[folders[i]] = i;
-      }
-      LocalFavoritesManager().updateOrder(order);
-    }
+    _saveOrder();
     _scrollController.dispose();
     super.dispose();
   }
@@ -362,7 +408,16 @@ class _FoldersReorderPageState extends State<_FoldersReorderPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text('排序'.tl)),
+      appBar: AppBar(
+        title: Text('排序'.tl),
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back),
+          onPressed: () {
+            _saveOrder();
+            Navigator.of(context).pop();
+          },
+        ),
+      ),
       body: ReorderableBuilder(
         scrollController: _scrollController,
         longPressDelay: const Duration(milliseconds: 150),
