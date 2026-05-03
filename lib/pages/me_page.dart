@@ -33,6 +33,39 @@ class _MePageState extends State<MePage> {
     super.dispose();
   }
 
+  String _historyTitle(int recentCount) {
+    try {
+      return "${"历史记录".tl}(${HistoryManager().count()})";
+    } catch (_) {
+      return "${"历史记录".tl}($recentCount)";
+    }
+  }
+
+  Widget _historyPlaceholder(BuildContext context) {
+    return Center(
+      child: Icon(
+        Icons.auto_stories,
+        size: 32,
+        color: Theme.of(context).colorScheme.onSecondaryContainer,
+      ),
+    );
+  }
+
+  File _coverFile(History item) {
+    final cover = item.cover.trim();
+    if (cover.isNotEmpty && (cover.startsWith('/') || cover.contains(':\\'))) {
+      final file = File(cover);
+      if (file.existsSync()) {
+        return file;
+      }
+    }
+    try {
+      return DownloadManager().getCoverFromCandidates(item.candidateDownloadIds());
+    } catch (_) {
+      return File('');
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return SizedBox.expand(
@@ -110,7 +143,7 @@ class _MePageState extends State<MePage> {
             children: [
               ListTile(
                 leading: const Icon(Icons.history),
-                title: Text("历史记录".tl),
+                title: Text(_historyTitle(history.length)),
                 trailing: const Icon(Icons.chevron_right),
                 mouseCursor: SystemMouseCursors.click,
               ),
@@ -148,51 +181,51 @@ class _MePageState extends State<MePage> {
   }
 
   Widget _buildCoverImage(BuildContext context, History item) {
-    final cover = item.cover;
-    if (cover.isEmpty) {
-      return Center(
-        child: Icon(
-          Icons.auto_stories,
-          size: 32,
-          color: Theme.of(context).colorScheme.onSecondaryContainer,
-        ),
-      );
+    final cover = _coverFile(item);
+    if (!cover.existsSync()) {
+      return _historyPlaceholder(context);
     }
-    if (cover.startsWith('/') || cover.contains(':\\')) {
-      return Image.file(
-        File(cover),
-        width: 96,
-        height: 128,
-        fit: BoxFit.cover,
-        filterQuality: FilterQuality.medium,
-        errorBuilder: (context, error, stackTrace) {
-          return Center(
-            child: Icon(
-              Icons.auto_stories,
-              size: 32,
-              color: Theme.of(context).colorScheme.onSecondaryContainer,
-            ),
-          );
-        },
-      );
-    }
-    return Center(
-      child: Icon(
-        Icons.auto_stories,
-        size: 32,
-        color: Theme.of(context).colorScheme.onSecondaryContainer,
-      ),
+    return Image.file(
+      cover,
+      width: 96,
+      height: 128,
+      fit: BoxFit.cover,
+      filterQuality: FilterQuality.medium,
+      errorBuilder: (context, error, stackTrace) {
+        return _historyPlaceholder(context);
+      },
     );
   }
 
   void _openComicFromHistory(BuildContext context, History history) async {
     try {
-      var comic = await DownloadManager().getComicOrNull(history.target);
+      final dm = DownloadManager();
+      await dm.init();
+      final comic =
+          await dm.getComicOrNullFromCandidates(history.candidateDownloadIds());
       if (comic != null) {
         if (!context.mounted) return;
-        await ensureHistoryBeforeRead(comic);
+        await ensureHistoryBeforeRead(
+          comic,
+          legacyTargets: history.candidateDownloadIds(),
+        );
+        if (mounted) {
+          setState(() {
+            final cover = dm.getCover(comic.id);
+            history.target = comic.id;
+            history.title = comic.name;
+            history.subtitle = comic.subTitle;
+            if (cover.existsSync()) {
+              history.cover = cover.path;
+            }
+          });
+        }
         if (!context.mounted) return;
         await App.openReader(() => comic.createReadingPage(ep: history.ep, page: history.page));
+      } else if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("未找到该漫画".tl)),
+        );
       }
     } catch (e) {
       print('[PicaKeep] MePage: _openComicFromHistory failed: $e');

@@ -20,12 +20,16 @@ HistoryType _historyTypeForDownload(DownloadedItem c) {
     case DownloadType.komiic:
     case DownloadType.other:
     case DownloadType.favorite:
+      if (c is CustomDownloadedItem && c.sourceKey.isNotEmpty) {
+        return HistoryType(c.sourceKey.hashCode);
+      }
       return HistoryType.other;
   }
 }
 
 /// Inserts or refreshes a history row before opening [ComicReadingPage].
-Future<void> ensureHistoryBeforeRead(DownloadedItem comic) async {
+Future<void> ensureHistoryBeforeRead(DownloadedItem comic,
+    {Iterable<String> legacyTargets = const <String>[]}) async {
   final dm = DownloadManager();
   await dm.init();
   final coverFile = dm.getCover(comic.id);
@@ -36,5 +40,6 @@ Future<void> ensureHistoryBeforeRead(DownloadedItem comic) async {
     title: comic.name,
     subtitle: comic.subTitle,
     cover: cover,
+    legacyTargets: legacyTargets,
   );
 }

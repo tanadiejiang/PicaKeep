@@ -3,25 +3,175 @@
 part of 'settings_page.dart';
 
 void _showSettingMessage(BuildContext context, String message) {
+  LogManager.addLog(LogLevel.info, 'SettingsMessage', message);
+
+  if (Scaffold.maybeOf(context) == null) {
+    return;
+  }
+
   final messenger = ScaffoldMessenger.maybeOf(context);
-  messenger?.hideCurrentSnackBar();
-  messenger?.showSnackBar(
-    SnackBar(
-      content: Text(message),
-      duration: const Duration(seconds: 2),
-    ),
+  if (messenger == null) {
+    return;
+  }
+
+  try {
+    messenger.hideCurrentSnackBar();
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(message),
+        duration: const Duration(seconds: 2),
+      ),
+    );
+  } catch (e, s) {
+    LogManager.addLog(
+      LogLevel.warning,
+      'SettingsMessage',
+      'Failed to show snack bar for "$message": $e\n$s',
+    );
+  }
+}
+
+void _notifyManagedDataViews() {
+  try {
+    App.notifyLocalDataChanged();
+  } catch (e, s) {
+    LogManager.addLog(
+      LogLevel.error,
+      'ManagedDataReload',
+      'Failed to notify app local data change: $e\n$s',
+    );
+  }
+
+  try {
+    StateController.findOrNull<SimpleController>(tag: 'image_favorites_page')
+        ?.update();
+  } catch (e, s) {
+    LogManager.addLog(
+      LogLevel.error,
+      'ManagedDataReload',
+      'Failed to update image favorites page: $e\n$s',
+    );
+  }
+}
+
+Future<int?> _reloadManagedDataManagers({bool rescanLocalComics = false}) async {
+  LogManager.addLog(
+    LogLevel.info,
+    'ManagedDataReload',
+    'start rescan=$rescanLocalComics',
   );
+  refreshLocalDataCaches();
+
+  LogManager.addLog(LogLevel.info, 'ManagedDataReload', 'appdata.readData:start');
+  await appdata.readData().timeout(const Duration(seconds: 5));
+  LogManager.addLog(LogLevel.info, 'ManagedDataReload', 'appdata.readData:ok');
+
+  LogManager.addLog(
+    LogLevel.info,
+    'ManagedDataReload',
+    'HistoryManager.init:start',
+  );
+  await HistoryManager().init().timeout(const Duration(seconds: 10));
+  LogManager.addLog(LogLevel.info, 'ManagedDataReload', 'HistoryManager.init:ok');
+
+  LogManager.addLog(
+    LogLevel.info,
+    'ManagedDataReload',
+    'DownloadManager.init:start',
+  );
+  await DownloadManager().init().timeout(const Duration(seconds: 10));
+  LogManager.addLog(LogLevel.info, 'ManagedDataReload', 'DownloadManager.init:ok');
+
+  int? scanCount;
+  if (rescanLocalComics) {
+    LogManager.addLog(
+      LogLevel.info,
+      'ManagedDataReload',
+      'DownloadManager.scanDirectoryForComics:start',
+    );
+    scanCount = DownloadManager().scanDirectoryForComics();
+    LogManager.addLog(
+      LogLevel.info,
+      'ManagedDataReload',
+      'DownloadManager.scanDirectoryForComics:ok count=$scanCount',
+    );
+  }
+
+  LogManager.addLog(
+    LogLevel.info,
+    'ManagedDataReload',
+    'LocalFavoritesManager.init:start',
+  );
+  await LocalFavoritesManager().init().timeout(const Duration(seconds: 15));
+  LogManager.addLog(
+    LogLevel.info,
+    'ManagedDataReload',
+    'LocalFavoritesManager.init:ok',
+  );
+
+  _notifyManagedDataViews();
+  LogManager.addLog(LogLevel.info, 'ManagedDataReload', 'notifyViews:ok');
+  return scanCount;
 }
 
 Future<void> _refreshLocalComics(BuildContext context) async {
   _showSettingMessage(context, '正在刷新本地漫画'.tl);
-  refreshLocalDataCaches();
-  await appdata.readData();
-  await DownloadManager().init();
-  await LocalFavoritesManager().init();
-  App.notifyLocalDataChanged();
+  await _reloadManagedDataManagers();
   if (context.mounted) {
     _showSettingMessage(context, '已刷新本地漫画'.tl);
+  }
+}
+
+  Future<void> _changeManagedDataSourceMode(
+  BuildContext context,
+  String value,
+) async {
+  final nextValue = normalizeManagedDataSourceMode(value);
+  final previousValue = appdata.settings[managedDataSourceModeSettingIndex];
+  LogManager.addLog(
+    LogLevel.info,
+    'ManagedDataSourceMode',
+    'switch request $previousValue -> $nextValue',
+  );
+  if (nextValue == previousValue) {
+    return;
+  }
+  _showSettingMessage(context, '正在切换数据库路径'.tl);
+  appdata.settings[managedDataSourceModeSettingIndex] = nextValue;
+  setManagedDataSourceMode(nextValue);
+  await appdata.updateSettings().timeout(const Duration(seconds: 5));
+  try {
+    await _reloadManagedDataManagers().timeout(const Duration(seconds: 20));
+    LogManager.addLog(
+      LogLevel.info,
+      'ManagedDataSourceMode',
+      'switch success $previousValue -> $nextValue',
+    );
+    if (context.mounted) {
+      _showSettingMessage(context, '已切换数据库路径'.tl);
+    }
+  } catch (e, s) {
+    LogManager.addLog(
+      LogLevel.error,
+      'ManagedDataSourceMode',
+      'Failed to switch managed data source mode from $previousValue to $nextValue: $e\n$s',
+    );
+    appdata.settings[managedDataSourceModeSettingIndex] = previousValue;
+    setManagedDataSourceMode(previousValue);
+    await appdata.updateSettings().timeout(const Duration(seconds: 5));
+    try {
+      await _reloadManagedDataManagers().timeout(const Duration(seconds: 20));
+    } catch (rollbackError, rollbackStack) {
+      LogManager.addLog(
+        LogLevel.error,
+        'ManagedDataSourceMode',
+        'Rollback failed for managed data source mode $nextValue -> $previousValue: $rollbackError\n$rollbackStack',
+      );
+    }
+    if (context.mounted) {
+      _showSettingMessage(context, '切换失败，已恢复原设置'.tl);
+    }
+    return;
   }
 }
 
@@ -51,11 +201,7 @@ Future<void> _rescanLocalComics(BuildContext context) async {
 
 Future<void> _runRescanLocalComics(BuildContext context) async {
   _showSettingMessage(context, '正在扫描...'.tl);
-  refreshLocalDataCaches();
-  await DownloadManager().init();
-  final count = DownloadManager().scanDirectoryForComics();
-  await LocalFavoritesManager().init();
-  App.notifyLocalDataChanged();
+  final count = await _reloadManagedDataManagers(rescanLocalComics: true) ?? 0;
   if (context.mounted) {
     _showSettingMessage(context, '扫描完成，共发现 $count 个漫画');
   }
@@ -76,11 +222,10 @@ Widget buildAppSettings(double width, BuildContext context) {
     ),
     SettingsTitle('数据'.tl),
     const _DownloadDirTile(),
-    ListTile(
-      leading: const Icon(Icons.refresh),
-      title: Text('数据管理-刷新本地漫画'.tl),
-      subtitle: Text('重新加载下载目录和本地收藏数据'.tl),
-      onTap: () => _refreshLocalComics(context),
+    _ManagedDataSourceModeTile(
+      width: width,
+      onRefresh: () => _refreshLocalComics(context),
+      onChanged: (value) => _changeManagedDataSourceMode(context, value),
     ),
     ListTile(
       leading: const Icon(Icons.sd_storage_rounded),
@@ -118,6 +263,191 @@ Widget buildAppSettings(double width, BuildContext context) {
       ),
     ),
   ]);
+}
+
+class _ManagedDataSourceModeTile extends StatefulWidget {
+  const _ManagedDataSourceModeTile({
+    required this.width,
+    required this.onRefresh,
+    required this.onChanged,
+  });
+
+  final double width;
+  final VoidCallback onRefresh;
+  final Future<void> Function(String value) onChanged;
+
+  @override
+  State<_ManagedDataSourceModeTile> createState() =>
+      _ManagedDataSourceModeTileState();
+}
+
+class _ManagedDataSourceModeTileState extends State<_ManagedDataSourceModeTile> {
+  String? _pendingValue;
+  bool _busy = false;
+
+  String get _currentValue => normalizeManagedDataSourceMode(
+        _pendingValue ?? appdata.settings[managedDataSourceModeSettingIndex],
+      );
+
+  Future<void> _selectValue(String value) async {
+    LogManager.addLog(
+      LogLevel.info,
+      'ManagedDataSourceMode',
+      'tap current=$_currentValue target=$value busy=$_busy pending=${_pendingValue ?? ''}',
+    );
+    if (_busy || value == _currentValue) {
+      return;
+    }
+    setState(() {
+      _busy = true;
+      _pendingValue = value;
+    });
+    try {
+      await widget.onChanged(value).timeout(const Duration(seconds: 20));
+    } catch (e, s) {
+      LogManager.addLog(
+        LogLevel.error,
+        'ManagedDataSourceMode',
+        'selectValue failed for target=$value: $e\n$s',
+      );
+      rethrow;
+    } finally {
+      if (mounted) {
+        setState(() {
+          _busy = false;
+          _pendingValue = null;
+        });
+      }
+    }
+  }
+
+  Widget _buildSegment(
+    BuildContext context, {
+    required String value,
+    required String label,
+    required bool isFirst,
+    required bool isLast,
+  }) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final selected = _currentValue == value;
+    final radius = BorderRadius.only(
+      topLeft: isFirst ? const Radius.circular(999) : Radius.zero,
+      bottomLeft: isFirst ? const Radius.circular(999) : Radius.zero,
+      topRight: isLast ? const Radius.circular(999) : Radius.zero,
+      bottomRight: isLast ? const Radius.circular(999) : Radius.zero,
+    );
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: _busy ? null : () => _selectValue(value),
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color:
+              selected ? colorScheme.primaryContainer : Colors.transparent,
+          border: Border(
+            left: isFirst
+                ? BorderSide.none
+                : BorderSide(color: colorScheme.outlineVariant),
+          ),
+          borderRadius: radius,
+        ),
+        child: SizedBox(
+          height: 36,
+          child: Center(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 10),
+              child: Text(
+                label.tl,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: widget.width >= 900 ? 13 : 12,
+                  fontWeight: FontWeight.w500,
+                  color: selected
+                      ? colorScheme.onPrimaryContainer
+                      : colorScheme.onSurface,
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSelector(BuildContext context) {
+    const options = <MapEntry<String, String>>[
+      MapEntry(managedDataSourceModeCurrentOnly, '仅本应用'),
+      MapEntry(managedDataSourceModeCurrentAndOriginal, '本+原应用'),
+      MapEntry(managedDataSourceModeOriginalOnly, '仅原应用'),
+    ];
+    return Opacity(
+      opacity: _busy ? 0.7 : 1,
+      child: Container(
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(color: Theme.of(context).colorScheme.outline),
+        ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(999),
+          child: Row(
+            children: [
+              for (int i = 0; i < options.length; i++)
+                Expanded(
+                  child: _buildSegment(
+                    context,
+                    value: options[i].key,
+                    label: options[i].value,
+                    isFirst: i == 0,
+                    isLast: i == options.length - 1,
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final selector = SizedBox(
+      width: widget.width >= 900 ? 330 : 270,
+      child: _buildSelector(context),
+    );
+    const subtitleText = '重新加载下载目录；数据库路径仅作用于本地收藏、图片收藏和历史数据';
+    final refreshTile = ListTile(
+      contentPadding: EdgeInsets.zero,
+      leading: const Icon(Icons.refresh),
+      title: Text('数据管理-刷新本地漫画'.tl),
+      subtitle: Text(subtitleText.tl),
+      onTap: widget.onRefresh,
+    );
+    if (widget.width >= 900) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            Expanded(child: refreshTile),
+            const SizedBox(width: 12),
+            selector,
+          ],
+        ),
+      );
+    }
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          refreshTile,
+          const SizedBox(height: 8),
+          selector,
+          const SizedBox(height: 8),
+        ],
+      ),
+    );
+  }
 }
 
 class _DownloadDirTile extends StatefulWidget {

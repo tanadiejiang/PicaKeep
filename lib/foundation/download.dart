@@ -98,6 +98,36 @@ class DownloadManager with _DownloadDb {
     return _getComicWithDb(id);
   }
 
+  String? resolveExistingId(Iterable<String> candidates) {
+    if (_db == null) return null;
+    final seen = <String>{};
+    for (final candidate in candidates) {
+      final id = candidate.trim();
+      if (id.isEmpty || !seen.add(id)) continue;
+      if (isExists(id)) {
+        return id;
+      }
+    }
+    return null;
+  }
+
+  Future<DownloadedItem?> getComicOrNullFromCandidates(
+      Iterable<String> candidates) async {
+    final id = resolveExistingId(candidates);
+    if (id == null) {
+      return null;
+    }
+    return _getComicWithDb(id);
+  }
+
+  File getCoverFromCandidates(Iterable<String> candidates) {
+    final id = resolveExistingId(candidates);
+    if (id == null) {
+      return File('');
+    }
+    return getCover(id);
+  }
+
   Future<void> delete(List<String> ids) async {
     for (var id in ids) {
       _deleteFromDb(id);
