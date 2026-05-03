@@ -1,5 +1,5 @@
 import 'dart:async';
-import 'dart:io' show Platform, Process;
+import 'dart:io' show File, Platform, Process;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -7,7 +7,10 @@ import 'package:picakeep/base.dart';
 import 'package:picakeep/foundation/app.dart';
 import 'package:picakeep/foundation/download.dart';
 import 'package:picakeep/foundation/download_model.dart';
+import 'package:picakeep/foundation/local_data_source.dart';
 import 'package:picakeep/foundation/local_favorites.dart';
+import 'package:picakeep/foundation/local_library.dart';
+import 'package:picakeep/foundation/local_library_settings.dart';
 import 'package:picakeep/foundation/ui_mode.dart';
 import 'package:picakeep/tools/translations.dart';
 import 'package:picakeep/components/comic_tile.dart';
@@ -115,6 +118,10 @@ class DownloadPageLogic extends StateController {
     _localDataListener = null;
   }
 
+  bool get _usesManagedDownloadSources =>
+      normalizeManagedDataSourceMode(appdata.settings[managedDataSourceModeSettingIndex]) !=
+      managedDataSourceModeCurrentOnly;
+
   void change() {
     loading = !loading;
     try {
@@ -170,11 +177,100 @@ class DownloadPageLogic extends StateController {
     if (appdata.settings[26][1] == "1") {
       direction = 'asc';
     }
-    comics = DownloadManager().getAll(order, direction);
+    comics = await _loadComics(order, direction);
     baseComics = comics.toList();
     resetSelected(comics.length);
     loading = false;
     update();
+  }
+
+  Future<List<DownloadedItem>> _loadComics(String order, String direction) async {
+    if (!_usesManagedDownloadSources) {
+      await DownloadManager().init();
+      return DownloadManager().getAll(order, direction);
+    }
+    await LocalLibraryManager().refresh();
+    final items = await LocalLibraryManager().getAll();
+    final downloads = items.where((item) => !item.isAlbum).cast<DownloadedItem>().toList();
+    _sortItems(downloads, order, direction);
+    return downloads;
+  }
+
+  void _sortItems(List<DownloadedItem> items, String order, String direction) {
+    int compare(DownloadedItem a, DownloadedItem b) {
+      switch (order) {
+        case 'title':
+          return a.name.compareTo(b.name);
+        case 'subtitle':
+          return a.subTitle.compareTo(b.subTitle);
+        case 'size':
+          return (a.comicSize ?? 0).compareTo(b.comicSize ?? 0);
+        case 'time':
+        default:
+          return (a.time ?? DateTime.fromMillisecondsSinceEpoch(0))
+              .compareTo(b.time ?? DateTime.fromMillisecondsSinceEpoch(0));
+      }
+    }
+
+    items.sort(compare);
+    if (direction == 'desc') {
+      items.setAll(0, items.reversed.toList());
+    }
+  }
+
+  bool canDeleteItem(DownloadedItem item) {
+    return item.canDelete && !_usesManagedDownloadSources;
+  }
+
+  Future<int> rescanDisk() async {
+    if (!_usesManagedDownloadSources) {
+      await DownloadManager().init();
+      final count = DownloadManager().scanDirectoryForComics();
+      await reload();
+      return count;
+    }
+    final count = await LocalLibraryManager().rescan();
+    await reload();
+    return count;
+  }
+
+  String emptyStatePathText() {
+    final mode = normalizeManagedDataSourceMode(
+      appdata.settings[managedDataSourceModeSettingIndex],
+    );
+    final currentPath = (DownloadManager().path ?? appdata.settings[22]).trim();
+    final originalPath =
+        appdata.settings[originalDownloadDirSettingIndex].trim();
+    switch (mode) {
+      case managedDataSourceModeCurrentAndOriginal:
+        return [
+          if (currentPath.isNotEmpty) currentPath,
+          if (originalPath.isNotEmpty && originalPath != currentPath) originalPath,
+        ].join(' / ');
+      case managedDataSourceModeOriginalOnly:
+        return originalPath;
+      case managedDataSourceModeCurrentOnly:
+      default:
+        return currentPath;
+    }
+  }
+
+  File coverFor(DownloadedItem item) {
+    if (item is LocalLibraryComicItem) {
+      final path = item.localCoverPath?.trim();
+      if (path != null && path.isNotEmpty) {
+        return File(path);
+      }
+    }
+    return DownloadManager().getCover(item.id);
+  }
+
+  String pathFor(DownloadedItem item) {
+    final fsPath = item.fileSystemPath?.trim();
+    if (fsPath != null && fsPath.isNotEmpty) {
+      return fsPath;
+    }
+    return "${DownloadManager().path}/${item.directory ?? ''}";
   }
 
   void resetSelected(int length) {
@@ -257,7 +353,7 @@ class DownloadPage extends StatelessWidget {
     if (appdata.settings[26][1] == "1") {
       direction = 'asc';
     }
-    logic.comics = DownloadManager().getAll(order, direction);
+    logic.comics = await logic._loadComics(order, direction);
     logic.baseComics = logic.comics.toList();
   }
 
@@ -277,7 +373,7 @@ class DownloadPage extends StatelessWidget {
           comicId: logic.comics[index].id,
           name: logic.comics[index].name,
           author: logic.comics[index].subTitle,
-          imagePath: DownloadManager().getCover(logic.comics[index].id),
+          imagePath: logic.coverFor(logic.comics[index]),
           type: type,
           tag: logic.comics[index].tags,
           onTap: () async {
@@ -331,39 +427,40 @@ class DownloadPage extends StatelessWidget {
             logic.comics[index].read();
           },
         ),
-        PopupMenuItem(
-          child: Text("删除".tl),
-          onTap: () {
-            Future.delayed(const Duration(milliseconds: 200), () {
-              showDialog(
-                context: App.globalContext!,
-                builder: (ctx) => AlertDialog(
-                  title: Text("确认删除".tl),
-                  content: Text("此操作无法撤销, 是否继续?".tl),
-                  actions: [
-                    TextButton(
-                      onPressed: () => Navigator.pop(ctx),
-                      child: Text("取消".tl),
-                    ),
-                    TextButton(
-                      onPressed: () {
-                        Navigator.pop(ctx);
-                        DownloadManager().delete([logic.comics[index].id]);
-                        logic.comics.removeAt(index);
-                        logic.selected.removeAt(index);
-                        logic.update();
-                      },
-                      child: Text("确认".tl),
-                    ),
-                  ],
-                ),
-              );
-            });
-          },
-        ),
+        if (logic.canDeleteItem(logic.comics[index]))
+          PopupMenuItem(
+            child: Text("删除".tl),
+            onTap: () {
+              Future.delayed(const Duration(milliseconds: 200), () {
+                showDialog(
+                  context: App.globalContext!,
+                  builder: (ctx) => AlertDialog(
+                    title: Text("确认删除".tl),
+                    content: Text("此操作无法撤销, 是否继续?".tl),
+                    actions: [
+                      TextButton(
+                        onPressed: () => Navigator.pop(ctx),
+                        child: Text("取消".tl),
+                      ),
+                      TextButton(
+                        onPressed: () {
+                          Navigator.pop(ctx);
+                          DownloadManager().delete([logic.comics[index].id]);
+                          logic.comics.removeAt(index);
+                          logic.selected.removeAt(index);
+                          logic.update();
+                        },
+                        child: Text("确认".tl),
+                      ),
+                    ],
+                  ),
+                );
+              });
+            },
+          ),
         PopupMenuItem(
           child: Text("导出".tl),
-          onTap: () => _exportComic(context, logic.comics[index]),
+          onTap: () => _exportComic(context, logic, logic.comics[index]),
         ),
         PopupMenuItem(
           child: Text("查看漫画详情".tl),
@@ -377,8 +474,7 @@ class DownloadPage extends StatelessWidget {
           child: Text("复制路径".tl),
           onTap: () {
             Future.delayed(const Duration(milliseconds: 300), () {
-              var path =
-                  "${DownloadManager().path}/${logic.comics[index].directory ?? ''}";
+              var path = logic.pathFor(logic.comics[index]);
               Clipboard.setData(ClipboardData(text: path));
             });
           },
@@ -387,9 +483,11 @@ class DownloadPage extends StatelessWidget {
     );
   }
 
-  void _exportComic(BuildContext context, DownloadedItem comic) {
-    final dir = comic.directory ?? '';
-    final fullPath = "${DownloadManager().path}/$dir";
+  void _exportComic(BuildContext context, DownloadPageLogic logic, DownloadedItem comic) {
+    final fullPath = logic.pathFor(comic);
+    if (fullPath.isEmpty) {
+      return;
+    }
     if (Platform.isWindows) {
       Process.run('explorer', [fullPath]);
     } else if (Platform.isMacOS) {
@@ -439,11 +537,15 @@ class DownloadPage extends StatelessWidget {
                     TextButton(
                       onPressed: () async {
                         App.globalBack();
-                        var comics = <String>[];
+                        final comics = <String>[];
                         for (int i = 0; i < logic.selected.length; i++) {
-                          if (logic.selected[i]) {
+                          if (logic.selected[i] &&
+                              logic.canDeleteItem(logic.comics[i])) {
                             comics.add(logic.comics[i].id);
                           }
+                        }
+                        if (comics.isEmpty) {
+                          return;
                         }
                         await DownloadManager().delete(comics);
                         logic.refresh();
@@ -655,7 +757,7 @@ class DownloadPage extends StatelessWidget {
     if (logic.selectedNum == 0) return;
     for (int i = 0; i < logic.selected.length; i++) {
       if (logic.selected[i]) {
-        _exportComic(context, logic.comics[i]);
+        _exportComic(context, logic, logic.comics[i]);
       }
     }
   }
@@ -697,11 +799,7 @@ class DownloadPage extends StatelessWidget {
                             FavoriteItem(
                               target: comic.id,
                               name: comic.name,
-                              coverPath: () {
-                                final cover =
-                                    DownloadManager().getCover(comic.id);
-                                return cover.path;
-                              }(),
+                              coverPath: logic.coverFor(comic).path,
                               author: comic.subTitle,
                               type: _downloadTypeToFavoriteType(comic.type),
                               tags: comic.tags,
@@ -723,7 +821,7 @@ class DownloadPage extends StatelessWidget {
   }
 
   Widget _buildEmptyState(BuildContext context, DownloadPageLogic logic) {
-    final path = DownloadManager().path ?? appdata.settings[22];
+    final path = logic.emptyStatePathText();
     return Center(
       child: Padding(
         padding: const EdgeInsets.all(24),
@@ -742,9 +840,7 @@ class DownloadPage extends StatelessWidget {
             const SizedBox(height: 24),
             FilledButton.icon(
               onPressed: () async {
-                await DownloadManager().init();
-                final count = DownloadManager().scanDirectoryForComics();
-                await logic.reload();
+                final count = await logic.rescanDisk();
                 if (context.mounted) {
                   ScaffoldMessenger.of(context).showSnackBar(
                     SnackBar(content: Text('扫描完成，共发现 $count 个漫画')),
@@ -783,6 +879,9 @@ class _DownloadedComicInfoViewState extends State<DownloadedComicInfoView> {
   late final comic = widget.item;
 
   deleteEpisode(int i) {
+    if (!widget.logic.canDeleteItem(comic)) {
+      return;
+    }
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(

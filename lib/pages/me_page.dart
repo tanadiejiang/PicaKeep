@@ -21,24 +21,100 @@ class MePage extends StatefulWidget {
 }
 
 class _MePageState extends State<MePage> {
+  int _downloadCount = 0;
+  bool _loadingDownloadCount = false;
+
   @override
   void initState() {
     super.initState();
     StateController.putSimpleController(() {
-      if (mounted) setState(() {});
+      if (mounted) {
+        setState(() {});
+        _loadDownloadCount();
+        _loadLocalLibraryCount();
+      }
     }, "me_page");
+    App.localDataVersion.addListener(_handleLocalDataChanged);
+    _loadDownloadCount();
     _loadLocalLibraryCount();
   }
 
   @override
   void dispose() {
+    App.localDataVersion.removeListener(_handleLocalDataChanged);
     StateController.remove<SimpleController>("me_page");
     super.dispose();
   }
 
-  Future<void> _loadLocalLibraryCount() async {
+  void _handleLocalDataChanged() {
+    _reloadLocalCounts();
+  }
+
+  Future<void> _reloadLocalCounts() async {
+    if (_loadingDownloadCount) {
+      return;
+    }
+    _loadingDownloadCount = true;
+    try {
+      await LocalLibraryManager().refresh();
+      final total = LocalLibraryManager().cachedDownloadCount;
+      if (mounted) {
+        setState(() {
+          _downloadCount = total;
+        });
+      }
+    } catch (e) {
+      await _fallbackLoadDownloadCount(e);
+      return;
+    } finally {
+      _loadingDownloadCount = false;
+    }
+  }
+
+  Future<void> _loadDownloadCount({bool forceRefresh = false}) async {
+    if (forceRefresh) {
+      await _reloadLocalCounts();
+      return;
+    }
+    if (_loadingDownloadCount) {
+      return;
+    }
+    _loadingDownloadCount = true;
     try {
       await LocalLibraryManager().ensureLoaded();
+      final total = LocalLibraryManager().cachedDownloadCount;
+      if (mounted) {
+        setState(() {
+          _downloadCount = total;
+        });
+      }
+    } catch (e) {
+      await _fallbackLoadDownloadCount(e);
+    } finally {
+      _loadingDownloadCount = false;
+    }
+  }
+
+  Future<void> _fallbackLoadDownloadCount(Object error) async {
+    try {
+      await DownloadManager().init();
+      if (mounted) {
+        setState(() {
+          _downloadCount = DownloadManager().total;
+        });
+      }
+    } catch (_) {
+      print('[PicaKeep] MePage: load download count failed: $error');
+    }
+  }
+
+  Future<void> _loadLocalLibraryCount({bool forceRefresh = false}) async {
+    try {
+      if (forceRefresh) {
+        await _reloadLocalCounts();
+      } else {
+        await LocalLibraryManager().ensureLoaded();
+      }
       if (mounted) {
         setState(() {});
       }
@@ -270,16 +346,10 @@ class _MePageState extends State<MePage> {
   }
 
   Widget _buildDownloadCard(BuildContext context) {
-    int total = 0;
-    try {
-      total = DownloadManager().total;
-    } catch (e) {
-      print('[PicaKeep] MePage: DownloadManager().total failed: $e');
-    }
     return _MePageCard(
       icon: const Icon(Icons.download_for_offline),
       title: "已下载".tl,
-      description: "共 @a 部漫画".tlParams({"a": total.toString()}),
+      description: "共 @a 部漫画".tlParams({"a": _downloadCount.toString()}),
       onTap: () => Navigator.of(context).push(
         MaterialPageRoute(builder: (_) => const DownloadPage()),
       ),
