@@ -71,8 +71,7 @@ List<String> _buildHistoryDownloadIdCandidates(String target, int type) {
       }
       break;
     case 2:
-      _addCandidate(
-          candidates, target.startsWith('jm') ? target : 'jm$target');
+      _addCandidate(candidates, target.startsWith('jm') ? target : 'jm$target');
       break;
     case 3:
       final hitomiId = _extractHitomiId(target);
@@ -93,8 +92,8 @@ List<String> _buildHistoryDownloadIdCandidates(String target, int type) {
       }
       break;
     case 5:
-      _addCandidate(candidates,
-          target.startsWith('nhentai') ? target : 'nhentai$target');
+      _addCandidate(
+          candidates, target.startsWith('nhentai') ? target : 'nhentai$target');
       break;
     case 6:
       _addCustomHistoryCandidates(candidates, target);
@@ -259,7 +258,6 @@ class HistoryManager {
 
   late Database _db;
   Database? _secondaryDb;
-  late String _dbPath;
 
   int get length => count();
 
@@ -279,22 +277,41 @@ class HistoryManager {
     final primaryPath = managedDataFilePath(roots.first, 'history.db');
     File(primaryPath).parent.createSync(recursive: true);
 
-    dispose();
+    Database? previousDb;
+    try {
+      previousDb = _db;
+    } catch (_) {}
+    final previousSecondaryDb = _secondaryDb;
 
-    _dbPath = primaryPath;
-    _db = sqlite3.open(_dbPath);
-    _configureDatabase(_db);
+    final nextDb = sqlite3.open(primaryPath);
+    _configureDatabase(nextDb);
 
+    _db = nextDb;
     _secondaryDb = null;
+
+    Database? nextSecondaryDb;
     if (roots.length > 1) {
       final secondaryPath = managedDataFilePath(roots[1], 'history.db');
       final secondaryFile = File(secondaryPath);
       if (secondaryFile.existsSync()) {
-        _secondaryDb = sqlite3.open(secondaryPath);
-        _configureDatabase(_secondaryDb!);
+        final openedSecondaryDb = sqlite3.open(secondaryPath);
+        _configureDatabase(openedSecondaryDb);
+        nextSecondaryDb = openedSecondaryDb;
       }
     }
+    _secondaryDb = nextSecondaryDb;
     _cachedHistory = null;
+
+    if (!identical(previousDb, nextDb)) {
+      try {
+        previousDb?.dispose();
+      } catch (_) {}
+    }
+    if (!identical(previousSecondaryDb, nextSecondaryDb)) {
+      try {
+        previousSecondaryDb?.dispose();
+      } catch (_) {}
+    }
   }
 
   void dispose() {

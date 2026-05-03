@@ -5,6 +5,7 @@ import 'dart:io';
 
 import 'foundation/app.dart';
 import 'foundation/local_data_source.dart';
+import 'foundation/local_library_settings.dart';
 import 'foundation/log.dart';
 import 'foundation/history.dart';
 import 'foundation/local_favorites.dart';
@@ -115,6 +116,12 @@ class Appdata {
     "gold-usergeneratedcontent.net", //87
     "0", //88
     "2.0.11", //89
+    "", //90 原应用下载目录
+    "[]", //91 本地漫画路径列表
+    "0", //92 本地图集图片排序
+    "time_desc", //93 本地图集列表排序
+    "1", //94 本地图集页仅显示图集
+    "0", //95 本地详情页相关推荐模式
   ];
 
   List<String> implicitData = [
@@ -185,6 +192,23 @@ class Appdata {
     settings[managedDataSourceModeSettingIndex] =
         normalizeManagedDataSourceMode(
             settings[managedDataSourceModeSettingIndex]);
+    settings[originalDownloadDirSettingIndex] =
+        settings[originalDownloadDirSettingIndex].trim();
+    settings[localComicPathsSettingIndex] = encodeLocalComicPathList(
+      decodeLocalComicPathList(settings[localComicPathsSettingIndex]),
+    );
+    settings[localAlbumImageSortSettingIndex] =
+        normalizeLocalAlbumImageSort(
+            settings[localAlbumImageSortSettingIndex]);
+    settings[localLibraryListSortSettingIndex] =
+        normalizeLocalLibraryListSort(
+            settings[localLibraryListSortSettingIndex]);
+    if (settings[localLibraryAlbumOnlySettingIndex] != "0") {
+      settings[localLibraryAlbumOnlySettingIndex] = "1";
+    }
+    settings[localDetailRecommendationSettingIndex] =
+        normalizeLocalDetailRecommendationMode(
+            settings[localDetailRecommendationSettingIndex]);
     setManagedDataSourceMode(settings[managedDataSourceModeSettingIndex]);
   }
 
@@ -249,6 +273,19 @@ class Appdata {
       settings[managedDataSourceModeSettingIndex] =
           normalizeManagedDataSourceMode(
               settings[managedDataSourceModeSettingIndex]);
+      settings[originalDownloadDirSettingIndex] = downloadPath;
+      settings[localComicPathsSettingIndex] = encodeLocalComicPathList(
+        decodeLocalComicPathList(settings[localComicPathsSettingIndex]),
+      );
+      settings[localAlbumImageSortSettingIndex] =
+          normalizeLocalAlbumImageSort(
+              settings[localAlbumImageSortSettingIndex]);
+      settings[localLibraryListSortSettingIndex] =
+          normalizeLocalLibraryListSort(
+              settings[localLibraryListSortSettingIndex]);
+      settings[localDetailRecommendationSettingIndex] =
+          normalizeLocalDetailRecommendationMode(
+              settings[localDetailRecommendationSettingIndex]);
       setManagedDataSourceMode(settings[managedDataSourceModeSettingIndex]);
       settings[22] = downloadPath;
       settings[13] = authRequired;

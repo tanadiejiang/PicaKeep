@@ -1,11 +1,22 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_reorderable_grid_view/widgets/reorderable_builder.dart';
 import 'package:picakeep/foundation/app.dart';
+import 'package:picakeep/foundation/download.dart';
 import 'package:picakeep/foundation/local_favorites.dart';
 import 'package:picakeep/tools/translations.dart';
 
 import '../local_search_page.dart';
 import 'local_favorites.dart';
+
+const _kSecondaryTopBarHeight = 48.0;
+const _kDrawerAnimationDuration = Duration(milliseconds: 220);
+
+class _FavoritesPageSession {
+  static String? currentFolder;
+  static bool foldersExpanded = true;
+}
 
 class MainFavoritesPage extends StatefulWidget {
   const MainFavoritesPage({super.key});
@@ -15,42 +26,132 @@ class MainFavoritesPage extends StatefulWidget {
 }
 
 class _MainFavoritesPageState extends State<MainFavoritesPage> {
+  final _favoritesManager = LocalFavoritesManager();
+  final List<FavoriteItem> _selectedComics = [];
+
+  StreamSubscription<List<FavGroup>>? _foldersSubscription;
+
   bool _loading = true;
+  bool _foldersExpanded = true;
+  String? _currentFolder;
+  List<String> _folders = [];
+  final Map<String, int> _folderCounts = {};
+  int _contentVersion = 0;
 
   @override
   void initState() {
     super.initState();
     App.localDataVersion.addListener(_handleLocalDataRefresh);
+    _foldersSubscription = _favoritesManager.allFoldersStream.listen(
+      _handleFoldersChanged,
+    );
     _loadFolders();
   }
 
   @override
   void dispose() {
     App.localDataVersion.removeListener(_handleLocalDataRefresh);
+    _foldersSubscription?.cancel();
     super.dispose();
   }
 
   void _handleLocalDataRefresh() {
-    _refresh();
+    _loadFolders();
   }
 
-  Future<void> _loadFolders() async {
-    await LocalFavoritesManager().init();
+  void _handleFoldersChanged(List<FavGroup> groups) {
     if (!mounted) {
       return;
     }
+    final folders = groups.map((group) => group.name).toList();
     setState(() {
       _loading = false;
+      _cacheFolderCounts(folders);
+      _applyFolders(folders);
     });
   }
 
-  Future<void> _refresh() async {
-    await LocalFavoritesManager().init();
+  void _cacheFolderCounts(List<String> folders) {
+    _folderCounts
+      ..clear()
+      ..addEntries(
+        folders.map(
+          (folder) => MapEntry(folder, _favoritesManager.count(folder)),
+        ),
+      );
+  }
+
+  Future<void> _loadFolders({
+    String? preferredFolder,
+    bool collapseDrawer = false,
+  }) async {
+    await _favoritesManager.init();
+    await DownloadManager().init();
     if (!mounted) {
       return;
     }
+    final folders = List<String>.from(_favoritesManager.folderNames);
     setState(() {
       _loading = false;
+      _cacheFolderCounts(folders);
+      _applyFolders(
+        folders,
+        preferredFolder: preferredFolder,
+        collapseDrawer: collapseDrawer,
+      );
+    });
+  }
+
+  void _applyFolders(
+    List<String> folders, {
+    String? preferredFolder,
+    bool collapseDrawer = false,
+  }) {
+    _folders = folders;
+
+    final candidateFolder =
+        preferredFolder ?? _FavoritesPageSession.currentFolder;
+    if (candidateFolder != null && folders.contains(candidateFolder)) {
+      _currentFolder = candidateFolder;
+    } else {
+      _currentFolder = null;
+    }
+
+    if (_currentFolder == null) {
+      _foldersExpanded = true;
+    } else if (collapseDrawer || preferredFolder != null) {
+      _foldersExpanded = false;
+    } else {
+      _foldersExpanded = _FavoritesPageSession.foldersExpanded;
+    }
+
+    _FavoritesPageSession.currentFolder = _currentFolder;
+    _FavoritesPageSession.foldersExpanded = _foldersExpanded;
+    _selectedComics.clear();
+    _contentVersion++;
+  }
+
+  void _toggleFolders() {
+    if (_folders.isEmpty) {
+      return;
+    }
+    setState(() {
+      _foldersExpanded = !_foldersExpanded;
+      _FavoritesPageSession.foldersExpanded = _foldersExpanded;
+    });
+  }
+
+  void _selectFolder(String folder) {
+    if (_currentFolder == folder && !_foldersExpanded) {
+      return;
+    }
+    setState(() {
+      _currentFolder = folder;
+      _foldersExpanded = false;
+      _FavoritesPageSession.currentFolder = folder;
+      _FavoritesPageSession.foldersExpanded = false;
+      _selectedComics.clear();
+      _contentVersion++;
     });
   }
 
@@ -58,20 +159,24 @@ class _MainFavoritesPageState extends State<MainFavoritesPage> {
     showDialog(
       context: context,
       builder: (_) => CreateFolderDialog(
-        onCreated: () {
-          _refresh();
+        onCreated: (folderName) {
+          _loadFolders(preferredFolder: folderName, collapseDrawer: true);
         },
       ),
     );
   }
 
   void _renameFolder(String folder) {
+    final isCurrentFolder = folder == _currentFolder;
     showDialog(
       context: context,
       builder: (_) => RenameFolderDialog(
         oldName: folder,
-        onRenamed: () {
-          _refresh();
+        onRenamed: (newName) {
+          _loadFolders(
+            preferredFolder: isCurrentFolder ? newName : null,
+            collapseDrawer: isCurrentFolder,
+          );
         },
       ),
     );
@@ -99,8 +204,8 @@ class _MainFavoritesPageState extends State<MainFavoritesPage> {
     if (!confirmed) {
       return;
     }
-    LocalFavoritesManager().deleteFolder(folder);
-    _refresh();
+    _favoritesManager.deleteFolder(folder);
+    await _loadFolders();
   }
 
   Future<void> _showFolderMenu(String folder, Offset position) async {
@@ -131,19 +236,11 @@ class _MainFavoritesPageState extends State<MainFavoritesPage> {
     switch (action) {
       case _FolderMenuAction.rename:
         _renameFolder(folder);
+        return;
       case _FolderMenuAction.delete:
-        _deleteFolder(folder);
+        await _deleteFolder(folder);
+        return;
     }
-  }
-
-  void _openFolder(String folder) {
-    Navigator.of(context)
-        .push(
-          MaterialPageRoute(
-            builder: (_) => LocalFavoritesFolder(folderName: folder),
-          ),
-        )
-        .then((_) => _refresh());
   }
 
   void _openFavoritesSearch() {
@@ -155,7 +252,7 @@ class _MainFavoritesPageState extends State<MainFavoritesPage> {
             ),
           ),
         )
-        .then((_) => _refresh());
+        .then((_) => _loadFolders());
   }
 
   void _openDownloadedSearch() {
@@ -167,7 +264,7 @@ class _MainFavoritesPageState extends State<MainFavoritesPage> {
             ),
           ),
         )
-        .then((_) => _refresh());
+        .then((_) => _loadFolders());
   }
 
   void _openReorderPage() {
@@ -175,11 +272,159 @@ class _MainFavoritesPageState extends State<MainFavoritesPage> {
         .push(
           MaterialPageRoute(
             builder: (_) => _FoldersReorderPage(
-              folders: List<String>.from(LocalFavoritesManager().folderNames),
+              folders: List<String>.from(_folders),
             ),
           ),
         )
-        .then((_) => _refresh());
+        .then((_) => _loadFolders());
+  }
+
+  Widget _buildTopBar(BuildContext context) {
+    final iconColor = Theme.of(context).colorScheme.primary;
+
+    return Material(
+      elevation: 1,
+      child: InkWell(
+        hoverColor: Colors.transparent,
+        onTap: _folders.isEmpty ? null : _toggleFolders,
+        child: SizedBox(
+          height: _kSecondaryTopBarHeight,
+          child: Row(
+            children: [
+              Icon(
+                _currentFolder == null ? Icons.folder_outlined : Icons.folder,
+                color: iconColor,
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  _currentFolder ?? '未选择'.tl,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontSize: 16),
+                ),
+              ),
+              const SizedBox(width: 8),
+              if (_folders.isNotEmpty)
+                Icon(
+                  _foldersExpanded
+                      ? Icons.keyboard_arrow_up
+                      : Icons.keyboard_arrow_down,
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildFoldersDrawer(BuildContext context, double height) {
+    return Material(
+      elevation: 1,
+      child: SizedBox(
+        height: height,
+        width: double.infinity,
+        child: Scrollbar(
+          interactive: true,
+          child: CustomScrollView(
+            slivers: [
+              const SliverToBoxAdapter(child: SizedBox(height: 8)),
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 4, 20, 8),
+                  child: Text(
+                    '本地'.tl,
+                    style: const TextStyle(fontSize: 18),
+                  ),
+                ),
+              ),
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  child: Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      _ActionItem(
+                        icon: Icons.create_new_folder_outlined,
+                        label: '新建'.tl,
+                        onTap: _createFolder,
+                      ),
+                      _ActionItem(
+                        icon: Icons.search,
+                        label: '搜索收藏'.tl,
+                        onTap: _openFavoritesSearch,
+                      ),
+                      _ActionItem(
+                        icon: Icons.manage_search,
+                        label: '搜索全部'.tl,
+                        onTap: _openDownloadedSearch,
+                      ),
+                      _ActionItem(
+                        icon: Icons.reorder,
+                        label: '排序'.tl,
+                        onTap: _openReorderPage,
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              const SliverToBoxAdapter(child: SizedBox(height: 8)),
+              if (_folders.isEmpty)
+                SliverFillRemaining(
+                  hasScrollBody: false,
+                  child: Center(
+                    child: Text('这里什么都没有'.tl),
+                  ),
+                )
+              else
+                SliverPadding(
+                  padding: const EdgeInsets.fromLTRB(12, 0, 12, 16),
+                  sliver: SliverGrid(
+                    gridDelegate:
+                        const SliverGridDelegateWithMaxCrossAxisExtent(
+                      maxCrossAxisExtent: 320,
+                      mainAxisExtent: 48,
+                      mainAxisSpacing: 6,
+                      crossAxisSpacing: 12,
+                    ),
+                    delegate: SliverChildBuilderDelegate(
+                      (context, index) {
+                        final folder = _folders[index];
+                        return _FolderTile(
+                          folder: folder,
+                          count: _folderCounts[folder] ?? 0,
+                          selected: folder == _currentFolder,
+                          onTap: () => _selectFolder(folder),
+                          onMenu: (position) =>
+                              _showFolderMenu(folder, position),
+                        );
+                      },
+                      childCount: _folders.length,
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildContent() {
+    if (_currentFolder == null) {
+      return Center(
+        child: Text(
+          _folders.isEmpty ? '这里什么都没有'.tl : '选择收藏夹'.tl,
+        ),
+      );
+    }
+
+    return ComicsPageView(
+      key: ValueKey('$_currentFolder:$_contentVersion'),
+      folder: _currentFolder!,
+      selectedComics: _selectedComics,
+    );
   }
 
   @override
@@ -188,84 +433,53 @@ class _MainFavoritesPageState extends State<MainFavoritesPage> {
       return const Center(child: CircularProgressIndicator());
     }
 
-    final folders = LocalFavoritesManager().folderNames;
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final drawerHeight = constraints.maxHeight > _kSecondaryTopBarHeight
+            ? constraints.maxHeight - _kSecondaryTopBarHeight
+            : 0.0;
 
-    return CustomScrollView(
-      slivers: [
-        const SliverToBoxAdapter(child: SizedBox(height: 8)),
-        SliverToBoxAdapter(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(28, 8, 28, 12),
-            child: Text(
-              '本地'.tl,
-              style: Theme.of(context).textTheme.headlineSmall,
+        return Stack(
+          children: [
+            Positioned(
+              top: _kSecondaryTopBarHeight,
+              left: 0,
+              right: 0,
+              bottom: 0,
+              child: _buildContent(),
             ),
-          ),
-        ),
-        SliverToBoxAdapter(
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 20),
-            child: Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                _ActionItem(
-                  icon: Icons.create_new_folder_outlined,
-                  label: '新建'.tl,
-                  onTap: _createFolder,
+            Positioned(
+              top: _kSecondaryTopBarHeight,
+              left: 0,
+              right: 0,
+              height: drawerHeight,
+              child: ClipRect(
+                child: IgnorePointer(
+                  ignoring: !_foldersExpanded,
+                  child: AnimatedOpacity(
+                    duration: _kDrawerAnimationDuration,
+                    curve: Curves.easeInOutCubic,
+                    opacity: _foldersExpanded ? 1 : 0,
+                    child: AnimatedSlide(
+                      duration: _kDrawerAnimationDuration,
+                      curve: Curves.easeInOutCubic,
+                      offset:
+                          _foldersExpanded ? Offset.zero : const Offset(0, -1),
+                      child: _buildFoldersDrawer(context, drawerHeight),
+                    ),
+                  ),
                 ),
-                _ActionItem(
-                  icon: Icons.search,
-                  label: '搜索收藏'.tl,
-                  onTap: _openFavoritesSearch,
-                ),
-                _ActionItem(
-                  icon: Icons.manage_search,
-                  label: '搜索全部'.tl,
-                  onTap: _openDownloadedSearch,
-                ),
-                _ActionItem(
-                  icon: Icons.reorder,
-                  label: '排序'.tl,
-                  onTap: _openReorderPage,
-                ),
-              ],
-            ),
-          ),
-        ),
-        const SliverToBoxAdapter(child: SizedBox(height: 12)),
-        if (folders.isEmpty)
-          SliverFillRemaining(
-            hasScrollBody: false,
-            child: Center(
-              child: Text('这里什么都没有'.tl),
-            ),
-          )
-        else
-          SliverPadding(
-            padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
-            sliver: SliverGrid(
-              gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-                maxCrossAxisExtent: 360,
-                mainAxisExtent: 72,
-                mainAxisSpacing: 8,
-                crossAxisSpacing: 16,
-              ),
-              delegate: SliverChildBuilderDelegate(
-                (context, index) {
-                  final folder = folders[index];
-                  return _FolderTile(
-                    folder: folder,
-                    count: LocalFavoritesManager().count(folder),
-                    onTap: () => _openFolder(folder),
-                    onMenu: (position) => _showFolderMenu(folder, position),
-                  );
-                },
-                childCount: folders.length,
               ),
             ),
-          ),
-      ],
+            Positioned(
+              top: 0,
+              left: 0,
+              right: 0,
+              child: _buildTopBar(context),
+            ),
+          ],
+        );
+      },
     );
   }
 }
@@ -312,45 +526,57 @@ class _FolderTile extends StatelessWidget {
   const _FolderTile({
     required this.folder,
     required this.count,
+    required this.selected,
     required this.onTap,
     required this.onMenu,
   });
 
   final String folder;
   final int count;
+  final bool selected;
   final VoidCallback onTap;
   final void Function(Offset position) onMenu;
 
   @override
   Widget build(BuildContext context) {
+    final selectedColor = selected
+        ? Theme.of(context).colorScheme.surfaceContainerHigh
+        : Colors.transparent;
+
     return GestureDetector(
       onLongPressStart: (details) => onMenu(details.globalPosition),
       onSecondaryTapDown: (details) => onMenu(details.globalPosition),
+      behavior: HitTestBehavior.opaque,
       child: InkWell(
         borderRadius: BorderRadius.circular(10),
         onTap: onTap,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 8),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 160),
+          padding: const EdgeInsets.symmetric(horizontal: 12),
+          decoration: BoxDecoration(
+            color: selectedColor,
+            borderRadius: BorderRadius.circular(10),
+          ),
           child: Row(
             children: [
               Icon(
                 Icons.folder,
-                size: 34,
+                size: 24,
                 color: Theme.of(context).colorScheme.secondary,
               ),
-              const SizedBox(width: 12),
+              const SizedBox(width: 10),
               Expanded(
                 child: Text(
                   folder,
-                  maxLines: 2,
+                  maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(fontSize: 18),
+                  style: const TextStyle(fontSize: 15),
                 ),
               ),
-              const SizedBox(width: 12),
+              const SizedBox(width: 8),
               Container(
-                constraints: const BoxConstraints(minWidth: 34),
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                constraints: const BoxConstraints(minWidth: 28),
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                 decoration: BoxDecoration(
                   color: Theme.of(context).colorScheme.primaryContainer,
                   borderRadius: BorderRadius.circular(999),
@@ -359,7 +585,7 @@ class _FolderTile extends StatelessWidget {
                   '$count',
                   textAlign: TextAlign.center,
                   style: TextStyle(
-                    fontSize: 13,
+                    fontSize: 12,
                     color: Theme.of(context).colorScheme.onPrimaryContainer,
                   ),
                 ),

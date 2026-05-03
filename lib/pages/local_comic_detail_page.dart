@@ -1,13 +1,18 @@
+import 'dart:io';
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:picakeep/base.dart';
+import 'package:picakeep/components/scrollable.dart';
+import 'package:picakeep/foundation/app.dart';
 import 'package:picakeep/foundation/download.dart';
 import 'package:picakeep/foundation/download_model.dart';
-import 'package:picakeep/foundation/local_favorites.dart';
+import 'package:picakeep/foundation/local_library.dart';
+import 'package:picakeep/foundation/local_library_settings.dart';
 import 'package:picakeep/tools/read_history_helper.dart';
-import 'package:picakeep/tools/translations.dart';
 import 'package:picakeep/tools/tags_translation.dart';
-import 'package:picakeep/foundation/app.dart';
-import 'reader/comic_reading_page.dart';
+import 'package:picakeep/tools/translations.dart';
 
 class LocalComicDetailPage extends StatefulWidget {
   final DownloadedItem comic;
@@ -18,34 +23,78 @@ class LocalComicDetailPage extends StatefulWidget {
   State<LocalComicDetailPage> createState() => _LocalComicDetailPageState();
 }
 
-class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
-  bool _reverseEpsOrder = false;
+class _LocalRecommendation {
+  const _LocalRecommendation({
+    required this.item,
+    required this.score,
+    required this.reason,
+  });
 
-  String get _sourceLabel {
-    switch (widget.comic.type) {
-      case DownloadType.picacg:
-        return '哔咔';
-      case DownloadType.ehentai:
-        return 'E-Hentai';
-      case DownloadType.jm:
-        return '禁漫';
-      case DownloadType.hitomi:
-        return 'Hitomi';
-      case DownloadType.htmanga:
-        return '绅士漫画';
-      case DownloadType.nhentai:
-        return 'NHentai';
-      case DownloadType.copyManga:
-        return '拷贝漫画';
-      case DownloadType.komiic:
-        return 'Komiic';
-      default:
-        return widget.comic.type.name;
+  final DownloadedItem item;
+  final double score;
+  final String reason;
+}
+
+class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
+  final _scrollController = ScrollController();
+  final List<LocalLibraryComicItem> _localItems = [];
+
+  bool _reverseEpsOrder = false;
+  bool _showFullEps = false;
+  bool _showAppbarTitle = false;
+  int _recommendationPage = 0;
+  double _bottomPullDistance = 0;
+
+  static const _recommendationPageSize = 10;
+
+  @override
+  void initState() {
+    super.initState();
+    _scrollController.addListener(_handleScroll);
+    _loadLocalItems();
+  }
+
+  @override
+  void dispose() {
+    _scrollController.removeListener(_handleScroll);
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  void _handleScroll() {
+    if (!_scrollController.hasClients) return;
+    final showTitle = _scrollController.position.pixels > 136;
+    if (showTitle != _showAppbarTitle) {
+      setState(() {
+        _showAppbarTitle = showTitle;
+      });
     }
   }
 
+  Future<void> _loadLocalItems() async {
+    final items = await LocalLibraryManager().getAll();
+    if (!mounted) return;
+    setState(() {
+      _localItems
+        ..clear()
+        ..addAll(items);
+    });
+  }
+
+  String get _sourceLabel {
+    final label = widget.comic.sourceDisplayName.trim();
+    if (label.isNotEmpty) return label.tl;
+    return downloadTypeDisplayName(widget.comic.type).tl;
+  }
+
+  bool get _isAlbum {
+    final comic = widget.comic;
+    if (comic is LocalLibraryComicItem) return comic.isAlbum;
+    return comic.sourceDisplayName == '图集';
+  }
+
   String _formatSize(double? size) {
-    if (size == null) return '未知';
+    if (size == null) return '未知'.tl;
     if (size > 1024) return '${(size / 1024).toStringAsFixed(1)} GB';
     return '${size.toStringAsFixed(1)} MB';
   }
@@ -55,66 +104,32 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
     return '${time.year}-${time.month.toString().padLeft(2, '0')}-${time.day.toString().padLeft(2, '0')} ${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}';
   }
 
-  Widget _buildCover() {
+  String _translateTagIfNeeded(String tag) {
+    if (App.locale.languageCode != 'zh') return tag;
     try {
-      final f = DownloadManager().getCover(widget.comic.id);
-      if (f.existsSync()) {
-        return ClipRRect(
-          borderRadius: BorderRadius.circular(12),
-          child: Image.file(
-            f,
-            fit: BoxFit.cover,
-            width: 160,
-            height: 220,
-            errorBuilder: (_, __, ___) => _placeholderCover(),
-          ),
-        );
+      for (final map in tagTranslations.values) {
+        for (final entry in map.entries) {
+          if (entry.key.toLowerCase() == tag.toLowerCase()) {
+            return entry.value.isNotEmpty ? entry.value.first : tag;
+          }
+        }
       }
     } catch (_) {}
-    return _placeholderCover();
-  }
-
-  Widget _placeholderCover() {
-    return Container(
-      width: 160,
-      height: 220,
-      decoration: BoxDecoration(
-        color: Colors.grey[300],
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: const Icon(Icons.image_not_supported, size: 48),
-    );
+    return tag;
   }
 
   Future<void> _onRead({int? ep, int? page}) async {
     await ensureHistoryBeforeRead(widget.comic);
-    final hasEp = widget.comic.eps.isNotEmpty;
-    final epsMap = <String, String>{};
-    if (hasEp) {
-      for (int i = 0; i < widget.comic.eps.length; i++) {
-        epsMap['${i + 1}'] = widget.comic.eps[i];
-      }
-    }
-    final readingData = LocalReadingData(
-      title: widget.comic.name,
-      id: widget.comic.id,
-      downloadId: widget.comic.id,
-      sourceKey: _extractSourceKey(widget.comic.id),
-      hasEp: hasEp,
-      comicType: comicTypeForDownloadType(widget.comic.type),
-      eps: hasEp ? epsMap : null,
-      favoriteType: _downloadTypeToFavoriteType(widget.comic.type),
+    await App.openReader(
+      () => widget.comic.createReadingPage(ep: ep, page: page),
     );
-    readingData.downloadedEps = widget.comic.downloadedEps;
-
-    await App.openReader(() => ComicReadingPage(
-          readingData,
-          page ?? 1,
-          ep ?? (hasEp ? 1 : 0),
-        ));
   }
 
-  void _onDelete() async {
+  Future<void> _onDelete() async {
+    if (!widget.comic.canDelete) {
+      _showMessage('当前项目不支持在此删除'.tl);
+      return;
+    }
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -138,7 +153,8 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
     }
   }
 
-  void _onDeleteEpisode(int ep) async {
+  Future<void> _onDeleteEpisode(int ep) async {
+    if (!widget.comic.canDelete) return;
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -158,39 +174,480 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
     );
     if (confirmed == true) {
       final error = await DownloadManager().deleteEpisode(widget.comic, ep);
-      if (error != null && mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(error)),
-        );
-      }
-      setState(() {});
+      if (error != null) _showMessage(error);
+      if (mounted) setState(() {});
     }
+  }
+
+  void _showMessage(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message)),
+    );
+  }
+
+  void _copyText(String text) {
+    Clipboard.setData(ClipboardData(text: text));
+    _showMessage('已复制'.tl);
   }
 
   String? _getDescription() {
     try {
       final json = widget.comic.toJson();
-      if (json['description'] != null && json['description'].toString().isNotEmpty) {
-        return json['description'].toString();
-      }
-      if (json['comicItem']?['description'] != null) {
-        return json['comicItem']['description'].toString();
+      final candidates = [
+        json['description'],
+        json['comicItem'] is Map ? json['comicItem']['description'] : null,
+        json['intro'],
+        json['introduction'],
+      ];
+      for (final value in candidates) {
+        final text = value?.toString().trim();
+        if (text != null && text.isNotEmpty) return text;
       }
     } catch (_) {}
     return null;
   }
 
-  String _translateTagIfNeeded(String tag) {
-    if (App.locale.languageCode != 'zh') return tag;
-    final translated = tagTranslations.values
-        .expand((m) => m.entries)
-        .firstWhere(
-          (e) => e.key.toLowerCase() == tag.toLowerCase(),
-          orElse: () => MapEntry(tag, [tag, '']),
-        )
-        .value
-        .first;
-    return translated;
+  Map<String, List<String>> _buildInfoGroups() {
+    final comic = widget.comic;
+    final json = comic.toJson();
+    final groups = <String, List<String>>{};
+
+    void add(String key, Iterable<String?> values) {
+      final normalized = values
+          .whereType<String>()
+          .map((e) => e.trim())
+          .where((e) => e.isNotEmpty)
+          .toSet()
+          .toList();
+      if (normalized.isNotEmpty) groups[key] = normalized;
+    }
+
+    add('ID', [
+      json['comicId']?.toString(),
+      json['id']?.toString(),
+      json['itemId']?.toString(),
+      comic.id,
+    ]);
+    add('作者', [comic.subTitle]);
+    add('来源', [_sourceLabel]);
+    add('大小', [_formatSize(comic.comicSize)]);
+    add('时间', [_formatTime(comic.time)]);
+    add('路径', [comic.fileSystemPath ?? comic.directory]);
+    if (comic.tags.isNotEmpty) {
+      groups['标签'] = comic.tags.map(_translateTagIfNeeded).toSet().toList();
+    }
+    return groups;
+  }
+
+  List<_LocalRecommendation> _buildRecommendations() {
+    final mode = normalizeLocalDetailRecommendationMode(
+      appdata.settings[localDetailRecommendationSettingIndex],
+    );
+    if (mode == '5') return const [];
+
+    final current = widget.comic;
+    final currentName = current.name;
+    final currentAuthor = current.subTitle.trim().toLowerCase();
+    final currentTags = current.tags.map((e) => e.trim().toLowerCase()).where((e) => e.isNotEmpty).toSet();
+    final currentTopics = _nameTopics(currentName);
+    final albumOnly = _isAlbum;
+
+    final recommendations = <_LocalRecommendation>[];
+    for (final item in _localItems) {
+      if (item.id == current.id || item.originalId == current.id || item.name == current.name) {
+        continue;
+      }
+
+      final nameScore = _nameSimilarity(currentName, item.name);
+      final itemAuthor = item.subTitle.trim().toLowerCase();
+      final sameAuthor = currentAuthor.isNotEmpty && currentAuthor == itemAuthor;
+      final itemTags = item.tags.map((e) => e.trim().toLowerCase()).where((e) => e.isNotEmpty).toSet();
+      final tagMatches = currentTags.intersection(itemTags).length;
+      final topicMatches = currentTopics.intersection(_nameTopics(item.name)).length;
+      final hasTopic = topicMatches > 0 || nameScore >= 0.36;
+
+      double score;
+      String reason;
+      if (albumOnly) {
+        score = nameScore * 1000;
+        reason = '名称相似'.tl;
+        if (score <= 0) continue;
+      } else {
+        final strongName = nameScore >= 0.62;
+        final authorAndTopic = sameAuthor && hasTopic;
+        final sameTopic = hasTopic;
+        final hasTags = tagMatches > 0;
+
+        switch (mode) {
+          case '1':
+            if (nameScore <= 0) continue;
+            score = nameScore * 1000 + tagMatches * 20 + (sameAuthor ? 80 : 0);
+            reason = '名称相似'.tl;
+            break;
+          case '2':
+            if (!authorAndTopic) continue;
+            score = 3000 + topicMatches * 80 + nameScore * 300 + tagMatches * 20;
+            reason = '同作者 + 同题材'.tl;
+            break;
+          case '3':
+            if (!sameTopic) continue;
+            score = 2000 + topicMatches * 90 + nameScore * 400;
+            reason = '同题材'.tl;
+            break;
+          case '4':
+            if (!hasTags) continue;
+            score = 1000 + tagMatches * 120 + nameScore * 200 + (sameAuthor ? 60 : 0);
+            reason = '同标签'.tl;
+            break;
+          case '0':
+          default:
+            if (strongName) {
+              score = 4000 + nameScore * 1000 + tagMatches * 20;
+              reason = '名称高度相似'.tl;
+            } else if (authorAndTopic) {
+              score = 3000 + topicMatches * 100 + nameScore * 400 + tagMatches * 20;
+              reason = '同作者 + 同题材'.tl;
+            } else if (sameTopic) {
+              score = 2000 + topicMatches * 100 + nameScore * 400;
+              reason = '同题材'.tl;
+            } else if (hasTags) {
+              score = 1000 + tagMatches * 120 + nameScore * 200;
+              reason = '同标签'.tl;
+            } else {
+              continue;
+            }
+            break;
+        }
+      }
+
+      recommendations.add(_LocalRecommendation(item: item, score: score, reason: reason));
+    }
+
+    recommendations.sort((a, b) {
+      final score = b.score.compareTo(a.score);
+      if (score != 0) return score;
+      final at = a.item.time ?? DateTime.fromMillisecondsSinceEpoch(0);
+      final bt = b.item.time ?? DateTime.fromMillisecondsSinceEpoch(0);
+      return bt.compareTo(at);
+    });
+    return recommendations;
+  }
+
+  Set<String> _nameTopics(String value) {
+    final normalized = value
+        .toLowerCase()
+        .replaceAll(RegExp(r'[\[\]【】()（）「」『』<>《》!！?？:：,，.。_\-]+'), ' ');
+    final matches = RegExp(r'[a-z0-9]{3,}|[\u4e00-\u9fa5]{2,}|[ぁ-んァ-ンー]{2,}')
+        .allMatches(normalized)
+        .map((e) => e.group(0)!)
+        .where((e) => e.length >= 2)
+        .toSet();
+    return matches;
+  }
+
+  double _nameSimilarity(String a, String b) {
+    final left = _normalizeName(a);
+    final right = _normalizeName(b);
+    if (left.isEmpty || right.isEmpty) return 0;
+    if (left == right) return 1;
+    if (left.contains(right) || right.contains(left)) {
+      final minLen = math.min(left.length, right.length);
+      final maxLen = math.max(left.length, right.length);
+      return 0.72 + (minLen / maxLen) * 0.18;
+    }
+    final leftBigrams = _bigrams(left);
+    final rightBigrams = _bigrams(right);
+    if (leftBigrams.isEmpty || rightBigrams.isEmpty) return 0;
+    final intersection = leftBigrams.intersection(rightBigrams).length;
+    return (2 * intersection) / (leftBigrams.length + rightBigrams.length);
+  }
+
+  String _normalizeName(String value) {
+    return value
+        .toLowerCase()
+        .replaceAll(RegExp(r'\[[^\]]*\]|【[^】]*】|\([^)]*\)|（[^）]*）'), '')
+        .replaceAll(RegExp(r'[^a-z0-9\u4e00-\u9fa5ぁ-んァ-ンー]+'), '');
+  }
+
+  Set<String> _bigrams(String value) {
+    if (value.length < 2) return {value};
+    return {
+      for (int i = 0; i < value.length - 1; i++) value.substring(i, i + 2),
+    };
+  }
+
+  bool _handleRecommendationOverscroll(OverscrollNotification notification, int total) {
+    if (notification.overscroll <= 0 || total <= _recommendationPageSize) {
+      return false;
+    }
+    final metrics = notification.metrics;
+    if (metrics.pixels < metrics.maxScrollExtent - 24) return false;
+    _bottomPullDistance += notification.overscroll;
+    if (_bottomPullDistance >= 88) {
+      _bottomPullDistance = 0;
+      setState(() {
+        final pages = (total / _recommendationPageSize).ceil();
+        _recommendationPage = (_recommendationPage + 1) % pages;
+      });
+    }
+    return false;
+  }
+
+  Future<void> _showRecommendationSettings() async {
+    var mode = normalizeLocalDetailRecommendationMode(
+      appdata.settings[localDetailRecommendationSettingIndex],
+    );
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return Dialog(
+              insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 420),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 8),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(20, 12, 12, 8),
+                        child: Row(
+                          children: [
+                            Text(
+                              '相关推荐设置'.tl,
+                              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
+                            ),
+                            const Spacer(),
+                            IconButton(
+                              icon: const Icon(Icons.close),
+                              onPressed: () => Navigator.pop(dialogContext),
+                            ),
+                          ],
+                        ),
+                      ),
+                      for (final entry in const <MapEntry<String, String>>[
+                        MapEntry('0', '智能推荐'),
+                        MapEntry('1', '名称相似优先'),
+                        MapEntry('2', '同作者 + 同题材'),
+                        MapEntry('3', '同题材'),
+                        MapEntry('4', '同标签最多'),
+                        MapEntry('5', '不推荐'),
+                      ])
+                        ListTile(
+                          leading: Icon(
+                            mode == entry.key
+                                ? Icons.radio_button_checked
+                                : Icons.radio_button_unchecked,
+                          ),
+                          title: Text(entry.value.tl),
+                          onTap: () async {
+                            setDialogState(() => mode = entry.key);
+                            appdata.settings[localDetailRecommendationSettingIndex] = entry.key;
+                            await appdata.updateSettings();
+                            if (mounted) {
+                              setState(() => _recommendationPage = 0);
+                            }
+                          },
+                        ),
+                    ],
+                  ),
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Widget _buildCover(BuildContext context, double width, double height) {
+    final cover = resolveLocalComicCover(widget.comic);
+    return GestureDetector(
+      onTap: cover.existsSync() ? () => _showCoverPreview(cover) : null,
+      child: Container(
+        width: width,
+        height: height,
+        decoration: BoxDecoration(
+          color: Theme.of(context).colorScheme.primaryContainer,
+          borderRadius: BorderRadius.circular(12),
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: cover.existsSync()
+            ? Hero(
+                tag: 'local-cover-${widget.comic.id}',
+                child: Image.file(
+                  cover,
+                  fit: BoxFit.cover,
+                  errorBuilder: (_, __, ___) => _placeholderCover(),
+                ),
+              )
+            : _placeholderCover(),
+      ),
+    );
+  }
+
+  Widget _placeholderCover() {
+    return const Center(child: Icon(Icons.image_not_supported, size: 36));
+  }
+
+  void _showCoverPreview(File cover) {
+    showDialog<void>(
+      context: context,
+      builder: (context) => Dialog(
+        clipBehavior: Clip.antiAlias,
+        child: InteractiveViewer(
+          child: Hero(
+            tag: 'local-cover-${widget.comic.id}',
+            child: Image.file(cover, fit: BoxFit.contain),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _sectionHeader(String title, {Widget? trailing}) {
+    return SliverToBoxAdapter(
+      child: Column(
+        children: [
+          const Divider(),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 18),
+            child: Row(
+              children: [
+                Text(
+                  title.tl,
+                  style: const TextStyle(fontWeight: FontWeight.w500, fontSize: 18),
+                ),
+                const Spacer(),
+                if (trailing != null) trailing,
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _infoCard(String text, {bool title = false}) {
+    if (text.trim().isEmpty) text = '未知'.tl;
+    final colorScheme = Theme.of(context).colorScheme;
+    return Container(
+      margin: const EdgeInsets.fromLTRB(4, 4, 4, 4),
+      child: InkWell(
+        borderRadius: const BorderRadius.all(Radius.circular(12)),
+        onLongPress: () => _copyText(text),
+        onSecondaryTap: () => _copyText(text),
+        child: Card(
+          margin: EdgeInsets.zero,
+          color: title
+              ? colorScheme.primaryContainer.withAlpha(160)
+              : ElevationOverlay.applySurfaceTint(
+                  colorScheme.surface,
+                  colorScheme.surfaceTint,
+                  3,
+                ),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          elevation: 0,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(12, 6, 12, 6),
+            child: Text(text, style: const TextStyle(fontSize: 13)),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildActionItem(String title, IconData icon, VoidCallback? onTap) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: const BorderRadius.all(Radius.circular(8)),
+      child: SizedBox(
+        height: 72,
+        width: 72,
+        child: Column(
+          children: [
+            const SizedBox(height: 12),
+            Icon(icon, size: 24, color: Theme.of(context).colorScheme.primary),
+            const SizedBox(height: 8),
+            Text(title.tl, style: const TextStyle(fontSize: 12), maxLines: 1),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _recommendationTile(_LocalRecommendation recommendation) {
+    final item = recommendation.item;
+    final cover = resolveLocalComicCover(item);
+    return InkWell(
+      borderRadius: BorderRadius.circular(12),
+      onTap: () {
+        Navigator.of(context).push(
+          MaterialPageRoute(builder: (_) => LocalComicDetailPage(comic: item)),
+        );
+      },
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(14, 8, 18, 8),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              width: 76,
+              height: 112,
+              decoration: BoxDecoration(
+                color: Theme.of(context).colorScheme.secondaryContainer,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              clipBehavior: Clip.antiAlias,
+              child: cover.existsSync()
+                  ? Image.file(cover, fit: BoxFit.cover)
+                  : const Icon(Icons.image_not_supported),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    item.name,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
+                  ),
+                  const SizedBox(height: 4),
+                  if (item.subTitle.isNotEmpty)
+                    Text(
+                      item.subTitle,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  const Spacer(),
+                  Text(
+                    item.id,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(fontSize: 12, color: Theme.of(context).colorScheme.outline),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    recommendation.reason,
+                    style: TextStyle(fontSize: 12, color: Theme.of(context).colorScheme.primary),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   @override
@@ -198,296 +655,299 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
     final comic = widget.comic;
     final description = _getDescription();
     final history = appdata.history.find(comic.id);
+    final infoGroups = _buildInfoGroups();
+    final recommendations = _buildRecommendations();
+    final start = recommendations.isEmpty
+        ? 0
+        : (_recommendationPage * _recommendationPageSize) % recommendations.length;
+    final pageRecommendations = recommendations
+        .skip(start)
+        .take(_recommendationPageSize)
+        .toList();
 
     return Scaffold(
-      appBar: AppBar(
-        title: Text(comic.name, maxLines: 1, overflow: TextOverflow.ellipsis),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.delete_outline),
-            tooltip: '删除下载'.tl,
-            onPressed: _onDelete,
-          ),
-        ],
-      ),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Header: cover + info
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                _buildCover(),
-                const SizedBox(width: 16),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        comic.name,
-                        style: const TextStyle(
-                          fontSize: 20,
-                          fontWeight: FontWeight.bold,
-                        ),
-                        maxLines: 3,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      if (comic.subTitle.isNotEmpty) ...[
-                        const SizedBox(height: 6),
-                        Text(
-                          comic.subTitle,
-                          style: TextStyle(
-                            fontSize: 15,
-                            color: Theme.of(context).colorScheme.onSurfaceVariant,
-                          ),
-                        ),
-                      ],
-                      const SizedBox(height: 10),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 10,
-                          vertical: 4,
-                        ),
-                        decoration: BoxDecoration(
-                          color: Theme.of(context)
-                              .colorScheme
-                              .primaryContainer
-                              .withAlpha(120),
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        child: Text(
-                          _sourceLabel,
-                          style: TextStyle(
-                            color: Theme.of(context).colorScheme.primary,
-                            fontWeight: FontWeight.w600,
-                            fontSize: 12,
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        _formatSize(comic.comicSize),
-                        style: TextStyle(
-                          fontSize: 14,
-                          color: Theme.of(context).colorScheme.outline,
-                        ),
-                      ),
-                      Text(
-                        _formatTime(comic.time),
-                        style: TextStyle(
-                          fontSize: 13,
-                          color: Theme.of(context).colorScheme.outline,
-                        ),
-                      ),
-                    ],
-                  ),
+      body: NotificationListener<OverscrollNotification>(
+        onNotification: (notification) => _handleRecommendationOverscroll(
+          notification,
+          recommendations.length,
+        ),
+        child: SmoothCustomScrollView(
+          controller: _scrollController,
+          slivers: [
+            SliverAppBar(
+              pinned: true,
+              title: AnimatedOpacity(
+                opacity: _showAppbarTitle ? 1 : 0,
+                duration: const Duration(milliseconds: 200),
+                child: Text(comic.name, maxLines: 1, overflow: TextOverflow.ellipsis),
+              ),
+              actions: [
+                IconButton(
+                  tooltip: '复制标题'.tl,
+                  icon: const Icon(Icons.more_horiz),
+                  onPressed: () => _copyText(comic.name),
                 ),
               ],
             ),
-
-            const SizedBox(height: 20),
-
-            // Action buttons
-            Row(
-              children: [
-                if (history != null && history.ep > 0) ...[
-                  Expanded(
-                    child: FilledButton.icon(
-                      onPressed: () => _onRead(ep: history.ep, page: history.page),
-                      icon: const Icon(Icons.menu_book),
-                      label: Text('继续阅读'.tl),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                ],
-                Expanded(
-                  child: OutlinedButton.icon(
-                    onPressed: () => _onRead(ep: comic.eps.isNotEmpty ? 1 : 0),
-                    icon: const Icon(Icons.not_started_outlined),
-                    label: Text('从头开始'.tl),
-                  ),
-                ),
-              ],
-            ),
-
-            const SizedBox(height: 20),
-
-            // Tags
-            if (comic.tags.isNotEmpty) ...[
-              Text(
-                '标签'.tl,
-                style: const TextStyle(
-                  fontSize: 17,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-              const SizedBox(height: 8),
-              Wrap(
-                spacing: 8,
-                runSpacing: 6,
-                children: comic.tags.map((t) {
-                  final display = _translateTagIfNeeded(t);
-                  return Chip(
-                    label: Text(display, style: const TextStyle(fontSize: 12)),
-                    visualDensity: VisualDensity.compact,
-                    materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                    backgroundColor: Theme.of(context)
-                        .colorScheme
-                        .secondaryContainer
-                        .withAlpha(120),
-                  );
-                }).toList(),
-              ),
-              const SizedBox(height: 20),
-            ],
-
-            // Description
-            if (description != null && description.isNotEmpty) ...[
-              Text(
-                '简介'.tl,
-                style: const TextStyle(
-                  fontSize: 17,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                description,
-                style: TextStyle(
-                  fontSize: 14,
-                  color: Theme.of(context).colorScheme.onSurfaceVariant,
-                  height: 1.4,
-                ),
-              ),
-              const SizedBox(height: 20),
-            ],
-
-            // Chapters
-            Row(
-              children: [
-                Text(
-                  '章节'.tl,
-                  style: const TextStyle(
-                    fontSize: 17,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                const Spacer(),
-                Tooltip(
-                  message: '排序'.tl,
-                  child: IconButton(
-                    icon: const Icon(Icons.swap_vert),
-                    onPressed: () {
-                      setState(() {
-                        _reverseEpsOrder = !_reverseEpsOrder;
-                      });
-                    },
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 8),
-            GridView.builder(
-              shrinkWrap: true,
-              physics: const NeverScrollableScrollPhysics(),
-              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                crossAxisCount: 4,
-                childAspectRatio: 2.5,
-                crossAxisSpacing: 8,
-                mainAxisSpacing: 8,
-              ),
-              itemCount: comic.eps.length,
-              itemBuilder: (ctx, i) {
-                int index = _reverseEpsOrder ? comic.eps.length - i - 1 : i;
-                final isDownloaded = comic.downloadedEps.contains(index);
-                return GestureDetector(
-                  onLongPress: isDownloaded ? () => _onDeleteEpisode(index) : null,
-                  child: ElevatedButton(
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: isDownloaded
-                          ? Theme.of(context).colorScheme.primaryContainer
-                          : Theme.of(context).colorScheme.surfaceContainerHighest,
-                      foregroundColor: isDownloaded
-                          ? Theme.of(context).colorScheme.onPrimaryContainer
-                          : Theme.of(context).colorScheme.outline,
-                      padding: EdgeInsets.zero,
-                    ),
-                    onPressed: isDownloaded
-                        ? () => _onRead(ep: index)
-                        : null,
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        if (isDownloaded) ...[
-                          Icon(
-                            Icons.download_done,
-                            size: 14,
-                            color: Theme.of(context).colorScheme.primary,
-                          ),
-                          const SizedBox(width: 4),
-                        ],
-                        Flexible(
-                          child: Text(
-                            comic.eps[index],
-                            textAlign: TextAlign.center,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              fontSize: 12,
-                              fontWeight: FontWeight.w500,
-                              color: isDownloaded
-                                  ? Theme.of(context).colorScheme.onPrimaryContainer
-                                  : Theme.of(context).colorScheme.outline,
-                            ),
-                          ),
+            SliverToBoxAdapter(child: _buildComicInfo(context, history)),
+            _sectionHeader('信息'),
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(12, 10, 12, 8),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    for (final entry in infoGroups.entries)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 2),
+                        child: Wrap(
+                          children: [
+                            _infoCard(entry.key.tl, title: true),
+                            for (final value in entry.value) _infoCard(value),
+                          ],
                         ),
-                      ],
-                    ),
-                  ),
-                );
-              },
+                      ),
+                  ],
+                ),
+              ),
             ),
-
-            const SizedBox(height: 40),
+            ..._buildEpisodes(context),
+            ..._buildIntroduction(description),
+            ..._buildRecommendationSlivers(pageRecommendations, recommendations.length),
+            SliverPadding(
+              padding: EdgeInsets.only(bottom: MediaQuery.of(context).padding.bottom + 24),
+            ),
           ],
         ),
       ),
     );
   }
-}
 
-String _extractSourceKey(String id) {
-  if (id.contains('copy_manga')) return 'copy_manga';
-  if (id.contains('Komiic')) return 'Komiic';
-  if (id.startsWith('jm')) return 'jm';
-  if (id.startsWith('nhentai')) return 'nhentai';
-  if (id.startsWith('hitomi')) return 'hitomi';
-  if (id.startsWith('Ht')) return 'htmanga';
-  if (RegExp(r'^\d+$').hasMatch(id)) return 'ehentai';
-  return 'picacg';
-}
+  Widget _buildComicInfo(BuildContext context, dynamic history) {
+    final comic = widget.comic;
+    return LayoutBuilder(builder: (context, constraints) {
+      final compact = constraints.maxWidth < 500;
+      final actions = Wrap(
+        alignment: compact ? WrapAlignment.center : WrapAlignment.start,
+        children: [
+          if (history != null && history.ep > 0)
+            _buildActionItem('继续阅读', Icons.menu_book, () => _onRead(ep: history.ep, page: history.page)),
+          _buildActionItem(
+            '从头开始',
+            Icons.not_started_outlined,
+            () => _onRead(ep: comic.eps.length > 1 ? 1 : 0),
+          ),
+          _buildActionItem('分享', Icons.share, () => _copyText(comic.name)),
+          if (comic.canDelete) _buildActionItem('删除下载', Icons.delete_outline, _onDelete),
+        ],
+      );
 
-FavoriteType _downloadTypeToFavoriteType(DownloadType type) {
-  switch (type) {
-    case DownloadType.picacg:
-      return FavoriteType.picacg;
-    case DownloadType.ehentai:
-      return FavoriteType.ehentai;
-    case DownloadType.jm:
-      return FavoriteType.jm;
-    case DownloadType.hitomi:
-      return FavoriteType.hitomi;
-    case DownloadType.htmanga:
-      return FavoriteType.htManga;
-    case DownloadType.nhentai:
-      return FavoriteType.nhentai;
-    case DownloadType.copyManga:
-      return FavoriteType.copyManga;
-    case DownloadType.komiic:
-      return FavoriteType.komiic;
-    default:
-      return const FavoriteType(0);
+      return Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(18, 8, 18, 12),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _buildCover(context, 102, 136),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      SelectableText(
+                        comic.name.trim(),
+                        style: const TextStyle(fontSize: 18),
+                      ),
+                      if (comic.subTitle.trim().isNotEmpty) ...[
+                        const SizedBox(height: 8),
+                        SelectableText(comic.subTitle, style: const TextStyle(fontSize: 14)),
+                      ],
+                      const SizedBox(height: 8),
+                      Text(_sourceLabel, style: const TextStyle(fontSize: 12)),
+                      const SizedBox(height: 8),
+                      Text(_formatSize(comic.comicSize), style: const TextStyle(fontSize: 12)),
+                      if (!compact) Padding(padding: const EdgeInsets.only(top: 12), child: actions),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+          if (compact) Padding(padding: const EdgeInsets.symmetric(horizontal: 12), child: actions),
+        ],
+      );
+    });
+  }
+
+  List<Widget> _buildEpisodes(BuildContext context) {
+    final comic = widget.comic;
+    if (comic.eps.isEmpty) return const [];
+    var length = comic.eps.length;
+    if (!_showFullEps) length = math.min(length, 20);
+
+    return [
+      _sectionHeader(
+        '章节',
+        trailing: Tooltip(
+          message: '排序'.tl,
+          child: IconButton(
+            icon: const Icon(Icons.swap_vert),
+            onPressed: () => setState(() => _reverseEpsOrder = !_reverseEpsOrder),
+          ),
+        ),
+      ),
+      const SliverPadding(padding: EdgeInsets.all(6)),
+      SliverPadding(
+        padding: const EdgeInsets.symmetric(horizontal: 8),
+        sliver: SliverGrid(
+          delegate: SliverChildBuilderDelegate(
+            childCount: length,
+            (context, i) {
+              final index = _reverseEpsOrder ? comic.eps.length - i - 1 : i;
+              final isDownloaded = comic.downloadedEps.contains(index) || !comic.canDelete;
+              final readEp = comic.eps.length > 1 ? index + 1 : 0;
+              return Padding(
+                padding: const EdgeInsets.fromLTRB(8, 4, 8, 4),
+                child: InkWell(
+                  borderRadius: const BorderRadius.all(Radius.circular(16)),
+                  onTap: isDownloaded ? () => _onRead(ep: readEp) : null,
+                  onLongPress: comic.canDelete && isDownloaded
+                      ? () => _onDeleteEpisode(index)
+                      : null,
+                  child: Material(
+                    elevation: 5,
+                    color: Theme.of(context).colorScheme.surface,
+                    surfaceTintColor: Theme.of(context).colorScheme.surfaceTint,
+                    borderRadius: const BorderRadius.all(Radius.circular(12)),
+                    shadowColor: Colors.transparent,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      child: Center(
+                        child: Text(
+                          comic.eps[index],
+                          maxLines: 1,
+                          textAlign: TextAlign.center,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: isDownloaded
+                                ? null
+                                : Theme.of(context).colorScheme.outline,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              );
+            },
+          ),
+          gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+            maxCrossAxisExtent: 200,
+            mainAxisExtent: 48,
+          ),
+        ),
+      ),
+      if (comic.eps.length > 20 && !_showFullEps)
+        SliverToBoxAdapter(
+          child: Align(
+            alignment: Alignment.center,
+            child: FilledButton.tonal(
+              style: ButtonStyle(
+                shape: WidgetStateProperty.all(
+                  const RoundedRectangleBorder(
+                    borderRadius: BorderRadius.all(Radius.circular(8)),
+                  ),
+                ),
+              ),
+              onPressed: () => setState(() => _showFullEps = true),
+              child: Text('${'显示全部'.tl} (${comic.eps.length})'),
+            ),
+          ),
+        ),
+    ];
+  }
+
+  List<Widget> _buildIntroduction(String? description) {
+    if (description == null || description.isEmpty) return const [];
+    return [
+      const SliverPadding(padding: EdgeInsets.all(5)),
+      _sectionHeader('简介'),
+      SliverToBoxAdapter(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(18, 10, 18, 0),
+          child: SelectableText(description),
+        ),
+      ),
+      const SliverPadding(padding: EdgeInsets.all(5)),
+    ];
+  }
+
+  List<Widget> _buildRecommendationSlivers(
+    List<_LocalRecommendation> recommendations,
+    int total,
+  ) {
+    if (normalizeLocalDetailRecommendationMode(
+          appdata.settings[localDetailRecommendationSettingIndex],
+        ) ==
+        '5') {
+      return const [];
+    }
+    if (recommendations.isEmpty) {
+      return [
+        _sectionHeader(
+          '相关推荐',
+          trailing: IconButton(
+            tooltip: '设置'.tl,
+            icon: const Icon(Icons.tune),
+            onPressed: _showRecommendationSettings,
+          ),
+        ),
+        SliverToBoxAdapter(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(18, 12, 18, 0),
+            child: Text('暂无可推荐的本地漫画'.tl),
+          ),
+        ),
+      ];
+    }
+
+    return [
+      _sectionHeader(
+        '相关推荐',
+        trailing: IconButton(
+          tooltip: '设置'.tl,
+          icon: const Icon(Icons.tune),
+          onPressed: _showRecommendationSettings,
+        ),
+      ),
+      const SliverPadding(padding: EdgeInsets.all(5)),
+      SliverPadding(
+        padding: const EdgeInsets.symmetric(horizontal: 8),
+        sliver: SliverGrid(
+          delegate: SliverChildBuilderDelegate(
+            childCount: recommendations.length,
+            (context, index) => _recommendationTile(recommendations[index]),
+          ),
+          gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+            maxCrossAxisExtent: 520,
+            mainAxisExtent: 136,
+          ),
+        ),
+      ),
+      if (total > _recommendationPageSize)
+        SliverToBoxAdapter(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 12),
+            child: Center(
+              child: Text(
+                '上拉刷新下一组推荐'.tl,
+                style: TextStyle(color: Theme.of(context).colorScheme.outline),
+              ),
+            ),
+          ),
+        ),
+    ];
   }
 }

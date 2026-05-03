@@ -24,6 +24,7 @@ import 'package:picakeep/base.dart';
 import 'package:picakeep/tools/keep_screen_on.dart';
 import 'package:picakeep/foundation/image_manager.dart';
 import 'package:picakeep/foundation/history.dart';
+import 'package:picakeep/foundation/local_library_settings.dart';
 import 'package:picakeep/tools/save_image.dart';
 import 'package:picakeep/tools/time.dart';
 import '../../foundation/app.dart';

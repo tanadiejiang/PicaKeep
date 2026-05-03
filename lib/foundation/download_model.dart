@@ -1,5 +1,7 @@
 // ignore_for_file: prefer_const_constructors, avoid_unused_constructor_parameters, no_leading_underscores_for_local_identifiers
 
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import '../pages/reader/comic_reading_page.dart';
 import 'def.dart';
@@ -24,6 +26,31 @@ ComicType comicTypeForDownloadType(DownloadType type) {
     case DownloadType.other:
     case DownloadType.favorite:
       return ComicType.other;
+  }
+}
+
+String downloadTypeDisplayName(DownloadType type) {
+  switch (type) {
+    case DownloadType.picacg:
+      return '哔咔';
+    case DownloadType.ehentai:
+      return 'E-Hentai';
+    case DownloadType.jm:
+      return '禁漫';
+    case DownloadType.hitomi:
+      return 'Hitomi';
+    case DownloadType.htmanga:
+      return '绅士漫画';
+    case DownloadType.nhentai:
+      return 'NHentai';
+    case DownloadType.copyManga:
+      return '拷贝漫画';
+    case DownloadType.komiic:
+      return 'Komiic';
+    case DownloadType.favorite:
+      return '收藏';
+    case DownloadType.other:
+      return '其它';
   }
 }
 
@@ -64,6 +91,14 @@ abstract class DownloadedItem {
   set comicSize(double? value);
 
   String? directory;
+
+  String get sourceDisplayName => downloadTypeDisplayName(type);
+
+  String? get localCoverPath => null;
+
+  String? get fileSystemPath => null;
+
+  bool get canDelete => true;
 
   Widget createReadingPage({int? ep, int? page});
 }
@@ -726,6 +761,18 @@ class CustomDownloadedItem extends DownloadedItem {
     required this.cover,
     required this.comicId,
   });
+
+  @override
+  String get sourceDisplayName => sourceName.isEmpty ? downloadTypeDisplayName(type) : sourceName;
+
+  @override
+  String? get localCoverPath {
+    if (cover.isEmpty) {
+      return null;
+    }
+    final file = File(cover);
+    return file.existsSync() ? file.path : null;
+  }
 
   @override
   Map<String, dynamic> toJson() => {

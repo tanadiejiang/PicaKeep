@@ -1,6 +1,9 @@
+import 'dart:io';
+
 import 'package:picakeep/foundation/download.dart';
 import 'package:picakeep/foundation/download_model.dart';
 import 'package:picakeep/foundation/history.dart';
+import 'package:picakeep/foundation/local_library.dart';
 
 HistoryType _historyTypeForDownload(DownloadedItem c) {
   switch (c.type) {
@@ -27,12 +30,56 @@ HistoryType _historyTypeForDownload(DownloadedItem c) {
   }
 }
 
+File resolveLocalComicCover(DownloadedItem comic,
+    {Iterable<String> legacyTargets = const <String>[]}) {
+  final directPath = comic.localCoverPath?.trim();
+  if (directPath != null && directPath.isNotEmpty) {
+    final file = File(directPath);
+    if (file.existsSync()) {
+      return file;
+    }
+  }
+
+  try {
+    final localItem =
+        LocalLibraryManager().findCachedByCandidates([comic.id, ...legacyTargets]);
+    final coverPath = localItem?.localCoverPath?.trim();
+    if (coverPath != null && coverPath.isNotEmpty) {
+      final file = File(coverPath);
+      if (file.existsSync()) {
+        return file;
+      }
+    }
+  } catch (_) {}
+
+  try {
+    final file = DownloadManager().getCoverFromCandidates([
+      comic.id,
+      ...legacyTargets,
+    ]);
+    if (file.existsSync()) {
+      return file;
+    }
+  } catch (_) {}
+
+  final rootPath = comic.fileSystemPath?.trim();
+  if (rootPath != null && rootPath.isNotEmpty) {
+    for (final name in ['cover.jpg', 'cover.jpeg', 'cover.png', 'cover.webp']) {
+      final file = File('$rootPath${Platform.pathSeparator}$name');
+      if (file.existsSync()) {
+        return file;
+      }
+    }
+  }
+
+  return File('');
+}
+
 /// Inserts or refreshes a history row before opening [ComicReadingPage].
 Future<void> ensureHistoryBeforeRead(DownloadedItem comic,
     {Iterable<String> legacyTargets = const <String>[]}) async {
-  final dm = DownloadManager();
-  await dm.init();
-  final coverFile = dm.getCover(comic.id);
+  final coverFile =
+      resolveLocalComicCover(comic, legacyTargets: legacyTargets);
   final cover = coverFile.existsSync() ? coverFile.path : '';
   await History.ensureForLocalRead(
     target: comic.id,

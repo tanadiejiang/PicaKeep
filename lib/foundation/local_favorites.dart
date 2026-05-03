@@ -98,8 +98,7 @@ List<String> _buildFavoriteDownloadIdCandidates(String target, int type) {
       }
       break;
     case 2:
-      _addCandidate(
-          candidates, target.startsWith('jm') ? target : 'jm$target');
+      _addCandidate(candidates, target.startsWith('jm') ? target : 'jm$target');
       break;
     case 3:
       final hitomiId = _extractHitomiId(target);
@@ -120,8 +119,8 @@ List<String> _buildFavoriteDownloadIdCandidates(String target, int type) {
       }
       break;
     case 6:
-      _addCandidate(candidates,
-          target.startsWith('nhentai') ? target : 'nhentai$target');
+      _addCandidate(
+          candidates, target.startsWith('nhentai') ? target : 'nhentai$target');
       break;
     default:
       _addCustomFavoriteCandidates(
@@ -161,8 +160,7 @@ final class FavoriteType {
   }
 
   @override
-  bool operator ==(Object other) =>
-      other is FavoriteType && other.key == key;
+  bool operator ==(Object other) => other is FavoriteType && other.key == key;
 
   @override
   int get hashCode => key.hashCode;
@@ -244,8 +242,7 @@ class FavGroup {
   FavGroup(this.name, {this.order = 0});
 
   @override
-  bool operator ==(Object other) =>
-      other is FavGroup && other.name == name;
+  bool operator ==(Object other) => other is FavGroup && other.name == name;
 
   @override
   int get hashCode => name.hashCode;
@@ -281,6 +278,8 @@ class LocalFavoritesManager {
   late String _dbPath;
 
   final _foldersController = StreamController<List<FavGroup>>.broadcast();
+  final _cachedFavoritedTargets = <String, bool>{};
+  bool _favoritedTargetsDirty = true;
 
   Stream<List<FavGroup>> get allFoldersStream => _foldersController.stream;
 
@@ -294,23 +293,43 @@ class LocalFavoritesManager {
     final primaryPath = managedDataFilePath(roots.first, 'local_favorite.db');
     File(primaryPath).parent.createSync(recursive: true);
 
-    dispose();
+    Database? previousDb;
+    try {
+      previousDb = _db;
+    } catch (_) {}
+    final previousSecondaryDb = _secondaryDb;
+
+    final nextDb = sqlite3.open(primaryPath);
+    _checkAndCreate(nextDb);
 
     _dbPath = primaryPath;
-    _db = sqlite3.open(_dbPath);
-    _checkAndCreate(_db);
+    _db = nextDb;
+    _secondaryDb = null;
     await readData();
 
-    _secondaryDb = null;
+    Database? nextSecondaryDb;
     if (roots.length > 1) {
       final secondaryPath = managedDataFilePath(roots[1], 'local_favorite.db');
       final secondaryFile = File(secondaryPath);
       if (secondaryFile.existsSync()) {
-        _secondaryDb = sqlite3.open(secondaryPath);
-        _checkAndCreate(_secondaryDb!);
+        final openedSecondaryDb = sqlite3.open(secondaryPath);
+        _checkAndCreate(openedSecondaryDb);
+        nextSecondaryDb = openedSecondaryDb;
       }
     }
+    _secondaryDb = nextSecondaryDb;
     _emitFolders();
+
+    if (!identical(previousDb, nextDb)) {
+      try {
+        previousDb?.dispose();
+      } catch (_) {}
+    }
+    if (!identical(previousSecondaryDb, nextSecondaryDb)) {
+      try {
+        previousSecondaryDb?.dispose();
+      } catch (_) {}
+    }
   }
 
   void dispose() {
@@ -371,7 +390,15 @@ class LocalFavoritesManager {
     var hasDisplayOrder = false;
     var targetPk = 0;
     var typePk = 0;
-    final requiredColumns = <String>{'target', 'name', 'author', 'type', 'tags', 'cover_path', 'time'};
+    final requiredColumns = <String>{
+      'target',
+      'name',
+      'author',
+      'type',
+      'tags',
+      'cover_path',
+      'time'
+    };
     final columns = <String>{};
     for (final row in info) {
       final name = row["name"] as String? ?? '';
@@ -387,8 +414,10 @@ class LocalFavoritesManager {
         typePk = pk;
       }
     }
-    final needsMigration =
-        !hasDisplayOrder || targetPk != 1 || typePk != 2 || requiredColumns.difference(columns).isNotEmpty;
+    final needsMigration = !hasDisplayOrder ||
+        targetPk != 1 ||
+        typePk != 2 ||
+        requiredColumns.difference(columns).isNotEmpty;
     if (!needsMigration) {
       return;
     }
@@ -429,6 +458,7 @@ class LocalFavoritesManager {
   }
 
   void _emitFolders() {
+    _favoritedTargetsDirty = true;
     final names = _getFolderNameStrings();
     _foldersController.add(names.map((e) => FavGroup(e, order: 0)).toList());
   }
@@ -570,7 +600,8 @@ class LocalFavoritesManager {
           select * from folder_order
           where folder_name == ?;
         """, [folder]);
-        final order = res.isNotEmpty ? (res.first["order_value"] as int? ?? 0) : 0;
+        final order =
+            res.isNotEmpty ? (res.first["order_value"] as int? ?? 0) : 0;
         folderToOrder.putIfAbsent(folder, () => order);
         if (db == _db) {
           folderToOrder[folder] = order;
@@ -592,6 +623,31 @@ class LocalFavoritesManager {
 
   void updateUI() {
     _emitFolders();
+  }
+
+  bool isExist(String target) {
+    if (_favoritedTargetsDirty) {
+      _cacheFavoritedTargets();
+    }
+    return _cachedFavoritedTargets.containsKey(target);
+  }
+
+  void _cacheFavoritedTargets() {
+    _favoritedTargetsDirty = false;
+    _cachedFavoritedTargets.clear();
+    for (final db in _dbs) {
+      for (final folder in _getUserTables(db)) {
+        final rows = db.select("""
+          select target from "$folder";
+        """);
+        for (final row in rows) {
+          final target = (row["target"] as String? ?? '').trim();
+          if (target.isNotEmpty) {
+            _cachedFavoritedTargets[target] = true;
+          }
+        }
+      }
+    }
   }
 
   int maxValue(String folder) {
@@ -617,7 +673,16 @@ class LocalFavoritesManager {
   }
 
   int count(String folderName) {
-    return getAllComics(folderName).length;
+    final keys = <String>{};
+    for (final db in _dbsForFolder(folderName)) {
+      final rows = db.select("""
+        select target, type from "$folderName";
+      """);
+      for (final row in rows) {
+        keys.add('${row["target"]}|${row["type"]}');
+      }
+    }
+    return keys.length;
   }
 
   String createFolder(String name) {
@@ -661,7 +726,8 @@ class LocalFavoritesManager {
       """, [oldName]);
       if (res.isNotEmpty) {
         final order = res.first["order_value"];
-        db.execute("delete from folder_order where folder_name == ?;", [oldName]);
+        db.execute(
+            "delete from folder_order where folder_name == ?;", [oldName]);
         db.execute("""
           insert or replace into folder_order (folder_name, order_value)
           values (?, ?);

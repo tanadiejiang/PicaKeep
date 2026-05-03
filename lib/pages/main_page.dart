@@ -11,6 +11,11 @@ import 'favorites/main_favorites_page.dart';
 import 'local_search_page.dart';
 import 'settings/settings_page.dart';
 
+enum _MainPaneActionPage {
+  search,
+  settings,
+}
+
 class MainPage extends StatefulWidget {
   const MainPage({super.key});
 
@@ -21,11 +26,68 @@ class MainPage extends StatefulWidget {
 class _MainPageState extends State<MainPage> {
   final observer = NaviObserver();
   final _navigatorKey = GlobalKey<NavigatorState>();
+  bool _isPaneActionNavigating = false;
 
   late final List<Widget> _pages = [
     const MePage(),
     const MainFavoritesPage(),
   ];
+
+  _MainPaneActionPage? _currentPaneActionPage() {
+    if (observer.routes.isEmpty) {
+      return null;
+    }
+    final currentRoute =
+        observer.routes.last.settings.name ?? observer.routes.last.toString();
+    if (currentRoute.contains('LocalSearchPage')) {
+      return _MainPaneActionPage.search;
+    }
+    if (currentRoute.contains('SettingsPage')) {
+      return _MainPaneActionPage.settings;
+    }
+    return null;
+  }
+
+  _MainPaneActionPage? _paneActionTypeOf(Widget page) {
+    if (page is LocalSearchPage) {
+      return _MainPaneActionPage.search;
+    }
+    if (page is SettingsPage) {
+      return _MainPaneActionPage.settings;
+    }
+    return null;
+  }
+
+  void _openHubPage(Widget Function() pageBuilder) {
+    final navigator = _navigatorKey.currentState;
+    final context = _navigatorKey.currentContext;
+    if (navigator == null || context == null || _isPaneActionNavigating) {
+      return;
+    }
+
+    final page = pageBuilder();
+    final targetPage = _paneActionTypeOf(page);
+    final currentPage = _currentPaneActionPage();
+    if (targetPage != null && currentPage == targetPage) {
+      return;
+    }
+
+    _isPaneActionNavigating = true;
+    Future.delayed(const Duration(milliseconds: 350), () {
+      _isPaneActionNavigating = false;
+    });
+
+    final route = AppPageRoute(
+      preventRebuild: false,
+      settings: RouteSettings(name: page.runtimeType.toString()),
+      builder: (_) => page,
+    );
+    if (targetPage != null && currentPage != null) {
+      navigator.pushReplacement(route);
+      return;
+    }
+    navigator.push(route);
+  }
 
   void checkClipboard() {
     checkLocalClipboard();
@@ -38,12 +100,7 @@ class _MainPageState extends State<MainPage> {
     StateController.putIfNotExists(MainPageHub());
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      StateController.find<MainPageHub>().pushPage = (pageBuilder) {
-        final ctx = _navigatorKey.currentContext;
-        if (ctx != null && ctx.mounted) {
-          App.to(ctx, pageBuilder);
-        }
-      };
+      StateController.find<MainPageHub>().pushPage = _openHubPage;
     });
     checkClipboard();
   }
@@ -78,20 +135,14 @@ class _MainPageState extends State<MainPage> {
           label: "搜索",
           icon: Icons.search,
           onTap: () {
-            final ctx = App.mainNavigatorKey?.currentContext;
-            if (ctx != null) {
-              App.to(ctx, () => const LocalSearchPage());
-            }
+            _openHubPage(() => const LocalSearchPage());
           },
         ),
         PaneActionEntry(
           label: "设置",
           icon: Icons.settings_outlined,
           onTap: () {
-            final ctx = App.mainNavigatorKey?.currentContext;
-            if (ctx != null) {
-              App.to(ctx, () => const SettingsPage());
-            }
+            _openHubPage(() => const SettingsPage());
           },
         ),
       ],

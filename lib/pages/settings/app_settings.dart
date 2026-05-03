@@ -87,13 +87,25 @@ Future<int?> _reloadManagedDataManagers({bool rescanLocalComics = false}) async 
     LogManager.addLog(
       LogLevel.info,
       'ManagedDataReload',
-      'DownloadManager.scanDirectoryForComics:start',
+      'LocalLibraryManager.rescan:start',
     );
-    scanCount = DownloadManager().scanDirectoryForComics();
+    scanCount = await LocalLibraryManager().rescan();
     LogManager.addLog(
       LogLevel.info,
       'ManagedDataReload',
-      'DownloadManager.scanDirectoryForComics:ok count=$scanCount',
+      'LocalLibraryManager.rescan:ok count=$scanCount',
+    );
+  } else {
+    LogManager.addLog(
+      LogLevel.info,
+      'ManagedDataReload',
+      'LocalLibraryManager.refresh:start',
+    );
+    await LocalLibraryManager().refresh();
+    LogManager.addLog(
+      LogLevel.info,
+      'ManagedDataReload',
+      'LocalLibraryManager.refresh:ok',
     );
   }
 
@@ -180,7 +192,7 @@ Future<void> _rescanLocalComics(BuildContext context) async {
     context: context,
     builder: (dialogContext) => AlertDialog(
       title: Text('重新扫描'.tl),
-      content: Text('将按当前下载目录重新扫描漫画文件并更新数据库。'.tl),
+      content: Text('将按当前设置重新扫描本应用下载目录、原应用下载目录与自定义本地漫画路径。'.tl),
       actions: [
         TextButton(
           onPressed: () => Navigator.of(dialogContext).pop(false),
@@ -203,7 +215,7 @@ Future<void> _runRescanLocalComics(BuildContext context) async {
   _showSettingMessage(context, '正在扫描...'.tl);
   final count = await _reloadManagedDataManagers(rescanLocalComics: true) ?? 0;
   if (context.mounted) {
-    _showSettingMessage(context, '扫描完成，共发现 $count 个漫画');
+    _showSettingMessage(context, '扫描完成，当前共 $count 个本地项目'.tl);
   }
 }
 
@@ -222,6 +234,10 @@ Widget buildAppSettings(double width, BuildContext context) {
     ),
     SettingsTitle('数据'.tl),
     const _DownloadDirTile(),
+    const _OriginalDownloadDirTile(),
+    const _LocalComicPathsTile(),
+    const _LocalAlbumImageSortTile(),
+    const _LocalLibraryListSortTile(),
     _ManagedDataSourceModeTile(
       width: width,
       onRefresh: () => _refreshLocalComics(context),
@@ -230,38 +246,25 @@ Widget buildAppSettings(double width, BuildContext context) {
     ListTile(
       leading: const Icon(Icons.sd_storage_rounded),
       title: Text('重新扫描磁盘'.tl),
-      subtitle: Text('从下载目录重新扫描漫画文件并更新数据库'.tl),
+      subtitle: Text('按当前设置重新扫描本应用下载目录、原应用下载目录与自定义本地漫画路径'.tl),
       onTap: () => _rescanLocalComics(context),
     ),
-    SettingsTitle('权限'.tl),
-    ListTile(
+    SettingsTitle('隐私'.tl),
+    if (App.isAndroid)
+      SwitchSetting(
+        leading: const Icon(Icons.screenshot),
+        title: '阻止屏幕截图'.tl,
+        subTitle: '需要重启App以应用更改'.tl,
+        settingsIndex: 12,
+      ),
+    SwitchSetting(
       leading: const Icon(Icons.security),
-      title: Text('权限管理'.tl),
-      trailing: const Icon(Icons.arrow_right),
-      onTap: () {
-        Navigator.of(context).push(
-          MaterialPageRoute(builder: (_) => const PermissionSetting()),
-        );
-      },
+      title: '需要身份验证'.tl,
+      subTitle: '如果系统中未设置任何认证方法请勿开启'.tl,
+      settingsIndex: 13,
     ),
     SettingsTitle('其它'.tl),
-    ListTile(
-      leading: const Icon(Icons.language),
-      title: Text('语言'.tl),
-      trailing: SizedBox(
-        width: 140,
-        child: Select(
-          initialValue: appdata.settings[50],
-          values: const ['', 'cn', 'tw', 'en'],
-          titles: const ['System', '中文(简体)', '中文(繁體)', 'English'],
-          onChanged: (value) {
-            appdata.settings[50] = value;
-            appdata.updateSettings();
-            App.updater?.call();
-          },
-        ),
-      ),
-    ),
+    const _LanguageSettingTile(),
   ]);
 }
 
@@ -410,41 +413,42 @@ class _ManagedDataSourceModeTileState extends State<_ManagedDataSourceModeTile> 
 
   @override
   Widget build(BuildContext context) {
-    final selector = SizedBox(
-      width: widget.width >= 900 ? 330 : 270,
-      child: _buildSelector(context),
-    );
-    const subtitleText = '重新加载下载目录；数据库路径仅作用于本地收藏、图片收藏和历史数据';
-    final refreshTile = ListTile(
-      contentPadding: EdgeInsets.zero,
-      leading: const Icon(Icons.refresh),
-      title: Text('数据管理-刷新本地漫画'.tl),
-      subtitle: Text(subtitleText.tl),
-      onTap: widget.onRefresh,
-    );
-    if (widget.width >= 900) {
-      return Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.center,
-          children: [
-            Expanded(child: refreshTile),
-            const SizedBox(width: 12),
-            selector,
-          ],
-        ),
-      );
-    }
+    final selectorMaxWidth = widget.width >= 900 ? 330.0 : 270.0;
+    const minimumSelectorWidth = 120.0;
+    const reservedRefreshWidth = 180.0;
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          refreshTile,
-          const SizedBox(height: 8),
-          selector,
-          const SizedBox(height: 8),
-        ],
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final availableSelectorWidth =
+              constraints.maxWidth - reservedRefreshWidth;
+          final selectorWidth = availableSelectorWidth < minimumSelectorWidth
+              ? minimumSelectorWidth
+              : (availableSelectorWidth < selectorMaxWidth
+                  ? availableSelectorWidth
+                  : selectorMaxWidth);
+          return Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Expanded(
+                child: ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.refresh),
+                  title: Text('数据管理-刷新本地漫画'.tl),
+                  subtitle: Text(
+                    '重新加载下载目录；数据库路径仅作用于本地收藏、图片收藏和历史数据'.tl,
+                  ),
+                  onTap: widget.onRefresh,
+                ),
+              ),
+              const SizedBox(width: 12),
+              SizedBox(
+                width: selectorWidth,
+                child: _buildSelector(context),
+              ),
+            ],
+          );
+        },
       ),
     );
   }
@@ -483,7 +487,7 @@ class _DownloadDirTileState extends State<_DownloadDirTile> {
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: Text('设置下载目录'.tl),
+        title: Text('设置本应用下载目录'.tl),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -500,6 +504,9 @@ class _DownloadDirTileState extends State<_DownloadDirTile> {
                 ),
                 const SizedBox(width: 8),
                 ElevatedButton.icon(
+                  style: ElevatedButton.styleFrom(
+                    minimumSize: const Size(0, 48),
+                  ),
                   onPressed: () async {
                     final picked = await _pickFolder();
                     if (picked != null) {
@@ -516,6 +523,9 @@ class _DownloadDirTileState extends State<_DownloadDirTile> {
               SizedBox(
                 width: double.infinity,
                 child: OutlinedButton.icon(
+                  style: OutlinedButton.styleFrom(
+                    minimumSize: const Size(0, 48),
+                  ),
                   onPressed: () {
                     _openCurrentDirectory(controller.text.trim());
                   },
@@ -553,31 +563,323 @@ class _DownloadDirTileState extends State<_DownloadDirTile> {
     );
   }
 
+  Widget _buildPathDisplay(BuildContext context, String display) {
+    return GestureDetector(
+      onTap: _showBrowseDialog,
+      child: Container(
+        width: double.infinity,
+        height: 40,
+        alignment: Alignment.center,
+        padding: const EdgeInsets.symmetric(horizontal: 12),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(color: Theme.of(context).colorScheme.outline),
+        ),
+        child: Text(
+          display,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: const TextStyle(fontSize: 14),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final path = appdata.settings[22];
     final display = path.isEmpty ? '未设置'.tl : path;
-    return ListTile(
+    return buildResponsiveSettingTile(
       leading: const Icon(Icons.folder),
-      title: Text('下载目录'.tl),
-      trailing: GestureDetector(
-        onTap: _showBrowseDialog,
-        child: Container(
-          constraints: const BoxConstraints(maxWidth: 160),
-          height: 40,
-          alignment: Alignment.center,
-          padding: const EdgeInsets.symmetric(horizontal: 12),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(6),
-            border: Border.all(color: Theme.of(context).colorScheme.outline),
-          ),
-          child: Text(
-            display,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: const TextStyle(fontSize: 14),
-          ),
+      title: Text('本应用下载目录'.tl),
+      trailingWidth: 220,
+      onTap: _showBrowseDialog,
+      trailing: _buildPathDisplay(context, display),
+    );
+  }
+}
+
+class _OriginalDownloadDirTile extends StatefulWidget {
+  const _OriginalDownloadDirTile();
+
+  @override
+  State<_OriginalDownloadDirTile> createState() => _OriginalDownloadDirTileState();
+}
+
+class _OriginalDownloadDirTileState extends State<_OriginalDownloadDirTile> {
+  Future<String?> _pickFolder() async {
+    try {
+      return await FilePicker.platform.getDirectoryPath();
+    } catch (_) {
+      return null;
+    }
+  }
+
+  void _openCurrentDirectory(String path) {
+    if (Platform.isWindows) {
+      Process.run('explorer', [path]);
+    } else if (Platform.isMacOS) {
+      Process.run('open', [path]);
+    } else if (Platform.isLinux) {
+      Process.run('xdg-open', [path]);
+    }
+  }
+
+  void _showBrowseDialog() {
+    final controller =
+        TextEditingController(text: appdata.settings[originalDownloadDirSettingIndex]);
+    final isDesktop =
+        Platform.isWindows || Platform.isMacOS || Platform.isLinux;
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('设置原应用下载目录'.tl),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: controller,
+                    decoration: InputDecoration(
+                      hintText: '请输入原应用下载目录路径'.tl,
+                      border: const OutlineInputBorder(),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                ElevatedButton.icon(
+                  style: ElevatedButton.styleFrom(
+                    minimumSize: const Size(0, 48),
+                  ),
+                  onPressed: () async {
+                    final picked = await _pickFolder();
+                    if (picked != null) {
+                      controller.text = picked;
+                    }
+                  },
+                  icon: const Icon(Icons.folder_open, size: 18),
+                  label: Text('浏览'.tl),
+                ),
+              ],
+            ),
+            if (isDesktop && controller.text.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  style: OutlinedButton.styleFrom(
+                    minimumSize: const Size(0, 48),
+                  ),
+                  onPressed: () {
+                    _openCurrentDirectory(controller.text.trim());
+                  },
+                  icon: const Icon(Icons.launch, size: 18),
+                  label: Text('打开当前目录'.tl),
+                ),
+              ),
+            ],
+          ],
         ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: Text('取消'.tl),
+          ),
+          TextButton(
+            onPressed: () async {
+              final newPath = controller.text.trim();
+              final changed =
+                  newPath != appdata.settings[originalDownloadDirSettingIndex];
+              appdata.settings[originalDownloadDirSettingIndex] = newPath;
+              await appdata.updateSettings();
+              if (!ctx.mounted || !mounted) {
+                return;
+              }
+              Navigator.of(ctx).pop();
+              setState(() {});
+              if (changed) {
+                await _runRescanLocalComics(context);
+              }
+            },
+            child: Text('确定'.tl),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPathDisplay(BuildContext context, String display) {
+    return GestureDetector(
+      onTap: _showBrowseDialog,
+      child: Container(
+        width: double.infinity,
+        height: 40,
+        alignment: Alignment.center,
+        padding: const EdgeInsets.symmetric(horizontal: 12),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(color: Theme.of(context).colorScheme.outline),
+        ),
+        child: Text(
+          display,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: const TextStyle(fontSize: 14),
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final path = appdata.settings[originalDownloadDirSettingIndex];
+    final display = path.isEmpty ? '未设置'.tl : path;
+    return buildResponsiveSettingTile(
+      leading: const Icon(Icons.folder_shared),
+      title: Text('原应用下载目录'.tl),
+      subtitle: Text('三档切换会决定该目录是否参与扫描'.tl),
+      trailingWidth: 220,
+      onTap: _showBrowseDialog,
+      trailing: _buildPathDisplay(context, display),
+    );
+  }
+}
+
+class _LocalComicPathsTile extends StatelessWidget {
+  const _LocalComicPathsTile();
+
+  @override
+  Widget build(BuildContext context) {
+    final paths = decodeLocalComicPathList(
+      appdata.settings[localComicPathsSettingIndex],
+    );
+    return ListTile(
+      leading: const Icon(Icons.photo_library_outlined),
+      title: Text('本地漫画路径'.tl),
+      subtitle: Text(
+        '已配置 @a 个自定义路径；这些路径始终参与扫描'.tlParams(
+          {'a': paths.length.toString()},
+        ),
+      ),
+      trailing: const Icon(Icons.chevron_right),
+      onTap: () {
+        Navigator.of(context).push(
+          MaterialPageRoute(builder: (_) => const LocalLibraryFilesPage()),
+        );
+      },
+    );
+  }
+}
+
+class _LocalAlbumImageSortTile extends StatelessWidget {
+  const _LocalAlbumImageSortTile();
+
+  Future<void> _changeSort(String value) async {
+    appdata.settings[localAlbumImageSortSettingIndex] =
+        normalizeLocalAlbumImageSort(value);
+    await appdata.updateSettings();
+    await LocalLibraryManager().refresh();
+    App.notifyLocalDataChanged();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return buildResponsiveSettingTile(
+      leading: const Icon(Icons.sort_by_alpha),
+      title: Text('本地图集图片排序'.tl),
+      subtitle: Text('作用于普通本地图集的阅读图片顺序'.tl),
+      trailingWidth: 180,
+      trailing: Select(
+        width: 180,
+        initialValue: normalizeLocalAlbumImageSort(
+          appdata.settings[localAlbumImageSortSettingIndex],
+        ),
+        values: const [
+          localAlbumImageSortNameAsc,
+          localAlbumImageSortNameDesc,
+          localAlbumImageSortTimeAsc,
+          localAlbumImageSortTimeDesc,
+        ],
+        titles: const [
+          '名称正序',
+          '名称倒序',
+          '时间正序',
+          '时间倒序',
+        ],
+        onChanged: (value) async {
+          await _changeSort(value);
+        },
+      ),
+    );
+  }
+}
+
+class _LocalLibraryListSortTile extends StatelessWidget {
+  const _LocalLibraryListSortTile();
+
+  Future<void> _changeSort(String value) async {
+    appdata.settings[localLibraryListSortSettingIndex] =
+        normalizeLocalLibraryListSort(value);
+    await appdata.updateSettings();
+    App.notifyLocalDataChanged();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return buildResponsiveSettingTile(
+      leading: const Icon(Icons.view_module_outlined),
+      title: Text('本地图集列表排序'.tl),
+      trailingWidth: 180,
+      trailing: Select(
+        width: 180,
+        initialValue: normalizeLocalLibraryListSort(
+          appdata.settings[localLibraryListSortSettingIndex],
+        ),
+        values: const [
+          'time_desc',
+          'time_asc',
+          'name_asc',
+          'name_desc',
+          'size_desc',
+          'size_asc',
+        ],
+        titles: const [
+          '最近更新优先',
+          '最早更新优先',
+          '名称 A-Z',
+          '名称 Z-A',
+          '体积从大到小',
+          '体积从小到大',
+        ],
+        onChanged: (value) async {
+          await _changeSort(value);
+        },
+      ),
+    );
+  }
+}
+
+class _LanguageSettingTile extends StatelessWidget {
+  const _LanguageSettingTile();
+
+  @override
+  Widget build(BuildContext context) {
+    return buildResponsiveSettingTile(
+      leading: const Icon(Icons.language),
+      title: Text('语言'.tl),
+      trailingWidth: 140,
+      trailing: Select(
+        width: 140,
+        initialValue: appdata.settings[50],
+        values: const ['', 'cn', 'tw', 'en'],
+        titles: const ['System', '中文(简体)', '中文(繁體)', 'English'],
+        onChanged: (value) {
+          appdata.settings[50] = value;
+          appdata.updateSettings();
+          App.updater?.call();
+        },
       ),
     );
   }

@@ -14,9 +14,12 @@ import 'package:picakeep/foundation/download.dart';
 import 'package:picakeep/foundation/history.dart';
 import 'package:picakeep/foundation/local_data_source.dart';
 import 'package:picakeep/foundation/local_favorites.dart';
+import 'package:picakeep/foundation/local_library.dart';
+import 'package:picakeep/foundation/local_library_settings.dart';
 import 'package:picakeep/foundation/log.dart';
 import 'package:picakeep/foundation/ui_mode.dart';
 import 'package:picakeep/pages/auth_page.dart';
+import 'package:picakeep/pages/local_library_page.dart';
 import 'package:picakeep/tools/block_screenshot.dart';
 import 'package:share_plus/share_plus.dart';
 
@@ -26,15 +29,65 @@ part 'reading_settings.dart';
 part 'local_favorite_settings.dart';
 
 void refreshLocalDataCaches() {
-  DownloadManager().dispose();
-  HistoryManager().dispose();
-  LocalFavoritesManager().dispose();
+  // Managers are reinitialized in place so mounted widgets never observe
+  // closed database handles during a mode switch.
 }
 
 const double _settingsWideLayoutBreakpoint = 900;
 
 Widget buildTwoColumnLayout(double width, List<Widget> children) {
-  return Column(children: children);
+  return Column(
+    crossAxisAlignment: CrossAxisAlignment.stretch,
+    children: [
+      for (final child in children)
+        SizedBox(width: double.infinity, child: child),
+    ],
+  );
+}
+
+Widget buildResponsiveSettingTile({
+  Widget? leading,
+  required Widget title,
+  Widget? subtitle,
+  required Widget trailing,
+  double trailingWidth = 140,
+  bool expandTrailingOnNarrow = false,
+  VoidCallback? onTap,
+}) {
+  return LayoutBuilder(
+    builder: (context, constraints) {
+      const horizontalPadding = 32.0;
+      const reservedLeadingWidth = 56.0;
+      const reservedTitleWidth = 120.0;
+      const minimumTrailingWidth = 72.0;
+      final availableTrailingWidth = constraints.maxWidth -
+          horizontalPadding -
+          (leading != null ? reservedLeadingWidth : 0.0) -
+          reservedTitleWidth;
+      final safeTrailingWidth = availableTrailingWidth > minimumTrailingWidth
+          ? availableTrailingWidth
+          : minimumTrailingWidth;
+      final effectiveTrailingWidth = expandTrailingOnNarrow
+          ? safeTrailingWidth
+          : (safeTrailingWidth < trailingWidth
+              ? safeTrailingWidth
+              : trailingWidth);
+
+      return ListTile(
+        leading: leading,
+        title: title,
+        subtitle: subtitle,
+        trailing: SizedBox(
+          width: effectiveTrailingWidth,
+          child: Align(
+            alignment: Alignment.centerRight,
+            child: trailing,
+          ),
+        ),
+        onTap: onTap,
+      );
+    },
+  );
 }
 
 class SettingsPage extends StatefulWidget {
@@ -56,7 +109,8 @@ class _SettingsPageState extends State<SettingsPage> {
   ColorScheme get colors => Theme.of(context).colorScheme;
 
   bool get enableTwoViews =>
-      !UiMode.m1(context) && MediaQuery.of(context).size.width >= _settingsWideLayoutBreakpoint;
+      !UiMode.m1(context) &&
+      MediaQuery.of(context).size.width >= _settingsWideLayoutBreakpoint;
 
   final categories = <String>["浏览", "阅读", "外观", "本地收藏", "APP", "关于"];
 
@@ -163,35 +217,41 @@ class _SettingsPageState extends State<SettingsPage> {
         ],
       );
     } else {
-      return Stack(
-        children: [
-          Positioned.fill(child: buildLeft()),
-          Positioned(
-            left: offset,
-            width: MediaQuery.of(context).size.width,
-            height: MediaQuery.of(context).size.height,
-            child: Listener(
-              onPointerDown: handlePointerDown,
-              child: AnimatedSwitcher(
-                duration: const Duration(milliseconds: 300),
-                reverseDuration: const Duration(milliseconds: 300),
-                switchInCurve: Curves.fastOutSlowIn,
-                switchOutCurve: Curves.fastOutSlowIn,
-                transitionBuilder: (child, animation) {
-                  var tween = Tween<Offset>(
-                      begin: const Offset(1, 0), end: const Offset(0, 0));
-                  return SlideTransition(
-                    position: tween.animate(animation),
-                    child: child,
-                  );
-                },
-                child: currentPage == -1
-                    ? const SizedBox(key: Key("1"))
-                    : buildRight(MediaQuery.of(context).size.width),
-              ),
-            ),
-          )
-        ],
+      return LayoutBuilder(
+        builder: (context, constraints) {
+          final pageWidth = constraints.maxWidth;
+          final pageHeight = constraints.maxHeight;
+          return Stack(
+            children: [
+              Positioned.fill(child: buildLeft()),
+              Positioned(
+                left: offset,
+                width: pageWidth,
+                height: pageHeight,
+                child: Listener(
+                  onPointerDown: handlePointerDown,
+                  child: AnimatedSwitcher(
+                    duration: const Duration(milliseconds: 300),
+                    reverseDuration: const Duration(milliseconds: 300),
+                    switchInCurve: Curves.fastOutSlowIn,
+                    switchOutCurve: Curves.fastOutSlowIn,
+                    transitionBuilder: (child, animation) {
+                      var tween = Tween<Offset>(
+                          begin: const Offset(1, 0), end: const Offset(0, 0));
+                      return SlideTransition(
+                        position: tween.animate(animation),
+                        child: child,
+                      );
+                    },
+                    child: currentPage == -1
+                        ? const SizedBox(key: Key("1"))
+                        : buildRight(pageWidth),
+                  ),
+                ),
+              )
+            ],
+          );
+        },
       );
     }
   }
@@ -318,66 +378,55 @@ class _SettingsPageState extends State<SettingsPage> {
   Widget buildAppearanceSettings(double width) => buildTwoColumnLayout(
         width,
         [
-          ListTile(
+          SelectSetting(
             leading: const Icon(Icons.color_lens),
-            title: Text("主题选择".tl),
-            trailing: Select(
-              initialValue:
-                  (int.tryParse(appdata.settings[27]) ?? 0).toString(),
-              values: const [
-                "0",
-                "1",
-                "2",
-                "3",
-                "4",
-                "5",
-                "6",
-                "7",
-                "8",
-                "9",
-                "10",
-                "11",
-                "12"
-              ],
-              titles: const [
-                "dynamic",
-                "red",
-                "pink",
-                "purple",
-                "indigo",
-                "blue",
-                "cyan",
-                "teal",
-                "green",
-                "lime",
-                "yellow",
-                "amber",
-                "orange"
-              ],
-              onChanged: (value) {
-                appdata.settings[27] = value;
-                appdata.updateSettings();
-                App.updater?.call();
-              },
-              width: 140,
-            ),
+            title: "主题选择".tl,
+            settingsIndex: 27,
+            initialValue: (int.tryParse(appdata.settings[27]) ?? 0).toString(),
+            values: const [
+              "0",
+              "1",
+              "2",
+              "3",
+              "4",
+              "5",
+              "6",
+              "7",
+              "8",
+              "9",
+              "10",
+              "11",
+              "12"
+            ],
+            titles: const [
+              "dynamic",
+              "red",
+              "pink",
+              "purple",
+              "indigo",
+              "blue",
+              "cyan",
+              "teal",
+              "green",
+              "lime",
+              "yellow",
+              "amber",
+              "orange"
+            ],
+            onChanged: (value) {
+              App.updater?.call();
+            },
           ),
-          ListTile(
+          SelectSetting(
             leading: const Icon(Icons.dark_mode),
-            title: Text("深色模式".tl),
-            trailing: Select(
-              initialValue: appdata.settings[32],
-              values: const ["0", "1", "2"],
-              titles: ["跟随系统".tl, "禁用".tl, "启用".tl],
-              onChanged: (value) {
-                setState(() {
-                  appdata.settings[32] = value;
-                });
-                appdata.updateSettings();
-                App.updater?.call();
-              },
-              width: 140,
-            ),
+            title: "深色模式".tl,
+            settingsIndex: 32,
+            values: const ["0", "1", "2"],
+            titles: ["跟随系统".tl, "禁用".tl, "启用".tl],
+            onChanged: (value) {
+              setState(() {});
+              App.updater?.call();
+            },
           ),
           if (appdata.settings[32] == "0" || appdata.settings[32] == "2")
             ListTile(
@@ -414,7 +463,8 @@ class _SettingsPageState extends State<SettingsPage> {
                           ),
                           actions: [
                             TextButton(
-                              onPressed: () => Navigator.of(dialogContext).pop(),
+                              onPressed: () =>
+                                  Navigator.of(dialogContext).pop(),
                               child: Text("确定".tl),
                             ),
                           ],
@@ -485,11 +535,13 @@ class _SettingsPageState extends State<SettingsPage> {
 class SwitchSetting extends StatefulWidget {
   const SwitchSetting({
     super.key,
+    this.leading,
     required this.title,
     this.subTitle,
     required this.settingsIndex,
   });
 
+  final Widget? leading;
   final String title;
   final String? subTitle;
   final int settingsIndex;
@@ -501,16 +553,18 @@ class SwitchSetting extends StatefulWidget {
 class _SwitchSettingState extends State<SwitchSetting> {
   @override
   Widget build(BuildContext context) {
-    return ListTile(
+    return buildResponsiveSettingTile(
+      leading: widget.leading,
       title: Text(widget.title),
       subtitle: widget.subTitle != null ? Text(widget.subTitle!) : null,
+      trailingWidth: 60,
       trailing: Switch(
         value: appdata.settings[widget.settingsIndex] == '1',
         onChanged: (value) {
           setState(() {
             appdata.settings[widget.settingsIndex] = value ? '1' : '0';
-            appdata.updateSettings();
           });
+          appdata.updateSettings();
         },
       ),
     );
@@ -520,17 +574,23 @@ class _SwitchSettingState extends State<SwitchSetting> {
 class SelectSetting extends StatefulWidget {
   const SelectSetting({
     super.key,
+    this.leading,
     required this.title,
     required this.settingsIndex,
     required this.values,
     required this.titles,
+    this.controlWidth = 140,
+    this.initialValue,
     this.onChanged,
   });
 
+  final Widget? leading;
   final String title;
   final int settingsIndex;
   final List<String> values;
   final List<String> titles;
+  final double controlWidth;
+  final String? initialValue;
   final void Function(String value)? onChanged;
 
   @override
@@ -540,11 +600,14 @@ class SelectSetting extends StatefulWidget {
 class _SelectSettingState extends State<SelectSetting> {
   @override
   Widget build(BuildContext context) {
-    return ListTile(
+    return buildResponsiveSettingTile(
+      leading: widget.leading,
       title: Text(widget.title),
+      trailingWidth: widget.controlWidth,
       trailing: Select(
-        width: 140,
-        initialValue: appdata.settings[widget.settingsIndex],
+        width: widget.controlWidth,
+        initialValue:
+            widget.initialValue ?? appdata.settings[widget.settingsIndex],
         values: widget.values,
         titles: widget.titles,
         onChanged: (value) {
