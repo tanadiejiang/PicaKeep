@@ -151,9 +151,15 @@ class LocalLibraryComicItem extends DownloadedItem {
   @override
   bool get canDelete => _canDelete;
 
-  bool get hasMultipleEpisodes => episodeFiles.length > 1;
+  bool get hasMultipleEpisodes =>
+      episodeFiles.length > 1 ||
+      (!episodeFiles.containsKey(0) && episodeFiles.containsKey(1));
 
   bool get isAlbum => itemId.startsWith('local_album::') || sourceDisplayName == '图集';
+
+  bool get isManagedDownloadItem =>
+      itemId.startsWith('local_download::current_download::') ||
+      itemId.startsWith('local_download::original_download::');
 
   @override
   Map<String, dynamic> toJson() => {
@@ -404,6 +410,14 @@ class LocalLibraryManager {
     _sortItems(items, localLibraryListSort);
     return items;
   }
+
+  Future<int> get downloadCount async {
+    await ensureLoaded();
+    return cachedDownloadCount;
+  }
+
+  int get cachedDownloadCount =>
+      _items.where((item) => item.isManagedDownloadItem).length;
 
   Future<List<LocalLibraryStorageEntry>> getStorageEntries() async {
     await ensureLoaded();
