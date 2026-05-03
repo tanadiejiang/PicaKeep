@@ -11,6 +11,8 @@ import 'package:picakeep/tools/translations.dart';
 import 'package:picakeep/components/select.dart' hide AnimatedContainer;
 import 'package:picakeep/foundation/app.dart';
 import 'package:picakeep/foundation/download.dart';
+import 'package:picakeep/foundation/history.dart';
+import 'package:picakeep/foundation/local_data_source.dart';
 import 'package:picakeep/foundation/local_favorites.dart';
 import 'package:picakeep/foundation/log.dart';
 import 'package:picakeep/foundation/ui_mode.dart';
@@ -25,6 +27,7 @@ part 'local_favorite_settings.dart';
 
 void refreshLocalDataCaches() {
   DownloadManager().dispose();
+  HistoryManager().dispose();
   LocalFavoritesManager().dispose();
 }
 
@@ -214,7 +217,7 @@ class _SettingsPageState extends State<SettingsPage> {
                 message: "Back",
                 child: IconButton(
                   icon: const Icon(Icons.arrow_back),
-                  onPressed: () => App.globalBack(),
+                  onPressed: () => App.back(context),
                 ),
               ),
               const SizedBox(width: 24),

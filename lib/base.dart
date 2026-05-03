@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'foundation/app.dart';
+import 'foundation/local_data_source.dart';
 import 'foundation/log.dart';
 import 'foundation/history.dart';
 import 'foundation/local_favorites.dart';
@@ -99,7 +100,7 @@ class Appdata {
     "1", //72
     "0", //73
     "1.0", //74
-    "", //75
+    "0", //75
     "0", //76
     "picacg,Eh主页,Eh热门,禁漫主页,禁漫最新,hitomi,绅士漫画,nhentai", //77
     "0", //78
@@ -181,6 +182,10 @@ class Appdata {
     if (settings[26].length < 2) {
       settings[26] += "0";
     }
+    settings[managedDataSourceModeSettingIndex] =
+        normalizeManagedDataSourceMode(
+            settings[managedDataSourceModeSettingIndex]);
+    setManagedDataSourceMode(settings[managedDataSourceModeSettingIndex]);
   }
 
   Future<void> updateSettings([bool syncData = true]) async {
@@ -241,6 +246,10 @@ class Appdata {
       for (var i = 0; i < settings.length && i < newSettings.length; i++) {
         settings[i] = newSettings[i];
       }
+      settings[managedDataSourceModeSettingIndex] =
+          normalizeManagedDataSourceMode(
+              settings[managedDataSourceModeSettingIndex]);
+      setManagedDataSourceMode(settings[managedDataSourceModeSettingIndex]);
       settings[22] = downloadPath;
       settings[13] = authRequired;
       var newFirstUse = List<String>.from(json["firstUse"]);

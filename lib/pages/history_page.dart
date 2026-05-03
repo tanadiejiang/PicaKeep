@@ -68,7 +68,7 @@ class _HistoryPageState extends State<HistoryPage> {
       if (f.existsSync()) return f;
     }
     try {
-      return DownloadManager().getCover(item.target);
+      return DownloadManager().getCoverFromCandidates(item.candidateDownloadIds());
     } catch (_) {
       return File('');
     }
@@ -112,11 +112,26 @@ class _HistoryPageState extends State<HistoryPage> {
   }
 
   Future<void> _openComic(History item) async {
-    final comic = await DownloadManager().getComicOrNull(item.target);
+    final dm = DownloadManager();
+    await dm.init();
+    final comic =
+        await dm.getComicOrNullFromCandidates(item.candidateDownloadIds());
     if (comic != null) {
       if (!mounted) return;
-      await ensureHistoryBeforeRead(comic);
+      await ensureHistoryBeforeRead(
+        comic,
+        legacyTargets: item.candidateDownloadIds(),
+      );
+      final cover = dm.getCover(comic.id);
       if (!mounted) return;
+      setState(() {
+        item.target = comic.id;
+        item.title = comic.name;
+        item.subtitle = comic.subTitle;
+        if (cover.existsSync()) {
+          item.cover = cover.path;
+        }
+      });
       await App.openReader(() => comic.createReadingPage(ep: item.ep, page: item.page));
     } else {
       if (!mounted) return;
@@ -186,7 +201,7 @@ class _HistoryPageState extends State<HistoryPage> {
                     child: DownloadedComicTile(
                       name: comic.title,
                       author: comic.subtitle,
-                      imagePath: cover.existsSync() ? cover : DownloadManager().getCover(comic.target),
+                      imagePath: cover,
                       type: comic.type.name,
                       tag: const [],
                       size: _formatTime(comic.time),

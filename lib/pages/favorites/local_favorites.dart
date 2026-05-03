@@ -24,19 +24,17 @@ class OpenFavoriteComicHelper {
   static Future<DownloadedItem?> _resolveDownloadedItem(FavoriteItem comic) async {
     final dm = DownloadManager();
     await dm.init();
-    var id = comic.toDownloadId();
-    if (!dm.isExists(id) && id != comic.target && dm.isExists(comic.target)) {
-      id = comic.target;
-    }
-    if (!dm.isExists(id)) {
+    final candidates = comic.candidateDownloadIds();
+    final resolvedId = dm.resolveExistingId(candidates);
+    if (resolvedId == null) {
       if (App.globalContext?.mounted ?? false) {
         ScaffoldMessenger.of(App.globalContext!).showSnackBar(
-          SnackBar(content: Text('未找到本地下载: $id')),
+          SnackBar(content: Text('未找到本地下载: ${candidates.first}')),
         );
       }
       return null;
     }
-    final dl = await dm.getComicOrNull(id);
+    final dl = await dm.getComicOrNullFromCandidates(candidates);
     if (dl == null) {
       if (App.globalContext?.mounted ?? false) {
         ScaffoldMessenger.of(App.globalContext!).showSnackBar(
@@ -70,7 +68,10 @@ class OpenFavoriteComicHelper {
       if (dl == null) {
         return;
       }
-      await ensureHistoryBeforeRead(dl);
+      await ensureHistoryBeforeRead(
+        dl,
+        legacyTargets: comic.candidateDownloadIds(),
+      );
       await dl.read();
     } catch (e) {
       if (App.globalContext?.mounted ?? false) {
@@ -108,13 +109,7 @@ class LocalFavoriteTile extends StatelessWidget {
   bool get _isDownloaded {
     try {
       final dm = DownloadManager();
-      var id = comic.toDownloadId();
-      if (!dm.isExists(id) &&
-          id != comic.target &&
-          dm.isExists(comic.target)) {
-        id = comic.target;
-      }
-      return dm.isExists(id);
+      return dm.resolveExistingId(comic.candidateDownloadIds()) != null;
     } catch (_) {
       return false;
     }
@@ -129,9 +124,17 @@ class LocalFavoriteTile extends StatelessWidget {
   // ---- cover image ----
   File get _coverFile {
     final p = comic.coverPath.trim();
-    if (p.isEmpty) return File('');
-    final f = File(p);
-    return f.existsSync() ? f : File('');
+    if (p.isNotEmpty) {
+      final f = File(p);
+      if (f.existsSync()) {
+        return f;
+      }
+    }
+    try {
+      return DownloadManager().getCoverFromCandidates(comic.candidateDownloadIds());
+    } catch (_) {
+      return File('');
+    }
   }
 
   // ---- tags (Chinese translation) ----

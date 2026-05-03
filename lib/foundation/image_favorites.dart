@@ -25,6 +25,28 @@ class ImageFavorite {
 
 class ImageFavoriteManager {
   static Database get _db => HistoryManager().database;
+  static List<Database> get _dbs => HistoryManager().databases;
+
+  static String _favoriteKey(String id, int ep, int page) => '$id::$ep::$page';
+
+  static ImageFavorite _fromRow(Row row) {
+    return ImageFavorite(
+      row["id"] as String,
+      row["cover"] as String,
+      row["title"] as String,
+      row["ep"] as int,
+      row["page"] as int,
+      jsonDecode(row["other"] as String) as Map<String, dynamic>,
+    );
+  }
+
+  static void _notifyUpdated() {
+    Future.microtask(() {
+      StateController.findOrNull<SimpleController>(tag: "me_page")?.update();
+      StateController.findOrNull<SimpleController>(tag: "image_favorites_page")
+          ?.update();
+    });
+  }
 
   static void add(ImageFavorite favorite) {
     _db.execute(
@@ -41,53 +63,55 @@ class ImageFavoriteManager {
         jsonEncode(favorite.otherInfo),
       ],
     );
-    Future.microtask(
-        () => StateController.findOrNull<SimpleController>(tag: "me_page")?.update());
+    _notifyUpdated();
   }
 
   static List<ImageFavorite> getAll() {
-    final res = _db.select("select * from image_favorites;");
-    return res
-        .map(
-          (e) => ImageFavorite(
-            e["id"] as String,
-            e["cover"] as String,
-            e["title"] as String,
-            e["ep"] as int,
-            e["page"] as int,
-            jsonDecode(e["other"] as String) as Map<String, dynamic>,
-          ),
-        )
-        .toList();
+    final merged = <String, ImageFavorite>{};
+    for (final db in _dbs) {
+      final res = db.select("select * from image_favorites;");
+      for (final row in res) {
+        final item = _fromRow(row);
+        merged.putIfAbsent(
+          _favoriteKey(item.id, item.ep, item.page),
+          () => item,
+        );
+      }
+    }
+    return merged.values.toList();
   }
 
   static void delete(ImageFavorite favorite) {
-    _db.execute(
-      """
-      delete from image_favorites
-      where id = ? and ep = ? and page = ?;
-    """,
-      [favorite.id, favorite.ep, favorite.page],
-    );
-    Future.microtask(
-        () => StateController.findOrNull<SimpleController>(tag: "me_page")?.update());
+    for (final db in _dbs) {
+      db.execute(
+        """
+        delete from image_favorites
+        where id = ? and ep = ? and page = ?;
+      """,
+        [favorite.id, favorite.ep, favorite.page],
+      );
+    }
+    _notifyUpdated();
   }
 
   static bool exist(String id, int ep, int page) {
-    final res = _db.select(
-      """
-      select * from image_favorites
-      where id = ? and ep = ? and page = ?;
-    """,
-      [id, ep, page],
-    );
-    return res.isNotEmpty;
+    for (final db in _dbs) {
+      final res = db.select(
+        """
+        select 1 from image_favorites
+        where id = ? and ep = ? and page = ?
+        limit 1;
+      """,
+        [id, ep, page],
+      );
+      if (res.isNotEmpty) {
+        return true;
+      }
+    }
+    return false;
   }
 
-  static int get length {
-    final res = _db.select("select count(*) from image_favorites;");
-    return res.first.values.first! as int;
-  }
+  static int get length => getAll().length;
 
   static ImageFavorite fromHitomiFile(
     String id,
