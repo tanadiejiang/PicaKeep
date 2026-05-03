@@ -12,6 +12,8 @@ import 'package:picakeep/tools/translations.dart';
 import 'favorites/local_favorites.dart';
 import 'local_comic_detail_page.dart';
 
+enum LocalSearchType { favoritesOnly, downloadsOnly, all }
+
 class _SearchResult {
   final String title;
   final String author;
@@ -33,7 +35,12 @@ class _SearchResult {
 }
 
 class LocalSearchPage extends StatefulWidget {
-  const LocalSearchPage({super.key});
+  const LocalSearchPage({
+    this.searchType = LocalSearchType.all,
+    super.key,
+  });
+
+  final LocalSearchType searchType;
 
   @override
   State<LocalSearchPage> createState() => _LocalSearchPageState();
@@ -88,39 +95,43 @@ class _LocalSearchPageState extends State<LocalSearchPage> {
     final seenIds = <String>{};
     final favManager = LocalFavoritesManager();
     await favManager.init();
-    final favResults = favManager.search(keyword);
-    for (final fav in favResults) {
-      final c = fav.comic;
-      final idKey = 'fav_${c.type.key}_${c.target}';
-      if (seenIds.contains(idKey)) continue;
-      seenIds.add(idKey);
-      results.add(_SearchResult(
-        title: c.name,
-        author: c.author,
-        sourceLabel: '${c.type.name} · ${fav.folder}',
-        tags: c.tags,
-        favType: c.type,
-        favoriteItem: fav,
-      ));
-    }
-    try {
-      final dlManager = DownloadManager();
-      await dlManager.init();
-      for (final item in dlManager.getAll()) {
-        final idKey = 'dl_${item.id}';
+    if (widget.searchType != LocalSearchType.downloadsOnly) {
+      final favResults = favManager.search(keyword);
+      for (final fav in favResults) {
+        final c = fav.comic;
+        final idKey = 'fav_${c.type.key}_${c.target}';
         if (seenIds.contains(idKey)) continue;
-        if (_matches(item, keyword)) {
-          seenIds.add(idKey);
-          results.add(_SearchResult(
-            title: item.name,
-            author: item.subTitle,
-            sourceLabel: _downloadLabel(item.type),
-            tags: item.tags,
-            downloadItem: item,
-          ));
-        }
+        seenIds.add(idKey);
+        results.add(_SearchResult(
+          title: c.name,
+          author: c.author,
+          sourceLabel: '${c.type.name} · ${fav.folder}',
+          tags: c.tags,
+          favType: c.type,
+          favoriteItem: fav,
+        ));
       }
-    } catch (_) {}
+    }
+    if (widget.searchType != LocalSearchType.favoritesOnly) {
+      try {
+        final dlManager = DownloadManager();
+        await dlManager.init();
+        for (final item in dlManager.getAll()) {
+          final idKey = 'dl_${item.id}';
+          if (seenIds.contains(idKey)) continue;
+          if (_matches(item, keyword)) {
+            seenIds.add(idKey);
+            results.add(_SearchResult(
+              title: item.name,
+              author: item.subTitle,
+              sourceLabel: _downloadLabel(item.type),
+              tags: item.tags,
+              downloadItem: item,
+            ));
+          }
+        }
+      } catch (_) {}
+    }
     if (!mounted) return;
     setState(() {
       _results = results;
@@ -305,7 +316,11 @@ class _LocalSearchPageState extends State<LocalSearchPage> {
                       ),
                       const SizedBox(height: 16),
                       Text(
-                        '输入关键词搜索本地收藏和下载',
+                        widget.searchType == LocalSearchType.favoritesOnly
+                            ? '输入关键词搜索收藏夹漫画'
+                            : widget.searchType == LocalSearchType.downloadsOnly
+                                ? '输入关键词搜索本地已下载漫画'
+                                : '输入关键词搜索本地收藏和下载',
                         style: TextStyle(
                           color: Theme.of(context).colorScheme.outline,
                         ),

@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_reorderable_grid_view/widgets/reorderable_builder.dart';
+import 'package:picakeep/base.dart';
 import 'package:picakeep/components/comic_tile.dart';
 import 'package:picakeep/components/layout.dart';
 import 'package:picakeep/foundation/app.dart';
@@ -10,6 +11,7 @@ import 'package:picakeep/foundation/download_model.dart';
 import 'package:picakeep/foundation/local_favorites.dart';
 import 'package:picakeep/pages/download_page.dart';
 import 'package:picakeep/pages/local_comic_detail_page.dart';
+import 'package:picakeep/pages/local_search_page.dart';
 import 'package:picakeep/tools/read_history_helper.dart';
 import 'package:picakeep/tools/tags_translation.dart';
 import 'package:picakeep/tools/translations.dart';
@@ -121,6 +123,8 @@ class LocalFavoriteTile extends StatelessWidget {
   String? get badge => _isDownloaded ? '已下载'.tl : null;
 
   String get description => '${comic.time} | ${comic.type.name}';
+
+  String get comicId => comic.toDownloadId();
 
   // ---- cover image ----
   File get _coverFile {
@@ -430,6 +434,10 @@ class LocalFavoriteTile extends StatelessWidget {
       final res = onTap!();
       if (res) return;
     }
+    if (appdata.settings[52] == '1') {
+      _read();
+      return;
+    }
     _openComic();
   }
 
@@ -439,7 +447,8 @@ class LocalFavoriteTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cover = _coverFile;
-    return DownloadedComicTile(
+    return _LocalFavoriteDownloadedComicTile(
+      comicId: comicId,
       name: comic.name,
       author: comic.author,
       imagePath: cover.path.isNotEmpty ? cover : File(''),
@@ -453,6 +462,26 @@ class LocalFavoriteTile extends StatelessWidget {
       onSecondaryTap: _showDesktopMenu,
     );
   }
+}
+
+class _LocalFavoriteDownloadedComicTile extends DownloadedComicTile {
+  const _LocalFavoriteDownloadedComicTile({
+    required this.comicId,
+    required super.name,
+    required super.author,
+    required super.imagePath,
+    required super.type,
+    required super.tag,
+    required super.size,
+    required super.onTap,
+    required super.onLongTap,
+    required super.onSecondaryTap,
+  });
+
+  final String comicId;
+
+  @override
+  String? get comicID => comicId;
 }
 
 // ============================================================
@@ -600,16 +629,22 @@ class _LocalFavoritesFolderState extends State<LocalFavoritesFolder> {
   @override
   void initState() {
     super.initState();
+    App.localDataVersion.addListener(_handleLocalDataRefresh);
     _loadComics();
   }
 
   @override
   void dispose() {
+    App.localDataVersion.removeListener(_handleLocalDataRefresh);
     if (_orderDirty) {
       _favManager.reorder(_comics, widget.folderName);
     }
     _scrollController.dispose();
     super.dispose();
+  }
+
+  void _handleLocalDataRefresh() {
+    _loadComics();
   }
 
   Future<void> _loadComics() async {
@@ -718,12 +753,12 @@ class _LocalFavoritesFolderState extends State<LocalFavoritesFolder> {
           IconButton(
             icon: const Icon(Icons.search),
             onPressed: () {
-              showSearch(
-                context: context,
-                delegate:
-                    _FavSearchDelegate(_comics, (c) async {
-                      await OpenFavoriteComicHelper.open(c);
-                    }),
+              Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => const LocalSearchPage(
+                    searchType: LocalSearchType.favoritesOnly,
+                  ),
+                ),
               );
             },
           ),
@@ -957,55 +992,4 @@ void copyAllTo(String source, List<FavoriteItem> comics) {
       ],
     ),
   );
-}
-
-// ============================================================
-// In-folder search
-// ============================================================
-
-class _FavSearchDelegate extends SearchDelegate<void> {
-  final List<FavoriteItem> comics;
-  final Future<void> Function(FavoriteItem) onOpen;
-
-  _FavSearchDelegate(this.comics, this.onOpen);
-
-  @override
-  List<Widget>? buildActions(BuildContext context) => [
-        IconButton(
-            icon: const Icon(Icons.clear), onPressed: () => query = ''),
-      ];
-
-  @override
-  Widget? buildLeading(BuildContext context) => IconButton(
-        icon: const Icon(Icons.arrow_back),
-        onPressed: () => close(context, null),
-      );
-
-  @override
-  Widget buildResults(BuildContext context) => _list(context);
-
-  @override
-  Widget buildSuggestions(BuildContext context) => _list(context);
-
-  Widget _list(BuildContext context) {
-    final q = query.toLowerCase().trim();
-    final results = q.isEmpty
-        ? comics
-        : comics
-            .where((c) =>
-                c.name.toLowerCase().contains(q) ||
-                c.author.toLowerCase().contains(q))
-            .toList();
-    return ListView.builder(
-      itemCount: results.length,
-      itemBuilder: (_, i) => ListTile(
-        title: Text(results[i].name),
-        subtitle: Text(results[i].author),
-        onTap: () async {
-          await onOpen(results[i]);
-          if (context.mounted) close(context, null);
-        },
-      ),
-    );
-  }
 }

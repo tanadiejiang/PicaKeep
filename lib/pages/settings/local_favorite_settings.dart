@@ -30,10 +30,21 @@ class _LocalFavoritesSettingsState extends State<LocalFavoritesSettings> {
   @override
   Widget build(BuildContext context) {
     return buildTwoColumnLayout(widget.width, [
-      SettingsTitle("本地收藏".tl),
       NewPageSetting(
         title: "收藏夹管理".tl,
         page: const FolderManageSetting(),
+      ),
+      SelectSetting(
+        title: "默认收藏夹".tl,
+        settingsIndex: 51,
+        values: _buildFolderValues(),
+        titles: _buildFolderTitles(),
+      ),
+      SelectSetting(
+        title: "收藏页点击行为".tl,
+        settingsIndex: 52,
+        values: const ["0", "1"],
+        titles: ["打开详情页".tl, "直接阅读".tl],
       ),
       SelectSetting(
         title: "本地收藏添加位置".tl,
@@ -50,12 +61,6 @@ class _LocalFavoritesSettingsState extends State<LocalFavoritesSettings> {
           "尾部添加".tl,
           "首部添加".tl,
         ],
-      ),
-      SelectSetting(
-        title: "默认收藏夹".tl,
-        settingsIndex: 51,
-        values: _buildFolderValues(),
-        titles: _buildFolderTitles(),
       ),
     ]);
   }

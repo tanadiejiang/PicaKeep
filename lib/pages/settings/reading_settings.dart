@@ -9,7 +9,6 @@ class ReadingSettings extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return buildTwoColumnLayout(width, [
-      SettingsTitle("阅读".tl),
       SwitchSetting(
         title: "点击屏幕左右区域翻页".tl,
         settingsIndex: 0,

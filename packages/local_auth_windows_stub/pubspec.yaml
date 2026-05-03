@@ -1,0 +1,20 @@
+name: local_auth_windows
+description: "Local stub for Windows auth to avoid NuGet dependency during build"
+version: 1.0.11
+publish_to: 'none'
+
+environment:
+  sdk: ^3.3.0
+  flutter: ">=3.16.0"
+
+flutter:
+  plugin:
+    implements: local_auth
+    platforms:
+      windows:
+        dartPluginClass: LocalAuthWindows
+
+dependencies:
+  flutter:
+    sdk: flutter
+  local_auth_platform_interface: ^1.0.1

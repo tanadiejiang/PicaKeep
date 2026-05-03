@@ -181,10 +181,19 @@ class LocalFavoritesManager {
   Future<void> init() async {
     final appDir = await getApplicationSupportDirectory();
     _dbPath = "${appDir.path}/local_favorite.db";
+    try {
+      _db.dispose();
+    } catch (_) {}
     _db = sqlite3.open(_dbPath);
     _checkAndCreate();
     await readData();
     _emitFolders();
+  }
+
+  void dispose() {
+    try {
+      _db.dispose();
+    } catch (_) {}
   }
 
   void _checkAndCreate() {

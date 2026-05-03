@@ -2,6 +2,7 @@
 import 'package:flutter/material.dart';
 import 'package:picakeep/base.dart';
 import 'package:picakeep/foundation/app.dart';
+import 'package:picakeep/foundation/history.dart';
 import 'package:picakeep/tools/tags_translation.dart';
 import 'package:picakeep/foundation/local_favorites.dart';
 
@@ -58,6 +59,11 @@ class DownloadedComicTile extends StatelessWidget {
   String? get comicID => null;
 
   bool get showFavorite => appdata.settings[72] == '1';
+
+  bool get showReadingPosition => appdata.settings[73] == '1';
+
+  History? get readingHistory =>
+      comicID == null ? null : HistoryManager().findSync(comicID!);
 
   @override
   Widget build(BuildContext context) {
@@ -157,7 +163,7 @@ class DownloadedComicTile extends StatelessWidget {
                   title: title.replaceAll("\n", ""),
                   user: subTitle,
                   description: description,
-                  subDescription: null,
+                  subDescription: _buildReadingPosition(),
                   badge: badge,
                   tags: tags,
                   maxLines: 2,
@@ -238,6 +244,33 @@ class DownloadedComicTile extends StatelessWidget {
             )
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _buildReadingPosition() {
+    if (!showReadingPosition) {
+      return const SizedBox.shrink();
+    }
+    final history = readingHistory;
+    if (history == null) {
+      return const SizedBox.shrink();
+    }
+
+    final page = history.page <= 0 ? 1 : history.page;
+    final ep = history.ep <= 0 ? null : history.ep;
+    final text = ep == null ? 'P$page' : 'E$ep · P$page';
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 4),
+      child: Text(
+        text,
+        style: TextStyle(
+          fontSize: 12,
+          color: Colors.orange.shade700,
+          fontWeight: FontWeight.w500,
+        ),
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
       ),
     );
   }
