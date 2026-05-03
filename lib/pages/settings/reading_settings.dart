@@ -24,44 +24,36 @@ class ReadingSettings extends StatelessWidget {
           "从上至下(连续)".tl,
         ],
       ),
-      ListTile(
-        title: Text("自动翻页".tl),
-        trailing: SizedBox(
-          width: 120,
-          child: Select(
-            initialValue: appdata.settings[33],
-            values: const [
-              "0",
-              "1",
-              "2",
-              "3",
-              "4",
-              "5",
-              "6",
-              "7",
-              "8",
-              "9",
-              "10"
-            ],
-            titles: const [
-              "禁用",
-              "1s",
-              "2s",
-              "3s",
-              "4s",
-              "5s",
-              "6s",
-              "7s",
-              "8s",
-              "9s",
-              "10s"
-            ],
-            onChanged: (value) {
-              appdata.settings[33] = value;
-              appdata.updateSettings();
-            },
-          ),
-        ),
+      SelectSetting(
+        title: "自动翻页".tl,
+        settingsIndex: 33,
+        controlWidth: 120,
+        values: const [
+          "0",
+          "1",
+          "2",
+          "3",
+          "4",
+          "5",
+          "6",
+          "7",
+          "8",
+          "9",
+          "10"
+        ],
+        titles: const [
+          "禁用",
+          "1s",
+          "2s",
+          "3s",
+          "4s",
+          "5s",
+          "6s",
+          "7s",
+          "8s",
+          "9s",
+          "10s"
+        ],
       ),
       SwitchSetting(
         title: "使用音量键翻页".tl,

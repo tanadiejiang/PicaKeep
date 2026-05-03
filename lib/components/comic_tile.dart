@@ -1,4 +1,4 @@
-﻿import 'dart:io';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:picakeep/base.dart';
 import 'package:picakeep/foundation/app.dart';
@@ -80,7 +80,10 @@ class DownloadedComicTile extends StatelessWidget {
 
     var isFavorite = false;
     if (showFavorite) {
-      isFavorite = _checkFavorite();
+      final target = comicID;
+      isFavorite = target == null
+          ? _checkFavorite()
+          : LocalFavoritesManager().isExist(target);
     }
 
     if (!isFavorite) {
@@ -102,7 +105,8 @@ class DownloadedComicTile extends StatelessWidget {
                 height: 24,
                 width: 24,
                 color: Colors.green,
-                child: const Icon(Icons.bookmark_rounded, size: 16, color: Colors.white),
+                child: const Icon(Icons.bookmark_rounded,
+                    size: 16, color: Colors.white),
               ),
             ]),
           ),
@@ -276,10 +280,16 @@ class DownloadedComicTile extends StatelessWidget {
   }
 
   Widget _buildImage() {
-    if (imagePath.existsSync()) {
-      return Image.file(imagePath, fit: BoxFit.cover, height: double.infinity);
+    if (imagePath.path.isEmpty) {
+      return const Center(child: Icon(Icons.image_not_supported));
     }
-    return const Center(child: Icon(Icons.image_not_supported));
+    return Image.file(
+      imagePath,
+      fit: BoxFit.cover,
+      height: double.infinity,
+      errorBuilder: (_, __, ___) =>
+          const Center(child: Icon(Icons.image_not_supported)),
+    );
   }
 }
 
@@ -337,8 +347,11 @@ class _ComicDescription extends StatelessWidget {
                           decoration: BoxDecoration(
                             color: s == "Unavailable"
                                 ? Theme.of(context).colorScheme.errorContainer
-                                : Theme.of(context).colorScheme.secondaryContainer,
-                            borderRadius: const BorderRadius.all(Radius.circular(8)),
+                                : Theme.of(context)
+                                    .colorScheme
+                                    .secondaryContainer,
+                            borderRadius:
+                                const BorderRadius.all(Radius.circular(8)),
                           ),
                           child: Text(s, style: const TextStyle(fontSize: 12)),
                         ),
@@ -376,4 +389,3 @@ class _ComicDescription extends StatelessWidget {
     );
   }
 }
-

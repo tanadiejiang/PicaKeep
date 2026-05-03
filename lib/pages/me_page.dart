@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:picakeep/foundation/app.dart';
 import 'package:picakeep/foundation/history.dart';
 import 'package:picakeep/foundation/download.dart';
+import 'package:picakeep/foundation/local_library.dart';
 import 'package:picakeep/tools/translations.dart';
 import 'package:picakeep/tools/read_history_helper.dart';
 import 'package:picakeep/foundation/image_favorites.dart';
@@ -10,6 +11,7 @@ import 'history_page.dart';
 import 'image_favorites.dart';
 import 'tools.dart';
 import 'download_page.dart';
+import 'local_library_page.dart';
 
 class MePage extends StatefulWidget {
   const MePage({super.key});
@@ -25,12 +27,22 @@ class _MePageState extends State<MePage> {
     StateController.putSimpleController(() {
       if (mounted) setState(() {});
     }, "me_page");
+    _loadLocalLibraryCount();
   }
 
   @override
   void dispose() {
     StateController.remove<SimpleController>("me_page");
     super.dispose();
+  }
+
+  Future<void> _loadLocalLibraryCount() async {
+    try {
+      await LocalLibraryManager().ensureLoaded();
+      if (mounted) {
+        setState(() {});
+      }
+    } catch (_) {}
   }
 
   String _historyTitle(int recentCount) {
@@ -60,10 +72,24 @@ class _MePageState extends State<MePage> {
       }
     }
     try {
-      return DownloadManager().getCoverFromCandidates(item.candidateDownloadIds());
-    } catch (_) {
-      return File('');
+      final file =
+          DownloadManager().getCoverFromCandidates(item.candidateDownloadIds());
+      if (file.existsSync()) {
+        return file;
+      }
+    } catch (_) {}
+    final localComic =
+        LocalLibraryManager().findCachedByCandidates(item.candidateDownloadIds());
+    if (localComic != null) {
+      final file = resolveLocalComicCover(
+        localComic,
+        legacyTargets: item.candidateDownloadIds(),
+      );
+      if (file.existsSync()) {
+        return file;
+      }
     }
+    return File('');
   }
 
   @override
@@ -88,6 +114,8 @@ class _MePageState extends State<MePage> {
                           children: [
                             const SizedBox(height: 12),
                             _buildDownloadCard(context),
+                            const SizedBox(height: 12),
+                            _buildLocalLibraryCard(context),
                           ],
                         ),
                       ),
@@ -107,6 +135,8 @@ class _MePageState extends State<MePage> {
                 else ...[
                   const SizedBox(height: 12),
                   _buildDownloadCard(context),
+                  const SizedBox(height: 12),
+                  _buildLocalLibraryCard(context),
                   const SizedBox(height: 12),
                   _buildImageFavoriteCard(context),
                   const SizedBox(height: 12),
@@ -201,8 +231,10 @@ class _MePageState extends State<MePage> {
     try {
       final dm = DownloadManager();
       await dm.init();
-      final comic =
+      var comic =
           await dm.getComicOrNullFromCandidates(history.candidateDownloadIds());
+      comic ??=
+          await LocalLibraryManager().findByCandidates(history.candidateDownloadIds());
       if (comic != null) {
         if (!context.mounted) return;
         await ensureHistoryBeforeRead(
@@ -211,7 +243,10 @@ class _MePageState extends State<MePage> {
         );
         if (mounted) {
           setState(() {
-            final cover = dm.getCover(comic.id);
+            final cover = resolveLocalComicCover(
+              comic!,
+              legacyTargets: history.candidateDownloadIds(),
+            );
             history.target = comic.id;
             history.title = comic.name;
             history.subtitle = comic.subTitle;
@@ -221,7 +256,9 @@ class _MePageState extends State<MePage> {
           });
         }
         if (!context.mounted) return;
-        await App.openReader(() => comic.createReadingPage(ep: history.ep, page: history.page));
+        await App.openReader(
+          () => comic!.createReadingPage(ep: history.ep, page: history.page),
+        );
       } else if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text("未找到该漫画".tl)),
@@ -245,6 +282,18 @@ class _MePageState extends State<MePage> {
       description: "共 @a 部漫画".tlParams({"a": total.toString()}),
       onTap: () => Navigator.of(context).push(
         MaterialPageRoute(builder: (_) => const DownloadPage()),
+      ),
+    );
+  }
+
+  Widget _buildLocalLibraryCard(BuildContext context) {
+    final total = LocalLibraryManager().cachedCount;
+    return _MePageCard(
+      icon: const Icon(Icons.photo_library),
+      title: "本地图集".tl,
+      description: "共 @a 个本地项目".tlParams({"a": total.toString()}),
+      onTap: () => Navigator.of(context).push(
+        MaterialPageRoute(builder: (_) => const LocalLibraryPage()),
       ),
     );
   }

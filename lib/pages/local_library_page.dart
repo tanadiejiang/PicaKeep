@@ -1,0 +1,860 @@
+import 'dart:io';
+
+import 'package:file_picker/file_picker.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:picakeep/base.dart';
+import 'package:picakeep/components/comic_tile.dart';
+import 'package:picakeep/components/components.dart';
+import 'package:picakeep/components/layout.dart';
+import 'package:picakeep/components/scrollable.dart';
+import 'package:picakeep/foundation/app.dart';
+import 'package:picakeep/foundation/local_library.dart';
+import 'package:picakeep/foundation/local_library_settings.dart';
+import 'package:picakeep/tools/read_history_helper.dart';
+import 'package:picakeep/tools/translations.dart';
+
+import 'local_comic_detail_page.dart';
+
+String _formatLocalLibrarySize(double sizeMb) {
+  if (sizeMb >= 1024) {
+    return '${(sizeMb / 1024).toStringAsFixed(1)} GB';
+  }
+  return '${sizeMb.toStringAsFixed(1)} MB';
+}
+
+String _localLibrarySourceLabel(LocalLibrarySource source) {
+  switch (source.kind) {
+    case LocalLibrarySourceKind.currentDownload:
+      return '本应用下载目录'.tl;
+    case LocalLibrarySourceKind.originalDownload:
+      return '原应用下载目录'.tl;
+    case LocalLibrarySourceKind.customPath:
+      return '自定义路径'.tl;
+  }
+}
+
+IconData _localLibrarySourceIcon(LocalLibrarySource source) {
+  switch (source.kind) {
+    case LocalLibrarySourceKind.currentDownload:
+      return Icons.download_for_offline;
+    case LocalLibrarySourceKind.originalDownload:
+      return Icons.drive_folder_upload;
+    case LocalLibrarySourceKind.customPath:
+      return Icons.photo_library;
+  }
+}
+
+Future<void> _openDirectoryPath(BuildContext context, String path) async {
+  if (path.trim().isEmpty) {
+    return;
+  }
+  if (Platform.isWindows) {
+    await Process.run('explorer', [path]);
+  } else if (Platform.isMacOS) {
+    await Process.run('open', [path]);
+  } else if (Platform.isLinux) {
+    await Process.run('xdg-open', [path]);
+  } else if (context.mounted) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('当前平台不支持直接打开目录'.tl)),
+    );
+  }
+}
+
+Future<void> _copyPath(BuildContext context, String path) async {
+  await Clipboard.setData(ClipboardData(text: path));
+  if (context.mounted) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('已复制路径'.tl)),
+    );
+  }
+}
+
+Future<void> _refreshLocalLibrary({bool rescan = false}) async {
+  if (rescan) {
+    await LocalLibraryManager().rescan();
+  } else {
+    await LocalLibraryManager().refresh();
+  }
+  App.notifyLocalDataChanged();
+}
+
+class _LocalLibraryComicTile extends DownloadedComicTile {
+  const _LocalLibraryComicTile({
+    required this.comicId,
+    required super.name,
+    required super.author,
+    required super.imagePath,
+    required super.type,
+    required super.tag,
+    required super.size,
+    required super.onTap,
+    required super.onLongTap,
+    required super.onSecondaryTap,
+  });
+
+  final String comicId;
+
+  @override
+  String? get comicID => comicId;
+
+  @override
+  bool get enableLongPressed => false;
+}
+
+class LocalLibraryPage extends StatefulWidget {
+  const LocalLibraryPage({super.key});
+
+  @override
+  State<LocalLibraryPage> createState() => _LocalLibraryPageState();
+}
+
+class _LocalLibraryPageState extends State<LocalLibraryPage> {
+  final _manager = LocalLibraryManager();
+  final _searchController = TextEditingController();
+  bool _loading = true;
+  bool _searchMode = false;
+  List<LocalLibraryComicItem> _items = const <LocalLibraryComicItem>[];
+
+  @override
+  void initState() {
+    super.initState();
+    App.localDataVersion.addListener(_handleLocalDataChanged);
+    _searchController.addListener(() {
+      if (mounted) {
+        setState(() {});
+      }
+    });
+    _load();
+  }
+
+  @override
+  void dispose() {
+    App.localDataVersion.removeListener(_handleLocalDataChanged);
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  void _handleLocalDataChanged() {
+    _load();
+  }
+
+  Future<void> _load() async {
+    if (mounted) {
+      setState(() {
+        _loading = true;
+      });
+    }
+    final items = await _manager.getAll();
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _items = items;
+      _loading = false;
+    });
+  }
+
+  List<LocalLibraryComicItem> get _filteredItems {
+    final albumOnly = appdata.settings[localLibraryAlbumOnlySettingIndex] != '0';
+    final baseItems = albumOnly
+        ? _items.where((item) => item.isAlbum)
+        : _items;
+    final keyword = _searchController.text.trim().toLowerCase();
+    if (keyword.isEmpty) {
+      return baseItems.toList();
+    }
+    return baseItems.where((item) {
+      return item.name.toLowerCase().contains(keyword) ||
+          item.subTitle.toLowerCase().contains(keyword) ||
+          item.tags.any((tag) => tag.toLowerCase().contains(keyword)) ||
+          (item.fileSystemPath?.toLowerCase().contains(keyword) ?? false);
+    }).toList();
+  }
+
+  File _coverFile(LocalLibraryComicItem item) {
+    return resolveLocalComicCover(item);
+  }
+
+  Future<void> _showSortDialog() async {
+    final selected = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) {
+        final current = normalizeLocalLibraryListSort(
+          appdata.settings[localLibraryListSortSettingIndex],
+        );
+        return SimpleDialog(
+          title: Text('排序'.tl),
+          children: [
+            for (final entry in const <MapEntry<String, String>>[
+              MapEntry('time_desc', '最近更新优先'),
+              MapEntry('time_asc', '最早更新优先'),
+              MapEntry('name_asc', '名称 A-Z'),
+              MapEntry('name_desc', '名称 Z-A'),
+              MapEntry('size_desc', '体积从大到小'),
+              MapEntry('size_asc', '体积从小到大'),
+            ])
+              ListTile(
+                leading: Icon(
+                  entry.key == current
+                      ? Icons.radio_button_checked
+                      : Icons.radio_button_unchecked,
+                ),
+                title: Text(entry.value.tl),
+                onTap: () {
+                  Navigator.of(dialogContext).pop(entry.key);
+                },
+              ),
+          ],
+        );
+      },
+    );
+    if (selected == null) {
+      return;
+    }
+    appdata.settings[localLibraryListSortSettingIndex] = selected;
+    await appdata.updateSettings();
+    await _load();
+  }
+
+  Future<void> _showFilterDialog() async {
+    var albumOnly = appdata.settings[localLibraryAlbumOnlySettingIndex] != '0';
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return Dialog(
+              insetPadding: const EdgeInsets.only(top: 72, right: 12, left: 80),
+              alignment: Alignment.topRight,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(18),
+              ),
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 280),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 8),
+                  child: SwitchListTile(
+                    value: albumOnly,
+                    title: Text('仅显示图集'.tl),
+                    subtitle: Text('隐藏下载目录来源，只看普通本地图集'.tl),
+                    secondary: const Icon(Icons.photo_library_outlined),
+                    onChanged: (value) async {
+                      setDialogState(() {
+                        albumOnly = value;
+                      });
+                      appdata.settings[localLibraryAlbumOnlySettingIndex] =
+                          value ? '1' : '0';
+                      await appdata.updateSettings();
+                      if (mounted) {
+                        setState(() {});
+                      }
+                    },
+                  ),
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  void _openItem(LocalLibraryComicItem item) {
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => LocalComicDetailPage(comic: item)),
+    );
+  }
+
+  Future<void> _showActions(LocalLibraryComicItem item) async {
+    final path = item.fileSystemPath?.trim() ?? '';
+    await showModalBottomSheet<void>(
+      context: context,
+      builder: (sheetContext) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ListTile(
+                leading: const Icon(Icons.info_outline),
+                title: Text('查看详情'.tl),
+                onTap: () {
+                  Navigator.of(sheetContext).pop();
+                  _openItem(item);
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.menu_book),
+                title: Text('继续阅读'.tl),
+                onTap: () async {
+                  Navigator.of(sheetContext).pop();
+                  await ensureHistoryBeforeRead(item);
+                  await App.openReader(() => item.createReadingPage());
+                },
+              ),
+              if (path.isNotEmpty)
+                ListTile(
+                  leading: const Icon(Icons.folder_open),
+                  title: Text('打开目录'.tl),
+                  onTap: () async {
+                    Navigator.of(sheetContext).pop();
+                    await _openDirectoryPath(context, path);
+                  },
+                ),
+              if (path.isNotEmpty)
+                ListTile(
+                  leading: const Icon(Icons.copy),
+                  title: Text('复制路径'.tl),
+                  onTap: () async {
+                    Navigator.of(sheetContext).pop();
+                    await _copyPath(context, path);
+                  },
+                ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  void _showDesktopMenu(LocalLibraryComicItem item, TapDownDetails details) {
+    final path = item.fileSystemPath?.trim() ?? '';
+    showMenu(
+      context: context,
+      position: RelativeRect.fromLTRB(
+        details.globalPosition.dx,
+        details.globalPosition.dy,
+        details.globalPosition.dx + 1,
+        details.globalPosition.dy + 1,
+      ),
+      items: [
+        PopupMenuItem<void>(
+          child: Text('查看详情'.tl),
+          onTap: () {
+            Future.delayed(const Duration(milliseconds: 120), () {
+              if (mounted) {
+                _openItem(item);
+              }
+            });
+          },
+        ),
+        PopupMenuItem<void>(
+          child: Text('继续阅读'.tl),
+          onTap: () {
+            Future.delayed(const Duration(milliseconds: 120), () async {
+              await ensureHistoryBeforeRead(item);
+              await App.openReader(() => item.createReadingPage());
+            });
+          },
+        ),
+        if (path.isNotEmpty)
+          PopupMenuItem<void>(
+            child: Text('打开目录'.tl),
+            onTap: () {
+              Future.delayed(const Duration(milliseconds: 120), () async {
+                if (mounted) {
+                  await _openDirectoryPath(context, path);
+                }
+              });
+            },
+          ),
+        if (path.isNotEmpty)
+          PopupMenuItem<void>(
+            child: Text('复制路径'.tl),
+            onTap: () {
+              Future.delayed(const Duration(milliseconds: 120), () async {
+                if (mounted) {
+                  await _copyPath(context, path);
+                }
+              });
+            },
+          ),
+      ],
+    );
+  }
+
+  Widget _buildItem(LocalLibraryComicItem item) {
+    return Padding(
+      padding: const EdgeInsets.all(2),
+      child: _LocalLibraryComicTile(
+        comicId: item.id,
+        name: item.name,
+        author: item.subTitle,
+        imagePath: _coverFile(item),
+        type: item.sourceDisplayName,
+        tag: item.tags,
+        size: item.comicSize == null
+            ? '未知大小'.tl
+            : _formatLocalLibrarySize(item.comicSize!),
+        onTap: () => _openItem(item),
+        onLongTap: () {},
+        onSecondaryTap: (details) => _showDesktopMenu(item, details),
+      ),
+    );
+  }
+
+  Widget _buildEmptyState() {
+    final hasKeyword = _searchController.text.trim().isNotEmpty;
+    return SliverToBoxAdapter(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.photo_library_outlined, size: 64, color: Colors.grey),
+            const SizedBox(height: 16),
+            Text(
+              hasKeyword ? '没有匹配的本地图集'.tl : '暂无本地图集'.tl,
+              style: const TextStyle(fontSize: 18, color: Colors.grey),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              hasKeyword
+                  ? '尝试调整搜索关键词'.tl
+                  : '可在工具-本地文件管理中添加本地漫画路径'.tl,
+              style: TextStyle(
+                fontSize: 12,
+                color: Theme.of(context).colorScheme.outline,
+              ),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 16),
+            FilledButton.icon(
+              onPressed: () async {
+                await _refreshLocalLibrary();
+                await _load();
+              },
+              icon: const Icon(Icons.refresh),
+              label: Text('刷新本地漫画'.tl),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildTitle() {
+    if (_searchMode) {
+      return TextField(
+        controller: _searchController,
+        autofocus: true,
+        decoration: InputDecoration(
+          border: InputBorder.none,
+          hintText: '搜索'.tl,
+        ),
+      );
+    }
+    return Text('本地图集'.tl);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final items = _filteredItems;
+    return Scaffold(
+      body: _loading
+          ? const Center(child: CircularProgressIndicator())
+          : SmoothCustomScrollView(
+              slivers: [
+                SliverAppbar(
+                  title: _buildTitle(),
+                  actions: [
+                    IconButton(
+                      icon: const Icon(Icons.refresh),
+                      tooltip: '刷新本地漫画'.tl,
+                      onPressed: () async {
+                        await _refreshLocalLibrary();
+                        await _load();
+                      },
+                    ),
+                    IconButton(
+                      icon: Icon(
+                        appdata.settings[localLibraryAlbumOnlySettingIndex] != '0'
+                            ? Icons.tune
+                            : Icons.tune_outlined,
+                      ),
+                      tooltip: '本地图集显示设置'.tl,
+                      onPressed: _showFilterDialog,
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.sort),
+                      tooltip: '排序'.tl,
+                      onPressed: _showSortDialog,
+                    ),
+                    IconButton(
+                      icon: Icon(_searchMode ? Icons.close : Icons.search),
+                      tooltip: _searchMode ? '关闭搜索'.tl : '搜索'.tl,
+                      onPressed: () {
+                        setState(() {
+                          _searchMode = !_searchMode;
+                          if (!_searchMode) {
+                            _searchController.clear();
+                          }
+                        });
+                      },
+                    ),
+                  ],
+                ),
+                if (items.isEmpty)
+                  _buildEmptyState()
+                else
+                  SliverGrid(
+                    delegate: SliverChildBuilderDelegate(
+                      (context, index) {
+                        final item = items[index];
+                        return GestureDetector(
+                          onLongPress: () => _showActions(item),
+                          child: _buildItem(item),
+                        );
+                      },
+                      childCount: items.length,
+                    ),
+                    gridDelegate: SliverGridDelegateWithComics(),
+                  ),
+              ],
+            ),
+    );
+  }
+}
+
+class LocalLibraryFilesPage extends StatefulWidget {
+  const LocalLibraryFilesPage({super.key});
+
+  @override
+  State<LocalLibraryFilesPage> createState() => _LocalLibraryFilesPageState();
+}
+
+class _LocalLibraryFilesPageState extends State<LocalLibraryFilesPage> {
+  final _manager = LocalLibraryManager();
+  bool _loading = true;
+  List<LocalLibrarySource> _sources = const <LocalLibrarySource>[];
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    if (mounted) {
+      setState(() {
+        _loading = true;
+      });
+    }
+    final sources = await _manager.getSources();
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _sources = sources;
+      _loading = false;
+    });
+  }
+
+  Future<String?> _pickFolder() async {
+    try {
+      return await FilePicker.platform.getDirectoryPath();
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> _showAddPathDialog() async {
+    final controller = TextEditingController();
+    final isDesktop = App.isDesktop;
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          title: Text('添加本地漫画路径'.tl),
+          content: StatefulBuilder(
+            builder: (context, setStateDialog) {
+              return Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  TextField(
+                    controller: controller,
+                    decoration: InputDecoration(
+                      hintText: '支持选择下载目录、单个图集目录或总目录'.tl,
+                      border: const OutlineInputBorder(),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: FilledButton.icon(
+                          onPressed: () async {
+                            final path = await _pickFolder();
+                            if (path != null) {
+                              controller.text = path;
+                              setStateDialog(() {});
+                            }
+                          },
+                          icon: const Icon(Icons.folder_open),
+                          label: Text('浏览'.tl),
+                        ),
+                      ),
+                    ],
+                  ),
+                  if (isDesktop && controller.text.trim().isNotEmpty) ...[
+                    const SizedBox(height: 12),
+                    SizedBox(
+                      width: double.infinity,
+                      child: OutlinedButton.icon(
+                        onPressed: () => _openDirectoryPath(context, controller.text.trim()),
+                        icon: const Icon(Icons.launch),
+                        label: Text('打开当前目录'.tl),
+                      ),
+                    ),
+                  ],
+                ],
+              );
+            },
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: Text('取消'.tl),
+            ),
+            TextButton(
+              onPressed: () async {
+                final path = controller.text.trim();
+                if (path.isEmpty) {
+                  return;
+                }
+                await _manager.addConfiguredLocalComicPath(path);
+                await _refreshLocalLibrary();
+                if (!dialogContext.mounted) {
+                  return;
+                }
+                Navigator.of(dialogContext).pop();
+                await _load();
+              },
+              child: Text('确定'.tl),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Future<void> _removeCustomPath(LocalLibrarySource source) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          title: Text('移除路径'.tl),
+          content: Text('确定要移除这个本地漫画路径吗？'.tl),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: Text('取消'.tl),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              child: Text('移除'.tl),
+            ),
+          ],
+        );
+      },
+    );
+    if (confirmed != true) {
+      return;
+    }
+    await _manager.removeConfiguredLocalComicPath(source.path);
+    await _refreshLocalLibrary();
+    await _load();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Text('本地文件管理'.tl),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.refresh),
+            tooltip: '刷新本地漫画'.tl,
+            onPressed: () async {
+              await _refreshLocalLibrary();
+              await _load();
+            },
+          ),
+          IconButton(
+            icon: const Icon(Icons.add),
+            tooltip: '添加路径'.tl,
+            onPressed: _showAddPathDialog,
+          ),
+        ],
+      ),
+      body: _loading
+          ? const Center(child: CircularProgressIndicator())
+          : ListView(
+              children: [
+                ListTile(
+                  leading: const Icon(Icons.info_outline),
+                  title: Text('本地漫画路径说明'.tl),
+                  subtitle: Text(
+                    '自定义路径始终参与扫描；可添加下载目录、单个图集目录或递归总目录。'.tl,
+                  ),
+                ),
+                const Divider(height: 1),
+                for (final source in _sources) ...[
+                  ListTile(
+                    leading: Icon(_localLibrarySourceIcon(source)),
+                    title: Text(source.title),
+                    subtitle: Text(
+                      '${_localLibrarySourceLabel(source)}\n${source.path}',
+                    ),
+                    isThreeLine: true,
+                    trailing: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        IconButton(
+                          icon: const Icon(Icons.folder_open),
+                          tooltip: '打开目录'.tl,
+                          onPressed: () => _openDirectoryPath(context, source.path),
+                        ),
+                        if (source.isCustom)
+                          IconButton(
+                            icon: const Icon(Icons.delete_outline),
+                            tooltip: '移除'.tl,
+                            onPressed: () => _removeCustomPath(source),
+                          ),
+                      ],
+                    ),
+                    onLongPress: () => _copyPath(context, source.path),
+                  ),
+                  const Divider(height: 1),
+                ],
+              ],
+            ),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: _showAddPathDialog,
+        icon: const Icon(Icons.add),
+        label: Text('添加路径'.tl),
+      ),
+    );
+  }
+}
+
+class LocalLibraryStoragePage extends StatefulWidget {
+  const LocalLibraryStoragePage({super.key});
+
+  @override
+  State<LocalLibraryStoragePage> createState() => _LocalLibraryStoragePageState();
+}
+
+class _LocalLibraryStoragePageState extends State<LocalLibraryStoragePage> {
+  final _manager = LocalLibraryManager();
+  bool _loading = true;
+  List<LocalLibraryStorageEntry> _entries = const <LocalLibraryStorageEntry>[];
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    if (mounted) {
+      setState(() {
+        _loading = true;
+      });
+    }
+    final entries = await _manager.getStorageEntries();
+    entries.sort((a, b) => b.sizeMb.compareTo(a.sizeMb));
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _entries = entries;
+      _loading = false;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Text('存储空间'.tl),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.refresh),
+            tooltip: '刷新本地漫画'.tl,
+            onPressed: () async {
+              await _refreshLocalLibrary();
+              await _load();
+            },
+          ),
+        ],
+      ),
+      body: _loading
+          ? const Center(child: CircularProgressIndicator())
+          : ListView.separated(
+              itemCount: _entries.length,
+              separatorBuilder: (_, __) => const Divider(height: 1),
+              itemBuilder: (context, index) {
+                final entry = _entries[index];
+                return ListTile(
+                  leading: Icon(_localLibrarySourceIcon(entry.source)),
+                  title: Text(entry.title),
+                  subtitle: Text(
+                    '${_formatLocalLibrarySize(entry.sizeMb)} · ${'共 @a 个图集'.tlParams({'a': entry.comicCount.toString()})}\n${entry.path}',
+                  ),
+                  isThreeLine: true,
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () {
+                    Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => _LocalLibraryStorageDetailPage(entry: entry),
+                      ),
+                    );
+                  },
+                );
+              },
+            ),
+    );
+  }
+}
+
+class _LocalLibraryStorageDetailPage extends StatelessWidget {
+  const _LocalLibraryStorageDetailPage({required this.entry});
+
+  final LocalLibraryStorageEntry entry;
+
+  @override
+  Widget build(BuildContext context) {
+    final children = entry.children.toList()
+      ..sort((a, b) => b.sizeMb.compareTo(a.sizeMb));
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(entry.title),
+      ),
+      body: ListView(
+        children: [
+          ListTile(
+            leading: Icon(_localLibrarySourceIcon(entry.source)),
+            title: Text(_formatLocalLibrarySize(entry.sizeMb)),
+            subtitle: Text(entry.path),
+            isThreeLine: false,
+            trailing: Text('共 @a 个图集'.tlParams({'a': entry.comicCount.toString()})),
+          ),
+          const Divider(height: 1),
+          for (final child in children) ...[
+            ListTile(
+              leading: const Icon(Icons.folder_copy_outlined),
+              title: Text(child.title),
+              subtitle: Text('${child.sourceDisplayName} · ${child.path}'),
+              trailing: Text(_formatLocalLibrarySize(child.sizeMb)),
+              onLongPress: () => _copyPath(context, child.path),
+              onTap: () => _openDirectoryPath(context, child.path),
+            ),
+            const Divider(height: 1),
+          ],
+        ],
+      ),
+    );
+  }
+}

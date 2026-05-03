@@ -19,6 +19,31 @@ class DownloadManager with _DownloadDb {
 
   @override
   Database? _db;
+  String? _dbFilePath;
+  Set<String>? _downloadIdSetCache;
+  final Map<String, String?> _resolvedIdCache = {};
+
+  void _clearLookupCaches() {
+    _downloadIdSetCache = null;
+    _resolvedIdCache.clear();
+  }
+
+  Set<String> _knownDownloadIds() {
+    final cached = _downloadIdSetCache;
+    if (cached != null) {
+      return cached;
+    }
+    if (_db == null) {
+      return const <String>{};
+    }
+    final ids = _db!
+        .select('select id from download;')
+        .map((row) => (row['id'] as String? ?? '').trim())
+        .where((id) => id.isNotEmpty)
+        .toSet();
+    _downloadIdSetCache = ids;
+    return ids;
+  }
 
   Future<void> _getPath() async {
     _DownloadDb.clearDirectoryCache();
@@ -36,19 +61,35 @@ class DownloadManager with _DownloadDb {
   }
 
   Future<void> init() async {
+    if (_db != null && _dbFilePath != null && path != null) {
+      final configuredPath =
+          appdata.settings[22].isEmpty ? path! : appdata.settings[22];
+      if (_dbFilePath == "$configuredPath/download.db") {
+        path = configuredPath;
+        return;
+      }
+    }
     await _getPath();
     await _initDb();
   }
 
   Future<void> _initDb() async {
+    final nextDbPath = "$path/download.db";
+    if (_db != null && _dbFilePath == nextDbPath) {
+      return;
+    }
     _db?.dispose();
-    _db = sqlite3.open("$path/download.db");
+    _db = sqlite3.open(nextDbPath);
+    _dbFilePath = nextDbPath;
     _createTable();
+    _clearLookupCaches();
   }
 
   void dispose() {
     _db?.dispose();
     _db = null;
+    _dbFilePath = null;
+    _clearLookupCaches();
   }
 
   String _comicPath(String relativeDir) => '${path!}$pathSep$relativeDir';
@@ -68,8 +109,7 @@ class DownloadManager with _DownloadDb {
           rawFromDb.trim().isNotEmpty ? rawFromDb : id);
     }
     final raw = rawFromDb.trim();
-    final sanitized = _DownloadDb.sanitizeFileName(
-        raw.isNotEmpty ? raw : id);
+    final sanitized = _DownloadDb.sanitizeFileName(raw.isNotEmpty ? raw : id);
     if (_dirExists(sanitized)) return sanitized;
     if (raw.isNotEmpty && raw != sanitized && _dirExists(raw)) return raw;
     try {
@@ -81,7 +121,8 @@ class DownloadManager with _DownloadDb {
         if (e is! Directory) continue;
         final name = e.uri.pathSegments.isEmpty
             ? ''
-            : e.uri.pathSegments.lastWhere((s) => s.isNotEmpty, orElse: () => '');
+            : e.uri.pathSegments
+                .lastWhere((s) => s.isNotEmpty, orElse: () => '');
         if (name.isEmpty || name == 'download.db') continue;
         final ln = name.toLowerCase();
         if (ln == lowerSan || ln == lowerRaw) return name;
@@ -100,14 +141,32 @@ class DownloadManager with _DownloadDb {
 
   String? resolveExistingId(Iterable<String> candidates) {
     if (_db == null) return null;
+    final normalized = <String>[];
     final seen = <String>{};
     for (final candidate in candidates) {
       final id = candidate.trim();
-      if (id.isEmpty || !seen.add(id)) continue;
-      if (isExists(id)) {
+      if (id.isEmpty || !seen.add(id)) {
+        continue;
+      }
+      normalized.add(id);
+    }
+    if (normalized.isEmpty) {
+      return null;
+    }
+
+    final cacheKey = normalized.join('\u0001');
+    if (_resolvedIdCache.containsKey(cacheKey)) {
+      return _resolvedIdCache[cacheKey];
+    }
+
+    final knownIds = _knownDownloadIds();
+    for (final id in normalized) {
+      if (knownIds.contains(id)) {
+        _resolvedIdCache[cacheKey] = id;
         return id;
       }
     }
+    _resolvedIdCache[cacheKey] = null;
     return null;
   }
 
@@ -140,6 +199,7 @@ class DownloadManager with _DownloadDb {
         }
       }
     }
+    _clearLookupCaches();
   }
 
   Future<String?> deleteEpisode(DownloadedItem comic, int ep) async {
@@ -155,6 +215,7 @@ class DownloadManager with _DownloadDb {
       comic.downloadedEps.remove(ep);
       comic.comicSize = size;
       _addToDb(comic, comic.directory ?? getDirectory(comic.id));
+      _clearLookupCaches();
       return null;
     } catch (e) {
       return e.toString();
@@ -279,6 +340,9 @@ class DownloadManager with _DownloadDb {
 
       _addToDb(comic, dirName, DateTime.now());
       count++;
+    }
+    if (count > 0) {
+      _clearLookupCaches();
     }
     return count;
   }
@@ -442,8 +506,7 @@ abstract mixin class _DownloadDb {
         return sanitizeFileName(id);
       }
       final rawDb = result.first['directory'] as String? ?? '';
-      directory =
-          (this as DownloadManager)._resolveDirectoryForId(id, rawDb);
+      directory = (this as DownloadManager)._resolveDirectoryForId(id, rawDb);
       if (_directoryCache.length > 50) {
         _directoryCache.remove(_directoryCache.keys.first);
       }

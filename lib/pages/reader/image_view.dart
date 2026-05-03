@@ -27,8 +27,39 @@ extension ImageExt on ComicReadingPage {
   Widget buildComicView(
       ComicReadingPageLogic logic, BuildContext context, String target) {
     ScrollExtension.futurePosition = null;
+    double topPullDistance = 0;
+    double bottomPullDistance = 0;
+
+    bool handleContinuousOverscroll(OverscrollNotification notification) {
+      if (!logic.data.hasEp) return false;
+      final metrics = notification.metrics;
+      if (notification.overscroll > 0 &&
+          metrics.pixels >= metrics.maxScrollExtent - 24) {
+        bottomPullDistance += notification.overscroll;
+        topPullDistance = 0;
+        if (bottomPullDistance >= 88) {
+          bottomPullDistance = 0;
+          logic.jumpToNextChapter();
+        }
+      } else if (notification.overscroll < 0 &&
+          metrics.pixels <= metrics.minScrollExtent + 24) {
+        topPullDistance += -notification.overscroll;
+        bottomPullDistance = 0;
+        if (topPullDistance >= 88) {
+          topPullDistance = 0;
+          logic.jumpToLastChapter();
+        }
+      } else {
+        topPullDistance = 0;
+        bottomPullDistance = 0;
+      }
+      return false;
+    }
+
     Widget buildType4() {
-      return ScrollablePositionedList.builder(
+      return NotificationListener<OverscrollNotification>(
+        onNotification: handleContinuousOverscroll,
+        child: ScrollablePositionedList.builder(
         itemScrollController: logic.itemScrollController,
         itemPositionsListener: logic.itemScrollListener,
         itemCount: logic.urls.length,
@@ -41,8 +72,11 @@ extension ImageExt on ComicReadingPage {
             : const ClampingScrollPhysics(),
         itemBuilder: (context, index) {
           return LayoutBuilder(builder: (context, constraints) {
-            double width = constraints.maxWidth;
-            double height = constraints.maxHeight;
+            final mediaSize = MediaQuery.of(context).size;
+            final width = constraints.maxWidth;
+            final height = constraints.hasBoundedHeight
+                ? constraints.maxHeight
+                : mediaSize.height;
 
             double imageWidth = width;
 
@@ -62,6 +96,7 @@ extension ImageExt on ComicReadingPage {
             );
           });
         },
+        ),
       );
     }
 

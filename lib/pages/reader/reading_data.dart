@@ -25,6 +25,12 @@ abstract class ReadingData {
 
   FavoriteType get favoriteType;
 
+  bool get supportsLocalImageSort => false;
+
+  String get localImageSortMode => '0';
+
+  Future<void> setLocalImageSortMode(String value) async {}
+
   bool checkEpDownloaded(int ep) {
     return !hasEp || downloadedEps.contains(ep-1);
   }

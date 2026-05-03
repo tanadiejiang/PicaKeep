@@ -1,4 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:picakeep/foundation/local_library.dart';
+import 'package:picakeep/pages/local_library_page.dart';
+import 'package:picakeep/tools/translations.dart';
 
 class ToolsPage extends StatelessWidget {
   const ToolsPage({super.key});
@@ -7,27 +10,55 @@ class ToolsPage extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text("\u5DE5\u5177"),
+        title: Text("工具".tl),
       ),
       body: ListView(
-        children: const [
+        children: [
           _ToolItem(
             icon: Icons.folder_open,
-            title: "\u672C\u5730\u6587\u4EF6\u7BA1\u7406",
-            subtitle: "\u7BA1\u7406\u4E0B\u8F7D\u7684\u6F2B\u753B\u6587\u4EF6",
+            title: "本地文件管理".tl,
+            subtitle: "管理本地漫画路径与目录来源".tl,
+            onTap: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const LocalLibraryFilesPage()),
+              );
+            },
           ),
-          Divider(height: 1),
+          const Divider(height: 1),
           _ToolItem(
             icon: Icons.storage,
-            title: "\u5B58\u50A8\u7A7A\u95F4",
-            subtitle:
-                "\u67E5\u770B\u672C\u5730\u5B58\u50A8\u4F7F\u7528\u60C5\u51B5",
+            title: "存储空间".tl,
+            subtitle: "查看每个本地路径与图集占用".tl,
+            onTap: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const LocalLibraryStoragePage()),
+              );
+            },
           ),
-          Divider(height: 1),
+          const Divider(height: 1),
+          _ToolItem(
+            icon: Icons.photo_library,
+            title: "本地图集".tl,
+            subtitle: "浏览聚合后的本地漫画与图集".tl,
+            onTap: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const LocalLibraryPage()),
+              );
+            },
+          ),
+          const Divider(height: 1),
           _ToolItem(
             icon: Icons.delete_sweep,
-            title: "\u6E05\u7406\u7F13\u5B58",
-            subtitle: "\u6E05\u7406\u672C\u5730\u7F13\u5B58\u6570\u636E",
+            title: "清理缓存".tl,
+            subtitle: "清理本地缓存数据".tl,
+            onTap: () {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text('工具 "${"清理缓存".tl}" 待实现'.tl),
+                  duration: const Duration(seconds: 1),
+                ),
+              );
+            },
           ),
         ],
       ),
@@ -40,11 +71,13 @@ class _ToolItem extends StatelessWidget {
     required this.icon,
     required this.title,
     required this.subtitle,
+    required this.onTap,
   });
 
   final IconData icon;
   final String title;
   final String subtitle;
+  final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
@@ -53,14 +86,7 @@ class _ToolItem extends StatelessWidget {
       title: Text(title),
       subtitle: Text(subtitle),
       trailing: const Icon(Icons.chevron_right),
-      onTap: () {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text("\u5DE5\u5177 \"$title\" \u5F85\u5B9E\u73B0"),
-            duration: const Duration(seconds: 1),
-          ),
-        );
-      },
+      onTap: onTap,
     );
   }
 }

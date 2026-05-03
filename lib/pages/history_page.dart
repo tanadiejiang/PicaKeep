@@ -8,8 +8,35 @@ import 'package:picakeep/components/scrollable.dart';
 import 'package:picakeep/foundation/app.dart';
 import 'package:picakeep/foundation/download.dart';
 import 'package:picakeep/foundation/history.dart';
+import 'package:picakeep/foundation/local_library.dart';
 import 'package:picakeep/tools/read_history_helper.dart';
 import 'package:picakeep/tools/translations.dart';
+
+class _HistoryDownloadedComicTile extends DownloadedComicTile {
+  const _HistoryDownloadedComicTile({
+    required this.comicId,
+    required super.name,
+    required super.author,
+    required super.imagePath,
+    required super.type,
+    required super.tag,
+    required super.size,
+    required super.onTap,
+    required super.onLongTap,
+    required super.onSecondaryTap,
+  });
+
+  final String comicId;
+
+  @override
+  String? get comicID => comicId.isEmpty ? null : comicId;
+
+  @override
+  bool get showFavorite => false;
+
+  @override
+  bool get showReadingPosition => false;
+}
 
 class HistoryPage extends StatefulWidget {
   const HistoryPage({super.key});
@@ -20,6 +47,7 @@ class HistoryPage extends StatefulWidget {
 
 class _HistoryPageState extends State<HistoryPage> {
   final comics = <History>[];
+  final _coverCache = <String, File>{};
   bool searchInit = false;
   bool searchMode = false;
   String keyword = "";
@@ -29,7 +57,10 @@ class _HistoryPageState extends State<HistoryPage> {
   void initState() {
     super.initState();
     comics.addAll(HistoryManager().getAll());
+    DownloadManager().init();
   }
+
+  String _cacheKey(History item) => '${item.type.value}|${item.target}';
 
   Widget buildTitle() {
     if (searchMode) {
@@ -62,16 +93,41 @@ class _HistoryPageState extends State<HistoryPage> {
   }
 
   File _coverFile(History item) {
+    final key = _cacheKey(item);
+    final cached = _coverCache[key];
+    if (cached != null) {
+      return cached;
+    }
+
     final c = item.cover.trim();
     if (c.isNotEmpty && (c.startsWith('/') || c.contains(':\\'))) {
       final f = File(c);
-      if (f.existsSync()) return f;
+      if (f.existsSync()) {
+        _coverCache[key] = f;
+        return f;
+      }
     }
     try {
-      return DownloadManager().getCoverFromCandidates(item.candidateDownloadIds());
-    } catch (_) {
-      return File('');
+      final file =
+          DownloadManager().getCoverFromCandidates(item.candidateDownloadIds());
+      if (file.existsSync()) {
+        _coverCache[key] = file;
+        return file;
+      }
+    } catch (_) {}
+
+    final localComic =
+        LocalLibraryManager().findCachedByCandidates(item.candidateDownloadIds());
+    if (localComic != null) {
+      final file =
+          resolveLocalComicCover(localComic, legacyTargets: item.candidateDownloadIds());
+      if (file.existsSync()) {
+        _coverCache[key] = file;
+        return file;
+      }
     }
+
+    return File('');
   }
 
   String _formatTime(DateTime time) {
@@ -114,25 +170,29 @@ class _HistoryPageState extends State<HistoryPage> {
   Future<void> _openComic(History item) async {
     final dm = DownloadManager();
     await dm.init();
-    final comic =
+    var comic =
         await dm.getComicOrNullFromCandidates(item.candidateDownloadIds());
+    comic ??=
+        await LocalLibraryManager().findByCandidates(item.candidateDownloadIds());
     if (comic != null) {
       if (!mounted) return;
       await ensureHistoryBeforeRead(
         comic,
         legacyTargets: item.candidateDownloadIds(),
       );
-      final cover = dm.getCover(comic.id);
+      final cover =
+          resolveLocalComicCover(comic, legacyTargets: item.candidateDownloadIds());
       if (!mounted) return;
       setState(() {
-        item.target = comic.id;
+        item.target = comic!.id;
         item.title = comic.name;
         item.subtitle = comic.subTitle;
         if (cover.existsSync()) {
           item.cover = cover.path;
         }
       });
-      await App.openReader(() => comic.createReadingPage(ep: item.ep, page: item.page));
+      await App.openReader(
+          () => comic!.createReadingPage(ep: item.ep, page: item.page));
     } else {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -198,7 +258,8 @@ class _HistoryPageState extends State<HistoryPage> {
                   final cover = _coverFile(comic);
                   return Padding(
                     padding: const EdgeInsets.all(2),
-                    child: DownloadedComicTile(
+                    child: _HistoryDownloadedComicTile(
+                      comicId: comic.target,
                       name: comic.title,
                       author: comic.subtitle,
                       imagePath: cover,

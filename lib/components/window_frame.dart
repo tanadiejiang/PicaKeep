@@ -305,9 +305,7 @@ class _DesktopQuickMenuBody extends StatelessWidget {
         _menuItem(
           icon: Icons.settings,
           title: '设置'.tl,
-          onTap: () {
-            _closeThen(() => SettingsPage.open());
-          },
+          onTap: () => push(() => const SettingsPage()),
         ),
       ],
     );

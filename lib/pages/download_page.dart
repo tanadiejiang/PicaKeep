@@ -54,6 +54,26 @@ FavoriteType _downloadTypeToFavoriteType(DownloadType type) {
   }
 }
 
+class _DownloadedPageComicTile extends DownloadedComicTile {
+  const _DownloadedPageComicTile({
+    required this.comicId,
+    required super.name,
+    required super.author,
+    required super.imagePath,
+    required super.type,
+    required super.tag,
+    required super.size,
+    required super.onTap,
+    required super.onLongTap,
+    required super.onSecondaryTap,
+  });
+
+  final String comicId;
+
+  @override
+  String? get comicID => comicId;
+}
+
 class DownloadPageLogic extends StateController {
   bool loading = true;
   bool selecting = false;
@@ -253,7 +273,8 @@ class DownloadPage extends StatelessWidget {
               : Colors.transparent,
           borderRadius: const BorderRadius.all(Radius.circular(16)),
         ),
-        child: DownloadedComicTile(
+        child: _DownloadedPageComicTile(
+          comicId: logic.comics[index].id,
           name: logic.comics[index].name,
           author: logic.comics[index].subTitle,
           imagePath: DownloadManager().getCover(logic.comics[index].id),
@@ -677,7 +698,8 @@ class DownloadPage extends StatelessWidget {
                               target: comic.id,
                               name: comic.name,
                               coverPath: () {
-                                final cover = DownloadManager().getCover(comic.id);
+                                final cover =
+                                    DownloadManager().getCover(comic.id);
                                 return cover.path;
                               }(),
                               author: comic.subTitle,

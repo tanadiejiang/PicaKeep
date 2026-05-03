@@ -3,6 +3,47 @@
 extension ToolBar on ComicReadingPage {
   bool get isReversed => appdata.settings[9] == "2" || appdata.settings[9] == "6";
 
+  Future<void> _showLocalAlbumImageSortDialog(
+    ComicReadingPageLogic logic,
+    BuildContext context,
+  ) async {
+    final selected = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) {
+        final current = normalizeLocalAlbumImageSort(
+          readingData.localImageSortMode,
+        );
+        return SimpleDialog(
+          title: Text('本地图集图片排序'.tl),
+          children: [
+            for (final entry in const <MapEntry<String, String>>[
+              MapEntry(localAlbumImageSortNameAsc, '名称正序'),
+              MapEntry(localAlbumImageSortNameDesc, '名称倒序'),
+              MapEntry(localAlbumImageSortTimeAsc, '时间正序'),
+              MapEntry(localAlbumImageSortTimeDesc, '时间倒序'),
+            ])
+              ListTile(
+                leading: Icon(
+                  entry.key == current
+                      ? Icons.radio_button_checked
+                      : Icons.radio_button_unchecked,
+                ),
+                title: Text(entry.value.tl),
+                onTap: () {
+                  Navigator.of(dialogContext).pop(entry.key);
+                },
+              ),
+          ],
+        );
+      },
+    );
+    if (selected == null) {
+      return;
+    }
+    await readingData.setLocalImageSortMode(selected);
+    logic.refresh_();
+  }
+
   ///构建底部工具栏
   Widget buildBottomToolBar(
       ComicReadingPageLogic logic, BuildContext context, bool showEps) {
@@ -71,6 +112,17 @@ extension ToolBar on ComicReadingPage {
                           onPressed: () {
                             logic.fullscreen();
                           },
+                        ),
+                      ),
+                    if (readingData.supportsLocalImageSort)
+                      Tooltip(
+                        message: "本地图集图片排序".tl,
+                        child: IconButton(
+                          icon: const Icon(Icons.sort_by_alpha),
+                          onPressed: () => _showLocalAlbumImageSortDialog(
+                            logic,
+                            context,
+                          ),
                         ),
                       ),
                     if (App.isAndroid && appdata.settings[76] == "0")

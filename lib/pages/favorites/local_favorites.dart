@@ -5,6 +5,7 @@ import 'package:flutter_reorderable_grid_view/widgets/reorderable_builder.dart';
 import 'package:picakeep/base.dart';
 import 'package:picakeep/components/comic_tile.dart';
 import 'package:picakeep/components/layout.dart';
+import 'package:picakeep/components/scrollable.dart';
 import 'package:picakeep/foundation/app.dart';
 import 'package:picakeep/foundation/download.dart';
 import 'package:picakeep/foundation/download_model.dart';
@@ -21,7 +22,8 @@ import 'package:picakeep/tools/translations.dart';
 // ============================================================
 
 class OpenFavoriteComicHelper {
-  static Future<DownloadedItem?> _resolveDownloadedItem(FavoriteItem comic) async {
+  static Future<DownloadedItem?> _resolveDownloadedItem(
+      FavoriteItem comic) async {
     final dm = DownloadManager();
     await dm.init();
     final candidates = comic.candidateDownloadIds();
@@ -105,6 +107,14 @@ class LocalFavoriteTile extends StatelessWidget {
   final bool Function()? onTap;
   final VoidCallback? onLongPressed;
 
+  static final Map<String, File> _coverCache = {};
+
+  static void clearCoverCache() {
+    _coverCache.clear();
+  }
+
+  String get _coverCacheKey => '${comic.type.key}_${comic.target}';
+
   // ---- badge ----
   bool get _isDownloaded {
     try {
@@ -123,15 +133,26 @@ class LocalFavoriteTile extends StatelessWidget {
 
   // ---- cover image ----
   File get _coverFile {
+    final cached = _coverCache[_coverCacheKey];
+    if (cached != null) {
+      return cached;
+    }
+
     final p = comic.coverPath.trim();
     if (p.isNotEmpty) {
       final f = File(p);
       if (f.existsSync()) {
+        _coverCache[_coverCacheKey] = f;
         return f;
       }
     }
     try {
-      return DownloadManager().getCoverFromCandidates(comic.candidateDownloadIds());
+      final file = DownloadManager()
+          .getCoverFromCandidates(comic.candidateDownloadIds());
+      if (file.path.isNotEmpty) {
+        _coverCache[_coverCacheKey] = file;
+      }
+      return file;
     } catch (_) {
       return File('');
     }
@@ -221,8 +242,7 @@ class LocalFavoriteTile extends StatelessWidget {
                     child: Text('确认'.tl),
                     onPressed: () {
                       if (folder != null) {
-                        LocalFavoritesManager()
-                            .addComic(folder!, comic);
+                        LocalFavoritesManager().addComic(folder!, comic);
                         Navigator.pop(ctx);
                       }
                     },
@@ -405,8 +425,8 @@ class LocalFavoriteTile extends StatelessWidget {
     final offset = details.globalPosition;
     showMenu(
       context: App.globalContext!,
-      position: RelativeRect.fromLTRB(
-          offset.dx, offset.dy, offset.dx, offset.dy),
+      position:
+          RelativeRect.fromLTRB(offset.dx, offset.dy, offset.dx, offset.dy),
       items: [
         PopupMenuItem(
           onTap: _read,
@@ -459,9 +479,8 @@ class LocalFavoriteTile extends StatelessWidget {
       tag: _generateTags(comic.tags),
       onTap: _handleTap,
       size: description,
-      onLongTap: enableLongPressed
-          ? (onLongPressed ?? _showLongPressMenu)
-          : () {},
+      onLongTap:
+          enableLongPressed ? (onLongPressed ?? _showLongPressMenu) : () {},
       onSecondaryTap: _showDesktopMenu,
     );
   }
@@ -485,6 +504,9 @@ class _LocalFavoriteDownloadedComicTile extends DownloadedComicTile {
 
   @override
   String? get comicID => comicId;
+
+  @override
+  bool get showFavorite => false;
 }
 
 // ============================================================
@@ -496,16 +518,17 @@ class ComicsPageView extends StatefulWidget {
     super.key,
     required this.folder,
     required this.selectedComics,
-    required this.onClick,
-    required this.onLongPressed,
+    this.onClick,
+    this.onLongPressed,
     this.onRegisterMenu,
   });
 
   final String folder;
   final List<FavoriteItem> selectedComics;
-  final bool Function(FavoriteItem comic) onClick;
-  final void Function(FavoriteItem comic) onLongPressed;
-  final void Function(FavoriteItem comic, VoidCallback showMenu)? onRegisterMenu;
+  final bool Function(FavoriteItem comic)? onClick;
+  final void Function(FavoriteItem comic)? onLongPressed;
+  final void Function(FavoriteItem comic, VoidCallback showMenu)?
+      onRegisterMenu;
 
   @override
   State<ComicsPageView> createState() => _ComicsPageViewState();
@@ -537,10 +560,10 @@ class _ComicsPageViewState extends State<ComicsPageView> {
   }
 
   Future<void> _loadComics() async {
-    await LocalFavoritesManager().init();
     if (!mounted) {
       return;
     }
+    LocalFavoriteTile.clearCoverCache();
     setState(() {
       _comics = LocalFavoritesManager().getAllComics(widget.folder);
       _loading = false;
@@ -548,6 +571,7 @@ class _ComicsPageViewState extends State<ComicsPageView> {
   }
 
   void _refreshAfterDelete(FavoriteItem comic) {
+    LocalFavoriteTile.clearCoverCache();
     setState(() {
       _comics = LocalFavoritesManager().getAllComics(widget.folder);
     });
@@ -567,37 +591,48 @@ class _ComicsPageViewState extends State<ComicsPageView> {
     return Scrollbar(
       controller: _scrollController,
       interactive: true,
-      child: GridView.builder(
+      child: SmoothScrollProvider(
         controller: _scrollController,
-        gridDelegate: SliverGridDelegateWithComics(),
-        itemCount: _comics.length,
-        padding: const EdgeInsets.only(bottom: 80, left: 4, right: 4, top: 4),
-        itemBuilder: (context, index) {
-          final comic = _comics[index];
-          final tile = LocalFavoriteTile(
-            key: ValueKey('${comic.type.key}_${comic.target}'),
-            comic: comic,
-            folderName: widget.folder,
-            onDelete: () => _refreshAfterDelete(comic),
-            enableLongPressed: true,
-            onTap: () => widget.onClick(comic),
-            onLongPressed: () => widget.onLongPressed(comic),
-          );
-          widget.onRegisterMenu?.call(comic, tile.openMenu);
+        builder: (context, controller, physics) {
+          return GridView.builder(
+            controller: controller,
+            physics: physics,
+            gridDelegate: SliverGridDelegateWithComics(),
+            itemCount: _comics.length,
+            padding:
+                const EdgeInsets.only(bottom: 80, left: 4, right: 4, top: 4),
+            itemBuilder: (context, index) {
+              final comic = _comics[index];
+              final tile = LocalFavoriteTile(
+                key: ValueKey('${comic.type.key}_${comic.target}'),
+                comic: comic,
+                folderName: widget.folder,
+                onDelete: () => _refreshAfterDelete(comic),
+                enableLongPressed: true,
+                onTap: widget.onClick == null
+                    ? null
+                    : () => widget.onClick!(comic),
+                onLongPressed: widget.onLongPressed == null
+                    ? null
+                    : () => widget.onLongPressed!(comic),
+              );
+              widget.onRegisterMenu?.call(comic, tile.openMenu);
 
-          Color? color;
-          if (widget.selectedComics.contains(comic)) {
-            color = Theme.of(context).colorScheme.surfaceContainerHighest;
-          }
+              Color? color;
+              if (widget.selectedComics.contains(comic)) {
+                color = Theme.of(context).colorScheme.surfaceContainerHighest;
+              }
 
-          return AnimatedContainer(
-            duration: const Duration(milliseconds: 160),
-            margin: const EdgeInsets.symmetric(vertical: 2, horizontal: 4),
-            decoration: BoxDecoration(
-              color: color,
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: tile,
+              return AnimatedContainer(
+                duration: const Duration(milliseconds: 160),
+                margin: const EdgeInsets.symmetric(vertical: 2, horizontal: 4),
+                decoration: BoxDecoration(
+                  color: color,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: tile,
+              );
+            },
           );
         },
       ),
@@ -655,6 +690,7 @@ class _LocalFavoritesFolderState extends State<LocalFavoritesFolder> {
     await DownloadManager().init();
     final comics = _favManager.getAllComics(widget.folderName);
     _applySort(comics);
+    LocalFavoriteTile.clearCoverCache();
     setState(() {
       _comics = comics;
       _loading = false;
@@ -699,6 +735,7 @@ class _LocalFavoritesFolderState extends State<LocalFavoritesFolder> {
   }
 
   void _onDeleteOne() {
+    LocalFavoriteTile.clearCoverCache();
     setState(() {
       _comics = _favManager.getAllComics(widget.folderName);
       _orderDirty = true;
@@ -749,8 +786,7 @@ class _LocalFavoritesFolderState extends State<LocalFavoritesFolder> {
             itemBuilder: (context) => [
               const PopupMenuItem(value: _SortMode.time, child: Text('按时间')),
               const PopupMenuItem(value: _SortMode.name, child: Text('按标题')),
-              const PopupMenuItem(
-                  value: _SortMode.author, child: Text('按作者')),
+              const PopupMenuItem(value: _SortMode.author, child: Text('按作者')),
             ],
           ),
           IconButton(
@@ -790,22 +826,26 @@ class _LocalFavoritesFolderState extends State<LocalFavoritesFolder> {
                     if (_selecting) return;
                     setState(() {
                       _orderDirty = true;
-                      _comics =
-                          reorderFunc(_comics) as List<FavoriteItem>;
+                      _comics = reorderFunc(_comics) as List<FavoriteItem>;
                     });
                   },
                   dragChildBoxDecoration: BoxDecoration(
                     borderRadius: BorderRadius.circular(16),
-                    color:
-                        Theme.of(context).colorScheme.surfaceContainerHigh,
+                    color: Theme.of(context).colorScheme.surfaceContainerHigh,
                   ),
                   builder: (children) {
-                    return GridView(
+                    return SmoothScrollProvider(
                       controller: _scrollController,
-                      padding: const EdgeInsets.only(
-                          bottom: 80, left: 4, right: 4, top: 4),
-                      gridDelegate: SliverGridDelegateWithComics(),
-                      children: children,
+                      builder: (context, controller, physics) {
+                        return GridView(
+                          controller: controller,
+                          physics: physics,
+                          padding: const EdgeInsets.only(
+                              bottom: 80, left: 4, right: 4, top: 4),
+                          gridDelegate: SliverGridDelegateWithComics(),
+                          children: children,
+                        );
+                      },
                     );
                   },
                   children: List.generate(
@@ -829,8 +869,7 @@ class _LocalFavoritesFolderState extends State<LocalFavoritesFolder> {
                               child: Checkbox(
                                 value: _selected[index],
                                 onChanged: (v) {
-                                  setState(
-                                      () => _selected[index] = v ?? false);
+                                  setState(() => _selected[index] = v ?? false);
                                 },
                               ),
                             ),
@@ -848,7 +887,7 @@ class _LocalFavoritesFolderState extends State<LocalFavoritesFolder> {
 // ============================================================
 
 class CreateFolderDialog extends StatelessWidget {
-  final VoidCallback onCreated;
+  final ValueChanged<String> onCreated;
   const CreateFolderDialog({super.key, required this.onCreated});
 
   @override
@@ -868,9 +907,10 @@ class CreateFolderDialog extends StatelessWidget {
             ),
             onSubmitted: (value) {
               if (value.trim().isNotEmpty) {
-                LocalFavoritesManager().createFolder(value.trim());
+                final folderName = value.trim();
+                LocalFavoritesManager().createFolder(folderName);
                 Navigator.pop(context);
-                onCreated();
+                onCreated(folderName);
               }
             },
           ),
@@ -883,7 +923,7 @@ class CreateFolderDialog extends StatelessWidget {
               if (name.isNotEmpty) {
                 LocalFavoritesManager().createFolder(name);
                 Navigator.pop(context);
-                onCreated();
+                onCreated(name);
               }
             },
             child: Text('确定'.tl),
@@ -897,7 +937,7 @@ class CreateFolderDialog extends StatelessWidget {
 
 class RenameFolderDialog extends StatelessWidget {
   final String oldName;
-  final VoidCallback onRenamed;
+  final ValueChanged<String> onRenamed;
   const RenameFolderDialog(
       {super.key, required this.oldName, required this.onRenamed});
 
@@ -918,9 +958,10 @@ class RenameFolderDialog extends StatelessWidget {
             ),
             onSubmitted: (value) {
               if (value.trim().isNotEmpty) {
-                LocalFavoritesManager().rename(oldName, value.trim());
+                final newName = value.trim();
+                LocalFavoritesManager().rename(oldName, newName);
                 Navigator.pop(context);
-                onRenamed();
+                onRenamed(newName);
               }
             },
           ),
@@ -933,7 +974,7 @@ class RenameFolderDialog extends StatelessWidget {
               if (name.isNotEmpty) {
                 LocalFavoritesManager().rename(oldName, name);
                 Navigator.pop(context);
-                onRenamed();
+                onRenamed(name);
               }
             },
             child: Text('确定'.tl),
@@ -964,8 +1005,7 @@ void copyAllTo(String source, List<FavoriteItem> comics) {
                   hint: const Text('选择文件夹'),
                   items: LocalFavoritesManager()
                       .folderNames
-                      .map((f) =>
-                          DropdownMenuItem(value: f, child: Text(f)))
+                      .map((f) => DropdownMenuItem(value: f, child: Text(f)))
                       .toList(),
                   onChanged: (v) {
                     folder = v;
@@ -980,8 +1020,7 @@ void copyAllTo(String source, List<FavoriteItem> comics) {
                   onPressed: () {
                     if (folder != null) {
                       for (var comic in comics) {
-                        LocalFavoritesManager()
-                            .addComic(folder!, comic);
+                        LocalFavoritesManager().addComic(folder!, comic);
                       }
                       Navigator.pop(ctx);
                     }
