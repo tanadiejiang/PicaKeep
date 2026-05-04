@@ -19,6 +19,7 @@ import 'package:picakeep/components/layout.dart';
 import 'package:picakeep/components/components.dart';
 import 'package:picakeep/components/window_frame.dart';
 import 'package:picakeep/tools/read_history_helper.dart';
+import 'package:picakeep/tools/tags_translation.dart';
 import 'local_comic_detail_page.dart';
 
 void _toComicInfoPage(BuildContext context, DownloadedItem comic) {
@@ -34,27 +35,103 @@ extension ReadComic on DownloadedItem {
   }
 }
 
-FavoriteType _downloadTypeToFavoriteType(DownloadType type) {
-  switch (type) {
-    case DownloadType.picacg:
-      return FavoriteType.picacg;
-    case DownloadType.ehentai:
-      return FavoriteType.ehentai;
-    case DownloadType.jm:
-      return FavoriteType.jm;
-    case DownloadType.hitomi:
-      return FavoriteType.hitomi;
-    case DownloadType.htmanga:
-      return FavoriteType.htManga;
-    case DownloadType.nhentai:
-      return FavoriteType.nhentai;
-    case DownloadType.copyManga:
-      return FavoriteType.copyManga;
-    case DownloadType.komiic:
-      return FavoriteType.komiic;
-    default:
-      return const FavoriteType(0);
+String _translateDownloadedTag(String tag) {
+  try {
+    for (final map in tagTranslations.values) {
+      for (final entry in map.entries) {
+        if (entry.key.toLowerCase() == tag.toLowerCase()) {
+          return entry.value.isNotEmpty ? entry.value.first : tag;
+        }
+      }
+    }
+  } catch (_) {}
+  return tag;
+}
+
+Iterable<String> _searchTermsForDownloadedTag(String tag) sync* {
+  final raw = tag.trim();
+  if (raw.isEmpty) {
+    return;
   }
+
+  yield raw.toLowerCase();
+
+  String normalizeTagLabel(String value) {
+    return value.replaceFirst(' ♀', '').replaceFirst(' ♂', '').trim();
+  }
+
+  if (raw.contains(':')) {
+    final value = raw.split(':').last.trim();
+    if (value.isNotEmpty) {
+      yield value.toLowerCase();
+      yield _translateDownloadedTag(value).trim().toLowerCase();
+    }
+    return;
+  }
+
+  final normalized = normalizeTagLabel(raw);
+  if (normalized.isNotEmpty) {
+    yield normalized.toLowerCase();
+    yield _translateDownloadedTag(normalized).trim().toLowerCase();
+  }
+}
+
+Iterable<String> _searchTermsForDownloadedItem(DownloadedItem item) sync* {
+  yield item.name.toLowerCase();
+  yield item.subTitle.toLowerCase();
+  yield item.sourceDisplayName.toLowerCase();
+
+  for (final tag in item.tags) {
+    yield* _searchTermsForDownloadedTag(tag)
+        .where((value) => value.isNotEmpty)
+        .map((value) => value.toLowerCase());
+  }
+
+  try {
+    final json = item.toJson();
+    for (final key in const [
+      'comicId',
+      'id',
+      'itemId',
+      'link',
+      'favoriteTarget',
+      'directory',
+    ]) {
+      final value = json[key]?.toString().trim();
+      if (value != null && value.isNotEmpty) {
+        yield value.toLowerCase();
+      }
+    }
+  } catch (_) {}
+
+  if (item is LocalLibraryComicItem) {
+    yield item.itemId.toLowerCase();
+    yield item.originalId.toLowerCase();
+    final favoriteTarget = item.favoriteTarget?.trim();
+    if (favoriteTarget != null && favoriteTarget.isNotEmpty) {
+      yield favoriteTarget.toLowerCase();
+    }
+    for (final alias in item.aliases) {
+      final value = alias.trim();
+      if (value.isNotEmpty) {
+        yield value.toLowerCase();
+      }
+    }
+  }
+}
+
+bool _matchesDownloadedKeyword(DownloadedItem item, String keyword) {
+  final words = keyword
+      .trim()
+      .toLowerCase()
+      .split(RegExp(r'\s+'))
+      .where((e) => e.isNotEmpty)
+      .toList();
+  if (words.isEmpty) {
+    return true;
+  }
+  final terms = _searchTermsForDownloadedItem(item).toList();
+  return words.every((word) => terms.any((term) => term.contains(word)));
 }
 
 class _DownloadedPageComicTile extends DownloadedComicTile {
@@ -119,7 +196,8 @@ class DownloadPageLogic extends StateController {
   }
 
   bool get _usesManagedDownloadSources =>
-      normalizeManagedDataSourceMode(appdata.settings[managedDataSourceModeSettingIndex]) !=
+      normalizeManagedDataSourceMode(
+          appdata.settings[managedDataSourceModeSettingIndex]) !=
       managedDataSourceModeCurrentOnly;
 
   void change() {
@@ -141,8 +219,7 @@ class DownloadPageLogic extends StateController {
       comics.addAll(baseComics);
     } else {
       for (var element in baseComics) {
-        if (element.name.toLowerCase().contains(keyword) ||
-            element.subTitle.toLowerCase().contains(keyword)) {
+        if (_matchesDownloadedKeyword(element, keyword)) {
           comics.add(element);
         }
       }
@@ -184,14 +261,16 @@ class DownloadPageLogic extends StateController {
     update();
   }
 
-  Future<List<DownloadedItem>> _loadComics(String order, String direction) async {
+  Future<List<DownloadedItem>> _loadComics(
+      String order, String direction) async {
     if (!_usesManagedDownloadSources) {
       await DownloadManager().init();
       return DownloadManager().getAll(order, direction);
     }
     await LocalLibraryManager().refresh();
     final items = await LocalLibraryManager().getAll();
-    final downloads = items.where((item) => !item.isAlbum).cast<DownloadedItem>().toList();
+    final downloads =
+        items.where((item) => !item.isAlbum).cast<DownloadedItem>().toList();
     _sortItems(downloads, order, direction);
     return downloads;
   }
@@ -245,7 +324,8 @@ class DownloadPageLogic extends StateController {
       case managedDataSourceModeCurrentAndOriginal:
         return [
           if (currentPath.isNotEmpty) currentPath,
-          if (originalPath.isNotEmpty && originalPath != currentPath) originalPath,
+          if (originalPath.isNotEmpty && originalPath != currentPath)
+            originalPath,
         ].join(' / ');
       case managedDataSourceModeOriginalOnly:
         return originalPath;
@@ -483,7 +563,8 @@ class DownloadPage extends StatelessWidget {
     );
   }
 
-  void _exportComic(BuildContext context, DownloadPageLogic logic, DownloadedItem comic) {
+  void _exportComic(
+      BuildContext context, DownloadPageLogic logic, DownloadedItem comic) {
     final fullPath = logic.pathFor(comic);
     if (fullPath.isEmpty) {
       return;
@@ -796,13 +877,9 @@ class DownloadPage extends StatelessWidget {
                           var comic = logic.comics[i];
                           LocalFavoritesManager().addComic(
                             folder!,
-                            FavoriteItem(
-                              target: comic.id,
-                              name: comic.name,
+                            FavoriteItem.fromDownloadedItem(
+                              comic,
                               coverPath: logic.coverFor(comic).path,
-                              author: comic.subTitle,
-                              type: _downloadTypeToFavoriteType(comic.type),
-                              tags: comic.tags,
                             ),
                           );
                         }

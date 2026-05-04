@@ -3,6 +3,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'package:picakeep/foundation/download_model.dart';
 import 'package:picakeep/foundation/local_data_source.dart';
 import 'package:sqlite3/sqlite3.dart';
 
@@ -49,6 +50,40 @@ String? _preferredCustomFavoriteSourceKey(int type) {
     'baozi'.hashCode: 'baozi',
   };
   return mapping[type];
+}
+
+int? _legacyBuiltInFavoriteTypeForSourceKey(String sourceKey) {
+  return switch (sourceKey) {
+    'copy_manga' => 7,
+    'Komiic' => 8,
+    _ => null,
+  };
+}
+
+Set<int> _equivalentFavoriteTypeKeys(int type) {
+  final keys = <int>{type};
+  final sourceKey = _preferredCustomFavoriteSourceKey(type);
+  if (sourceKey != null) {
+    keys.add(sourceKey.hashCode);
+    final legacyKey = _legacyBuiltInFavoriteTypeForSourceKey(sourceKey);
+    if (legacyKey != null) {
+      keys.add(legacyKey);
+    }
+  }
+  return keys;
+}
+
+String _canonicalFavoriteTypeIdentity(int type) {
+  final sourceKey = _preferredCustomFavoriteSourceKey(type);
+  if (sourceKey != null) {
+    return 'custom:$sourceKey';
+  }
+  return 'type:$type';
+}
+
+int _preferredStorageTypeKey(int type) {
+  final sourceKey = _preferredCustomFavoriteSourceKey(type);
+  return sourceKey?.hashCode ?? type;
 }
 
 String? _favoriteSourceDisplayName(int type) {
@@ -184,6 +219,124 @@ class FavoriteItem {
     required this.tags,
   });
 
+  factory FavoriteItem.fromDownloadedItem(
+    DownloadedItem comic, {
+    required String coverPath,
+  }) {
+    final json = comic.toJson();
+    final explicitFavoriteTarget = json['favoriteTarget']?.toString().trim();
+    var target =
+        explicitFavoriteTarget != null && explicitFavoriteTarget.isNotEmpty
+            ? explicitFavoriteTarget
+            : comic.id;
+    var type = FavoriteType.picacg;
+    switch (comic.type) {
+      case DownloadType.picacg:
+        target =
+            explicitFavoriteTarget != null && explicitFavoriteTarget.isNotEmpty
+                ? explicitFavoriteTarget
+                : _stripLocalDownloadPrefix(comic.id);
+        type = FavoriteType.picacg;
+        break;
+      case DownloadType.ehentai:
+        final link = json['link']?.toString().trim();
+        target =
+            explicitFavoriteTarget != null && explicitFavoriteTarget.isNotEmpty
+                ? explicitFavoriteTarget
+                : link != null && link.isNotEmpty
+                    ? link
+                    : _stripLocalDownloadPrefix(comic.id);
+        type = FavoriteType.ehentai;
+        break;
+      case DownloadType.jm:
+        target =
+            explicitFavoriteTarget != null && explicitFavoriteTarget.isNotEmpty
+                ? explicitFavoriteTarget
+                : _stripKnownPrefix(_stripLocalDownloadPrefix(comic.id), 'jm');
+        type = FavoriteType.jm;
+        break;
+      case DownloadType.hitomi:
+        final link = json['link']?.toString().trim();
+        target =
+            explicitFavoriteTarget != null && explicitFavoriteTarget.isNotEmpty
+                ? explicitFavoriteTarget
+                : link != null && link.isNotEmpty
+                    ? link
+                    : _stripKnownPrefix(
+                        _stripLocalDownloadPrefix(comic.id), 'hitomi');
+        type = FavoriteType.hitomi;
+        break;
+      case DownloadType.htmanga:
+        target =
+            explicitFavoriteTarget != null && explicitFavoriteTarget.isNotEmpty
+                ? explicitFavoriteTarget
+                : _stripKnownPrefix(_stripLocalDownloadPrefix(comic.id), 'Ht');
+        target = _stripKnownPrefix(target, 'ht');
+        type = FavoriteType.htManga;
+        break;
+      case DownloadType.nhentai:
+        target = explicitFavoriteTarget != null &&
+                explicitFavoriteTarget.isNotEmpty
+            ? explicitFavoriteTarget
+            : _stripKnownPrefix(_stripLocalDownloadPrefix(comic.id), 'nhentai');
+        type = FavoriteType.nhentai;
+        break;
+      case DownloadType.copyManga:
+        target = _customFavoriteTarget(comic);
+        type = FavoriteType.copyManga;
+        break;
+      case DownloadType.komiic:
+        target = _customFavoriteTarget(comic);
+        type = FavoriteType.komiic;
+        break;
+      case DownloadType.other:
+      case DownloadType.favorite:
+        target = _customFavoriteTarget(comic);
+        type = _customFavoriteType(comic);
+        break;
+    }
+    return FavoriteItem(
+      target: target,
+      name: comic.name,
+      coverPath: coverPath,
+      author: comic.subTitle,
+      type: type,
+      tags: comic.tags,
+    );
+  }
+
+  static String _stripLocalDownloadPrefix(String id) {
+    const marker = '::';
+    if (!id.startsWith('local_download::')) {
+      return id;
+    }
+    final index = id.lastIndexOf(marker);
+    return index == -1 ? id : id.substring(index + marker.length);
+  }
+
+  static String _stripKnownPrefix(String value, String prefix) {
+    return value.startsWith(prefix) ? value.substring(prefix.length) : value;
+  }
+
+  static String _customFavoriteTarget(DownloadedItem comic) {
+    if (comic is CustomDownloadedItem && comic.comicId.trim().isNotEmpty) {
+      return comic.comicId.trim();
+    }
+    final json = comic.toJson();
+    final comicId = json['comicId']?.toString().trim();
+    if (comicId != null && comicId.isNotEmpty) {
+      return comicId;
+    }
+    return _stripLocalDownloadPrefix(comic.id);
+  }
+
+  static FavoriteType _customFavoriteType(DownloadedItem comic) {
+    if (comic is CustomDownloadedItem && comic.sourceKey.trim().isNotEmpty) {
+      return FavoriteType(comic.sourceKey.hashCode);
+    }
+    return const FavoriteType(0);
+  }
+
   /// Convert favorite target to download DB ID.
   /// The first candidate is the preferred local download ID; callers that need
   /// robust compatibility should use [candidateDownloadIds].
@@ -265,6 +418,13 @@ class FavoriteItemWithFolderInfo {
   int get hashCode => comic.hashCode ^ folder.hashCode;
 }
 
+class _FolderRecord {
+  const _FolderRecord({required this.folderName, required this.tableName});
+
+  final String folderName;
+  final String tableName;
+}
+
 class LocalFavoritesManager {
   factory LocalFavoritesManager() =>
       cache ?? (cache = LocalFavoritesManager._create());
@@ -287,6 +447,108 @@ class LocalFavoritesManager {
         _db,
         if (_secondaryDb != null) _secondaryDb!,
       ];
+
+  List<_FolderRecord> _getFolderRecords(Database db) {
+    return [
+      for (final table in _getUserTables(db))
+        _FolderRecord(folderName: table, tableName: table),
+    ];
+  }
+
+  String? _folderTableNameInDb(String folder, Database db) {
+    for (final table in _getUserTables(db)) {
+      if (table == folder) {
+        return table;
+      }
+    }
+    return null;
+  }
+
+  void _migrateFolderMetaToLegacy(Database db) {
+    final tables = _getTablesWithDB(db).toSet();
+    if (!tables.contains('folder_meta')) {
+      return;
+    }
+    final info = db.select('PRAGMA table_info("folder_meta");');
+    final columns = <String>{
+      for (final row in info) _asText(row['name']),
+    };
+    if (!columns.contains('folder_name') || !columns.contains('table_name')) {
+      db.execute('drop table if exists folder_meta;');
+      return;
+    }
+    final rows = db.select('select folder_name, table_name from folder_meta;');
+    for (final row in rows) {
+      final folderName = _asText(row['folder_name']);
+      final tableName = _asText(row['table_name']);
+      if (folderName.isEmpty ||
+          tableName.isEmpty ||
+          folderName == tableName ||
+          folderName.contains('"')) {
+        continue;
+      }
+      if (!tables.contains(tableName)) {
+        continue;
+      }
+      if (tables.contains(folderName)) {
+        _ensureFolderTableSchema(db, folderName);
+        _ensureFolderTableSchema(db, tableName);
+        final existingKeys = <String>{};
+        final existingRows = db.select("""
+          select target, type from "$folderName";
+        """);
+        for (final existingRow in existingRows) {
+          final target = _asText(existingRow['target']);
+          if (target.isEmpty) {
+            continue;
+          }
+          existingKeys.add('$target|${_asInt(existingRow['type'])}');
+        }
+        var nextOrder = db.select("""
+          SELECT MAX(display_order) AS max_value
+          FROM "$folderName";
+        """).firstOrNull?['max_value'] as int? ?? 0;
+        final sourceRows = db.select("""
+          select * from "$tableName"
+          order by display_order, rowid;
+        """);
+        for (final sourceRow in sourceRows) {
+          final target = _asText(sourceRow['target']);
+          final type = _asInt(sourceRow['type']);
+          if (target.isEmpty) {
+            continue;
+          }
+          final key = '$target|$type';
+          if (existingKeys.contains(key)) {
+            continue;
+          }
+          nextOrder++;
+          db.execute("""
+            insert into "$folderName"
+              (target, name, author, type, tags, cover_path, time, display_order)
+            values (?, ?, ?, ?, ?, ?, ?, ?);
+          """, [
+            target,
+            _asText(sourceRow['name']),
+            _asText(sourceRow['author']),
+            type,
+            _asText(sourceRow['tags']),
+            _asText(sourceRow['cover_path']),
+            _asText(sourceRow['time'], getCurTime()),
+            nextOrder,
+          ]);
+          existingKeys.add(key);
+        }
+        db.execute('drop table if exists "$tableName";');
+        tables.remove(tableName);
+        continue;
+      }
+      db.execute('alter table "$tableName" rename to "$folderName";');
+      tables.remove(tableName);
+      tables.add(folderName);
+    }
+    db.execute('drop table if exists folder_meta;');
+  }
 
   Future<void> init() async {
     final roots = await getManagedDataRoots();
@@ -343,7 +605,7 @@ class LocalFavoritesManager {
   }
 
   void _checkAndCreate(Database db) {
-    final tables = _getTablesWithDB(db);
+    var tables = _getTablesWithDB(db);
     if (!tables.contains('folder_sync')) {
       db.execute("""
         create table folder_sync (
@@ -362,8 +624,11 @@ class LocalFavoritesManager {
         );
       """);
     }
+    _migrateFolderMetaToLegacy(db);
+    tables = _getTablesWithDB(db);
     tables.remove('folder_sync');
     tables.remove('folder_order');
+    tables.remove('folder_meta');
     for (final table in tables) {
       _ensureFolderTableSchema(db, table);
     }
@@ -508,11 +773,12 @@ class LocalFavoritesManager {
     final tables = _getTablesWithDB(db);
     tables.remove('folder_sync');
     tables.remove('folder_order');
+    tables.remove('folder_meta');
     return tables;
   }
 
   bool _folderExistsInDb(String folder, Database db) {
-    return _getUserTables(db).contains(folder);
+    return _folderTableNameInDb(folder, db) != null;
   }
 
   List<Database> _dbsForFolder(String folder) {
@@ -530,16 +796,24 @@ class LocalFavoritesManager {
   }
 
   int _maxValueInDb(Database db, String folder) {
+    final tableName = _folderTableNameInDb(folder, db);
+    if (tableName == null) {
+      return 0;
+    }
     return db.select("""
       SELECT MAX(display_order) AS max_value
-      FROM "$folder";
+      FROM "$tableName";
     """).firstOrNull?["max_value"] ?? 0;
   }
 
   int _minValueInDb(Database db, String folder) {
+    final tableName = _folderTableNameInDb(folder, db);
+    if (tableName == null) {
+      return 0;
+    }
     return db.select("""
       SELECT MIN(display_order) AS min_value
-      FROM "$folder";
+      FROM "$tableName";
     """).firstOrNull?["min_value"] ?? 0;
   }
 
@@ -559,23 +833,29 @@ class LocalFavoritesManager {
     """);
   }
 
-  void _dropFolder(Database db, String name) {
-    db.execute('drop table if exists "$name";');
+  void _dropFolder(Database db, String folderName) {
+    final tableName = _folderTableNameInDb(folderName, db) ?? folderName;
+    db.execute('drop table if exists "$tableName";');
     db.execute("""
       delete from folder_order
       where folder_name == ?;
-    """, [name]);
+    """, [folderName]);
   }
 
   void _insertComic(Database db, String folder, FavoriteItem comic, int order) {
+    final tableName = _folderTableNameInDb(folder, db);
+    if (tableName == null) {
+      throw Exception('Folder does not exist');
+    }
+    final storageTypeKey = _preferredStorageTypeKey(comic.type.key);
     db.execute("""
-      insert into "$folder" (target, name, author, type, tags, cover_path, time, display_order)
+      insert into "$tableName" (target, name, author, type, tags, cover_path, time, display_order)
       values (?, ?, ?, ?, ?, ?, ?, ?);
     """, [
       comic.target,
       comic.name,
       comic.author,
-      comic.type.key,
+      storageTypeKey,
       comic.tags.join(','),
       comic.coverPath,
       comic.time,
@@ -584,27 +864,35 @@ class LocalFavoritesManager {
   }
 
   bool _matchesFavoriteKeyword(FavoriteItem comic, String keyword) {
-    if (comic.name.contains(keyword)) return true;
-    if (comic.author.contains(keyword)) return true;
-    if (comic.tags.any((element) => element.contains(keyword))) return true;
-    return false;
+    final normalized = keyword.trim().toLowerCase();
+    if (normalized.isEmpty) {
+      return true;
+    }
+    final fields = <String>[
+      comic.name,
+      comic.author,
+      comic.target,
+      ...comic.tags,
+      ...comic.candidateDownloadIds(),
+    ];
+    return fields.any((field) => field.toLowerCase().contains(normalized));
   }
 
   List<String> _getFolderNameStrings() {
     final folders = <String>{};
     final folderToOrder = <String, int>{};
     for (final db in _dbs) {
-      for (final folder in _getUserTables(db)) {
-        folders.add(folder);
+      for (final folder in _getFolderRecords(db)) {
+        folders.add(folder.folderName);
         final res = db.select("""
           select * from folder_order
           where folder_name == ?;
-        """, [folder]);
+        """, [folder.folderName]);
         final order =
             res.isNotEmpty ? (res.first["order_value"] as int? ?? 0) : 0;
-        folderToOrder.putIfAbsent(folder, () => order);
+        folderToOrder.putIfAbsent(folder.folderName, () => order);
         if (db == _db) {
-          folderToOrder[folder] = order;
+          folderToOrder[folder.folderName] = order;
         }
       }
     }
@@ -626,28 +914,85 @@ class LocalFavoritesManager {
   }
 
   bool isExist(String target) {
+    final normalized = target.trim();
+    if (normalized.isEmpty) {
+      return false;
+    }
     if (_favoritedTargetsDirty) {
       _cacheFavoritedTargets();
     }
-    return _cachedFavoritedTargets.containsKey(target);
+    return _cachedFavoritedTargets.containsKey(normalized);
   }
 
   void _cacheFavoritedTargets() {
     _favoritedTargetsDirty = false;
     _cachedFavoritedTargets.clear();
     for (final db in _dbs) {
-      for (final folder in _getUserTables(db)) {
+      for (final folder in _getFolderRecords(db)) {
         final rows = db.select("""
-          select target from "$folder";
+          select * from "${folder.tableName}";
         """);
         for (final row in rows) {
-          final target = (row["target"] as String? ?? '').trim();
-          if (target.isNotEmpty) {
-            _cachedFavoritedTargets[target] = true;
+          final item = FavoriteItem.fromRow(row);
+          final candidates = <String>{
+            item.target,
+            ...item.candidateDownloadIds(),
+          };
+          for (final candidate in candidates) {
+            final normalized = candidate.trim();
+            if (normalized.isEmpty) {
+              continue;
+            }
+            _cachedFavoritedTargets[normalized] = true;
+            _cachedFavoritedTargets[
+                'local_download::current_download::$normalized'] = true;
+            _cachedFavoritedTargets[
+                'local_download::original_download::$normalized'] = true;
           }
         }
       }
     }
+  }
+
+  List<int> _equivalentTypeList(int type) =>
+      _equivalentFavoriteTypeKeys(type).toList(growable: false);
+
+  bool _hasComicInDb(
+    Database db,
+    String folder,
+    String target,
+    Iterable<int> typeKeys,
+  ) {
+    final keys = typeKeys.toList(growable: false);
+    final tableName = _folderTableNameInDb(folder, db);
+    if (target.isEmpty || keys.isEmpty || tableName == null) {
+      return false;
+    }
+    final placeholders = List.filled(keys.length, '?').join(', ');
+    final res = db.select("""
+      select 1 from "$tableName"
+      where target == ? and type in ($placeholders)
+      limit 1;
+    """, [target, ...keys]);
+    return res.isNotEmpty;
+  }
+
+  void _deleteComicInDb(
+    Database db,
+    String folder,
+    String target,
+    Iterable<int> typeKeys,
+  ) {
+    final keys = typeKeys.toList(growable: false);
+    final tableName = _folderTableNameInDb(folder, db);
+    if (target.isEmpty || keys.isEmpty || tableName == null) {
+      return;
+    }
+    final placeholders = List.filled(keys.length, '?').join(', ');
+    db.execute("""
+      delete from "$tableName"
+      where target == ? and type in ($placeholders);
+    """, [target, ...keys]);
   }
 
   int maxValue(String folder) {
@@ -675,11 +1020,16 @@ class LocalFavoritesManager {
   int count(String folderName) {
     final keys = <String>{};
     for (final db in _dbsForFolder(folderName)) {
+      final tableName = _folderTableNameInDb(folderName, db);
+      if (tableName == null) {
+        continue;
+      }
       final rows = db.select("""
-        select target, type from "$folderName";
+        select target, type from "$tableName";
       """);
       for (final row in rows) {
-        keys.add('${row["target"]}|${row["type"]}');
+        final type = row["type"] as int? ?? 0;
+        keys.add('${row["target"]}|${_canonicalFavoriteTypeIdentity(type)}');
       }
     }
     return keys.length;
@@ -688,6 +1038,9 @@ class LocalFavoritesManager {
   String createFolder(String name) {
     if (name.isEmpty) {
       throw "name is empty!";
+    }
+    if (name.contains('"')) {
+      throw "Invalid name";
     }
     if (_getFolderNameStrings().contains(name)) {
       throw Exception("Folder is existing");
@@ -716,18 +1069,33 @@ class LocalFavoritesManager {
       throw Exception("Folder does not exist");
     }
     for (final db in dbs) {
+      final tableName = _folderTableNameInDb(oldName, db);
+      if (tableName == null) {
+        continue;
+      }
       db.execute("""
-        ALTER TABLE "$oldName"
+        ALTER TABLE "$tableName"
         RENAME TO "$newName";
       """);
-      final res = db.select("""
+      final syncRows = db.select("""
+        select 1 from folder_sync
+        where folder_name == ?
+        limit 1;
+      """, [oldName]);
+      if (syncRows.isNotEmpty) {
+        db.execute("""
+          UPDATE folder_sync
+          set folder_name = ?
+          where folder_name == ?
+        """, [newName, oldName]);
+      }
+      final orderRows = db.select("""
         select * from folder_order
         where folder_name == ?;
       """, [oldName]);
-      if (res.isNotEmpty) {
-        final order = res.first["order_value"];
-        db.execute(
-            "delete from folder_order where folder_name == ?;", [oldName]);
+      if (orderRows.isNotEmpty) {
+        final order = orderRows.first["order_value"];
+        db.execute("delete from folder_order where folder_name == ?;", [oldName]);
         db.execute("""
           insert or replace into folder_order (folder_name, order_value)
           values (?, ?);
@@ -738,12 +1106,9 @@ class LocalFavoritesManager {
   }
 
   bool comicExists(String folder, String target, int type) {
+    final typeKeys = _equivalentTypeList(type);
     for (final db in _dbsForFolder(folder)) {
-      final res = db.select("""
-        select * from "$folder"
-        where target == ? and type == ?;
-      """, [target, type]);
-      if (res.isNotEmpty) {
+      if (_hasComicInDb(db, folder, target, typeKeys)) {
         return true;
       }
     }
@@ -755,11 +1120,8 @@ class LocalFavoritesManager {
       throw Exception("Folder does not exists");
     }
     final db = _dbForFolderWrite(folder);
-    final res = db.select("""
-      select * from "$folder"
-      where target == ? and type == ?;
-    """, [comic.target, comic.type.key]);
-    if (res.isNotEmpty) {
+    final typeKeys = _equivalentTypeList(comic.type.key);
+    if (_hasComicInDb(db, folder, comic.target, typeKeys)) {
       return;
     }
     _insertComic(db, folder, comic, order ?? (_maxValueInDb(db, folder) + 1));
@@ -767,29 +1129,29 @@ class LocalFavoritesManager {
   }
 
   void deleteComic(String folder, FavoriteItem comic) {
+    final typeKeys = _equivalentTypeList(comic.type.key);
     for (final db in _dbsForFolder(folder)) {
-      db.execute("""
-        delete from "$folder"
-        where target == ? and type == ?;
-      """, [comic.target, comic.type.key]);
+      _deleteComicInDb(db, folder, comic.target, typeKeys);
     }
     _emitFolders();
   }
 
   void deleteComicWithTarget(String folder, String target, FavoriteType type) {
+    final typeKeys = _equivalentTypeList(type.key);
     for (final db in _dbsForFolder(folder)) {
-      db.execute("""
-        delete from "$folder"
-        where target == ? and type == ?;
-      """, [target, type.key]);
+      _deleteComicInDb(db, folder, target, typeKeys);
     }
     _emitFolders();
   }
 
   void editTags(String target, String folder, List<String> tags) {
     for (final db in _dbsForFolder(folder)) {
+      final tableName = _folderTableNameInDb(folder, db);
+      if (tableName == null) {
+        continue;
+      }
       db.execute("""
-        update "$folder"
+        update "$tableName"
         set tags = ?
         where target == ?;
       """, [tags.join(','), target]);
@@ -800,15 +1162,23 @@ class LocalFavoritesManager {
     final merged = <String, FavoriteItem>{};
     final orders = <String, int>{};
     for (final db in _dbsForFolder(folder)) {
+      final tableName = _folderTableNameInDb(folder, db);
+      if (tableName == null) {
+        continue;
+      }
       final rows = db.select("""
-        select * from "$folder"
+        select * from "$tableName"
         ORDER BY display_order;
       """);
       for (final element in rows) {
         final item = FavoriteItem.fromRow(element);
-        final key = '${item.target}|${item.type.key}';
-        merged.putIfAbsent(key, () => item);
-        orders.putIfAbsent(key, () => element["display_order"] as int? ?? 0);
+        final key =
+            '${item.target}|${_canonicalFavoriteTypeIdentity(item.type.key)}';
+        final order = element["display_order"] as int? ?? 0;
+        if (!merged.containsKey(key) || db == _db) {
+          merged[key] = item;
+          orders[key] = order;
+        }
       }
     }
     final keys = merged.keys.toList()
@@ -879,10 +1249,14 @@ class LocalFavoritesManager {
       throw Exception("Failed to reorder: folder not found");
     }
     final targetDb = _dbForFolderWrite(folder);
+    final tableName = _folderTableNameInDb(folder, targetDb);
+    if (tableName == null) {
+      throw Exception("Failed to reorder: folder storage not found");
+    }
     for (final db in _dbsForFolder(folder)) {
       _dropFolder(db, folder);
     }
-    _createFolderTable(targetDb, folder);
+    _createFolderTable(targetDb, tableName);
     for (int i = 0; i < newFolder.length; i++) {
       _insertComic(targetDb, folder, newFolder[i], i);
     }
