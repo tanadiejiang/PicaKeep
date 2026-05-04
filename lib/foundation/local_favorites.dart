@@ -425,6 +425,11 @@ class _FolderRecord {
   final String tableName;
 }
 
+enum FavoriteFolderCreateTarget {
+  current,
+  original,
+}
+
 class LocalFavoritesManager {
   factory LocalFavoritesManager() =>
       cache ?? (cache = LocalFavoritesManager._create());
@@ -469,6 +474,17 @@ class LocalFavoritesManager {
     if (!tables.contains('folder_meta')) {
       return;
     }
+
+    String? findTableNameIgnoreCase(String name) {
+      final normalized = name.trim().toLowerCase();
+      for (final table in tables) {
+        if (table.trim().toLowerCase() == normalized) {
+          return table;
+        }
+      }
+      return null;
+    }
+
     final info = db.select('PRAGMA table_info("folder_meta");');
     final columns = <String>{
       for (final row in info) _asText(row['name']),
@@ -490,12 +506,16 @@ class LocalFavoritesManager {
       if (!tables.contains(tableName)) {
         continue;
       }
-      if (tables.contains(folderName)) {
-        _ensureFolderTableSchema(db, folderName);
+      final existingFolderTableName = findTableNameIgnoreCase(folderName);
+      if (existingFolderTableName != null) {
+        if (existingFolderTableName.toLowerCase() == tableName.toLowerCase()) {
+          continue;
+        }
+        _ensureFolderTableSchema(db, existingFolderTableName);
         _ensureFolderTableSchema(db, tableName);
         final existingKeys = <String>{};
         final existingRows = db.select("""
-          select target, type from "$folderName";
+          select target, type from "$existingFolderTableName";
         """);
         for (final existingRow in existingRows) {
           final target = _asText(existingRow['target']);
@@ -506,7 +526,7 @@ class LocalFavoritesManager {
         }
         var nextOrder = db.select("""
           SELECT MAX(display_order) AS max_value
-          FROM "$folderName";
+          FROM "$existingFolderTableName";
         """).firstOrNull?['max_value'] as int? ?? 0;
         final sourceRows = db.select("""
           select * from "$tableName"
@@ -524,7 +544,7 @@ class LocalFavoritesManager {
           }
           nextOrder++;
           db.execute("""
-            insert into "$folderName"
+            insert into "$existingFolderTableName"
               (target, name, author, type, tags, cover_path, time, display_order)
             values (?, ?, ?, ?, ?, ?, ?, ?);
           """, [
@@ -785,6 +805,15 @@ class LocalFavoritesManager {
     return _dbs.where((db) => _folderExistsInDb(folder, db)).toList();
   }
 
+  bool get canCreateInOriginalDatabase => _secondaryDb != null;
+
+  Database _dbForFolderCreation(FavoriteFolderCreateTarget target) {
+    if (target == FavoriteFolderCreateTarget.original && _secondaryDb != null) {
+      return _secondaryDb!;
+    }
+    return _db;
+  }
+
   Database _dbForFolderWrite(String folder) {
     if (_folderExistsInDb(folder, _db)) {
       return _db;
@@ -1035,7 +1064,10 @@ class LocalFavoritesManager {
     return keys.length;
   }
 
-  String createFolder(String name) {
+  String createFolder(
+    String name, [
+    FavoriteFolderCreateTarget target = FavoriteFolderCreateTarget.current,
+  ]) {
     if (name.isEmpty) {
       throw "name is empty!";
     }
@@ -1045,7 +1077,7 @@ class LocalFavoritesManager {
     if (_getFolderNameStrings().contains(name)) {
       throw Exception("Folder is existing");
     }
-    _createFolderTable(_db, name);
+    _createFolderTable(_dbForFolderCreation(target), name);
     _emitFolders();
     return name;
   }

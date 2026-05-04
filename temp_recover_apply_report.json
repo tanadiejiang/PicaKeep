@@ -1,0 +1,56 @@
+{
+  "backup_path": "e:\\Pica\\download\\download.db.bak_20260504_141252",
+  "recovered_db_path": "e:\\Pica\\download\\download.recovered.db",
+  "expected_total": 91,
+  "actual_total": 91,
+  "final_total": 91,
+  "preserved_existing_count": 39,
+  "inserted_missing_count": 52,
+  "verified_rows": [
+    {
+      "id": "jm283",
+      "directory": "[モノリノ] Scorched Girl 后编 (コミックホットミルク 2018年3月号)[Digital][委员长个人翻译]",
+      "json": {
+        "comicId": "283",
+        "name": "[モノリノ] Scorched Girl 后编 (コミックホットミルク 2018年3月号)[Digital][委员长个人翻译]",
+        "author": "モノリノ",
+        "size": 8.338251113891602,
+        "downloadedChapters": [
+          0
+        ],
+        "epNames": [
+          "1"
+        ],
+        "tagList": [
+          "巨乳",
+          "中文"
+        ]
+      }
+    },
+    {
+      "id": "jm1185383",
+      "directory": "她的假期 [ろれろれ屋 (ろれる)] 彼女の休日",
+      "json": {
+        "comicId": "1185383",
+        "name": "她的假期 [ろれろれ屋 (ろれる)] 彼女の休日",
+        "author": "ろれる",
+        "size": 34.37115287780762,
+        "downloadedChapters": [
+          0
+        ],
+        "epNames": [
+          "1"
+        ],
+        "tagList": [
+          "粪便",
+          "露出",
+          "手淫",
+          "排泄",
+          "贫乳",
+          "自慰",
+          "中文"
+        ]
+      }
+    }
+  ]
+}

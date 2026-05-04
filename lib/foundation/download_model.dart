@@ -381,20 +381,31 @@ class DownloadedJmComic extends DownloadedItem {
   });
 
   Map<String, dynamic> toMap() => {
-        "comicId": comicId,
-        "name": name,
-        "author": author,
+        "comic": {
+          "name": name,
+          "id": comicId,
+          "author": _buildAuthorList(author),
+          "description": "",
+          "likes": "",
+          "views": "",
+          "series": _buildSeriesMap(comicId, downloadedChapters, epNames),
+          "tags": tagList,
+          "works": const <String>[],
+          "actors": const <String>[],
+          "relatedComics": const <dynamic>[],
+          "liked": "",
+          "favorite": "",
+          "epNames": epNames,
+        },
         "size": size,
         "downloadedChapters": downloadedChapters,
-        "epNames": epNames,
-        "tagList": tagList,
       };
 
   DownloadedJmComic.fromMap(Map<String, dynamic> map)
       : comicId = map["comicId"] ?? map["comic"]?["id"] ?? '',
         name = map["name"] ?? map["comic"]?["name"] ?? '',
         author = _parseAuthor(map["author"] ?? map["comic"]?["author"]),
-        size = map["size"],
+        size = map["size"]?.toDouble(),
         epNames = const [],
         tagList = const [],
         downloadedChapters = [] {
@@ -404,6 +415,34 @@ class DownloadedJmComic extends DownloadedItem {
     epNames =
         List<String>.from(map["epNames"] ?? map["comic"]?["epNames"] ?? []);
     tagList = List<String>.from(map["tagList"] ?? map["comic"]?["tags"] ?? []);
+  }
+
+  static List<String> _buildAuthorList(String author) {
+    return author
+        .split(',')
+        .map((value) => value.trim())
+        .where((value) => value.isNotEmpty)
+        .toList();
+  }
+
+  static Map<String, String> _buildSeriesMap(
+    String comicId,
+    List<int> downloadedChapters,
+    List<String> epNames,
+  ) {
+    int count = epNames.length;
+    if (downloadedChapters.isNotEmpty) {
+      final maxIndex = downloadedChapters.reduce((a, b) => a > b ? a : b) + 1;
+      if (maxIndex > count) {
+        count = maxIndex;
+      }
+    }
+    if (count <= 0) {
+      count = 1;
+    }
+    return {
+      for (int i = 1; i <= count; i++) i.toString(): comicId,
+    };
   }
 
   static String _parseAuthor(dynamic author) {

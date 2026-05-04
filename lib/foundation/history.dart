@@ -42,6 +42,11 @@ String? _preferredCustomHistorySourceKey(int type) {
   return mapping[type];
 }
 
+const _currentManagedHistoryPrefix =
+    'local_download::current_download::';
+const _originalManagedHistoryPrefix =
+    'local_download::original_download::';
+
 void _addCandidate(Set<String> candidates, String value) {
   final v = value.trim();
   if (v.isNotEmpty) {
@@ -98,6 +103,8 @@ List<String> _buildHistoryDownloadIdCandidates(String target, int type) {
     case 6:
       _addCustomHistoryCandidates(candidates, target);
       break;
+    case 7:
+      break;
     default:
       _addCustomHistoryCandidates(
           candidates, target, _preferredCustomHistorySourceKey(type));
@@ -117,6 +124,7 @@ final class HistoryType {
 
   /// Generic local/custom source fallback used by PicaKeep.
   static HistoryType get other => const HistoryType(6);
+  static HistoryType get localAlbum => const HistoryType(7);
 
   final int value;
 
@@ -129,6 +137,7 @@ final class HistoryType {
       4: "htmanga",
       5: "nhentai",
       6: "other",
+      7: "图集",
     };
     return nameMap[value] ?? _preferredCustomHistorySourceKey(value) ?? "other";
   }
@@ -243,7 +252,7 @@ class History {
       page,
       target,
     );
-    await manager.addHistory(h);
+    await manager.addHistory(h, legacyTargets: legacyTargets);
     return manager.findSync(target)!;
   }
 }
@@ -300,6 +309,7 @@ class HistoryManager {
       }
     }
     _secondaryDb = nextSecondaryDb;
+    _reconcileManagedHistoryStorage();
     _cachedHistory = null;
 
     if (!identical(previousDb, nextDb)) {
@@ -399,8 +409,117 @@ class HistoryManager {
     return null;
   }
 
-  Future<void> addHistory(History newItem) async {
-    final db = _findDbContainingTarget(newItem.target) ?? _db;
+  void _upsertHistoryInDb(Database db, History item) {
+    db.execute("""
+      insert or replace into history
+        (target, title, subtitle, cover, time, type, ep, page, readEpisode, max_page)
+      values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+    """, [
+      item.target,
+      item.title,
+      item.subtitle,
+      item.cover,
+      item.time.millisecondsSinceEpoch,
+      item.type.value,
+      item.ep,
+      item.page,
+      item.readEpisode.join(','),
+      item.maxPage,
+    ]);
+  }
+
+  Database _preferredDbForHistoryTarget(
+    String target, {
+    Iterable<String> legacyTargets = const <String>[],
+  }) {
+    final normalizedTarget = target.trim();
+    final existingDb = _findDbContainingTarget(normalizedTarget);
+    if (existingDb != null) {
+      return existingDb;
+    }
+    for (final legacyTarget in legacyTargets) {
+      final normalizedLegacyTarget = legacyTarget.trim();
+      if (normalizedLegacyTarget.isEmpty) {
+        continue;
+      }
+      final legacyDb = _findDbContainingTarget(normalizedLegacyTarget);
+      if (legacyDb != null) {
+        return legacyDb;
+      }
+    }
+    if (normalizedTarget.startsWith(_originalManagedHistoryPrefix) &&
+        _secondaryDb != null) {
+      return _secondaryDb!;
+    }
+    return _db;
+  }
+
+  bool _shouldExposeHistoryTarget(String target) {
+    final normalizedTarget = target.trim();
+    switch (managedDataSourceMode) {
+      case managedDataSourceModeOriginalOnly:
+        return !normalizedTarget.startsWith(_currentManagedHistoryPrefix);
+      case managedDataSourceModeCurrentOnly:
+        return !normalizedTarget.startsWith(_originalManagedHistoryPrefix);
+      case managedDataSourceModeCurrentAndOriginal:
+        return true;
+      default:
+        return true;
+    }
+  }
+
+  void _reconcileManagedHistoryStorage() {
+    final secondaryDb = _secondaryDb;
+    if (secondaryDb == null) {
+      return;
+    }
+
+    void moveManagedRows({
+      required Database from,
+      required Database to,
+      required bool Function(String target) shouldMove,
+    }) {
+      final rows = from.select("""
+        select * from history;
+      """);
+      for (final row in rows) {
+        final item = History.fromRow(row);
+        if (!shouldMove(item.target)) {
+          continue;
+        }
+        final existing = _findInDb(to, item.target);
+        if (existing == null || item.time.isAfter(existing.time)) {
+          _upsertHistoryInDb(to, item);
+        }
+        from.execute("""
+          delete from history
+          where target == ?;
+        """, [item.target]);
+      }
+    }
+
+    moveManagedRows(
+      from: _db,
+      to: secondaryDb,
+      shouldMove: (target) =>
+          target.trim().startsWith(_originalManagedHistoryPrefix),
+    );
+    moveManagedRows(
+      from: secondaryDb,
+      to: _db,
+      shouldMove: (target) =>
+          target.trim().startsWith(_currentManagedHistoryPrefix),
+    );
+  }
+
+  Future<void> addHistory(
+    History newItem, {
+    Iterable<String> legacyTargets = const <String>[],
+  }) async {
+    final db = _preferredDbForHistoryTarget(
+      newItem.target,
+      legacyTargets: legacyTargets,
+    );
     final res = db.select(
       """
       select * from history
@@ -409,21 +528,7 @@ class HistoryManager {
       [newItem.target],
     );
     if (res.isEmpty) {
-      db.execute("""
-        insert into history (target, title, subtitle, cover, time, type, ep, page, readEpisode, max_page)
-        values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
-      """, [
-        newItem.target,
-        newItem.title,
-        newItem.subtitle,
-        newItem.cover,
-        newItem.time.millisecondsSinceEpoch,
-        newItem.type.value,
-        newItem.ep,
-        newItem.page,
-        newItem.readEpisode.join(','),
-        newItem.maxPage
-      ]);
+      _upsertHistoryInDb(db, newItem);
     } else {
       db.execute("""
         update history
@@ -493,7 +598,7 @@ class HistoryManager {
 
   Future<void> saveReadHistory(History history,
       [bool updateMePage = true]) async {
-    final db = _findDbContainingTarget(history.target) ?? _db;
+    final db = _preferredDbForHistoryTarget(history.target);
     db.execute("""
       update history
       set time = ${DateTime.now().millisecondsSinceEpoch}, ep = ?, page = ?, readEpisode = ?, max_page = ?
@@ -566,6 +671,9 @@ class HistoryManager {
       """);
       for (final element in res) {
         final item = History.fromRow(element);
+        if (!_shouldExposeHistoryTarget(item.target)) {
+          continue;
+        }
         final existing = merged[item.target];
         if (existing == null || item.time.isAfter(existing.time)) {
           merged[item.target] = item;

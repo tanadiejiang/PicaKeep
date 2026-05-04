@@ -6,6 +6,9 @@ import 'package:picakeep/foundation/history.dart';
 import 'package:picakeep/foundation/local_library.dart';
 
 HistoryType _historyTypeForDownload(DownloadedItem c) {
+  if (c is LocalLibraryComicItem && c.isAlbum) {
+    return HistoryType.localAlbum;
+  }
   switch (c.type) {
     case DownloadType.picacg:
       return HistoryType.picacg;

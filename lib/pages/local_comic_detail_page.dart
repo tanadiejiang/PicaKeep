@@ -46,7 +46,6 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
   bool _showAppbarTitle = false;
   int _recommendationPage = 0;
   double _bottomPullDistance = 0;
-  Offset? _lastTextActionPosition;
 
   static const _recommendationPageSize = 10;
 
@@ -619,16 +618,6 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
     );
   }
 
-  Offset _fallbackTextActionPosition() {
-    final renderObject = context.findRenderObject();
-    if (renderObject is! RenderBox) {
-      return const Offset(220, 220);
-    }
-    return renderObject.localToGlobal(
-      Offset(renderObject.size.width / 2, renderObject.size.height / 3),
-    );
-  }
-
   Future<void> _showTextActionsAt(
     Offset position,
     String text, {
@@ -636,10 +625,22 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
     String? searchTag,
   }) async {
     if (text.trim().isEmpty) return;
+    final overlay = Overlay.of(context).context.findRenderObject();
+    if (overlay is! RenderBox) {
+      return;
+    }
+    final localPosition = overlay.globalToLocal(position);
+    final size = overlay.size;
+    final dx = localPosition.dx.clamp(0.0, size.width);
+    final dy = localPosition.dy.clamp(0.0, size.height);
     final action = await showMenu<String>(
       context: context,
       position: RelativeRect.fromLTRB(
-          position.dx, position.dy, position.dx, position.dy),
+        dx,
+        dy,
+        size.width - dx,
+        size.height - dy,
+      ),
       items: [
         PopupMenuItem<String>(
           value: 'copy',
@@ -690,17 +691,12 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
     final colorScheme = Theme.of(context).colorScheme;
     return Container(
       margin: const EdgeInsets.fromLTRB(4, 4, 4, 4),
-      child: InkWell(
-        borderRadius: const BorderRadius.all(Radius.circular(12)),
-        onTapDown: title
+      child: GestureDetector(
+        behavior: HitTestBehavior.translucent,
+        onLongPressStart: title
             ? null
-            : (details) {
-                _lastTextActionPosition = details.globalPosition;
-              },
-        onLongPress: title
-            ? null
-            : () => _showTextActionsAt(
-                  _lastTextActionPosition ?? _fallbackTextActionPosition(),
+            : (details) => _showTextActionsAt(
+                  details.globalPosition,
                   text,
                   searchAuthor: group == '作者' ? text : null,
                   searchTag: group == '标签' ? text : null,
@@ -722,8 +718,9 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
                   colorScheme.surfaceTint,
                   3,
                 ),
-          shape:
-              RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+          ),
           elevation: 0,
           child: Padding(
             padding: const EdgeInsets.fromLTRB(12, 6, 12, 6),
