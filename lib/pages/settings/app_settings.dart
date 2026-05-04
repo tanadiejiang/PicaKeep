@@ -54,7 +54,8 @@ void _notifyManagedDataViews() {
   }
 }
 
-Future<int?> _reloadManagedDataManagers({bool rescanLocalComics = false}) async {
+Future<int?> _reloadManagedDataManagers(
+    {bool rescanLocalComics = false}) async {
   LogManager.addLog(
     LogLevel.info,
     'ManagedDataReload',
@@ -62,7 +63,8 @@ Future<int?> _reloadManagedDataManagers({bool rescanLocalComics = false}) async 
   );
   refreshLocalDataCaches();
 
-  LogManager.addLog(LogLevel.info, 'ManagedDataReload', 'appdata.readData:start');
+  LogManager.addLog(
+      LogLevel.info, 'ManagedDataReload', 'appdata.readData:start');
   await appdata.readData().timeout(const Duration(seconds: 5));
   LogManager.addLog(LogLevel.info, 'ManagedDataReload', 'appdata.readData:ok');
 
@@ -72,7 +74,8 @@ Future<int?> _reloadManagedDataManagers({bool rescanLocalComics = false}) async 
     'HistoryManager.init:start',
   );
   await HistoryManager().init().timeout(const Duration(seconds: 10));
-  LogManager.addLog(LogLevel.info, 'ManagedDataReload', 'HistoryManager.init:ok');
+  LogManager.addLog(
+      LogLevel.info, 'ManagedDataReload', 'HistoryManager.init:ok');
 
   LogManager.addLog(
     LogLevel.info,
@@ -80,7 +83,8 @@ Future<int?> _reloadManagedDataManagers({bool rescanLocalComics = false}) async 
     'DownloadManager.init:start',
   );
   await DownloadManager().init().timeout(const Duration(seconds: 10));
-  LogManager.addLog(LogLevel.info, 'ManagedDataReload', 'DownloadManager.init:ok');
+  LogManager.addLog(
+      LogLevel.info, 'ManagedDataReload', 'DownloadManager.init:ok');
 
   int? scanCount;
   if (rescanLocalComics) {
@@ -134,7 +138,7 @@ Future<void> _refreshLocalComics(BuildContext context) async {
   }
 }
 
-  Future<void> _changeManagedDataSourceMode(
+Future<void> _changeManagedDataSourceMode(
   BuildContext context,
   String value,
 ) async {
@@ -243,6 +247,7 @@ Widget buildAppSettings(double width, BuildContext context) {
       onRefresh: () => _refreshLocalComics(context),
       onChanged: (value) => _changeManagedDataSourceMode(context, value),
     ),
+    const _LocalLibraryShowAllDatabaseRecordsTile(),
     ListTile(
       leading: const Icon(Icons.sd_storage_rounded),
       title: Text('重新扫描磁盘'.tl),
@@ -268,6 +273,71 @@ Widget buildAppSettings(double width, BuildContext context) {
   ]);
 }
 
+class _LocalLibraryShowAllDatabaseRecordsTile extends StatefulWidget {
+  const _LocalLibraryShowAllDatabaseRecordsTile();
+
+  @override
+  State<_LocalLibraryShowAllDatabaseRecordsTile> createState() =>
+      _LocalLibraryShowAllDatabaseRecordsTileState();
+}
+
+class _LocalLibraryShowAllDatabaseRecordsTileState
+    extends State<_LocalLibraryShowAllDatabaseRecordsTile> {
+  bool _busy = false;
+
+  Future<void> _setValue(bool value) async {
+    if (_busy) {
+      return;
+    }
+    final previousValue =
+        appdata.settings[localLibraryShowAllDatabaseRecordsSettingIndex];
+    setState(() {
+      _busy = true;
+      appdata.settings[localLibraryShowAllDatabaseRecordsSettingIndex] =
+          value ? '1' : '0';
+    });
+    try {
+      await appdata.updateSettings();
+      await _reloadManagedDataManagers();
+    } catch (e, s) {
+      LogManager.addLog(
+        LogLevel.error,
+        'LocalLibraryShowAllDatabaseRecords',
+        'Failed to switch value to $value: $e\n$s',
+      );
+      appdata.settings[localLibraryShowAllDatabaseRecordsSettingIndex] =
+          previousValue;
+      if (mounted) {
+        _showSettingMessage(context, '切换失败，已恢复原设置'.tl);
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _busy = false;
+        });
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return buildResponsiveSettingTile(
+      leading: const Icon(Icons.storage_outlined),
+      title: Text('无论有无漫画按照数据库文件显示已下载漫画列表'.tl),
+      subtitle: Text(
+        '无论（源数据库有没有漫画/漫画文件夹）数据库，始终按照漫画已下载的数据库进行显示'.tl,
+      ),
+      trailingWidth: 60,
+      trailing: Switch(
+        value:
+            appdata.settings[localLibraryShowAllDatabaseRecordsSettingIndex] ==
+                '1',
+        onChanged: _busy ? null : _setValue,
+      ),
+    );
+  }
+}
+
 class _ManagedDataSourceModeTile extends StatefulWidget {
   const _ManagedDataSourceModeTile({
     required this.width,
@@ -284,7 +354,8 @@ class _ManagedDataSourceModeTile extends StatefulWidget {
       _ManagedDataSourceModeTileState();
 }
 
-class _ManagedDataSourceModeTileState extends State<_ManagedDataSourceModeTile> {
+class _ManagedDataSourceModeTileState
+    extends State<_ManagedDataSourceModeTile> {
   String? _pendingValue;
   bool _busy = false;
 
@@ -344,8 +415,7 @@ class _ManagedDataSourceModeTileState extends State<_ManagedDataSourceModeTile> 
       onTap: _busy ? null : () => _selectValue(value),
       child: DecoratedBox(
         decoration: BoxDecoration(
-          color:
-              selected ? colorScheme.primaryContainer : Colors.transparent,
+          color: selected ? colorScheme.primaryContainer : Colors.transparent,
           border: Border(
             left: isFirst
                 ? BorderSide.none
@@ -603,7 +673,8 @@ class _OriginalDownloadDirTile extends StatefulWidget {
   const _OriginalDownloadDirTile();
 
   @override
-  State<_OriginalDownloadDirTile> createState() => _OriginalDownloadDirTileState();
+  State<_OriginalDownloadDirTile> createState() =>
+      _OriginalDownloadDirTileState();
 }
 
 class _OriginalDownloadDirTileState extends State<_OriginalDownloadDirTile> {
@@ -626,8 +697,8 @@ class _OriginalDownloadDirTileState extends State<_OriginalDownloadDirTile> {
   }
 
   void _showBrowseDialog() {
-    final controller =
-        TextEditingController(text: appdata.settings[originalDownloadDirSettingIndex]);
+    final controller = TextEditingController(
+        text: appdata.settings[originalDownloadDirSettingIndex]);
     final isDesktop =
         Platform.isWindows || Platform.isMacOS || Platform.isLinux;
     showDialog(
@@ -1016,9 +1087,7 @@ class _LogSettingState extends State<LogSetting> {
                         Text(log.content),
                         const SizedBox(height: 4),
                         Text(
-                          log.time
-                              .toString()
-                              .replaceAll(RegExp(r'\.\w+'), ''),
+                          log.time.toString().replaceAll(RegExp(r'\.\w+'), ''),
                         ),
                         TextButton(
                           onPressed: () async {
@@ -1055,8 +1124,7 @@ class _PermissionSettingState extends State<PermissionSetting> {
   Future<bool> _isAuthSupported() async {
     try {
       final isDeviceSupported = await _localAuthentication.isDeviceSupported();
-      final canCheckBiometrics =
-          await _localAuthentication.canCheckBiometrics;
+      final canCheckBiometrics = await _localAuthentication.canCheckBiometrics;
       final availableBiometrics =
           await _localAuthentication.getAvailableBiometrics();
       return isDeviceSupported ||

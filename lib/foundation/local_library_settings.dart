@@ -6,6 +6,7 @@ const localAlbumImageSortSettingIndex = 92;
 const localLibraryListSortSettingIndex = 93;
 const localLibraryAlbumOnlySettingIndex = 94;
 const localDetailRecommendationSettingIndex = 95;
+const localLibraryShowAllDatabaseRecordsSettingIndex = 96;
 
 const localAlbumImageSortNameAsc = '0';
 const localAlbumImageSortNameDesc = '1';
@@ -48,6 +49,10 @@ String normalizeLocalDetailRecommendationMode(String? value) {
     default:
       return '0';
   }
+}
+
+String normalizeLocalLibraryShowAllDatabaseRecords(String? value) {
+  return value == '1' ? '1' : '0';
 }
 
 List<String> decodeLocalComicPathList(String? raw) {

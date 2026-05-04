@@ -315,7 +315,7 @@ class _MainFavoritesPageState extends State<MainFavoritesPage> {
                       : Icons.keyboard_arrow_down,
                 ),
             ],
-          ),
+          ).paddingHorizontal(16),
         ),
       ),
     );

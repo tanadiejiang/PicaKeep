@@ -244,6 +244,66 @@ class DownloadedComic extends DownloadedItem {
   }
 }
 
+class ScannedDownloadedComic extends DownloadedComic {
+  ScannedDownloadedComic({
+    required super.comicId,
+    required super.title,
+    required super.author,
+    super.description = '',
+    super.thumbUrl = '',
+    required super.chapters,
+    required super.downloadedChapters,
+    super.size,
+    super.tagList = const [],
+  });
+
+  factory ScannedDownloadedComic.fromJson(Map<String, dynamic> json) {
+    final chapters = DownloadedComic._parseChapters(json);
+    final downloadedChapters = json["downloadedChapters"] != null
+        ? List<int>.from(json["downloadedChapters"])
+        : List<int>.generate(chapters.length, (index) => index);
+    return ScannedDownloadedComic(
+      comicId: json["comicId"] ?? json["comicItem"]?["id"] ?? '',
+      title: json["title"] ?? json["comicItem"]?["title"] ?? '',
+      author: json["author"] ?? json["comicItem"]?["author"] ?? '',
+      description:
+          json["description"] ?? json["comicItem"]?["description"] ?? '',
+      thumbUrl: json["thumbUrl"] ?? json["comicItem"]?["thumbUrl"] ?? '',
+      chapters: chapters,
+      downloadedChapters: downloadedChapters,
+      size: json["size"]?.toDouble(),
+      tagList:
+          DownloadedComic._parseTagsList(json["tagList"] ?? json["comicItem"]?["tags"]),
+    );
+  }
+
+  @override
+  DownloadType get type => DownloadType.other;
+
+  @override
+  String get sourceDisplayName => '本地扫描';
+
+  @override
+  Widget createReadingPage({int? ep, int? page}) {
+    var epsMap = <String, String>{};
+    for (int i = 0; i < chapters.length; i++) {
+      epsMap[(i + 1).toString()] = chapters[i];
+    }
+    var data = LocalReadingData(
+      title: title,
+      id: id,
+      downloadId: id,
+      sourceKey: 'other',
+      hasEp: chapters.isNotEmpty,
+      comicType: comicTypeForDownloadType(DownloadType.other),
+      eps: epsMap,
+      favoriteType: const FavoriteType(0),
+    );
+    data.downloadedEps = downloadedChapters;
+    return ComicReadingPage(data, page ?? 1, ep ?? 1);
+  }
+}
+
 class DownloadedGallery extends DownloadedItem {
   String galleryTitle;
   String subtitle;

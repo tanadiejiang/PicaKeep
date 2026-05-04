@@ -605,10 +605,24 @@ class LocalLibraryManager {
 
     final db = sqlite3.open(dbPath);
     try {
-      final rows = db.select(
-        'select id, time, directory, json from download order by time desc',
-      );
+      final rows = db
+          .select('select id, time, directory, json from download order by time desc')
+          .toList()
+        ..sort((a, b) {
+          final score = _downloadRowPriority(
+            (b['id'] as String? ?? '').trim(),
+            (b['directory'] as String? ?? '').trim(),
+          ).compareTo(_downloadRowPriority(
+            (a['id'] as String? ?? '').trim(),
+            (a['directory'] as String? ?? '').trim(),
+          ));
+          if (score != 0) {
+            return score;
+          }
+          return ((b['time'] as int?) ?? 0).compareTo((a['time'] as int?) ?? 0);
+        });
       final children = <LocalLibraryStorageChildEntry>[];
+      final seenDirectories = <String>{};
       double totalSize = 0;
 
       for (final row in rows) {
@@ -626,28 +640,40 @@ class LocalLibraryManager {
           continue;
         }
 
+        final showAllDatabaseRecords =
+            appdata.settings[localLibraryShowAllDatabaseRecordsSettingIndex] ==
+                '1';
         final itemDirectory =
             _resolveDownloadItemDirectory(source.path, rawId, rawDirectory);
-        if (!Directory(itemDirectory).existsSync()) {
+        final dedupeKey = itemDirectory.toLowerCase();
+        if (!seenDirectories.add(dedupeKey)) {
+          continue;
+        }
+        final itemDirectoryExists = Directory(itemDirectory).existsSync();
+        if (!itemDirectoryExists && !showAllDatabaseRecords) {
           continue;
         }
 
-        final episodeFiles =
-            _buildDownloadedEpisodeFiles(itemDirectory, baseItem);
-        if (episodeFiles.isEmpty) {
+        final episodeFiles = itemDirectoryExists
+            ? _buildDownloadedEpisodeFiles(itemDirectory, baseItem)
+            : const <int, List<String>>{};
+        if (episodeFiles.isEmpty && !showAllDatabaseRecords) {
           continue;
         }
 
-        final coverPath =
-            _pickCoverPath(itemDirectory, episodeFiles[0] ?? const <String>[]);
+        final coverPath = itemDirectoryExists
+            ? _pickCoverPath(itemDirectory, episodeFiles[0] ?? const <String>[])
+            : null;
+        final localType = _effectiveDownloadTypeForLocalItem(baseItem, rawId);
         final item = LocalLibraryComicItem(
           itemId: 'local_download::${source.id}::$rawId',
           originalId: rawId,
-          type: baseItem.type,
+          type: localType,
           name: baseItem.name,
           subTitle: baseItem.subTitle,
           tags: List<String>.from(baseItem.tags),
-          sourceDisplayName: _displayNameForDownloaded(baseItem),
+          sourceDisplayName:
+              _displayNameForDownloaded(baseItem, rawId, localType),
           fileSystemPath: itemDirectory,
           episodeFiles: episodeFiles,
           downloadedEps:
@@ -657,8 +683,10 @@ class LocalLibraryManager {
           canDelete: false,
           aliases: [rawId],
           favoriteTarget: _favoriteTargetForDownloaded(baseItem, rawId),
-          comicSize: baseItem.comicSize ??
-              _computeDirectorySizeMb(Directory(itemDirectory)),
+          comicSize: itemDirectoryExists
+              ? (baseItem.comicSize ??
+                  _computeDirectorySizeMb(Directory(itemDirectory)))
+              : (baseItem.comicSize ?? 0),
         )..time = baseItem.time;
 
         _indexItem(item);
@@ -767,11 +795,38 @@ class LocalLibraryManager {
     return File(_joinPath(path, 'download.db')).existsSync();
   }
 
-  static String _displayNameForDownloaded(DownloadedItem item) {
+  static bool _isRescannedLocalRecord(DownloadedItem item, String rawId) {
+    if (item is CustomDownloadedItem) {
+      return false;
+    }
+    if (item is DownloadedComic) {
+      return !RegExp(r'^[0-9a-fA-F]{24}$').hasMatch(rawId.trim());
+    }
+    return false;
+  }
+
+  static DownloadType _effectiveDownloadTypeForLocalItem(
+    DownloadedItem item,
+    String rawId,
+  ) {
+    if (_isRescannedLocalRecord(item, rawId)) {
+      return DownloadType.other;
+    }
+    return item.type;
+  }
+
+  static String _displayNameForDownloaded(
+    DownloadedItem item,
+    String rawId,
+    DownloadType resolvedType,
+  ) {
     if (item is CustomDownloadedItem) {
       return item.sourceDisplayName;
     }
-    return downloadTypeDisplayName(item.type);
+    if (_isRescannedLocalRecord(item, rawId)) {
+      return '本地扫描';
+    }
+    return downloadTypeDisplayName(resolvedType);
   }
 
   static List<String> _buildDisplayedEpisodes(
@@ -798,7 +853,7 @@ class LocalLibraryManager {
 
     for (final candidate in candidates) {
       final path = _joinPath(rootPath, candidate);
-      if (Directory(path).existsSync()) {
+      if (_directoryExistsSync(path)) {
         return path;
       }
     }
@@ -831,11 +886,18 @@ class LocalLibraryManager {
           .map((row) => (row['id'] as String? ?? '').trim())
           .where((id) => id.isNotEmpty)
           .toSet();
+      final knownDirectories = db
+          .select('select directory from download')
+          .map((row) => (row['directory'] as String? ?? '').trim())
+          .where((directory) => directory.isNotEmpty)
+          .toSet();
 
       var count = 0;
       for (final entry in _safeList(root).whereType<Directory>()) {
         final dirName = _basename(entry.path);
-        if (dirName.isEmpty || knownIds.contains(dirName)) {
+        if (dirName.isEmpty ||
+            knownIds.contains(dirName) ||
+            knownDirectories.contains(dirName)) {
           continue;
         }
 
@@ -888,6 +950,7 @@ class LocalLibraryManager {
           jsonEncode(comic.toJson()),
         ]);
         knownIds.add(dirName);
+        knownDirectories.add(dirName);
         count++;
       }
 
@@ -1054,6 +1117,14 @@ class LocalLibraryManager {
     return bytes / 1024 / 1024;
   }
 
+  static bool _directoryExistsSync(String path) {
+    try {
+      return Directory(path).existsSync();
+    } catch (_) {
+      return false;
+    }
+  }
+
   static List<FileSystemEntity> _safeList(Directory dir) {
     try {
       return dir.listSync();
@@ -1134,6 +1205,33 @@ class LocalLibraryManager {
     return sanitized;
   }
 
+  static bool _looksLikeCanonicalDownloadId(String id) {
+    final value = id.trim();
+    return value.contains('-') ||
+        value.startsWith('jm') ||
+        value.startsWith('hitomi') ||
+        value.startsWith('nhentai') ||
+        value.startsWith('Ht') ||
+        RegExp(r'^\d+$').hasMatch(value) ||
+        RegExp(r'^[0-9a-fA-F]{24}$').hasMatch(value);
+  }
+
+  static int _downloadRowPriority(String id, String directory) {
+    final normalizedId = id.trim();
+    final normalizedDirectory = directory.trim();
+    if (normalizedId.isEmpty) {
+      return -1;
+    }
+    if (_looksLikeCanonicalDownloadId(normalizedId) &&
+        normalizedId != normalizedDirectory) {
+      return 2;
+    }
+    if (_looksLikeCanonicalDownloadId(normalizedId)) {
+      return 1;
+    }
+    return 0;
+  }
+
   static DownloadedItem? _parseDownloadedItem(
     String id,
     String json,
@@ -1156,7 +1254,9 @@ class LocalLibraryManager {
       } else if (RegExp(r'^\d+$').hasMatch(id)) {
         comic = DownloadedGallery.fromJson(data);
       } else {
-        comic = DownloadedComic.fromJson(data);
+        comic = RegExp(r'^[0-9a-fA-F]{24}$').hasMatch(id.trim())
+            ? DownloadedComic.fromJson(data)
+            : ScannedDownloadedComic.fromJson(data);
       }
       comic.time = time;
       comic.directory = directory;

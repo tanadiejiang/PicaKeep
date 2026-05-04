@@ -122,6 +122,7 @@ class Appdata {
     "time_desc", //93 本地图集列表排序
     "1", //94 本地图集页仅显示图集
     "0", //95 本地详情页相关推荐模式
+    "0", //96 无论有无文件都按下载数据库显示
   ];
 
   List<String> implicitData = [
@@ -198,17 +199,18 @@ class Appdata {
       decodeLocalComicPathList(settings[localComicPathsSettingIndex]),
     );
     settings[localAlbumImageSortSettingIndex] =
-        normalizeLocalAlbumImageSort(
-            settings[localAlbumImageSortSettingIndex]);
-    settings[localLibraryListSortSettingIndex] =
-        normalizeLocalLibraryListSort(
-            settings[localLibraryListSortSettingIndex]);
+        normalizeLocalAlbumImageSort(settings[localAlbumImageSortSettingIndex]);
+    settings[localLibraryListSortSettingIndex] = normalizeLocalLibraryListSort(
+        settings[localLibraryListSortSettingIndex]);
     if (settings[localLibraryAlbumOnlySettingIndex] != "0") {
       settings[localLibraryAlbumOnlySettingIndex] = "1";
     }
     settings[localDetailRecommendationSettingIndex] =
         normalizeLocalDetailRecommendationMode(
             settings[localDetailRecommendationSettingIndex]);
+    settings[localLibraryShowAllDatabaseRecordsSettingIndex] =
+        normalizeLocalLibraryShowAllDatabaseRecords(
+            settings[localLibraryShowAllDatabaseRecordsSettingIndex]);
     setManagedDataSourceMode(settings[managedDataSourceModeSettingIndex]);
   }
 
@@ -277,15 +279,17 @@ class Appdata {
       settings[localComicPathsSettingIndex] = encodeLocalComicPathList(
         decodeLocalComicPathList(settings[localComicPathsSettingIndex]),
       );
-      settings[localAlbumImageSortSettingIndex] =
-          normalizeLocalAlbumImageSort(
-              settings[localAlbumImageSortSettingIndex]);
+      settings[localAlbumImageSortSettingIndex] = normalizeLocalAlbumImageSort(
+          settings[localAlbumImageSortSettingIndex]);
       settings[localLibraryListSortSettingIndex] =
           normalizeLocalLibraryListSort(
               settings[localLibraryListSortSettingIndex]);
       settings[localDetailRecommendationSettingIndex] =
           normalizeLocalDetailRecommendationMode(
               settings[localDetailRecommendationSettingIndex]);
+      settings[localLibraryShowAllDatabaseRecordsSettingIndex] =
+          normalizeLocalLibraryShowAllDatabaseRecords(
+              settings[localLibraryShowAllDatabaseRecordsSettingIndex]);
       setManagedDataSourceMode(settings[managedDataSourceModeSettingIndex]);
       settings[22] = downloadPath;
       settings[13] = authRequired;

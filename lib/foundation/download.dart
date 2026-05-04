@@ -303,7 +303,7 @@ class DownloadManager with _DownloadDb {
 
       if (!hasSubdirImages && !hasFlatImages) continue;
 
-      if (isExists(dirName)) continue;
+      if (isExists(dirName) || _hasDirectoryRecord(dirName)) continue;
 
       final chapters = <String>[];
       final downloadedChapters = <int>[];
@@ -373,10 +373,14 @@ class DownloadManager with _DownloadDb {
       select * from download
       order by $order $direction
     ''');
-    int success = 0;
+    int parsed = 0;
     int failed = 0;
-    final items = <DownloadedItem>[];
+    final bestItems = <String, DownloadedItem>{};
+    final bestScores = <String, int>{};
+    final orderedKeys = <String>[];
     for (var e in result) {
+      final rawId = (e['id'] as String? ?? '').trim();
+      final rawDirectory = (e['directory'] as String? ?? '').trim();
       final item = _getComicFromJson(
         e['id'],
         e['json'],
@@ -384,14 +388,28 @@ class DownloadManager with _DownloadDb {
         e['directory'],
       );
       if (item != null) {
-        items.add(item);
-        success++;
+        parsed++;
+        final resolvedDirectory = _resolveDirectoryForId(rawId, rawDirectory);
+        final dedupeKey = resolvedDirectory.isNotEmpty
+            ? resolvedDirectory.toLowerCase()
+            : rawId.toLowerCase();
+        final score = _downloadRowPriority(rawId, rawDirectory);
+        final previousScore = bestScores[dedupeKey];
+        if (previousScore == null) {
+          orderedKeys.add(dedupeKey);
+          bestScores[dedupeKey] = score;
+          bestItems[dedupeKey] = item;
+        } else if (score > previousScore) {
+          bestScores[dedupeKey] = score;
+          bestItems[dedupeKey] = item;
+        }
       } else {
         failed++;
       }
     }
+    final items = orderedKeys.map((key) => bestItems[key]!).toList();
     print(
-        '[PicaKeep] getAll() loaded: $success success, $failed failed, total ${result.length}');
+        '[PicaKeep] getAll() loaded: ${items.length} visible, $parsed parsed, $failed failed, total ${result.length}');
 
     return items;
   }
@@ -454,6 +472,46 @@ abstract mixin class _DownloadDb {
       where id = ?
     ''', [id]);
     return result.isNotEmpty;
+  }
+
+  bool _hasDirectoryRecord(String directory) {
+    final normalized = directory.trim();
+    if (normalized.isEmpty) {
+      return false;
+    }
+    final result = _db!.select('''
+      select 1 from download
+      where directory = ?
+      limit 1
+    ''', [normalized]);
+    return result.isNotEmpty;
+  }
+
+  bool _looksLikeCanonicalDownloadId(String id) {
+    final value = id.trim();
+    return value.contains('-') ||
+        value.startsWith('jm') ||
+        value.startsWith('hitomi') ||
+        value.startsWith('nhentai') ||
+        value.startsWith('Ht') ||
+        value.isNum ||
+        RegExp(r'^[0-9a-fA-F]{24}$').hasMatch(value);
+  }
+
+  int _downloadRowPriority(String id, String directory) {
+    final normalizedId = id.trim();
+    final normalizedDirectory = directory.trim();
+    if (normalizedId.isEmpty) {
+      return -1;
+    }
+    if (_looksLikeCanonicalDownloadId(normalizedId) &&
+        normalizedId != normalizedDirectory) {
+      return 2;
+    }
+    if (_looksLikeCanonicalDownloadId(normalizedId)) {
+      return 1;
+    }
+    return 0;
   }
 
   void _deleteFromDb(String id) {
@@ -533,6 +591,10 @@ abstract mixin class _DownloadDb {
 DownloadedItem? _getComicFromJson(
     String id, String json, DateTime time, String? directory) {
   DownloadedItem? comic;
+
+  bool isPicacgLikeId(String value) {
+    return RegExp(r'^[0-9a-fA-F]{24}$').hasMatch(value.trim());
+  }
   try {
     final data = jsonDecode(json) as Map<String, dynamic>;
 
@@ -579,11 +641,13 @@ DownloadedItem? _getComicFromJson(
         print('[PicaKeep] DownloadedGallery.fromJson failed for id="$id": $e');
       }
     } else {
-      // Picacg: MongoDB ObjectId like "6595730e2ef71146c8a109a6"
+      // Picacg ObjectId or local records synthesized by rescan
       try {
-        comic = DownloadedComic.fromJson(data);
+        comic = isPicacgLikeId(id)
+            ? DownloadedComic.fromJson(data)
+            : ScannedDownloadedComic.fromJson(data);
       } catch (e) {
-        print('[PicaKeep] DownloadedComic.fromJson failed for id="$id": $e');
+        print('[PicaKeep] DownloadedComic parse failed for id="$id": $e');
       }
     }
 

@@ -256,6 +256,12 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
   }
 
   String _displayIdFor(DownloadedItem comic) {
+    final isAlbum = comic is LocalLibraryComicItem
+        ? comic.isAlbum
+        : comic.sourceDisplayName == '图集';
+    if (isAlbum) {
+      return comic.name;
+    }
     if (comic is LocalLibraryComicItem) {
       final originalId = comic.originalId.trim();
       if (originalId.isNotEmpty) {
@@ -270,6 +276,37 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
       }
     }
     return comic.id;
+  }
+
+  String? _displayPathFor(DownloadedItem comic) {
+    String? fullPath;
+    final fileSystemPath = comic.fileSystemPath?.trim();
+    if (fileSystemPath != null && fileSystemPath.isNotEmpty) {
+      fullPath = fileSystemPath;
+    } else {
+      final directory = comic.directory?.trim();
+      if (directory != null && directory.isNotEmpty) {
+        final rootPath = (DownloadManager().path ?? appdata.settings[22]).trim();
+        fullPath = rootPath.isNotEmpty
+            ? '$rootPath${Platform.pathSeparator}$directory'
+            : directory;
+      }
+    }
+    if (fullPath == null || fullPath.isEmpty) {
+      return null;
+    }
+
+    final normalized = fullPath.replaceAll('\\', '/');
+    final trimmed = normalized.endsWith('/') && normalized.length > 1
+        ? normalized.substring(0, normalized.length - 1)
+        : normalized;
+    final lastSeparator = trimmed.lastIndexOf('/');
+    if (lastSeparator <= 0) {
+      return trimmed.replaceAll('/', Platform.pathSeparator);
+    }
+    return trimmed
+        .substring(0, lastSeparator)
+        .replaceAll('/', Platform.pathSeparator);
   }
 
   void _showNextRecommendationPage(int total) {
@@ -297,7 +334,7 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
     add('ID', [_displayIdFor(comic)]);
     add('作者', [comic.subTitle]);
     add('时间', [_formatTime(comic.time)]);
-    add('路径', [comic.fileSystemPath ?? comic.directory]);
+    add('路径', [_displayPathFor(comic)]);
     if (comic.tags.isNotEmpty) {
       groups['标签'] = comic.tags.map(_translateTagIfNeeded).toSet().toList();
     }
