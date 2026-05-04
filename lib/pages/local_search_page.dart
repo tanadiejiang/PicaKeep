@@ -8,6 +8,7 @@ import 'package:picakeep/foundation/app.dart';
 import 'package:picakeep/foundation/download.dart';
 import 'package:picakeep/foundation/download_model.dart';
 import 'package:picakeep/foundation/local_favorites.dart';
+import 'package:picakeep/foundation/local_library.dart';
 import 'package:picakeep/tools/translations.dart';
 import 'favorites/local_favorites.dart';
 import 'local_comic_detail_page.dart';
@@ -19,17 +20,17 @@ class _SearchResult {
   final String author;
   final String sourceLabel;
   final List<String> tags;
-  final FavoriteType? favType;
   final DownloadedItem? downloadItem;
+  final DownloadedItem? localItem;
   final FavoriteItemWithFolderInfo? favoriteItem;
 
-  _SearchResult({
+  const _SearchResult({
     required this.title,
     required this.author,
     required this.sourceLabel,
     this.tags = const [],
-    this.favType,
     this.downloadItem,
+    this.localItem,
     this.favoriteItem,
   });
 }
@@ -37,10 +38,12 @@ class _SearchResult {
 class LocalSearchPage extends StatefulWidget {
   const LocalSearchPage({
     this.searchType = LocalSearchType.all,
+    this.initialKeyword = '',
     super.key,
   });
 
   final LocalSearchType searchType;
+  final String initialKeyword;
 
   @override
   State<LocalSearchPage> createState() => _LocalSearchPageState();
@@ -57,6 +60,15 @@ class _LocalSearchPageState extends State<LocalSearchPage> {
   void initState() {
     super.initState();
     _controller.addListener(() => setState(() {}));
+    final initialKeyword = widget.initialKeyword.trim();
+    if (initialKeyword.isNotEmpty) {
+      _controller.text = initialKeyword;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          _search(initialKeyword);
+        }
+      });
+    }
   }
 
   @override
@@ -83,7 +95,8 @@ class _LocalSearchPageState extends State<LocalSearchPage> {
   }
 
   Future<void> _search(String keyword) async {
-    if (keyword.trim().isEmpty) {
+    final normalizedKeyword = keyword.trim();
+    if (normalizedKeyword.isEmpty) {
       setState(() {
         _results = [];
         _hasSearched = false;
@@ -91,47 +104,58 @@ class _LocalSearchPageState extends State<LocalSearchPage> {
       return;
     }
     setState(() => _isSearching = true);
+
     final results = <_SearchResult>[];
     final seenIds = <String>{};
     final favManager = LocalFavoritesManager();
+    final localManager = LocalLibraryManager();
+
     await favManager.init();
+    await localManager.ensureLoaded();
+
     if (widget.searchType != LocalSearchType.downloadsOnly) {
-      final favResults = favManager.search(keyword);
+      final favResults = favManager.search(normalizedKeyword);
       for (final fav in favResults) {
-        final c = fav.comic;
-        final idKey = 'fav_${c.type.key}_${c.target}';
+        final comic = fav.comic;
+        final localItem =
+            localManager.findCachedByCandidates(comic.candidateDownloadIds());
+        final idKey = localItem != null
+            ? 'local_${localItem.id}'
+            : 'fav_${comic.type.key}_${comic.target}';
         if (seenIds.contains(idKey)) continue;
         seenIds.add(idKey);
-        results.add(_SearchResult(
-          title: c.name,
-          author: c.author,
-          sourceLabel: '${c.type.name} · ${fav.folder}',
-          tags: c.tags,
-          favType: c.type,
-          favoriteItem: fav,
-        ));
+        results.add(
+          _SearchResult(
+            title: comic.name,
+            author: comic.author,
+            sourceLabel: '${comic.type.name} · ${fav.folder}',
+            tags: comic.tags,
+            localItem: localItem,
+            favoriteItem: fav,
+          ),
+        );
       }
     }
+
     if (widget.searchType != LocalSearchType.favoritesOnly) {
-      try {
-        final dlManager = DownloadManager();
-        await dlManager.init();
-        for (final item in dlManager.getAll()) {
-          final idKey = 'dl_${item.id}';
-          if (seenIds.contains(idKey)) continue;
-          if (_matches(item, keyword)) {
-            seenIds.add(idKey);
-            results.add(_SearchResult(
+      for (final item in await localManager.getAll()) {
+        final idKey = 'local_${item.id}';
+        if (seenIds.contains(idKey)) continue;
+        if (_matches(item, normalizedKeyword)) {
+          seenIds.add(idKey);
+          results.add(
+            _SearchResult(
               title: item.name,
               author: item.subTitle,
-              sourceLabel: _downloadLabel(item.type),
+              sourceLabel: _downloadLabel(item),
               tags: item.tags,
               downloadItem: item,
-            ));
-          }
+            ),
+          );
         }
-      } catch (_) {}
+      }
     }
+
     if (!mounted) return;
     setState(() {
       _results = results;
@@ -140,21 +164,90 @@ class _LocalSearchPageState extends State<LocalSearchPage> {
     });
   }
 
-  bool _matches(DownloadedItem item, String keyword) {
-    final k = keyword.trim().toLowerCase();
-    for (final kw in k.split(' ')) {
-      if (kw.isEmpty) continue;
-      if (!item.name.toLowerCase().contains(kw) &&
-          !item.subTitle.toLowerCase().contains(kw) &&
-          !item.tags.any((t) => t.toLowerCase().contains(kw))) {
-        return false;
+  Iterable<String> _tagTerms(String tag) sync* {
+    final raw = tag.trim();
+    if (raw.isEmpty) return;
+    yield raw.toLowerCase();
+    if (raw.contains(':')) {
+      final value = raw.split(':').last.trim();
+      if (value.isNotEmpty) {
+        yield value.toLowerCase();
       }
     }
-    return true;
   }
 
-  String _downloadLabel(DownloadType type) {
-    switch (type) {
+  Iterable<String> _searchTerms(DownloadedItem item) sync* {
+    yield item.name.toLowerCase();
+    yield item.subTitle.toLowerCase();
+    yield item.sourceDisplayName.toLowerCase();
+
+    for (final tag in item.tags) {
+      yield* _tagTerms(tag);
+    }
+
+    try {
+      final json = item.toJson();
+      for (final key in const [
+        'comicId',
+        'id',
+        'itemId',
+        'link',
+        'favoriteTarget',
+        'directory',
+      ]) {
+        final value = json[key]?.toString().trim();
+        if (value != null && value.isNotEmpty) {
+          yield value.toLowerCase();
+        }
+      }
+    } catch (_) {}
+
+    if (item is LocalLibraryComicItem) {
+      yield item.itemId.toLowerCase();
+      yield item.originalId.toLowerCase();
+      final favoriteTarget = item.favoriteTarget?.trim();
+      if (favoriteTarget != null && favoriteTarget.isNotEmpty) {
+        yield favoriteTarget.toLowerCase();
+      }
+      final fileSystemPath = item.fileSystemPath?.trim();
+      if (fileSystemPath != null && fileSystemPath.isNotEmpty) {
+        yield fileSystemPath.toLowerCase();
+      }
+      for (final alias in item.aliases) {
+        final normalized = alias.trim();
+        if (normalized.isNotEmpty) {
+          yield normalized.toLowerCase();
+        }
+      }
+      if (item.isAlbum) {
+        yield '图集';
+      }
+    }
+  }
+
+  bool _matches(DownloadedItem item, String keyword) {
+    final words = keyword
+        .trim()
+        .toLowerCase()
+        .split(RegExp(r'\s+'))
+        .where((e) => e.isNotEmpty)
+        .toList();
+    if (words.isEmpty) {
+      return true;
+    }
+    final terms = _searchTerms(item).where((e) => e.isNotEmpty).toList();
+    return words.every((word) => terms.any((term) => term.contains(word)));
+  }
+
+  String _downloadLabel(DownloadedItem item) {
+    if (item is LocalLibraryComicItem) {
+      if (item.isAlbum) {
+        return '图集 · 本地';
+      }
+      final source = item.sourceDisplayName.trim();
+      return source.isEmpty ? '本地下载' : '$source · 本地';
+    }
+    switch (item.type) {
       case DownloadType.picacg:
         return 'Picacg · 下载';
       case DownloadType.ehentai:
@@ -176,99 +269,83 @@ class _LocalSearchPageState extends State<LocalSearchPage> {
     }
   }
 
-  Widget _buildGridTile(_SearchResult r) {
-    if (r.downloadItem != null) {
-      final item = r.downloadItem!;
-      final type = item.type.name;
+  String _formatSize(double? size) {
+    if (size == null) return '未知大小'.tl;
+    if (size > 1024) return '${(size / 1024).toStringAsFixed(1)}GB';
+    return '${size.toStringAsFixed(1)}MB';
+  }
+
+  File _coverForDownloadedItem(DownloadedItem item) {
+    if (item is LocalLibraryComicItem) {
+      final coverPath = item.localCoverPath?.trim();
+      if (coverPath != null && coverPath.isNotEmpty) {
+        final file = File(coverPath);
+        if (file.existsSync()) {
+          return file;
+        }
+      }
+    }
+    return DownloadManager().getCover(item.id);
+  }
+
+  Widget _buildGridTile(_SearchResult result) {
+    if (result.downloadItem != null) {
+      final item = result.downloadItem!;
       return Padding(
         padding: const EdgeInsets.all(2),
         child: DownloadedComicTile(
           name: item.name,
           author: item.subTitle,
-          imagePath: DownloadManager().getCover(item.id),
-          type: type,
+          imagePath: _coverForDownloadedItem(item),
+          type: result.sourceLabel,
           tag: item.tags,
           onTap: () {
             App.pushInner(() => LocalComicDetailPage(comic: item));
           },
-          size: item.comicSize != null
-              ? '${item.comicSize!.toStringAsFixed(2)}MB'
-              : '未知大小'.tl,
+          size: _formatSize(item.comicSize),
           onLongTap: () {},
           onSecondaryTap: (_) {},
         ),
       );
     }
-    if (r.favoriteItem != null) {
-      final c = r.favoriteItem!.comic;
-      final p = c.coverPath.trim();
-      final coverOk = p.isNotEmpty && File(p).existsSync();
-      if (coverOk) {
-        return Padding(
-          padding: const EdgeInsets.all(2),
-          child: DownloadedComicTile(
-            name: c.name,
-            author: c.author,
-            imagePath: File(p),
-            type: r.sourceLabel,
-            tag: c.tags,
-            onTap: () {
-              App.pushInner(
-                () => LocalFavoritesFolder(folderName: r.favoriteItem!.folder),
-              );
-            },
-            size: '—',
-            onLongTap: () {},
-            onSecondaryTap: (_) {},
-          ),
-        );
-      }
+
+    if (result.favoriteItem != null) {
+      final favorite = result.favoriteItem!;
+      final comic = favorite.comic;
+      final localItem = result.localItem;
+      final coverPath = comic.coverPath.trim();
+      final favoriteCover = coverPath.isNotEmpty ? File(coverPath) : File('');
+      final localCover =
+          localItem != null ? _coverForDownloadedItem(localItem) : null;
+      final imageFile = favoriteCover.existsSync()
+          ? favoriteCover
+          : (localCover?.existsSync() ?? false)
+              ? localCover!
+              : File('');
+
       return Padding(
         padding: const EdgeInsets.all(2),
-        child: Material(
-          borderRadius: BorderRadius.circular(16),
-          color: Theme.of(context).colorScheme.surfaceContainerHighest,
-          child: InkWell(
-            onTap: () {
-              App.pushInner(
-                () => LocalFavoritesFolder(folderName: r.favoriteItem!.folder),
-              );
-            },
-            borderRadius: BorderRadius.circular(16),
-            child: Padding(
-              padding: const EdgeInsets.all(8),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Expanded(
-                    child: Center(
-                      child: Icon(
-                        Icons.collections_bookmark,
-                        size: 40,
-                        color: Theme.of(context).colorScheme.primary,
-                      ),
-                    ),
-                  ),
-                  Text(
-                    c.name,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontWeight: FontWeight.w600),
-                  ),
-                  if (c.author.isNotEmpty)
-                    Text(
-                      c.author,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context).textTheme.bodySmall,
-                    ),
-                ],
-              ),
-            ),
-          ),
+        child: DownloadedComicTile(
+          name: comic.name,
+          author: comic.author,
+          imagePath: imageFile,
+          type: result.sourceLabel,
+          tag: comic.tags,
+          onTap: () {
+            if (localItem != null) {
+              App.pushInner(() => LocalComicDetailPage(comic: localItem));
+              return;
+            }
+            App.pushInner(
+                () => LocalFavoritesFolder(folderName: favorite.folder));
+          },
+          size: localItem != null ? _formatSize(localItem.comicSize) : '未下载'.tl,
+          onLongTap: () {},
+          onSecondaryTap: (_) {},
         ),
       );
     }
+
     return const SizedBox.shrink();
   }
 
@@ -278,7 +355,7 @@ class _LocalSearchPageState extends State<LocalSearchPage> {
       appBar: AppBar(
         title: TextField(
           controller: _controller,
-          autofocus: true,
+          autofocus: widget.initialKeyword.trim().isEmpty,
           decoration: const InputDecoration(
             hintText: '搜索本地漫画...',
             border: InputBorder.none,

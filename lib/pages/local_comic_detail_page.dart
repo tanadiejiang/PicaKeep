@@ -14,6 +14,8 @@ import 'package:picakeep/tools/read_history_helper.dart';
 import 'package:picakeep/tools/tags_translation.dart';
 import 'package:picakeep/tools/translations.dart';
 
+import 'local_search_page.dart';
+
 class LocalComicDetailPage extends StatefulWidget {
   final DownloadedItem comic;
 
@@ -44,6 +46,7 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
   bool _showAppbarTitle = false;
   int _recommendationPage = 0;
   double _bottomPullDistance = 0;
+  Offset? _lastTextActionPosition;
 
   static const _recommendationPageSize = 10;
 
@@ -118,11 +121,56 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
     return tag;
   }
 
+  List<String> _historyTargetsFor(DownloadedItem comic) {
+    final targets = <String>{comic.id};
+    try {
+      final json = comic.toJson();
+      for (final key in const [
+        'comicId',
+        'id',
+        'itemId',
+        'link',
+        'favoriteTarget',
+      ]) {
+        final value = json[key]?.toString().trim();
+        if (value != null && value.isNotEmpty) targets.add(value);
+      }
+    } catch (_) {}
+    if (comic is LocalLibraryComicItem) {
+      final originalId = comic.originalId.trim();
+      if (originalId.isNotEmpty) targets.add(originalId);
+      final favoriteTarget = comic.favoriteTarget?.trim();
+      if (favoriteTarget != null && favoriteTarget.isNotEmpty) {
+        targets.add(favoriteTarget);
+      }
+      for (final alias in comic.aliases) {
+        final value = alias.trim();
+        if (value.isNotEmpty) targets.add(value);
+      }
+    }
+    return targets.toList();
+  }
+
+  dynamic _historyFor(DownloadedItem comic) {
+    for (final target in _historyTargetsFor(comic)) {
+      final history = appdata.history.find(target);
+      if (history != null) return history;
+    }
+    return null;
+  }
+
   Future<void> _onRead({int? ep, int? page}) async {
-    await ensureHistoryBeforeRead(widget.comic);
+    await ensureHistoryBeforeRead(
+      widget.comic,
+      legacyTargets: _historyTargetsFor(widget.comic),
+    );
     await App.openReader(
       () => widget.comic.createReadingPage(ep: ep, page: page),
     );
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    if (mounted) {
+      setState(() {});
+    }
   }
 
   Future<void> _onDelete() async {
@@ -208,9 +256,33 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
     return null;
   }
 
+  String _displayIdFor(DownloadedItem comic) {
+    if (comic is LocalLibraryComicItem) {
+      final originalId = comic.originalId.trim();
+      if (originalId.isNotEmpty) {
+        return originalId;
+      }
+    }
+    final json = comic.toJson();
+    for (final key in const ['comicId', 'id', 'itemId']) {
+      final value = json[key]?.toString().trim();
+      if (value != null && value.isNotEmpty) {
+        return value;
+      }
+    }
+    return comic.id;
+  }
+
+  void _showNextRecommendationPage(int total) {
+    if (total <= _recommendationPageSize) return;
+    setState(() {
+      final pages = (total / _recommendationPageSize).ceil();
+      _recommendationPage = (_recommendationPage + 1) % pages;
+    });
+  }
+
   Map<String, List<String>> _buildInfoGroups() {
     final comic = widget.comic;
-    final json = comic.toJson();
     final groups = <String, List<String>>{};
 
     void add(String key, Iterable<String?> values) {
@@ -223,15 +295,8 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
       if (normalized.isNotEmpty) groups[key] = normalized;
     }
 
-    add('ID', [
-      json['comicId']?.toString(),
-      json['id']?.toString(),
-      json['itemId']?.toString(),
-      comic.id,
-    ]);
+    add('ID', [_displayIdFor(comic)]);
     add('作者', [comic.subTitle]);
-    add('来源', [_sourceLabel]);
-    add('大小', [_formatSize(comic.comicSize)]);
     add('时间', [_formatTime(comic.time)]);
     add('路径', [comic.fileSystemPath ?? comic.directory]);
     if (comic.tags.isNotEmpty) {
@@ -249,22 +314,32 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
     final current = widget.comic;
     final currentName = current.name;
     final currentAuthor = current.subTitle.trim().toLowerCase();
-    final currentTags = current.tags.map((e) => e.trim().toLowerCase()).where((e) => e.isNotEmpty).toSet();
+    final currentTags = current.tags
+        .map((e) => e.trim().toLowerCase())
+        .where((e) => e.isNotEmpty)
+        .toSet();
     final currentTopics = _nameTopics(currentName);
     final albumOnly = _isAlbum;
 
     final recommendations = <_LocalRecommendation>[];
     for (final item in _localItems) {
-      if (item.id == current.id || item.originalId == current.id || item.name == current.name) {
+      if (item.id == current.id ||
+          item.originalId == current.id ||
+          item.name == current.name) {
         continue;
       }
 
       final nameScore = _nameSimilarity(currentName, item.name);
       final itemAuthor = item.subTitle.trim().toLowerCase();
-      final sameAuthor = currentAuthor.isNotEmpty && currentAuthor == itemAuthor;
-      final itemTags = item.tags.map((e) => e.trim().toLowerCase()).where((e) => e.isNotEmpty).toSet();
+      final sameAuthor =
+          currentAuthor.isNotEmpty && currentAuthor == itemAuthor;
+      final itemTags = item.tags
+          .map((e) => e.trim().toLowerCase())
+          .where((e) => e.isNotEmpty)
+          .toSet();
       final tagMatches = currentTags.intersection(itemTags).length;
-      final topicMatches = currentTopics.intersection(_nameTopics(item.name)).length;
+      final topicMatches =
+          currentTopics.intersection(_nameTopics(item.name)).length;
       final hasTopic = topicMatches > 0 || nameScore >= 0.36;
 
       double score;
@@ -287,7 +362,8 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
             break;
           case '2':
             if (!authorAndTopic) continue;
-            score = 3000 + topicMatches * 80 + nameScore * 300 + tagMatches * 20;
+            score =
+                3000 + topicMatches * 80 + nameScore * 300 + tagMatches * 20;
             reason = '同作者 + 同题材'.tl;
             break;
           case '3':
@@ -297,7 +373,10 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
             break;
           case '4':
             if (!hasTags) continue;
-            score = 1000 + tagMatches * 120 + nameScore * 200 + (sameAuthor ? 60 : 0);
+            score = 1000 +
+                tagMatches * 120 +
+                nameScore * 200 +
+                (sameAuthor ? 60 : 0);
             reason = '同标签'.tl;
             break;
           case '0':
@@ -306,7 +385,8 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
               score = 4000 + nameScore * 1000 + tagMatches * 20;
               reason = '名称高度相似'.tl;
             } else if (authorAndTopic) {
-              score = 3000 + topicMatches * 100 + nameScore * 400 + tagMatches * 20;
+              score =
+                  3000 + topicMatches * 100 + nameScore * 400 + tagMatches * 20;
               reason = '同作者 + 同题材'.tl;
             } else if (sameTopic) {
               score = 2000 + topicMatches * 100 + nameScore * 400;
@@ -321,7 +401,8 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
         }
       }
 
-      recommendations.add(_LocalRecommendation(item: item, score: score, reason: reason));
+      recommendations
+          .add(_LocalRecommendation(item: item, score: score, reason: reason));
     }
 
     recommendations.sort((a, b) {
@@ -377,19 +458,19 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
     };
   }
 
-  bool _handleRecommendationOverscroll(OverscrollNotification notification, int total) {
-    if (notification.overscroll <= 0 || total <= _recommendationPageSize) {
+  bool _handleRecommendationOverscroll(
+      OverscrollNotification notification, int total) {
+    if (notification.dragDetails == null ||
+        notification.overscroll <= 0 ||
+        total <= _recommendationPageSize) {
       return false;
     }
     final metrics = notification.metrics;
     if (metrics.pixels < metrics.maxScrollExtent - 24) return false;
     _bottomPullDistance += notification.overscroll;
-    if (_bottomPullDistance >= 88) {
+    if (_bottomPullDistance >= 120) {
+      _showNextRecommendationPage(total);
       _bottomPullDistance = 0;
-      setState(() {
-        final pages = (total / _recommendationPageSize).ceil();
-        _recommendationPage = (_recommendationPage + 1) % pages;
-      });
     }
     return false;
   }
@@ -404,8 +485,10 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
         return StatefulBuilder(
           builder: (context, setDialogState) {
             return Dialog(
-              insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+              insetPadding:
+                  const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(18)),
               child: ConstrainedBox(
                 constraints: const BoxConstraints(maxWidth: 420),
                 child: Padding(
@@ -419,7 +502,8 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
                           children: [
                             Text(
                               '相关推荐设置'.tl,
-                              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
+                              style: const TextStyle(
+                                  fontSize: 18, fontWeight: FontWeight.w600),
                             ),
                             const Spacer(),
                             IconButton(
@@ -446,7 +530,9 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
                           title: Text(entry.value.tl),
                           onTap: () async {
                             setDialogState(() => mode = entry.key);
-                            appdata.settings[localDetailRecommendationSettingIndex] = entry.key;
+                            appdata.settings[
+                                    localDetailRecommendationSettingIndex] =
+                                entry.key;
                             await appdata.updateSettings();
                             if (mounted) {
                               setState(() => _recommendationPage = 0);
@@ -520,7 +606,8 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
               children: [
                 Text(
                   title.tl,
-                  style: const TextStyle(fontWeight: FontWeight.w500, fontSize: 18),
+                  style: const TextStyle(
+                      fontWeight: FontWeight.w500, fontSize: 18),
                 ),
                 const Spacer(),
                 if (trailing != null) trailing,
@@ -532,15 +619,100 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
     );
   }
 
-  Widget _infoCard(String text, {bool title = false}) {
+  Offset _fallbackTextActionPosition() {
+    final renderObject = context.findRenderObject();
+    if (renderObject is! RenderBox) {
+      return const Offset(220, 220);
+    }
+    return renderObject.localToGlobal(
+      Offset(renderObject.size.width / 2, renderObject.size.height / 3),
+    );
+  }
+
+  Future<void> _showTextActionsAt(
+    Offset position,
+    String text, {
+    String? searchAuthor,
+    String? searchTag,
+  }) async {
+    if (text.trim().isEmpty) return;
+    final action = await showMenu<String>(
+      context: context,
+      position: RelativeRect.fromLTRB(
+          position.dx, position.dy, position.dx, position.dy),
+      items: [
+        PopupMenuItem<String>(
+          value: 'copy',
+          child: Text('复制'.tl),
+        ),
+        if (searchAuthor != null && searchAuthor.trim().isNotEmpty)
+          PopupMenuItem<String>(
+            value: 'author',
+            child: Text('推荐该作者'.tl),
+          ),
+        if (searchTag != null && searchTag.trim().isNotEmpty)
+          PopupMenuItem<String>(
+            value: 'tag',
+            child: Text('推荐该标签'.tl),
+          ),
+      ],
+    );
+    if (!mounted || action == null) {
+      return;
+    }
+    switch (action) {
+      case 'copy':
+        _copyText(text);
+        break;
+      case 'author':
+        _openRecommendationSearch(searchAuthor!);
+        break;
+      case 'tag':
+        _openRecommendationSearch(searchTag!);
+        break;
+    }
+  }
+
+  void _openRecommendationSearch(String keyword) {
+    final normalized = keyword.trim();
+    if (normalized.isEmpty) {
+      return;
+    }
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => LocalSearchPage(initialKeyword: normalized),
+      ),
+    );
+  }
+
+  Widget _infoCard(String text, {bool title = false, String? group}) {
     if (text.trim().isEmpty) text = '未知'.tl;
     final colorScheme = Theme.of(context).colorScheme;
     return Container(
       margin: const EdgeInsets.fromLTRB(4, 4, 4, 4),
       child: InkWell(
         borderRadius: const BorderRadius.all(Radius.circular(12)),
-        onLongPress: () => _copyText(text),
-        onSecondaryTap: () => _copyText(text),
+        onTapDown: title
+            ? null
+            : (details) {
+                _lastTextActionPosition = details.globalPosition;
+              },
+        onLongPress: title
+            ? null
+            : () => _showTextActionsAt(
+                  _lastTextActionPosition ?? _fallbackTextActionPosition(),
+                  text,
+                  searchAuthor: group == '作者' ? text : null,
+                  searchTag: group == '标签' ? text : null,
+                ),
+        onSecondaryTapDown: title
+            ? null
+            : (details) => _showTextActionsAt(
+                  details.globalPosition,
+                  text,
+                  searchAuthor: group == '作者' ? text : null,
+                  searchTag: group == '标签' ? text : null,
+                ),
         child: Card(
           margin: EdgeInsets.zero,
           color: title
@@ -550,7 +722,8 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
                   colorScheme.surfaceTint,
                   3,
                 ),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
           elevation: 0,
           child: Padding(
             padding: const EdgeInsets.fromLTRB(12, 6, 12, 6),
@@ -616,7 +789,8 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
                     item.name,
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
+                    style: const TextStyle(
+                        fontSize: 14, fontWeight: FontWeight.w500),
                   ),
                   const SizedBox(height: 4),
                   if (item.subTitle.isNotEmpty)
@@ -631,15 +805,19 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
                     ),
                   const Spacer(),
                   Text(
-                    item.id,
+                    _displayIdFor(item),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: TextStyle(fontSize: 12, color: Theme.of(context).colorScheme.outline),
+                    style: TextStyle(
+                        fontSize: 12,
+                        color: Theme.of(context).colorScheme.outline),
                   ),
                   const SizedBox(height: 4),
                   Text(
                     recommendation.reason,
-                    style: TextStyle(fontSize: 12, color: Theme.of(context).colorScheme.primary),
+                    style: TextStyle(
+                        fontSize: 12,
+                        color: Theme.of(context).colorScheme.primary),
                   ),
                 ],
               ),
@@ -654,16 +832,15 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
   Widget build(BuildContext context) {
     final comic = widget.comic;
     final description = _getDescription();
-    final history = appdata.history.find(comic.id);
+    final history = _historyFor(comic);
     final infoGroups = _buildInfoGroups();
     final recommendations = _buildRecommendations();
     final start = recommendations.isEmpty
         ? 0
-        : (_recommendationPage * _recommendationPageSize) % recommendations.length;
-    final pageRecommendations = recommendations
-        .skip(start)
-        .take(_recommendationPageSize)
-        .toList();
+        : (_recommendationPage * _recommendationPageSize) %
+            recommendations.length;
+    final pageRecommendations =
+        recommendations.skip(start).take(_recommendationPageSize).toList();
 
     return Scaffold(
       body: NotificationListener<OverscrollNotification>(
@@ -679,7 +856,11 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
               title: AnimatedOpacity(
                 opacity: _showAppbarTitle ? 1 : 0,
                 duration: const Duration(milliseconds: 200),
-                child: Text(comic.name, maxLines: 1, overflow: TextOverflow.ellipsis),
+                child: Text(
+                  comic.name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
               ),
               actions: [
                 IconButton(
@@ -703,7 +884,8 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
                         child: Wrap(
                           children: [
                             _infoCard(entry.key.tl, title: true),
-                            for (final value in entry.value) _infoCard(value),
+                            for (final value in entry.value)
+                              _infoCard(value, group: entry.key),
                           ],
                         ),
                       ),
@@ -713,9 +895,14 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
             ),
             ..._buildEpisodes(context),
             ..._buildIntroduction(description),
-            ..._buildRecommendationSlivers(pageRecommendations, recommendations.length),
+            ..._buildRecommendationSlivers(
+              pageRecommendations,
+              recommendations.length,
+            ),
             SliverPadding(
-              padding: EdgeInsets.only(bottom: MediaQuery.of(context).padding.bottom + 24),
+              padding: EdgeInsets.only(
+                bottom: MediaQuery.of(context).padding.bottom + 24,
+              ),
             ),
           ],
         ),
@@ -725,20 +912,23 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
 
   Widget _buildComicInfo(BuildContext context, dynamic history) {
     final comic = widget.comic;
+    final canContinue = history != null && (history.ep > 0 || history.page > 0);
     return LayoutBuilder(builder: (context, constraints) {
       final compact = constraints.maxWidth < 500;
       final actions = Wrap(
         alignment: compact ? WrapAlignment.center : WrapAlignment.start,
         children: [
-          if (history != null && history.ep > 0)
-            _buildActionItem('继续阅读', Icons.menu_book, () => _onRead(ep: history.ep, page: history.page)),
+          if (canContinue)
+            _buildActionItem('继续阅读', Icons.menu_book,
+                () => _onRead(ep: history.ep, page: history.page)),
           _buildActionItem(
             '从头开始',
             Icons.not_started_outlined,
             () => _onRead(ep: comic.eps.length > 1 ? 1 : 0),
           ),
           _buildActionItem('分享', Icons.share, () => _copyText(comic.name)),
-          if (comic.canDelete) _buildActionItem('删除下载', Icons.delete_outline, _onDelete),
+          if (comic.canDelete)
+            _buildActionItem('删除下载', Icons.delete_outline, _onDelete),
         ],
       );
 
@@ -762,20 +952,28 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
                       ),
                       if (comic.subTitle.trim().isNotEmpty) ...[
                         const SizedBox(height: 8),
-                        SelectableText(comic.subTitle, style: const TextStyle(fontSize: 14)),
+                        SelectableText(comic.subTitle,
+                            style: const TextStyle(fontSize: 14)),
                       ],
                       const SizedBox(height: 8),
                       Text(_sourceLabel, style: const TextStyle(fontSize: 12)),
                       const SizedBox(height: 8),
-                      Text(_formatSize(comic.comicSize), style: const TextStyle(fontSize: 12)),
-                      if (!compact) Padding(padding: const EdgeInsets.only(top: 12), child: actions),
+                      Text(_formatSize(comic.comicSize),
+                          style: const TextStyle(fontSize: 12)),
+                      if (!compact)
+                        Padding(
+                            padding: const EdgeInsets.only(top: 12),
+                            child: actions),
                     ],
                   ),
                 ),
               ],
             ),
           ),
-          if (compact) Padding(padding: const EdgeInsets.symmetric(horizontal: 12), child: actions),
+          if (compact)
+            Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                child: actions),
         ],
       );
     });
@@ -789,12 +987,13 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
 
     return [
       _sectionHeader(
-        '章节',
+        '章节  ·  共${comic.eps.length}章',
         trailing: Tooltip(
           message: '排序'.tl,
           child: IconButton(
             icon: const Icon(Icons.swap_vert),
-            onPressed: () => setState(() => _reverseEpsOrder = !_reverseEpsOrder),
+            onPressed: () =>
+                setState(() => _reverseEpsOrder = !_reverseEpsOrder),
           ),
         ),
       ),
@@ -806,7 +1005,8 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
             childCount: length,
             (context, i) {
               final index = _reverseEpsOrder ? comic.eps.length - i - 1 : i;
-              final isDownloaded = comic.downloadedEps.contains(index) || !comic.canDelete;
+              final isDownloaded =
+                  comic.downloadedEps.contains(index) || !comic.canDelete;
               final readEp = comic.eps.length > 1 ? index + 1 : 0;
               return Padding(
                 padding: const EdgeInsets.fromLTRB(8, 4, 8, 4),
@@ -823,7 +1023,8 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
                     borderRadius: const BorderRadius.all(Radius.circular(12)),
                     shadowColor: Colors.transparent,
                     child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 8, vertical: 4),
                       child: Center(
                         child: Text(
                           comic.eps[index],
@@ -941,9 +1142,10 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
           child: Padding(
             padding: const EdgeInsets.symmetric(vertical: 12),
             child: Center(
-              child: Text(
-                '上拉刷新下一组推荐'.tl,
-                style: TextStyle(color: Theme.of(context).colorScheme.outline),
+              child: FilledButton.tonalIcon(
+                onPressed: () => _showNextRecommendationPage(total),
+                icon: const Icon(Icons.keyboard_double_arrow_up),
+                label: Text('下一组推荐'.tl),
               ),
             ),
           ),

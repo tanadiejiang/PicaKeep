@@ -10,6 +10,7 @@ import 'package:picakeep/foundation/app.dart';
 import 'package:picakeep/foundation/download.dart';
 import 'package:picakeep/foundation/download_model.dart';
 import 'package:picakeep/foundation/local_favorites.dart';
+import 'package:picakeep/foundation/local_library.dart';
 import 'package:picakeep/pages/download_page.dart';
 import 'package:picakeep/pages/local_comic_detail_page.dart';
 import 'package:picakeep/pages/local_search_page.dart';
@@ -24,9 +25,17 @@ import 'package:picakeep/tools/translations.dart';
 class OpenFavoriteComicHelper {
   static Future<DownloadedItem?> _resolveDownloadedItem(
       FavoriteItem comic) async {
+    final candidates = comic.candidateDownloadIds();
+    try {
+      final localItem =
+          await LocalLibraryManager().findByCandidates(candidates);
+      if (localItem != null) {
+        return localItem;
+      }
+    } catch (_) {}
+
     final dm = DownloadManager();
     await dm.init();
-    final candidates = comic.candidateDownloadIds();
     final resolvedId = dm.resolveExistingId(candidates);
     if (resolvedId == null) {
       if (App.globalContext?.mounted ?? false) {
@@ -118,8 +127,14 @@ class LocalFavoriteTile extends StatelessWidget {
   // ---- badge ----
   bool get _isDownloaded {
     try {
+      final candidates = comic.candidateDownloadIds();
+      final localItem =
+          LocalLibraryManager().findCachedByCandidates(candidates);
+      if (localItem != null) {
+        return true;
+      }
       final dm = DownloadManager();
-      return dm.resolveExistingId(comic.candidateDownloadIds()) != null;
+      return dm.resolveExistingId(candidates) != null;
     } catch (_) {
       return false;
     }
@@ -146,6 +161,20 @@ class LocalFavoriteTile extends StatelessWidget {
         return f;
       }
     }
+
+    final localItem = LocalLibraryManager()
+        .findCachedByCandidates(comic.candidateDownloadIds());
+    if (localItem != null) {
+      final localCoverPath = localItem.localCoverPath?.trim();
+      if (localCoverPath != null && localCoverPath.isNotEmpty) {
+        final localCover = File(localCoverPath);
+        if (localCover.existsSync()) {
+          _coverCache[_coverCacheKey] = localCover;
+          return localCover;
+        }
+      }
+    }
+
     try {
       final file = DownloadManager()
           .getCoverFromCandidates(comic.candidateDownloadIds());
@@ -538,6 +567,7 @@ class _ComicsPageViewState extends State<ComicsPageView> {
   final _scrollController = ScrollController();
   List<FavoriteItem> _comics = [];
   bool _loading = true;
+  bool _selecting = false;
 
   @override
   void initState() {
@@ -549,6 +579,8 @@ class _ComicsPageViewState extends State<ComicsPageView> {
   void didUpdateWidget(covariant ComicsPageView oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.folder != widget.folder) {
+      widget.selectedComics.clear();
+      _selecting = false;
       _loadComics();
     }
   }
@@ -563,10 +595,48 @@ class _ComicsPageViewState extends State<ComicsPageView> {
     if (!mounted) {
       return;
     }
+    await LocalLibraryManager().ensureLoaded();
     LocalFavoriteTile.clearCoverCache();
     setState(() {
       _comics = LocalFavoritesManager().getAllComics(widget.folder);
       _loading = false;
+      widget.selectedComics.removeWhere((comic) => !_comics.contains(comic));
+      _selecting = widget.selectedComics.isNotEmpty;
+    });
+  }
+
+  int get _selectedNum => widget.selectedComics.length;
+
+  void _enterSelectMode(FavoriteItem comic) {
+    setState(() {
+      _selecting = true;
+      widget.selectedComics
+        ..clear()
+        ..add(comic);
+    });
+  }
+
+  bool _toggleSelected(FavoriteItem comic) {
+    if (!_selecting) {
+      return false;
+    }
+    setState(() {
+      if (widget.selectedComics.contains(comic)) {
+        widget.selectedComics.remove(comic);
+      } else {
+        widget.selectedComics.add(comic);
+      }
+      if (widget.selectedComics.isEmpty) {
+        _selecting = false;
+      }
+    });
+    return true;
+  }
+
+  void _exitSelectMode() {
+    setState(() {
+      _selecting = false;
+      widget.selectedComics.clear();
     });
   }
 
@@ -578,16 +648,82 @@ class _ComicsPageViewState extends State<ComicsPageView> {
     widget.selectedComics.remove(comic);
   }
 
-  @override
-  Widget build(BuildContext context) {
-    if (_loading) {
-      return const Center(child: CircularProgressIndicator());
+  void _removeSelected() {
+    final toRemove = List<FavoriteItem>.from(widget.selectedComics);
+    if (toRemove.isEmpty) {
+      return;
     }
-
-    if (_comics.isEmpty) {
-      return Center(child: Text('这里什么都没有'.tl));
+    for (final comic in toRemove) {
+      LocalFavoritesManager().deleteComic(widget.folder, comic);
     }
+    LocalFavoriteTile.clearCoverCache();
+    setState(() {
+      _comics = LocalFavoritesManager().getAllComics(widget.folder);
+      widget.selectedComics.clear();
+      _selecting = false;
+    });
+  }
 
+  void _showRemoveSelectedDialog() {
+    if (_selectedNum == 0) {
+      return;
+    }
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('删除'.tl),
+        content: Text('确定要删除选中的 @num 部漫画吗？'
+            .tlParams({'num': _selectedNum.toString()})),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: Text('取消'.tl),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              _removeSelected();
+            },
+            child: Text('删除'.tl),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSelectionBar() {
+    if (!_selecting) {
+      return const SizedBox.shrink();
+    }
+    return Material(
+      color: Theme.of(context).colorScheme.primaryContainer,
+      child: SizedBox(
+        height: 56,
+        child: Row(
+          children: [
+            IconButton(
+              onPressed: _exitSelectMode,
+              icon: const Icon(Icons.close),
+            ),
+            Expanded(
+              child: Text(
+                '已选择 @num 个项目'.tlParams({'num': _selectedNum.toString()}),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            IconButton(
+              tooltip: '删除选中'.tl,
+              onPressed: _selectedNum == 0 ? null : _showRemoveSelectedDialog,
+              icon: const Icon(Icons.delete_forever_outlined),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildGrid() {
     return Scrollbar(
       controller: _scrollController,
       interactive: true,
@@ -603,31 +739,35 @@ class _ComicsPageViewState extends State<ComicsPageView> {
                 const EdgeInsets.only(bottom: 80, left: 4, right: 4, top: 4),
             itemBuilder: (context, index) {
               final comic = _comics[index];
+              final selected = widget.selectedComics.contains(comic);
               final tile = LocalFavoriteTile(
                 key: ValueKey('${comic.type.key}_${comic.target}'),
                 comic: comic,
                 folderName: widget.folder,
                 onDelete: () => _refreshAfterDelete(comic),
                 enableLongPressed: true,
-                onTap: widget.onClick == null
-                    ? null
-                    : () => widget.onClick!(comic),
-                onLongPressed: widget.onLongPressed == null
-                    ? null
-                    : () => widget.onLongPressed!(comic),
+                onTap: () => _toggleSelected(comic) ||
+                    (widget.onClick?.call(comic) ?? false),
+                onLongPressed: () {
+                  if (_selecting) {
+                    _toggleSelected(comic);
+                  } else {
+                    _enterSelectMode(comic);
+                  }
+                  widget.onLongPressed?.call(comic);
+                },
               );
-              widget.onRegisterMenu?.call(comic, tile.openMenu);
-
-              Color? color;
-              if (widget.selectedComics.contains(comic)) {
-                color = Theme.of(context).colorScheme.surfaceContainerHighest;
+              if (!_selecting) {
+                widget.onRegisterMenu?.call(comic, tile.openMenu);
               }
 
               return AnimatedContainer(
                 duration: const Duration(milliseconds: 160),
                 margin: const EdgeInsets.symmetric(vertical: 2, horizontal: 4),
                 decoration: BoxDecoration(
-                  color: color,
+                  color: selected
+                      ? Theme.of(context).colorScheme.surfaceContainerHighest
+                      : null,
                   borderRadius: BorderRadius.circular(12),
                 ),
                 child: tile,
@@ -636,6 +776,24 @@ class _ComicsPageViewState extends State<ComicsPageView> {
           );
         },
       ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_loading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    if (_comics.isEmpty) {
+      return Center(child: Text('这里什么都没有'.tl));
+    }
+
+    return Column(
+      children: [
+        _buildSelectionBar(),
+        Expanded(child: _buildGrid()),
+      ],
     );
   }
 }
@@ -688,13 +846,77 @@ class _LocalFavoritesFolderState extends State<LocalFavoritesFolder> {
   Future<void> _loadComics() async {
     await _favManager.init();
     await DownloadManager().init();
+    await LocalLibraryManager().ensureLoaded();
     final comics = _favManager.getAllComics(widget.folderName);
     _applySort(comics);
     LocalFavoriteTile.clearCoverCache();
     setState(() {
       _comics = comics;
       _loading = false;
+      if (_selecting) {
+        _selected = List.filled(comics.length, false);
+        _selecting = false;
+      }
     });
+  }
+
+  int get _selectedNum => _selected.where((e) => e).length;
+
+  void _enterSelectMode(int index) {
+    setState(() {
+      _selecting = true;
+      _selected = List.filled(_comics.length, false);
+      if (index >= 0 && index < _selected.length) {
+        _selected[index] = true;
+      }
+    });
+  }
+
+  void _toggleSelected(int index) {
+    if (!_selecting || index < 0 || index >= _selected.length) {
+      return;
+    }
+    setState(() {
+      _selected[index] = !_selected[index];
+      if (!_selected.any((e) => e)) {
+        _selecting = false;
+        _selected = [];
+      }
+    });
+  }
+
+  void _exitSelectMode() {
+    setState(() {
+      _selecting = false;
+      _selected = [];
+    });
+  }
+
+  void _showRemoveSelectedDialog() {
+    if (_selectedNum == 0) {
+      return;
+    }
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('删除'.tl),
+        content: Text('确定要删除选中的 @num 部漫画吗？'
+            .tlParams({'num': _selectedNum.toString()})),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: Text('取消'.tl),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              _removeSelected();
+            },
+            child: Text('删除'.tl),
+          ),
+        ],
+      ),
+    );
   }
 
   void _applySort(List<FavoriteItem> comics) {
@@ -710,8 +932,11 @@ class _LocalFavoritesFolderState extends State<LocalFavoritesFolder> {
 
   void _removeSelected() {
     final toRemove = <FavoriteItem>[];
-    for (var i = 0; i < _comics.length; i++) {
+    for (var i = 0; i < _comics.length && i < _selected.length; i++) {
       if (_selected[i]) toRemove.add(_comics[i]);
+    }
+    if (toRemove.isEmpty) {
+      return;
     }
     for (final comic in toRemove) {
       _favManager.deleteComic(widget.folderName, comic);
@@ -746,61 +971,50 @@ class _LocalFavoritesFolderState extends State<LocalFavoritesFolder> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text(widget.folderName),
+        title: _selecting
+            ? Text('已选择 @num 个项目'
+                .tlParams({'num': _selectedNum.toString()}))
+            : Text(widget.folderName),
+        leading: _selecting
+            ? IconButton(
+                onPressed: _exitSelectMode,
+                icon: const Icon(Icons.close),
+              )
+            : null,
         actions: [
           if (_selecting)
             IconButton(
               icon: const Icon(Icons.delete_outline),
               tooltip: '删除选中'.tl,
+              onPressed: _selectedNum == 0 ? null : _showRemoveSelectedDialog,
+            ),
+          if (!_selecting)
+            PopupMenuButton<_SortMode>(
+              icon: const Icon(Icons.sort),
+              tooltip: '排序'.tl,
+              onSelected: (mode) {
+                setState(() => _sortMode = mode);
+                _loadComics();
+              },
+              itemBuilder: (context) => [
+                const PopupMenuItem(value: _SortMode.time, child: Text('按时间')),
+                const PopupMenuItem(value: _SortMode.name, child: Text('按标题')),
+                const PopupMenuItem(value: _SortMode.author, child: Text('按作者')),
+              ],
+            ),
+          if (!_selecting)
+            IconButton(
+              icon: const Icon(Icons.search),
               onPressed: () {
-                showDialog(
-                  context: context,
-                  builder: (ctx) => AlertDialog(
-                    title: const Text('删除'),
-                    content: Text(
-                        '确定要删除选中的 ${_selected.where((e) => e).length} 部漫画吗？'),
-                    actions: [
-                      TextButton(
-                        onPressed: () => Navigator.pop(ctx),
-                        child: const Text('取消'),
-                      ),
-                      TextButton(
-                        onPressed: () {
-                          _removeSelected();
-                          Navigator.pop(ctx);
-                        },
-                        child: const Text('删除'),
-                      ),
-                    ],
+                Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => const LocalSearchPage(
+                      searchType: LocalSearchType.favoritesOnly,
+                    ),
                   ),
                 );
               },
             ),
-          PopupMenuButton<_SortMode>(
-            icon: const Icon(Icons.sort),
-            tooltip: '排序'.tl,
-            onSelected: (mode) {
-              setState(() => _sortMode = mode);
-              _loadComics();
-            },
-            itemBuilder: (context) => [
-              const PopupMenuItem(value: _SortMode.time, child: Text('按时间')),
-              const PopupMenuItem(value: _SortMode.name, child: Text('按标题')),
-              const PopupMenuItem(value: _SortMode.author, child: Text('按作者')),
-            ],
-          ),
-          IconButton(
-            icon: const Icon(Icons.search),
-            onPressed: () {
-              Navigator.of(context).push(
-                MaterialPageRoute(
-                  builder: (_) => const LocalSearchPage(
-                    searchType: LocalSearchType.favoritesOnly,
-                  ),
-                ),
-              );
-            },
-          ),
         ],
       ),
       floatingActionButton: _comics.isNotEmpty
@@ -816,12 +1030,8 @@ class _LocalFavoritesFolderState extends State<LocalFavoritesFolder> {
               ? const Center(child: Text('暂无漫画'))
               : ReorderableBuilder(
                   scrollController: _scrollController,
-                  longPressDelay: _selecting
-                      ? const Duration(days: 365)
-                      : App.isDesktop
-                          ? const Duration(milliseconds: 100)
-                          : const Duration(milliseconds: 500),
-                  enableDraggable: !_selecting,
+                  longPressDelay: const Duration(days: 365),
+                  enableDraggable: false,
                   onReorder: (reorderFunc) {
                     if (_selecting) return;
                     setState(() {
@@ -850,32 +1060,39 @@ class _LocalFavoritesFolderState extends State<LocalFavoritesFolder> {
                   },
                   children: List.generate(
                     _comics.length,
-                    (index) => Padding(
-                      key: Key(
-                          '${_comics[index].type.key}_${_comics[index].target}'),
-                      padding: const EdgeInsets.all(2),
-                      child: Stack(
-                        children: [
-                          LocalFavoriteTile(
+                    (index) {
+                      final selected =
+                          index < _selected.length && _selected[index];
+                      return Padding(
+                        key: Key(
+                            '${_comics[index].type.key}_${_comics[index].target}'),
+                        padding: const EdgeInsets.all(2),
+                        child: AnimatedContainer(
+                          duration: const Duration(milliseconds: 160),
+                          decoration: BoxDecoration(
+                            color: selected
+                                ? Theme.of(context)
+                                    .colorScheme
+                                    .surfaceContainerHighest
+                                : null,
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: LocalFavoriteTile(
                             comic: _comics[index],
                             folderName: widget.folderName,
                             onDelete: _onDeleteOne,
-                            enableLongPressed: !_selecting,
+                            enableLongPressed: true,
+                            onTap: _selecting
+                                ? () {
+                                    _toggleSelected(index);
+                                    return true;
+                                  }
+                                : null,
+                            onLongPressed: () => _enterSelectMode(index),
                           ),
-                          if (_selecting)
-                            Positioned(
-                              top: 4,
-                              right: 4,
-                              child: Checkbox(
-                                value: _selected[index],
-                                onChanged: (v) {
-                                  setState(() => _selected[index] = v ?? false);
-                                },
-                              ),
-                            ),
-                        ],
-                      ),
-                    ),
+                        ),
+                      );
+                    },
                   ),
                 ),
     );

@@ -1,8 +1,10 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:picakeep/base.dart';
 import 'package:picakeep/foundation/app.dart';
 import 'package:picakeep/foundation/history.dart';
 import 'package:picakeep/foundation/download.dart';
+import 'package:picakeep/foundation/local_data_source.dart';
 import 'package:picakeep/foundation/local_library.dart';
 import 'package:picakeep/tools/translations.dart';
 import 'package:picakeep/tools/read_history_helper.dart';
@@ -50,61 +52,60 @@ class _MePageState extends State<MePage> {
     _reloadLocalCounts();
   }
 
+  Future<int> _resolveDownloadCount({required bool forceRefresh}) async {
+    final mode = normalizeManagedDataSourceMode(
+      appdata.settings[managedDataSourceModeSettingIndex],
+    );
+    if (mode == managedDataSourceModeCurrentOnly) {
+      final manager = DownloadManager();
+      await manager.init();
+      return manager.getAll().length;
+    }
+
+    if (forceRefresh) {
+      await LocalLibraryManager().refresh();
+    } else {
+      await LocalLibraryManager().ensureLoaded();
+    }
+    final items = await LocalLibraryManager().getAll();
+    return items.where((item) => !item.isAlbum).length;
+  }
+
   Future<void> _reloadLocalCounts() async {
     if (_loadingDownloadCount) {
       return;
     }
     _loadingDownloadCount = true;
     try {
-      await LocalLibraryManager().refresh();
-      final total = LocalLibraryManager().cachedDownloadCount;
+      final total = await _resolveDownloadCount(forceRefresh: true);
       if (mounted) {
         setState(() {
           _downloadCount = total;
         });
       }
     } catch (e) {
-      await _fallbackLoadDownloadCount(e);
-      return;
+      print('[PicaKeep] MePage: reload download count failed: $e');
     } finally {
       _loadingDownloadCount = false;
     }
   }
 
   Future<void> _loadDownloadCount({bool forceRefresh = false}) async {
-    if (forceRefresh) {
-      await _reloadLocalCounts();
-      return;
-    }
     if (_loadingDownloadCount) {
       return;
     }
     _loadingDownloadCount = true;
     try {
-      await LocalLibraryManager().ensureLoaded();
-      final total = LocalLibraryManager().cachedDownloadCount;
+      final total = await _resolveDownloadCount(forceRefresh: forceRefresh);
       if (mounted) {
         setState(() {
           _downloadCount = total;
         });
       }
     } catch (e) {
-      await _fallbackLoadDownloadCount(e);
+      print('[PicaKeep] MePage: load download count failed: $e');
     } finally {
       _loadingDownloadCount = false;
-    }
-  }
-
-  Future<void> _fallbackLoadDownloadCount(Object error) async {
-    try {
-      await DownloadManager().init();
-      if (mounted) {
-        setState(() {
-          _downloadCount = DownloadManager().total;
-        });
-      }
-    } catch (_) {
-      print('[PicaKeep] MePage: load download count failed: $error');
     }
   }
 
@@ -154,8 +155,8 @@ class _MePageState extends State<MePage> {
         return file;
       }
     } catch (_) {}
-    final localComic =
-        LocalLibraryManager().findCachedByCandidates(item.candidateDownloadIds());
+    final localComic = LocalLibraryManager()
+        .findCachedByCandidates(item.candidateDownloadIds());
     if (localComic != null) {
       final file = resolveLocalComicCover(
         localComic,
@@ -261,7 +262,8 @@ class _MePageState extends State<MePage> {
                   itemCount: history.length,
                   itemBuilder: (context, index) {
                     return InkWell(
-                      onTap: () => _openComicFromHistory(context, history[index]),
+                      onTap: () =>
+                          _openComicFromHistory(context, history[index]),
                       borderRadius: BorderRadius.circular(8),
                       child: Container(
                         width: 96,
@@ -269,7 +271,8 @@ class _MePageState extends State<MePage> {
                         margin: const EdgeInsets.symmetric(horizontal: 8),
                         decoration: BoxDecoration(
                           borderRadius: BorderRadius.circular(8),
-                          color: Theme.of(context).colorScheme.secondaryContainer,
+                          color:
+                              Theme.of(context).colorScheme.secondaryContainer,
                         ),
                         clipBehavior: Clip.antiAlias,
                         child: _buildCoverImage(context, history[index]),
@@ -309,8 +312,8 @@ class _MePageState extends State<MePage> {
       await dm.init();
       var comic =
           await dm.getComicOrNullFromCandidates(history.candidateDownloadIds());
-      comic ??=
-          await LocalLibraryManager().findByCandidates(history.candidateDownloadIds());
+      comic ??= await LocalLibraryManager()
+          .findByCandidates(history.candidateDownloadIds());
       if (comic != null) {
         if (!context.mounted) return;
         await ensureHistoryBeforeRead(
@@ -357,14 +360,16 @@ class _MePageState extends State<MePage> {
   }
 
   Widget _buildLocalLibraryCard(BuildContext context) {
-    final total = LocalLibraryManager().cachedCount;
+    final total = LocalLibraryManager().cachedVisibleCount;
     return _MePageCard(
       icon: const Icon(Icons.photo_library),
       title: "本地图集".tl,
       description: "共 @a 个本地项目".tlParams({"a": total.toString()}),
-      onTap: () => Navigator.of(context).push(
-        MaterialPageRoute(builder: (_) => const LocalLibraryPage()),
-      ),
+      onTap: () => Navigator.of(context)
+          .push(
+            MaterialPageRoute(builder: (_) => const LocalLibraryPage()),
+          )
+          .then((_) => _loadLocalLibraryCount()),
     );
   }
 
@@ -373,9 +378,11 @@ class _MePageState extends State<MePage> {
       icon: const Icon(Icons.image),
       title: "图片收藏".tl,
       description: "@a 条图片收藏".tlParams({"a": "${ImageFavoriteManager.length}"}),
-      onTap: () => Navigator.of(context).push(
+      onTap: () => Navigator.of(context)
+          .push(
         MaterialPageRoute(builder: (_) => const ImageFavoritesPage()),
-      ).then((_) {
+      )
+          .then((_) {
         // Defer setState until after the route transition completes, so the
         // widget tree is fully restored and the count reflects DB changes.
         WidgetsBinding.instance.addPostFrameCallback((_) {
