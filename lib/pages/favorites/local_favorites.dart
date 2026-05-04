@@ -673,8 +673,8 @@ class _ComicsPageViewState extends State<ComicsPageView> {
       context: context,
       builder: (ctx) => AlertDialog(
         title: Text('删除'.tl),
-        content: Text('确定要删除选中的 @num 部漫画吗？'
-            .tlParams({'num': _selectedNum.toString()})),
+        content: Text(
+            '确定要删除选中的 @num 部漫画吗？'.tlParams({'num': _selectedNum.toString()})),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx),
@@ -725,57 +725,54 @@ class _ComicsPageViewState extends State<ComicsPageView> {
   }
 
   Widget _buildGrid() {
-    return Scrollbar(
-      controller: _scrollController,
-      interactive: true,
-      child: SmoothScrollProvider(
+    return DesktopScrollbarDragBehavior(
+      child: Scrollbar(
         controller: _scrollController,
-        builder: (context, controller, physics) {
-          return GridView.builder(
-            controller: controller,
-            physics: physics,
-            gridDelegate: SliverGridDelegateWithComics(),
-            itemCount: _comics.length,
-            padding:
-                const EdgeInsets.only(bottom: 80, left: 4, right: 4, top: 4),
-            itemBuilder: (context, index) {
-              final comic = _comics[index];
-              final selected = widget.selectedComics.contains(comic);
-              final tile = LocalFavoriteTile(
-                key: ValueKey('${comic.type.key}_${comic.target}'),
-                comic: comic,
-                folderName: widget.folder,
-                onDelete: () => _refreshAfterDelete(comic),
-                enableLongPressed: true,
-                onTap: () => _toggleSelected(comic) ||
-                    (widget.onClick?.call(comic) ?? false),
-                onLongPressed: () {
-                  if (_selecting) {
-                    _toggleSelected(comic);
-                  } else {
-                    _enterSelectMode(comic);
-                  }
-                  widget.onLongPressed?.call(comic);
-                },
-              );
-              if (!_selecting) {
-                widget.onRegisterMenu?.call(comic, tile.openMenu);
-              }
+        interactive: true,
+        child: GridView.builder(
+          controller: _scrollController,
+          physics: const ClampingScrollPhysics(),
+          gridDelegate: SliverGridDelegateWithComics(),
+          itemCount: _comics.length,
+          padding: const EdgeInsets.only(bottom: 80, left: 4, right: 4, top: 4),
+          itemBuilder: (context, index) {
+            final comic = _comics[index];
+            final selected = widget.selectedComics.contains(comic);
+            final tile = LocalFavoriteTile(
+              key: ValueKey('${comic.type.key}_${comic.target}'),
+              comic: comic,
+              folderName: widget.folder,
+              onDelete: () => _refreshAfterDelete(comic),
+              enableLongPressed: true,
+              onTap: () =>
+                  _toggleSelected(comic) ||
+                  (widget.onClick?.call(comic) ?? false),
+              onLongPressed: () {
+                if (_selecting) {
+                  _toggleSelected(comic);
+                } else {
+                  _enterSelectMode(comic);
+                }
+                widget.onLongPressed?.call(comic);
+              },
+            );
+            if (!_selecting) {
+              widget.onRegisterMenu?.call(comic, tile.openMenu);
+            }
 
-              return AnimatedContainer(
-                duration: const Duration(milliseconds: 160),
-                margin: const EdgeInsets.symmetric(vertical: 2, horizontal: 4),
-                decoration: BoxDecoration(
-                  color: selected
-                      ? Theme.of(context).colorScheme.surfaceContainerHighest
-                      : null,
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: tile,
-              );
-            },
-          );
-        },
+            return AnimatedContainer(
+              duration: const Duration(milliseconds: 160),
+              margin: const EdgeInsets.symmetric(vertical: 2, horizontal: 4),
+              decoration: BoxDecoration(
+                color: selected
+                    ? Theme.of(context).colorScheme.surfaceContainerHighest
+                    : null,
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: tile,
+            );
+          },
+        ),
       ),
     );
   }
@@ -901,8 +898,8 @@ class _LocalFavoritesFolderState extends State<LocalFavoritesFolder> {
       context: context,
       builder: (ctx) => AlertDialog(
         title: Text('删除'.tl),
-        content: Text('确定要删除选中的 @num 部漫画吗？'
-            .tlParams({'num': _selectedNum.toString()})),
+        content: Text(
+            '确定要删除选中的 @num 部漫画吗？'.tlParams({'num': _selectedNum.toString()})),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx),
@@ -973,8 +970,7 @@ class _LocalFavoritesFolderState extends State<LocalFavoritesFolder> {
     return Scaffold(
       appBar: AppBar(
         title: _selecting
-            ? Text('已选择 @num 个项目'
-                .tlParams({'num': _selectedNum.toString()}))
+            ? Text('已选择 @num 个项目'.tlParams({'num': _selectedNum.toString()}))
             : Text(widget.folderName),
         leading: _selecting
             ? IconButton(
@@ -1000,7 +996,8 @@ class _LocalFavoritesFolderState extends State<LocalFavoritesFolder> {
               itemBuilder: (context) => [
                 const PopupMenuItem(value: _SortMode.time, child: Text('按时间')),
                 const PopupMenuItem(value: _SortMode.name, child: Text('按标题')),
-                const PopupMenuItem(value: _SortMode.author, child: Text('按作者')),
+                const PopupMenuItem(
+                    value: _SortMode.author, child: Text('按作者')),
               ],
             ),
           if (!_selecting)
@@ -1045,18 +1042,19 @@ class _LocalFavoritesFolderState extends State<LocalFavoritesFolder> {
                     color: Theme.of(context).colorScheme.surfaceContainerHigh,
                   ),
                   builder: (children) {
-                    return SmoothScrollProvider(
-                      controller: _scrollController,
-                      builder: (context, controller, physics) {
-                        return GridView(
-                          controller: controller,
-                          physics: physics,
+                    return DesktopScrollbarDragBehavior(
+                      child: Scrollbar(
+                        controller: _scrollController,
+                        interactive: true,
+                        child: GridView(
+                          controller: _scrollController,
+                          physics: const ClampingScrollPhysics(),
                           padding: const EdgeInsets.only(
                               bottom: 80, left: 4, right: 4, top: 4),
                           gridDelegate: SliverGridDelegateWithComics(),
                           children: children,
-                        );
-                      },
+                        ),
+                      ),
                     );
                   },
                   children: List.generate(
