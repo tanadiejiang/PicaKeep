@@ -7,6 +7,7 @@ import 'package:picakeep/foundation/download.dart';
 import 'package:picakeep/foundation/local_favorites.dart';
 import 'package:picakeep/tools/translations.dart';
 
+import '../../components/scrollable.dart';
 import '../local_search_page.dart';
 import 'local_favorites.dart';
 
@@ -27,7 +28,8 @@ class MainFavoritesPage extends StatefulWidget {
 
 class _MainFavoritesPageState extends State<MainFavoritesPage> {
   final _favoritesManager = LocalFavoritesManager();
-  final List<FavoriteItem> _selectedComics = [];
+  final _selectedComics = <FavoriteItem>[];
+  final _foldersScrollController = ScrollController();
 
   StreamSubscription<List<FavGroup>>? _foldersSubscription;
 
@@ -52,6 +54,7 @@ class _MainFavoritesPageState extends State<MainFavoritesPage> {
   void dispose() {
     App.localDataVersion.removeListener(_handleLocalDataRefresh);
     _foldersSubscription?.cancel();
+    _foldersScrollController.dispose();
     super.dispose();
   }
 
@@ -324,87 +327,91 @@ class _MainFavoritesPageState extends State<MainFavoritesPage> {
       child: SizedBox(
         height: height,
         width: double.infinity,
-        child: Scrollbar(
-          interactive: true,
-          child: CustomScrollView(
-            slivers: [
-              const SliverToBoxAdapter(child: SizedBox(height: 8)),
-              SliverToBoxAdapter(
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(20, 4, 20, 8),
-                  child: Text(
-                    '本地'.tl,
-                    style: const TextStyle(fontSize: 18),
-                  ),
-                ),
-              ),
-              SliverToBoxAdapter(
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 12),
-                  child: Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: [
-                      _ActionItem(
-                        icon: Icons.create_new_folder_outlined,
-                        label: '新建'.tl,
-                        onTap: _createFolder,
-                      ),
-                      _ActionItem(
-                        icon: Icons.search,
-                        label: '搜索收藏'.tl,
-                        onTap: _openFavoritesSearch,
-                      ),
-                      _ActionItem(
-                        icon: Icons.manage_search,
-                        label: '搜索全部'.tl,
-                        onTap: _openDownloadedSearch,
-                      ),
-                      _ActionItem(
-                        icon: Icons.reorder,
-                        label: '排序'.tl,
-                        onTap: _openReorderPage,
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-              const SliverToBoxAdapter(child: SizedBox(height: 8)),
-              if (_folders.isEmpty)
-                SliverFillRemaining(
-                  hasScrollBody: false,
-                  child: Center(
-                    child: Text('这里什么都没有'.tl),
-                  ),
-                )
-              else
-                SliverPadding(
-                  padding: const EdgeInsets.fromLTRB(12, 0, 12, 16),
-                  sliver: SliverGrid(
-                    gridDelegate:
-                        const SliverGridDelegateWithMaxCrossAxisExtent(
-                      maxCrossAxisExtent: 320,
-                      mainAxisExtent: 48,
-                      mainAxisSpacing: 6,
-                      crossAxisSpacing: 12,
-                    ),
-                    delegate: SliverChildBuilderDelegate(
-                      (context, index) {
-                        final folder = _folders[index];
-                        return _FolderTile(
-                          folder: folder,
-                          count: _folderCounts[folder] ?? 0,
-                          selected: folder == _currentFolder,
-                          onTap: () => _selectFolder(folder),
-                          onMenu: (position) =>
-                              _showFolderMenu(folder, position),
-                        );
-                      },
-                      childCount: _folders.length,
+        child: DesktopScrollbarDragBehavior(
+          child: Scrollbar(
+            controller: _foldersScrollController,
+            interactive: true,
+            child: CustomScrollView(
+              controller: _foldersScrollController,
+              slivers: [
+                const SliverToBoxAdapter(child: SizedBox(height: 8)),
+                SliverToBoxAdapter(
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(20, 4, 20, 8),
+                    child: Text(
+                      '本地'.tl,
+                      style: const TextStyle(fontSize: 18),
                     ),
                   ),
                 ),
-            ],
+                SliverToBoxAdapter(
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    child: Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [
+                        _ActionItem(
+                          icon: Icons.create_new_folder_outlined,
+                          label: '新建'.tl,
+                          onTap: _createFolder,
+                        ),
+                        _ActionItem(
+                          icon: Icons.search,
+                          label: '搜索收藏'.tl,
+                          onTap: _openFavoritesSearch,
+                        ),
+                        _ActionItem(
+                          icon: Icons.manage_search,
+                          label: '搜索全部'.tl,
+                          onTap: _openDownloadedSearch,
+                        ),
+                        _ActionItem(
+                          icon: Icons.reorder,
+                          label: '排序'.tl,
+                          onTap: _openReorderPage,
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                const SliverToBoxAdapter(child: SizedBox(height: 8)),
+                if (_folders.isEmpty)
+                  SliverFillRemaining(
+                    hasScrollBody: false,
+                    child: Center(
+                      child: Text('这里什么都没有'.tl),
+                    ),
+                  )
+                else
+                  SliverPadding(
+                    padding: const EdgeInsets.fromLTRB(12, 0, 12, 16),
+                    sliver: SliverGrid(
+                      gridDelegate:
+                          const SliverGridDelegateWithMaxCrossAxisExtent(
+                        maxCrossAxisExtent: 320,
+                        mainAxisExtent: 48,
+                        mainAxisSpacing: 6,
+                        crossAxisSpacing: 12,
+                      ),
+                      delegate: SliverChildBuilderDelegate(
+                        (context, index) {
+                          final folder = _folders[index];
+                          return _FolderTile(
+                            folder: folder,
+                            count: _folderCounts[folder] ?? 0,
+                            selected: folder == _currentFolder,
+                            onTap: () => _selectFolder(folder),
+                            onMenu: (position) =>
+                                _showFolderMenu(folder, position),
+                          );
+                        },
+                        childCount: _folders.length,
+                      ),
+                    ),
+                  ),
+              ],
+            ),
           ),
         ),
       ),

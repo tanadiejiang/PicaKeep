@@ -3,6 +3,34 @@ import 'package:flutter/material.dart';
 import 'package:picakeep/foundation/app.dart';
 
 const _fastAnimationDuration = Duration(milliseconds: 160);
+const _desktopScrollbarDragDevices = <PointerDeviceKind>{
+  PointerDeviceKind.touch,
+  PointerDeviceKind.stylus,
+  PointerDeviceKind.invertedStylus,
+  PointerDeviceKind.trackpad,
+  PointerDeviceKind.mouse,
+  PointerDeviceKind.unknown,
+};
+
+class DesktopScrollbarDragBehavior extends StatelessWidget {
+  const DesktopScrollbarDragBehavior({
+    super.key,
+    required this.child,
+  });
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return ScrollConfiguration(
+      behavior: const MaterialScrollBehavior().copyWith(
+        scrollbars: false,
+        dragDevices: _desktopScrollbarDragDevices,
+      ),
+      child: child,
+    );
+  }
+}
 
 class SmoothCustomScrollView extends StatelessWidget {
   const SmoothCustomScrollView(
