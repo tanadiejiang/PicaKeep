@@ -62,6 +62,14 @@ class _HistoryPageState extends State<HistoryPage> {
 
   String _cacheKey(History item) => '${item.type.value}|${item.target}';
 
+  String _typeLabel(History item) {
+    if (item.type == HistoryType.localAlbum ||
+        item.target.startsWith('local_album::')) {
+      return '图集';
+    }
+    return item.type.name;
+  }
+
   Widget buildTitle() {
     if (searchMode) {
       return TextField(
@@ -263,7 +271,7 @@ class _HistoryPageState extends State<HistoryPage> {
                       name: comic.title,
                       author: comic.subtitle,
                       imagePath: cover,
-                      type: comic.type.name,
+                      type: _typeLabel(comic),
                       tag: const [],
                       size: _formatTime(comic.time),
                       onTap: () => _openComic(comic),

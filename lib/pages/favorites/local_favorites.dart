@@ -9,6 +9,7 @@ import 'package:picakeep/components/scrollable.dart';
 import 'package:picakeep/foundation/app.dart';
 import 'package:picakeep/foundation/download.dart';
 import 'package:picakeep/foundation/download_model.dart';
+import 'package:picakeep/foundation/local_data_source.dart';
 import 'package:picakeep/foundation/local_favorites.dart';
 import 'package:picakeep/foundation/local_library.dart';
 import 'package:picakeep/pages/download_page.dart';
@@ -1103,13 +1104,43 @@ class _LocalFavoritesFolderState extends State<LocalFavoritesFolder> {
 // Folder management dialogs
 // ============================================================
 
-class CreateFolderDialog extends StatelessWidget {
+class CreateFolderDialog extends StatefulWidget {
   final ValueChanged<String> onCreated;
   const CreateFolderDialog({super.key, required this.onCreated});
 
   @override
+  State<CreateFolderDialog> createState() => _CreateFolderDialogState();
+}
+
+class _CreateFolderDialogState extends State<CreateFolderDialog> {
+  final controller = TextEditingController();
+  FavoriteFolderCreateTarget _target = FavoriteFolderCreateTarget.current;
+
+  bool get _showTargetSelector =>
+      normalizeManagedDataSourceMode(
+            appdata.settings[managedDataSourceModeSettingIndex],
+          ) ==
+          managedDataSourceModeCurrentAndOriginal &&
+      LocalFavoritesManager().canCreateInOriginalDatabase;
+
+  void _submit() {
+    final name = controller.text.trim();
+    if (name.isEmpty) {
+      return;
+    }
+    LocalFavoritesManager().createFolder(name, _target);
+    Navigator.pop(context);
+    widget.onCreated(name);
+  }
+
+  @override
+  void dispose() {
+    controller.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final controller = TextEditingController();
     return SimpleDialog(
       title: Text('新建文件夹'.tl),
       children: [
@@ -1122,27 +1153,48 @@ class CreateFolderDialog extends StatelessWidget {
               border: const OutlineInputBorder(),
               labelText: '名称'.tl,
             ),
-            onSubmitted: (value) {
-              if (value.trim().isNotEmpty) {
-                final folderName = value.trim();
-                LocalFavoritesManager().createFolder(folderName);
-                Navigator.pop(context);
-                onCreated(folderName);
-              }
-            },
+            onSubmitted: (_) => _submit(),
           ),
         ),
+        if (_showTargetSelector) ...[
+          const SizedBox(height: 12),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 0, 20, 0),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '新建位置'.tl,
+                  style: Theme.of(context).textTheme.bodyMedium,
+                ),
+                const SizedBox(height: 8),
+                SegmentedButton<FavoriteFolderCreateTarget>(
+                  segments: [
+                    ButtonSegment(
+                      value: FavoriteFolderCreateTarget.current,
+                      label: Text('本应用'.tl),
+                    ),
+                    ButtonSegment(
+                      value: FavoriteFolderCreateTarget.original,
+                      label: Text('原应用'.tl),
+                    ),
+                  ],
+                  selected: {_target},
+                  showSelectedIcon: false,
+                  onSelectionChanged: (selection) {
+                    setState(() {
+                      _target = selection.first;
+                    });
+                  },
+                ),
+              ],
+            ),
+          ),
+        ],
         const SizedBox(height: 16),
         Center(
           child: FilledButton(
-            onPressed: () {
-              final name = controller.text.trim();
-              if (name.isNotEmpty) {
-                LocalFavoritesManager().createFolder(name);
-                Navigator.pop(context);
-                onCreated(name);
-              }
-            },
+            onPressed: _submit,
             child: Text('确定'.tl),
           ),
         ),
