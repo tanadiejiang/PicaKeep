@@ -13,18 +13,79 @@ class _AppServiceSettingsSectionState
   String _mode =
       normalizeAppRuntimeMode(appdata.settings[appRuntimeModeSettingIndex]);
 
+  @override
+  void initState() {
+    super.initState();
+    Future.microtask(_normalizeModeForCurrentPlatform);
+  }
+
+  Future<void> _normalizeModeForCurrentPlatform() async {
+    if (_mode != appRuntimeModeServer || canUseServerModeOnCurrentPlatform()) {
+      return;
+    }
+    _mode = appRuntimeModeClient;
+    appdata.settings[appRuntimeModeSettingIndex] = _mode;
+    await appdata.updateSettings();
+    App.notifyServiceConfigChanged();
+    if (mounted) {
+      setState(() {});
+    }
+  }
+
+  Future<void> _syncLocalServerRuntime({
+    bool restartIfRunning = false,
+  }) async {
+    if (!canManageDesktopLocalServerRuntime()) {
+      return;
+    }
+    try {
+      await syncDesktopLocalServerRuntimeForCurrentMode(
+        restartIfRunning: restartIfRunning,
+      );
+    } catch (e) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('本地服务操作失败：$e'.tl),
+        ),
+      );
+    }
+  }
+
   Future<void> _setMode(String value) async {
     final nextValue = normalizeAppRuntimeMode(value);
+    if (nextValue == appRuntimeModeServer &&
+        !canUseServerModeOnCurrentPlatform()) {
+      final capability = currentServerPlatformCapability();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            '${capability.displayName} 当前暂不纳入服务端目标，现阶段仅保留客户端模式'.tl,
+          ),
+        ),
+      );
+      return;
+    }
     setState(() {
       _mode = nextValue;
       appdata.settings[appRuntimeModeSettingIndex] = nextValue;
     });
     await appdata.updateSettings();
-    App.updater?.call();
+    App.notifyServiceConfigChanged();
+    await _syncLocalServerRuntime();
   }
 
   @override
   Widget build(BuildContext context) {
+    final capability = currentServerPlatformCapability();
+    final canUseServerMode = capability.supportsServerMode;
+    final currentMode = canUseServerMode ? _mode : appRuntimeModeClient;
+    final modeValues = canUseServerMode
+        ? const [appRuntimeModeClient, appRuntimeModeServer]
+        : const [appRuntimeModeClient];
+    final modeTitles = canUseServerMode ? ['客户端'.tl, '服务端'.tl] : ['客户端'.tl];
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -32,21 +93,41 @@ class _AppServiceSettingsSectionState
         buildResponsiveSettingTile(
           leading: const Icon(Icons.sync_alt),
           title: Text('运行模式'.tl),
-          subtitle: Text('当前先在客户端设置页中切换客户端 / 服务端模式'.tl),
+          subtitle: Text(
+            '当前平台：@a · @b'.tlParams({
+              'a': capability.displayName,
+              'b': serverPlatformTierLabel(capability.tier),
+            }),
+          ),
           trailingWidth: 140,
           trailing: Select(
             width: 140,
-            initialValue: _mode,
-            values: const [appRuntimeModeClient, appRuntimeModeServer],
-            titles: ['客户端'.tl, '服务端'.tl],
+            initialValue: currentMode,
+            values: modeValues,
+            titles: modeTitles,
             onChanged: (value) {
               _setMode(value);
             },
           ),
         ),
+        ListTile(
+          leading: Icon(
+            capability.isFullServerTarget
+                ? Icons.dns_outlined
+                : capability.isEnhancedServerTarget
+                    ? Icons.phone_android_outlined
+                    : Icons.block_outlined,
+          ),
+          title: Text('当前平台服务端能力'.tl),
+          subtitle: Text(
+            '${capability.summary} ${serverPlatformTierDescription(capability.tier)} ${capability.notes.first}'
+                .tl,
+          ),
+        ),
         const _ServiceDiscoveryStrategyTile(),
-        if (_mode == appRuntimeModeClient) const _RemoteServerAddressTile(),
-        if (_mode == appRuntimeModeServer) const _ServiceAdminPortTile(),
+        if (currentMode == appRuntimeModeClient)
+          const _RemoteServerAddressTile(),
+        if (currentMode == appRuntimeModeServer) const _ServiceAdminPortTile(),
         ListTile(
           leading: const Icon(Icons.monitor_heart_outlined),
           title: Text('服务信息入口'.tl),
@@ -118,6 +199,7 @@ class _RemoteServerAddressTileState extends State<_RemoteServerAddressTile> {
     }
     appdata.settings[remoteServerAddressSettingIndex] = result.trim();
     await appdata.updateSettings();
+    App.notifyServiceConfigChanged();
     if (mounted) {
       setState(() {});
     }
@@ -183,6 +265,20 @@ class _ServiceAdminPortTileState extends State<_ServiceAdminPortTile> {
     appdata.settings[serviceAdminPortSettingIndex] =
         normalizeServiceAdminPortValue(result);
     await appdata.updateSettings();
+    App.notifyServiceConfigChanged();
+    try {
+      await syncDesktopLocalServerRuntimeForCurrentMode(
+        restartIfRunning: true,
+      );
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('本地服务操作失败：$e'.tl),
+          ),
+        );
+      }
+    }
     if (mounted) {
       setState(() {});
     }

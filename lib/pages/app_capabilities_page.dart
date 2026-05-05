@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:picakeep/foundation/app_runtime_mode.dart';
 import 'package:picakeep/tools/translations.dart';
 
 class AppCapabilitiesPage extends StatelessWidget {
@@ -24,6 +25,7 @@ List<Widget> buildAppCapabilitiesContent(
   bool includeOverview = true,
 }) {
   final children = <Widget>[];
+  final capabilities = serverPlatformCapabilityMatrix();
 
   if (includeOverview) {
     children.add(
@@ -37,12 +39,14 @@ List<Widget> buildAppCapabilitiesContent(
   }
 
   children.addAll([
+    _PlatformCapabilityMatrix(capabilities: capabilities),
+    const SizedBox(height: 12),
     const _CapabilitySection(
       icon: Icons.flag_outlined,
       title: '当前状态',
       items: [
         '已完成本地漫画 / 已下载 / 本地图集 / 收藏 / 历史等本地阅读链路',
-        '当前新增方向为云端/NAS 一体化扩展，目标是在同一套代码里支持客户端与服务端双模式',
+        '当前新增方向为云端/NAS 一体化扩展，目标是在同一套代码里支持客户端与分平台能力的服务端双模式',
       ],
     ),
     const SizedBox(height: 12),
@@ -51,7 +55,7 @@ List<Widget> buildAppCapabilitiesContent(
       title: '目标形态',
       items: [
         '客户端模式：手动输入服务端地址，后续支持局域网自动扫描与一键连接',
-        '服务端模式：运行在 NAS / Linux 设备上，直接读取本地数据库与图片文件，不依赖 SMB / NFS / FTP',
+        '服务端模式：Windows / Linux / macOS 作为完整服务端目标，Android 作为移动增强服务端目标，统一直接读取本地数据库与图片文件，不依赖 SMB / NFS / FTP',
         '导航中增加服务信息面板，分别展示客户端连接状态或服务端运行状态',
       ],
     ),
@@ -63,7 +67,7 @@ List<Widget> buildAppCapabilitiesContent(
         '客户端与服务端共享数据模型、数据库访问逻辑与漫画元信息转换层',
         '局域网发现首选 mDNS / Bonjour，先避免自定义 UDP 广播对局域网其他设备产生额外噪声',
         '服务端使用纯 Dart + shelf，提供状态接口、漫画列表接口、图片流接口与后台管理入口',
-        '通过 main_client.dart 与 main_server.dart 分离构建 Flutter 客户端和 Linux 可执行服务端',
+        '通过 main_client.dart 与 main_server.dart 分离构建 Flutter 客户端与 Dart 服务端，并按桌面端 / Android 区分服务能力',
       ],
     ),
     const SizedBox(height: 12),
@@ -84,8 +88,8 @@ List<Widget> buildAppCapabilitiesContent(
       items: [
         '第一阶段：先补设置入口、工具入口与 APP能力 页面，集中承载规划与后续配置',
         '第二阶段：抽象 Local / Remote DataSource，打通客户端远程列表与详情接口',
-        '第三阶段：补服务发现、管理后台、Linux 原生部署与联调',
-        '第四阶段：预留 Docker 化部署支持，但优先保证 Linux 原生可跑通',
+        '第三阶段：补服务发现、管理后台，以及 Windows / Linux / macOS 服务端联调与部署',
+        '第四阶段：补 Android 前台服务链路，并继续预留 Docker 化部署支持',
       ],
     ),
     const SizedBox(height: 12),
@@ -102,6 +106,97 @@ List<Widget> buildAppCapabilitiesContent(
   ]);
 
   return children;
+}
+
+class _PlatformCapabilityMatrix extends StatelessWidget {
+  const _PlatformCapabilityMatrix({required this.capabilities});
+
+  final List<ServerPlatformCapability> capabilities;
+
+  @override
+  Widget build(BuildContext context) {
+    return Card.outlined(
+      margin: EdgeInsets.zero,
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const Icon(Icons.devices_outlined),
+                const SizedBox(width: 8),
+                Text(
+                  '平台能力矩阵'.tl,
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            for (var index = 0; index < capabilities.length; index++) ...[
+              _PlatformCapabilityRow(capability: capabilities[index]),
+              if (index != capabilities.length - 1) const SizedBox(height: 12),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _PlatformCapabilityRow extends StatelessWidget {
+  const _PlatformCapabilityRow({required this.capability});
+
+  final ServerPlatformCapability capability;
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final chipBackgroundColor = capability.isFullServerTarget
+        ? colorScheme.primaryContainer
+        : capability.isEnhancedServerTarget
+            ? colorScheme.secondaryContainer
+            : colorScheme.surfaceContainerHighest;
+    final chipForegroundColor = capability.isFullServerTarget
+        ? colorScheme.onPrimaryContainer
+        : capability.isEnhancedServerTarget
+            ? colorScheme.onSecondaryContainer
+            : colorScheme.onSurfaceVariant;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          children: [
+            Text(
+              capability.displayName,
+              style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                    fontWeight: FontWeight.w600,
+                  ),
+            ),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              decoration: BoxDecoration(
+                color: chipBackgroundColor,
+                borderRadius: BorderRadius.circular(999),
+              ),
+              child: Text(
+                serverPlatformTierLabel(capability.tier).tl,
+                style: TextStyle(
+                  color: chipForegroundColor,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        Text('${capability.summary} ${capability.notes.first}'.tl),
+      ],
+    );
+  }
 }
 
 class _CapabilityOverviewCard extends StatelessWidget {

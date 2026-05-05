@@ -9,8 +9,11 @@ import 'package:picakeep/components/components.dart';
 import 'package:picakeep/components/layout.dart';
 import 'package:picakeep/components/scrollable.dart';
 import 'package:picakeep/foundation/app.dart';
+import 'package:picakeep/foundation/app_runtime_mode.dart';
+import 'package:picakeep/foundation/download_model.dart';
 import 'package:picakeep/foundation/local_library.dart';
 import 'package:picakeep/foundation/local_library_settings.dart';
+import 'package:picakeep/foundation/remote_library_data_source.dart';
 import 'package:picakeep/tools/read_history_helper.dart';
 import 'package:picakeep/tools/translations.dart';
 
@@ -86,6 +89,7 @@ class _LocalLibraryComicTile extends DownloadedComicTile {
     required super.name,
     required super.author,
     required super.imagePath,
+    super.imageProvider,
     required super.type,
     required super.tag,
     required super.size,
@@ -112,15 +116,22 @@ class LocalLibraryPage extends StatefulWidget {
 
 class _LocalLibraryPageState extends State<LocalLibraryPage> {
   final _manager = LocalLibraryManager();
+  final _remoteDataSource = const RemoteLibraryDataSource();
   final _searchController = TextEditingController();
   bool _loading = true;
   bool _searchMode = false;
-  List<LocalLibraryComicItem> _items = const <LocalLibraryComicItem>[];
+  String? _errorText;
+  List<DownloadedItem> _items = const <DownloadedItem>[];
+
+  bool get _isRemoteMode =>
+      normalizeAppRuntimeMode(appdata.settings[appRuntimeModeSettingIndex]) ==
+      appRuntimeModeClient;
 
   @override
   void initState() {
     super.initState();
     App.localDataVersion.addListener(_handleLocalDataChanged);
+    App.serviceConfigVersion.addListener(_handleServiceConfigChanged);
     _searchController.addListener(() {
       if (mounted) {
         setState(() {});
@@ -132,49 +143,128 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
   @override
   void dispose() {
     App.localDataVersion.removeListener(_handleLocalDataChanged);
+    App.serviceConfigVersion.removeListener(_handleServiceConfigChanged);
     _searchController.dispose();
     super.dispose();
   }
 
   void _handleLocalDataChanged() {
+    if (!_isRemoteMode) {
+      _load();
+    }
+  }
+
+  void _handleServiceConfigChanged() {
     _load();
+  }
+
+  Future<void> _refreshCurrentLibrary({bool rescan = false}) async {
+    if (_isRemoteMode) {
+      await _load();
+      return;
+    }
+    await _refreshLocalLibrary(rescan: rescan);
+    await _load();
   }
 
   Future<void> _load() async {
     if (mounted) {
       setState(() {
         _loading = true;
+        _errorText = null;
       });
     }
-    final items = await _manager.getAll();
-    if (!mounted) {
-      return;
+    try {
+      final items = _isRemoteMode
+          ? await _remoteDataSource.fetchItems()
+          : await _manager.getAll();
+      final sortedItems = _sortItems(items);
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _items = sortedItems;
+        _loading = false;
+      });
+    } catch (e) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _items = const <DownloadedItem>[];
+        _errorText = e.toString().trim();
+        _loading = false;
+      });
     }
-    setState(() {
-      _items = items;
-      _loading = false;
-    });
   }
 
-  List<LocalLibraryComicItem> get _filteredItems {
+  List<DownloadedItem> get _filteredItems {
     final albumOnly = appdata.settings[localLibraryAlbumOnlySettingIndex] != '0';
-    final baseItems = albumOnly
-        ? _items.where((item) => item.isAlbum)
+    final Iterable<DownloadedItem> baseItems = !_isRemoteMode && albumOnly
+        ? _items.where((item) => item is LocalLibraryComicItem && item.isAlbum)
         : _items;
     final keyword = _searchController.text.trim().toLowerCase();
     if (keyword.isEmpty) {
-      return baseItems.toList();
+      return baseItems.toList(growable: false);
     }
     return baseItems.where((item) {
       return item.name.toLowerCase().contains(keyword) ||
           item.subTitle.toLowerCase().contains(keyword) ||
           item.tags.any((tag) => tag.toLowerCase().contains(keyword)) ||
           (item.fileSystemPath?.toLowerCase().contains(keyword) ?? false);
-    }).toList();
+    }).toList(growable: false);
   }
 
-  File _coverFile(LocalLibraryComicItem item) {
-    return resolveLocalComicCover(item);
+  List<DownloadedItem> _sortItems(List<DownloadedItem> items) {
+    final sorted = List<DownloadedItem>.from(items);
+    switch (normalizeLocalLibraryListSort(
+      appdata.settings[localLibraryListSortSettingIndex],
+    )) {
+      case 'time_asc':
+        sorted.sort(
+          (a, b) => (a.time ?? DateTime.fromMillisecondsSinceEpoch(0))
+              .compareTo(b.time ?? DateTime.fromMillisecondsSinceEpoch(0)),
+        );
+        break;
+      case 'name_asc':
+        sorted.sort((a, b) => a.name.compareTo(b.name));
+        break;
+      case 'name_desc':
+        sorted.sort((a, b) => b.name.compareTo(a.name));
+        break;
+      case 'size_asc':
+        sorted.sort((a, b) => (a.comicSize ?? 0).compareTo(b.comicSize ?? 0));
+        break;
+      case 'size_desc':
+        sorted.sort((a, b) => (b.comicSize ?? 0).compareTo(a.comicSize ?? 0));
+        break;
+      case 'time_desc':
+      default:
+        sorted.sort(
+          (a, b) => (b.time ?? DateTime.fromMillisecondsSinceEpoch(0))
+              .compareTo(a.time ?? DateTime.fromMillisecondsSinceEpoch(0)),
+        );
+        break;
+    }
+    return sorted;
+  }
+
+  File _coverFile(DownloadedItem item) {
+    if (item is LocalLibraryComicItem) {
+      return resolveLocalComicCover(item);
+    }
+    final path = item.localCoverPath?.trim();
+    if (path != null && path.isNotEmpty) {
+      return File(path);
+    }
+    return File('');
+  }
+
+  ImageProvider<Object>? _coverImageProvider(DownloadedItem item) {
+    if (item is RemoteLibraryComicItem) {
+      return item.coverImageProvider;
+    }
+    return null;
   }
 
   Future<void> _showSortDialog() async {
@@ -261,13 +351,13 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
     );
   }
 
-  void _openItem(LocalLibraryComicItem item) {
+  void _openItem(DownloadedItem item) {
     Navigator.of(context).push(
       MaterialPageRoute(builder: (_) => LocalComicDetailPage(comic: item)),
     );
   }
 
-  Future<void> _showActions(LocalLibraryComicItem item) async {
+  Future<void> _showActions(DownloadedItem item) async {
     final path = item.fileSystemPath?.trim() ?? '';
     await showModalBottomSheet<void>(
       context: context,
@@ -318,7 +408,7 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
     );
   }
 
-  void _showDesktopMenu(LocalLibraryComicItem item, TapDownDetails details) {
+  void _showDesktopMenu(DownloadedItem item, TapDownDetails details) {
     final path = item.fileSystemPath?.trim() ?? '';
     showMenu(
       context: context,
@@ -374,7 +464,7 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
     );
   }
 
-  Widget _buildItem(LocalLibraryComicItem item) {
+  Widget _buildItem(DownloadedItem item) {
     return Padding(
       padding: const EdgeInsets.all(2),
       child: _LocalLibraryComicTile(
@@ -382,6 +472,7 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
         name: item.name,
         author: item.subTitle,
         imagePath: _coverFile(item),
+        imageProvider: _coverImageProvider(item),
         type: item.sourceDisplayName,
         tag: item.tags,
         size: item.comicSize == null
@@ -396,6 +487,19 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
 
   Widget _buildEmptyState() {
     final hasKeyword = _searchController.text.trim().isNotEmpty;
+    final emptyTitle = hasKeyword
+        ? (_isRemoteMode ? '没有匹配的远程漫画' : '没有匹配的本地图集')
+        : (_errorText?.trim().isNotEmpty == true
+            ? (_isRemoteMode ? '远程漫画库暂不可用' : '本地漫画库暂不可用')
+            : (_isRemoteMode ? '暂无远程漫画' : '暂无本地图集'));
+    final emptyDescription = hasKeyword
+        ? '尝试调整搜索关键词'.tl
+        : (_errorText?.trim().isNotEmpty == true
+            ? _errorText!
+            : _isRemoteMode
+                ? '请确认服务端地址和服务状态后再刷新远程漫画库'.tl
+                : '可在工具-本地文件管理中添加本地漫画路径'.tl);
+    final refreshLabel = _isRemoteMode ? '刷新远程漫画'.tl : '刷新本地漫画'.tl;
     return SliverToBoxAdapter(
       child: Padding(
         padding: const EdgeInsets.all(24),
@@ -405,14 +509,12 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
             const Icon(Icons.photo_library_outlined, size: 64, color: Colors.grey),
             const SizedBox(height: 16),
             Text(
-              hasKeyword ? '没有匹配的本地图集'.tl : '暂无本地图集'.tl,
+              emptyTitle.tl,
               style: const TextStyle(fontSize: 18, color: Colors.grey),
             ),
             const SizedBox(height: 8),
             Text(
-              hasKeyword
-                  ? '尝试调整搜索关键词'.tl
-                  : '可在工具-本地文件管理中添加本地漫画路径'.tl,
+              emptyDescription,
               style: TextStyle(
                 fontSize: 12,
                 color: Theme.of(context).colorScheme.outline,
@@ -422,11 +524,10 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
             const SizedBox(height: 16),
             FilledButton.icon(
               onPressed: () async {
-                await _refreshLocalLibrary();
-                await _load();
+                await _refreshCurrentLibrary();
               },
               icon: const Icon(Icons.refresh),
-              label: Text('刷新本地漫画'.tl),
+              label: Text(refreshLabel),
             ),
           ],
         ),
@@ -445,12 +546,13 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
         ),
       );
     }
-    return Text('本地图集'.tl);
+    return Text(_isRemoteMode ? '远程漫画库'.tl : '本地图集'.tl);
   }
 
   @override
   Widget build(BuildContext context) {
     final items = _filteredItems;
+    final refreshTooltip = _isRemoteMode ? '刷新远程漫画'.tl : '刷新本地漫画'.tl;
     return Scaffold(
       body: _loading
           ? const Center(child: CircularProgressIndicator())
@@ -461,21 +563,21 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
                   actions: [
                     IconButton(
                       icon: const Icon(Icons.refresh),
-                      tooltip: '刷新本地漫画'.tl,
+                      tooltip: refreshTooltip,
                       onPressed: () async {
-                        await _refreshLocalLibrary();
-                        await _load();
+                        await _refreshCurrentLibrary();
                       },
                     ),
-                    IconButton(
-                      icon: Icon(
-                        appdata.settings[localLibraryAlbumOnlySettingIndex] != '0'
-                            ? Icons.tune
-                            : Icons.tune_outlined,
+                    if (!_isRemoteMode)
+                      IconButton(
+                        icon: Icon(
+                          appdata.settings[localLibraryAlbumOnlySettingIndex] != '0'
+                              ? Icons.tune
+                              : Icons.tune_outlined,
+                        ),
+                        tooltip: '本地图集显示设置'.tl,
+                        onPressed: _showFilterDialog,
                       ),
-                      tooltip: '本地图集显示设置'.tl,
-                      onPressed: _showFilterDialog,
-                    ),
                     IconButton(
                       icon: const Icon(Icons.sort),
                       tooltip: '排序'.tl,

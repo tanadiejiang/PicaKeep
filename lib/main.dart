@@ -9,6 +9,7 @@ import 'base.dart';
 import 'pages/auth_page.dart';
 import 'pages/main_page.dart';
 import 'components/window_frame.dart';
+import 'server/local_server_runtime_sync.dart';
 import 'tools/block_screenshot.dart';
 
 void main() async {
@@ -25,6 +26,12 @@ void main() async {
 
   await initWindowManagerIfDesktop();
 
+  try {
+    await syncDesktopLocalServerRuntimeForCurrentMode();
+  } catch (e, s) {
+    debugPrint('Failed to sync local server runtime: $e\n$s');
+  }
+
   runApp(const PicaKeepApp());
 
   await showWindowWhenReady();
@@ -37,8 +44,7 @@ class PicaKeepApp extends StatefulWidget {
   State<PicaKeepApp> createState() => _PicaKeepAppState();
 }
 
-class _PicaKeepAppState extends State<PicaKeepApp>
-    with WidgetsBindingObserver {
+class _PicaKeepAppState extends State<PicaKeepApp> with WidgetsBindingObserver {
   static const List<Color> _seedColors = [
     Colors.blue,
     Colors.red,

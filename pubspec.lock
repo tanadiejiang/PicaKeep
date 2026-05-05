@@ -653,6 +653,14 @@ packages:
       url: "https://pub.flutter-io.cn"
     source: hosted
     version: "2.4.1"
+  shelf:
+    dependency: "direct main"
+    description:
+      name: shelf
+      sha256: e7dd780a7ffb623c57850b33f43309312fc863fb6aa3d276a754bb299839ef12
+      url: "https://pub.flutter-io.cn"
+    source: hosted
+    version: "1.4.2"
   shimmer_animation:
     dependency: "direct main"
     description:
@@ -690,6 +698,14 @@ packages:
       url: "https://pub.flutter-io.cn"
     source: hosted
     version: "2.1.0"
+  sqlite3_flutter_libs:
+    dependency: "direct main"
+    description:
+      name: sqlite3_flutter_libs
+      sha256: eeb9e3a45207649076b808f8a5a74d68770d0b7f26ccef6d5f43106eee5375ad
+      url: "https://pub.flutter-io.cn"
+    source: hosted
+    version: "0.5.42"
   stack_trace:
     dependency: transitive
     description:

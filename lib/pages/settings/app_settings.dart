@@ -43,6 +43,16 @@ void _notifyManagedDataViews() {
   }
 
   try {
+    LocalServerRuntime.instance.markResourceStateDirty();
+  } catch (e, s) {
+    LogManager.addLog(
+      LogLevel.error,
+      'ManagedDataReload',
+      'Failed to notify local server runtime resource change: $e\n$s',
+    );
+  }
+
+  try {
     StateController.findOrNull<SimpleController>(tag: 'image_favorites_page')
         ?.update();
   } catch (e, s) {
