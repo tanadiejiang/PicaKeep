@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:picakeep/foundation/local_library.dart';
+import 'package:picakeep/pages/app_capabilities_page.dart';
 import 'package:picakeep/pages/local_library_page.dart';
 import 'package:picakeep/tools/translations.dart';
 
@@ -20,7 +20,8 @@ class ToolsPage extends StatelessWidget {
             subtitle: "管理本地漫画路径与目录来源".tl,
             onTap: () {
               Navigator.of(context).push(
-                MaterialPageRoute(builder: (_) => const LocalLibraryFilesPage()),
+                MaterialPageRoute(
+                    builder: (_) => const LocalLibraryFilesPage()),
               );
             },
           ),
@@ -31,7 +32,8 @@ class ToolsPage extends StatelessWidget {
             subtitle: "查看每个本地路径与图集占用".tl,
             onTap: () {
               Navigator.of(context).push(
-                MaterialPageRoute(builder: (_) => const LocalLibraryStoragePage()),
+                MaterialPageRoute(
+                    builder: (_) => const LocalLibraryStoragePage()),
               );
             },
           ),
@@ -43,6 +45,17 @@ class ToolsPage extends StatelessWidget {
             onTap: () {
               Navigator.of(context).push(
                 MaterialPageRoute(builder: (_) => const LocalLibraryPage()),
+              );
+            },
+          ),
+          const Divider(height: 1),
+          _ToolItem(
+            icon: Icons.cloud_sync_outlined,
+            title: "APP能力".tl,
+            subtitle: "查看云端 / NAS 一体化扩展规划与后续入口".tl,
+            onTap: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const AppCapabilitiesPage()),
               );
             },
           ),

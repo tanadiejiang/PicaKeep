@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'foundation/app.dart';
+import 'foundation/app_runtime_mode.dart';
 import 'foundation/local_data_source.dart';
 import 'foundation/local_library_settings.dart';
 import 'foundation/log.dart';
@@ -123,6 +124,10 @@ class Appdata {
     "1", //94 本地图集页仅显示图集
     "0", //95 本地详情页相关推荐模式
     "0", //96 无论有无文件都按下载数据库显示
+    "client", //97 运行模式
+    "", //98 客户端服务端地址
+    "mdns", //99 局域网发现方式
+    "9527", //100 服务端后台端口
   ];
 
   List<String> implicitData = [
@@ -211,6 +216,14 @@ class Appdata {
     settings[localLibraryShowAllDatabaseRecordsSettingIndex] =
         normalizeLocalLibraryShowAllDatabaseRecords(
             settings[localLibraryShowAllDatabaseRecordsSettingIndex]);
+    settings[appRuntimeModeSettingIndex] =
+        normalizeAppRuntimeMode(settings[appRuntimeModeSettingIndex]);
+    settings[remoteServerAddressSettingIndex] =
+        settings[remoteServerAddressSettingIndex].trim();
+    settings[serviceDiscoveryModeSettingIndex] = normalizeServiceDiscoveryMode(
+        settings[serviceDiscoveryModeSettingIndex]);
+    settings[serviceAdminPortSettingIndex] =
+        normalizeServiceAdminPortValue(settings[serviceAdminPortSettingIndex]);
     setManagedDataSourceMode(settings[managedDataSourceModeSettingIndex]);
   }
 

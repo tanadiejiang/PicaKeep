@@ -225,6 +225,7 @@ Future<void> _runRescanLocalComics(BuildContext context) async {
 
 Widget buildAppSettings(double width, BuildContext context) {
   return buildTwoColumnLayout(width, [
+    const _AppServiceSettingsSection(),
     SettingsTitle('日志'.tl),
     ListTile(
       leading: const Icon(Icons.bug_report),

@@ -10,6 +10,7 @@ import 'me_page.dart';
 import 'favorites/main_favorites_page.dart';
 import 'local_search_page.dart';
 import 'settings/settings_page.dart';
+import 'service_info_page.dart';
 
 enum _MainPaneActionPage {
   search,
@@ -31,6 +32,7 @@ class _MainPageState extends State<MainPage> {
   late final List<Widget> _pages = [
     const MePage(),
     const MainFavoritesPage(),
+    const ServiceInfoPage(),
   ];
 
   _MainPaneActionPage? _currentPaneActionPage() {
@@ -128,6 +130,11 @@ class _MainPageState extends State<MainPage> {
           label: "收藏",
           icon: Icons.local_activity_outlined,
           activeIcon: Icons.local_activity,
+        ),
+        PaneItemEntry(
+          label: "服务信息",
+          icon: Icons.router_outlined,
+          activeIcon: Icons.router,
         ),
       ],
       paneActions: [
