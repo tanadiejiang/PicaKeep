@@ -28,6 +28,7 @@
   - 原 PicaComic 数据目录
   - 用户自定义本地漫画路径
 - 新增本地图集、本地文件管理、存储统计、数据源切换、隐私认证等能力
+- 在本地离线主链路之外，新增**客户端 / 服务端双模式骨架**，为后续局域网 / NAS 一体化扩展预留入口
 
 ### 1.2 最终保留 / 新增能力
 
@@ -56,6 +57,12 @@
 - 应用返回前台身份验证
 - Android 截图保护
 - 桌面窗口标题栏快捷入口桥接
+- 运行模式切换（客户端 / 服务端）
+- 服务信息页 `ServiceInfoPage`
+- APP能力页 `AppCapabilitiesPage`
+- 远程服务状态数据源 `service_data_source.dart`
+- Linux / Dart 服务端入口 `bin/main_server.dart`
+- 服务端资源扫描器与管理后台原型 `lib/server/`
 
 ### 1.3 明确移除的能力
 - 所有在线图源插件系统
@@ -98,7 +105,19 @@
 - `local_library.dart` / `local_library_page.dart` 是正式核心模块，不是附加功能
 - `ToolsPage` 已从占位页演变为本地资源管理入口
 - 设置页中的“数据”部分已不只是下载目录设置，而是完整的本地数据接入控制台
+- `app_runtime_mode.dart`、`service_data_source.dart`、`runtime_service_settings.dart`、`service_info_page.dart` 说明项目已进入**客户端 / 服务端双模式骨架**阶段
+- `lib/server/` 与 `bin/main_server.dart` 应视为已落地的服务端原型，而不是单纯想法说明
 - 依赖列表需以当前实际版本为准，而不是初始裁剪设想
+
+### 2.3 关于“服务端”这部分的准确定位
+
+当前项目里的服务端相关内容，应该被定义为：
+- **已经有真实代码骨架**
+- **已经有运行模式、服务信息页、后台原型、资源扫描与配置文件结构**
+- **尚未完全替代当前本地阅读主链路**
+- **尚未完整打通远程漫画列表 / 详情 / 阅读图片流**
+
+因此复刻文档里应把它写成“当前版本已开始落地的第二主线”，而不是写成“纯未来规划”或“已经全做完”。
 
 ---
 
@@ -314,7 +333,83 @@
 
 ---
 
-## 3.8 设置页面实际内容
+## 3.8 服务端 / 客户端双模式骨架（新增第二主线）
+
+当前 `PicaKeep` 已不只是单机本地阅读器，还新增了一套**服务端扩展骨架**，用于后续云端 / NAS / 局域网一体化。
+
+### 当前已经落地的部分
+
+#### 运行模式与设置
+- `lib/foundation/app_runtime_mode.dart`
+- `lib/pages/settings/runtime_service_settings.dart`
+
+已落地设置项：
+- 客户端 / 服务端模式切换
+- 远程服务端地址
+- 服务端后台端口
+- 局域网发现策略（当前文案以 mDNS / Bonjour 为主）
+
+对应新增 settings 索引：
+- `[97]`：运行模式
+- `[98]`：远程服务端地址
+- `[99]`：局域网发现方式
+- `[100]`：服务端后台端口
+
+#### 客户端状态数据源
+- `lib/foundation/service_data_source.dart`
+- `lib/pages/service_info_page.dart`
+
+当前客户端模式下已具备：
+- 地址规范化
+- `/status` 接口拼接
+- HTTP 状态探测
+- 在线 / 离线 / 地址无效 / 未配置 等状态区分
+- 响应延迟、状态码、漫画数量、连接数展示
+
+#### 服务端原型
+- `bin/main_server.dart`
+- `lib/server/server_app.dart`
+- `lib/server/server_config.dart`
+- `lib/server/local_resource_scanner.dart`
+- `lib/server/server_runtime_state.dart`
+- `lib/server/admin_web.dart`
+
+当前服务端已具备：
+- 独立 Dart 入口
+- JSON 配置文件加载 / 保存
+- 本地资源扫描
+- `/status` 状态接口
+- `/admin` 后台页面
+- `/api/admin/summary`
+- `/api/admin/resources`
+- `/api/admin/config`
+- `/api/admin/logs`
+- `/api/admin/scan`
+
+#### APP 能力说明页
+- `lib/pages/app_capabilities_page.dart`
+
+该页面当前承担的角色是：
+- 把客户端 / 服务端一体化方向正式暴露给用户
+- 展示阶段路线、技术骨架与约束
+- 作为后续扩展入口，而不是仅内部备注
+
+### 当前尚未完全打通的部分
+- 远程漫画列表接口
+- 远程详情接口
+- 远程阅读图片流
+- 真正的服务发现扫描
+- 完整认证与权限控制
+- Linux / NAS 实际部署闭环
+
+### 因此在复刻时的正确策略
+- 先完整复刻本地离线主链路
+- 再把服务端双模式骨架按当前代码状态一起复刻进去
+- 不要把它删掉，也不要错误写成“已完全完成的远程阅读系统”
+
+---
+
+## 3.9 设置页面实际内容
 
 设置页仍保留 6 大分类，但现在每类都应以当前实现为准。
 
@@ -367,16 +462,19 @@
 - 受管数据源模式切换
 - 刷新本地漫画
 - 重新扫描磁盘
+- 运行模式切换（客户端 / 服务端）
+- 远程服务端地址 / 后台端口配置
 - 语言切换
 - 截图保护
 - 身份验证
+- 服务信息入口联动
 
 ### 关于
 - 版本 / 反馈 / 外部链接等
 
 ---
 
-## 3.9 数据源模式与兼容策略（新增正式要求）
+## 3.10 数据源模式与兼容策略（新增正式要求）
 
 当前项目不是只读当前应用数据，而是支持多数据根接入。
 
@@ -410,7 +508,7 @@
 
 ---
 
-## 3.10 剪贴板链接识别实际状态
+## 3.11 剪贴板链接识别实际状态
 
 当前 `tools/local_app_links.dart` 已接入 `MainPage`，但它的能力应按“当前实现 + 可继续优化”来定义。
 
@@ -432,7 +530,7 @@
 
 ---
 
-## 3.11 工具页实际内容
+## 3.12 工具页实际内容
 
 `ToolsPage` 已不是占位工具页，而是本地资源入口页。
 
@@ -440,13 +538,14 @@
 - 本地文件管理
 - 存储空间
 - 本地图集
+- APP能力
 - 清理缓存（目前仍偏占位）
 
 实际复刻时，应将前三项视为正式功能，将“清理缓存”视为可后补项。
 
 ---
 
-## 3.12 权限、隐私与安全
+## 3.13 权限、隐私与安全
 
 初始计划原本移除了身份验证，但当前项目实际重新引入了**本地隐私能力**。
 
@@ -464,7 +563,7 @@
 
 ---
 
-## 3.13 桌面端能力
+## 3.14 桌面端能力
 
 当前依赖和代码都说明桌面端被正式支持，而不是偶然可运行。
 
@@ -507,6 +606,8 @@
 - `file_selector` — 部分平台目录选择
 - `flutter_image_gallery_saver` — 阅读器保存图片
 - `local_auth` — 本地身份验证
+- `shelf` — 服务端 HTTP 接口与管理后台原型
+- `shelf_io`（通过 `shelf` 相关服务端入口使用）— 启动本地管理服务
 
 ### 4.3 覆盖与补丁
 - `local_auth_windows` 使用本地 stub override
@@ -713,10 +814,11 @@
 - 去重结果展示
 
 ### 5.23 工具页
-实现 3 个正式入口：
+实现 4 个正式入口：
 - 本地文件管理
 - 存储空间
 - 本地图集
+- APP能力
 
 “清理缓存”可先做占位。
 
@@ -735,6 +837,10 @@
 - 数据源模式
 - 刷新本地漫画
 - 重新扫描磁盘
+- 运行模式切换（客户端 / 服务端）
+- 远程服务端地址配置
+- 服务端后台端口配置
+- 服务信息入口
 - 语言切换
 - 日志
 - 截图保护
@@ -752,17 +858,28 @@
 - `MainPageHub`
 - 目录打开与路径复制能力
 
+### 5.28 服务端骨架
+实现并保留：
+- `bin/main_server.dart` 独立入口
+- `app_runtime_mode.dart` 运行模式与地址规范化
+- `service_data_source.dart` 客户端状态探测
+- `service_info_page.dart` 服务信息展示页
+- `app_capabilities_page.dart` 服务端 / NAS 扩展说明页
+- `lib/server/` 下的配置、扫描、后台与状态接口原型
+
+注意：这一阶段只要求复刻当前已存在的服务端骨架，不要求把远程阅读链路一次性全部做完。
+
 ---
 
 ## 第八步：兼容旧数据并做最终验证
 
-### 5.28 数据兼容要求
+### 5.29 数据兼容要求
 - `download.db` 结构兼容原 PicaComic
 - `local_favorite.db` 结构兼容原 PicaComic
 - `history` 结构兼容原 PicaComic
 - 原应用数据目录自动识别
 
-### 5.29 功能验证清单
+### 5.30 功能验证清单
 
 #### 启动与基础
 - [ ] 应用启动正常
@@ -775,6 +892,8 @@
 - [ ] 收藏页正常
 - [ ] 搜索页正常
 - [ ] 设置页 6 大分类正常
+- [ ] 服务信息页正常显示当前模式与状态
+- [ ] APP能力页可打开并展示服务端扩展说明
 
 #### 下载与详情
 - [ ] 已下载列表正常
@@ -809,6 +928,15 @@
 - [ ] 刷新本地漫画生效
 - [ ] 重新扫描磁盘生效
 - [ ] 切换数据源模式后页面联动刷新
+- [ ] 客户端 / 服务端模式切换后设置与服务信息页联动正常
+
+#### 服务端骨架
+- [ ] `main_server.dart` 可启动服务端进程
+- [ ] `/status` 接口可返回状态 JSON
+- [ ] `/admin` 后台页面可打开
+- [ ] `/api/admin/resources` 可返回资源扫描结果
+- [ ] `/api/admin/config` 可读写配置
+- [ ] 客户端模式下填写服务端地址后可探测在线 / 离线状态
 
 #### 隐私与桌面
 - [ ] 身份验证正常
@@ -835,11 +963,14 @@
 - `lib/pages/favorites/main_favorites_page.dart`
 - `lib/pages/favorites/local_favorites.dart`
 - `lib/pages/me_page.dart`
+- `lib/pages/service_info_page.dart`
+- `lib/pages/app_capabilities_page.dart`
 - `lib/pages/settings/settings_page.dart`
 - `lib/pages/settings/app_settings.dart`
 - `lib/pages/settings/explore_settings.dart`
 - `lib/pages/settings/reading_settings.dart`
 - `lib/pages/settings/local_favorite_settings.dart`
+- `lib/pages/settings/runtime_service_settings.dart`
 - `lib/pages/reader/`
 - `lib/components/navigation_bar.dart`
 - `lib/tools/translations.dart`
@@ -854,8 +985,16 @@
 - `lib/foundation/local_library.dart`
 - `lib/foundation/local_library_settings.dart`
 - `lib/foundation/main_page_hub.dart`
+- `lib/foundation/app_runtime_mode.dart`
+- `lib/foundation/service_data_source.dart`
 - `lib/pages/local_library_page.dart`
 - `lib/pages/auth_page.dart`
+- `lib/server/admin_web.dart`
+- `lib/server/local_resource_scanner.dart`
+- `lib/server/server_app.dart`
+- `lib/server/server_config.dart`
+- `lib/server/server_runtime_state.dart`
+- `bin/main_server.dart`
 - `lib/tools/notification.dart`
 - `lib/tools/extensions.dart`
 
@@ -869,6 +1008,7 @@
 4. **阅读器尽量少动。** 重点是把阅读数据提供层本地化。
 5. **本地库条目应尽量复用 `DownloadedItem` 体系。** 这样才能复用详情页、阅读页、历史、推荐与 UI 组件。
 6. **设置页不是装饰页，而是本地数据控制面板。** 刷新、重扫、路径切换都要真的生效。
+7. **服务端部分按“当前已落地骨架”复刻。** 保留运行模式、状态探测、后台原型与扫描器，不把它删成纯本地版，也不夸大成已经完整可用的远程阅读系统。
 
 ---
 
@@ -876,6 +1016,6 @@
 
 如果要复刻当前 `PicaKeep`，正确目标不是“做一个删掉联网功能的 PicaComic”，而是：
 
-**做一个继承 PicaComic 阅读器与 UI 主干、同时具备本地下载库 + 原应用数据兼容 + 自定义本地路径聚合 + 本地图集管理能力的离线漫画库应用。**
+**做一个继承 PicaComic 阅读器与 UI 主干、同时具备本地下载库 + 原应用数据兼容 + 自定义本地路径聚合 + 本地图集管理能力，并且保留客户端 / 服务端双模式扩展骨架的离线漫画库应用。**
 
 这就是当前项目真实完成态所对应的复刻蓝图。

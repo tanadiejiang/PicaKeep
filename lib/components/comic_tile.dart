@@ -26,6 +26,7 @@ class DownloadedComicTile extends StatelessWidget {
     required this.name,
     required this.author,
     required this.imagePath,
+    this.imageProvider,
     required this.type,
     required this.tag,
     required this.size,
@@ -36,6 +37,7 @@ class DownloadedComicTile extends StatelessWidget {
 
   final String size;
   final File imagePath;
+  final ImageProvider<Object>? imageProvider;
   final String author;
   final String name;
   final void Function() onTap;
@@ -280,6 +282,16 @@ class DownloadedComicTile extends StatelessWidget {
   }
 
   Widget _buildImage() {
+    final provider = imageProvider;
+    if (provider != null) {
+      return Image(
+        image: provider,
+        fit: BoxFit.cover,
+        height: double.infinity,
+        errorBuilder: (_, __, ___) =>
+            const Center(child: Icon(Icons.image_not_supported)),
+      );
+    }
     if (imagePath.path.isEmpty) {
       return const Center(child: Icon(Icons.image_not_supported));
     }
