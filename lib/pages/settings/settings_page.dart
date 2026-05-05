@@ -18,12 +18,16 @@ import 'package:picakeep/foundation/local_library.dart';
 import 'package:picakeep/foundation/local_library_settings.dart';
 import 'package:picakeep/foundation/log.dart';
 import 'package:picakeep/foundation/ui_mode.dart';
+import 'package:picakeep/foundation/app_runtime_mode.dart';
+import 'package:picakeep/pages/app_capabilities_page.dart';
 import 'package:picakeep/pages/auth_page.dart';
 import 'package:picakeep/pages/local_library_page.dart';
 import 'package:picakeep/tools/block_screenshot.dart';
 import 'package:share_plus/share_plus.dart';
 
 part 'app_settings.dart';
+part 'app_capabilities_settings.dart';
+part 'runtime_service_settings.dart';
 part 'explore_settings.dart';
 part 'reading_settings.dart';
 part 'local_favorite_settings.dart';
@@ -112,7 +116,7 @@ class _SettingsPageState extends State<SettingsPage> {
       !UiMode.m1(context) &&
       MediaQuery.of(context).size.width >= _settingsWideLayoutBreakpoint;
 
-  final categories = <String>["浏览", "阅读", "外观", "本地收藏", "APP", "关于"];
+  final categories = <String>["浏览", "阅读", "外观", "本地收藏", "APP", "APP能力", "关于"];
 
   final icons = <IconData>[
     Icons.explore,
@@ -120,6 +124,7 @@ class _SettingsPageState extends State<SettingsPage> {
     Icons.color_lens,
     Icons.collections_bookmark_rounded,
     Icons.apps,
+    Icons.cloud_sync_outlined,
     Icons.info
   ];
 
@@ -344,7 +349,8 @@ class _SettingsPageState extends State<SettingsPage> {
         2 => buildAppearanceSettings(width),
         3 => LocalFavoritesSettings(width: width),
         4 => buildAppSettings(width, context),
-        5 => buildAbout(width),
+        5 => buildAppCapabilitiesSettings(width, context),
+        6 => buildAbout(width),
         _ => throw UnimplementedError()
       };
     }

@@ -1,0 +1,214 @@
+import 'package:flutter/material.dart';
+import 'package:picakeep/tools/translations.dart';
+
+class AppCapabilitiesPage extends StatelessWidget {
+  const AppCapabilitiesPage({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final bottomPadding = MediaQuery.of(context).padding.bottom + 12;
+    return Scaffold(
+      appBar: AppBar(
+        title: Text('APP能力'.tl),
+      ),
+      body: ListView(
+        padding: EdgeInsets.fromLTRB(12, 12, 12, bottomPadding),
+        children: buildAppCapabilitiesContent(context),
+      ),
+    );
+  }
+}
+
+List<Widget> buildAppCapabilitiesContent(
+  BuildContext context, {
+  bool includeOverview = true,
+}) {
+  final children = <Widget>[];
+
+  if (includeOverview) {
+    children.add(
+      _CapabilityOverviewCard(
+        title: 'PicaKeep – 云端/NAS 一体化扩展'.tl,
+        subtitle: '当前先作为规划入口，后续客户端 / 服务端能力会继续在这里落地'.tl,
+        status: '规划中'.tl,
+      ),
+    );
+    children.add(const SizedBox(height: 12));
+  }
+
+  children.addAll([
+    const _CapabilitySection(
+      icon: Icons.flag_outlined,
+      title: '当前状态',
+      items: [
+        '已完成本地漫画 / 已下载 / 本地图集 / 收藏 / 历史等本地阅读链路',
+        '当前新增方向为云端/NAS 一体化扩展，目标是在同一套代码里支持客户端与服务端双模式',
+      ],
+    ),
+    const SizedBox(height: 12),
+    const _CapabilitySection(
+      icon: Icons.device_hub_outlined,
+      title: '目标形态',
+      items: [
+        '客户端模式：手动输入服务端地址，后续支持局域网自动扫描与一键连接',
+        '服务端模式：运行在 NAS / Linux 设备上，直接读取本地数据库与图片文件，不依赖 SMB / NFS / FTP',
+        '导航中增加服务信息面板，分别展示客户端连接状态或服务端运行状态',
+      ],
+    ),
+    const SizedBox(height: 12),
+    const _CapabilitySection(
+      icon: Icons.developer_mode_outlined,
+      title: '技术骨架',
+      items: [
+        '客户端与服务端共享数据模型、数据库访问逻辑与漫画元信息转换层',
+        '局域网发现首选 mDNS / Bonjour，先避免自定义 UDP 广播对局域网其他设备产生额外噪声',
+        '服务端使用纯 Dart + shelf，提供状态接口、漫画列表接口、图片流接口与后台管理入口',
+        '通过 main_client.dart 与 main_server.dart 分离构建 Flutter 客户端和 Linux 可执行服务端',
+      ],
+    ),
+    const SizedBox(height: 12),
+    const _CapabilitySection(
+      icon: Icons.security_outlined,
+      title: '基础约束',
+      items: [
+        '所有实际访问都走自研服务，默认不记录访问日志',
+        '后台初版先保留登录页，但仅使用滑动成功即登录的占位方案，后续再替换为真实认证',
+        '图片接口需要支持 Range 请求，保证大图与阅读翻页体验',
+        '局域网无认证场景下仍需保留最小保护，例如只绑定内网、随机管理口令、可关闭自动发现',
+      ],
+    ),
+    const SizedBox(height: 12),
+    const _CapabilitySection(
+      icon: Icons.timeline_outlined,
+      title: '阶段路线',
+      items: [
+        '第一阶段：先补设置入口、工具入口与 APP能力 页面，集中承载规划与后续配置',
+        '第二阶段：抽象 Local / Remote DataSource，打通客户端远程列表与详情接口',
+        '第三阶段：补服务发现、管理后台、Linux 原生部署与联调',
+        '第四阶段：预留 Docker 化部署支持，但优先保证 Linux 原生可跑通',
+      ],
+    ),
+    const SizedBox(height: 12),
+    const _CapabilitySection(
+      icon: Icons.pending_actions_outlined,
+      title: '后续会继续放在这里的内容',
+      items: [
+        '运行模式切换配置',
+        '服务地址与扫描入口',
+        '服务信息面板与连接状态',
+        '服务端管理入口与部署说明',
+      ],
+    ),
+  ]);
+
+  return children;
+}
+
+class _CapabilityOverviewCard extends StatelessWidget {
+  const _CapabilityOverviewCard({
+    required this.title,
+    required this.subtitle,
+    required this.status,
+  });
+
+  final String title;
+  final String subtitle;
+  final String status;
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return Card.outlined(
+      margin: EdgeInsets.zero,
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                const Icon(Icons.cloud_sync_outlined),
+                Text(
+                  title,
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: colorScheme.secondaryContainer,
+                    borderRadius: BorderRadius.circular(999),
+                  ),
+                  child: Text(
+                    status,
+                    style: TextStyle(
+                      color: colorScheme.onSecondaryContainer,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Text(subtitle),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _CapabilitySection extends StatelessWidget {
+  const _CapabilitySection({
+    required this.icon,
+    required this.title,
+    required this.items,
+  });
+
+  final IconData icon;
+  final String title;
+  final List<String> items;
+
+  @override
+  Widget build(BuildContext context) {
+    return Card.outlined(
+      margin: EdgeInsets.zero,
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(icon),
+                const SizedBox(width: 8),
+                Text(
+                  title.tl,
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            for (final item in items) ...[
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Padding(
+                    padding: EdgeInsets.only(top: 6),
+                    child: Icon(Icons.circle, size: 6),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(child: Text(item.tl)),
+                ],
+              ),
+              if (item != items.last) const SizedBox(height: 10),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
