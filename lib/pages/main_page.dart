@@ -2,15 +2,16 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:picakeep/foundation/app.dart';
 import 'package:picakeep/foundation/app_page_route.dart';
+import 'package:picakeep/foundation/app_runtime_mode.dart';
 import 'package:picakeep/foundation/main_page_hub.dart';
 import 'package:picakeep/tools/local_app_links.dart';
 import '../base.dart';
 import '../components/components.dart';
-import 'me_page.dart';
 import 'favorites/main_favorites_page.dart';
 import 'local_search_page.dart';
-import 'settings/settings_page.dart';
+import 'me_page.dart';
 import 'service_info_page.dart';
+import 'settings/settings_page.dart';
 
 enum _MainPaneActionPage {
   search,
@@ -29,11 +30,34 @@ class _MainPageState extends State<MainPage> {
   final _navigatorKey = GlobalKey<NavigatorState>();
   bool _isPaneActionNavigating = false;
 
-  late final List<Widget> _pages = [
-    const MePage(),
-    const MainFavoritesPage(),
-    const ServiceInfoPage(),
-  ];
+  bool get _showServiceInfoTab =>
+      normalizeAppRuntimeMode(appdata.settings[appRuntimeModeSettingIndex]) ==
+      appRuntimeModeServer;
+
+  List<Widget> get _pages => [
+        const MePage(),
+        const MainFavoritesPage(),
+        if (_showServiceInfoTab) const ServiceInfoPage(),
+      ];
+
+  List<PaneItemEntry> get _paneItems => [
+        PaneItemEntry(
+          label: '我',
+          icon: Icons.person_outline,
+          activeIcon: Icons.person,
+        ),
+        PaneItemEntry(
+          label: '收藏',
+          icon: Icons.local_activity_outlined,
+          activeIcon: Icons.local_activity,
+        ),
+        if (_showServiceInfoTab)
+          PaneItemEntry(
+            label: '服务信息',
+            icon: Icons.router_outlined,
+            activeIcon: Icons.router,
+          ),
+      ];
 
   _MainPaneActionPage? _currentPaneActionPage() {
     if (observer.routes.isEmpty) {
@@ -91,6 +115,12 @@ class _MainPageState extends State<MainPage> {
     navigator.push(route);
   }
 
+  void _handleServiceConfigChanged() {
+    if (mounted) {
+      setState(() {});
+    }
+  }
+
   void checkClipboard() {
     checkLocalClipboard();
   }
@@ -99,6 +129,7 @@ class _MainPageState extends State<MainPage> {
   void initState() {
     super.initState();
     App.mainNavigatorKey = _navigatorKey;
+    App.serviceConfigVersion.addListener(_handleServiceConfigChanged);
     StateController.putIfNotExists(MainPageHub());
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
@@ -107,46 +138,41 @@ class _MainPageState extends State<MainPage> {
     checkClipboard();
   }
 
-  int _initialTabIndex() {
+  @override
+  void dispose() {
+    App.serviceConfigVersion.removeListener(_handleServiceConfigChanged);
+    super.dispose();
+  }
+
+  int _initialTabIndex(int pageCount) {
     try {
       final i = int.parse(appdata.settings[23]);
-      if (i >= 0 && i < _pages.length) return i;
+      if (i >= 0 && i < pageCount) {
+        return i;
+      }
     } catch (_) {}
     return 0;
   }
 
   @override
   Widget build(BuildContext context) {
+    final pages = _pages;
+    final paneItems = _paneItems;
     return NaviPane(
-      initialPage: _initialTabIndex(),
+      key: ValueKey(_showServiceInfoTab),
+      initialPage: _initialTabIndex(pages.length),
       observer: observer,
-      paneItems: [
-        PaneItemEntry(
-          label: "我",
-          icon: Icons.person_outline,
-          activeIcon: Icons.person,
-        ),
-        PaneItemEntry(
-          label: "收藏",
-          icon: Icons.local_activity_outlined,
-          activeIcon: Icons.local_activity,
-        ),
-        PaneItemEntry(
-          label: "服务信息",
-          icon: Icons.router_outlined,
-          activeIcon: Icons.router,
-        ),
-      ],
+      paneItems: paneItems,
       paneActions: [
         PaneActionEntry(
-          label: "搜索",
+          label: '搜索',
           icon: Icons.search,
           onTap: () {
             _openHubPage(() => const LocalSearchPage());
           },
         ),
         PaneActionEntry(
-          label: "设置",
+          label: '设置',
           icon: Icons.settings_outlined,
           onTap: () {
             _openHubPage(() => const SettingsPage());
@@ -161,7 +187,7 @@ class _MainPageState extends State<MainPage> {
             preventRebuild: false,
             isRootRoute: true,
             builder: (context) {
-              return NaviPaddingWidget(child: _pages[index]);
+              return NaviPaddingWidget(child: pages[index]);
             },
           ),
         );
@@ -173,7 +199,7 @@ class _MainPageState extends State<MainPage> {
             preventRebuild: false,
             isRootRoute: true,
             builder: (context) {
-              return NaviPaddingWidget(child: _pages[index]);
+              return NaviPaddingWidget(child: pages[index]);
             },
           ),
           (route) => false,

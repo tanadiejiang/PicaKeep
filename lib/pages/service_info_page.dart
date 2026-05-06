@@ -1,15 +1,19 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:picakeep/base.dart';
+import 'package:picakeep/components/components.dart';
 import 'package:picakeep/foundation/app.dart';
 import 'package:picakeep/foundation/app_runtime_mode.dart';
 import 'package:picakeep/foundation/service_data_source.dart';
 import 'package:picakeep/server/local_server_runtime.dart';
+import 'package:picakeep/tools/android_foreground_service.dart';
 import 'package:picakeep/tools/translations.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 class ServiceInfoPage extends StatefulWidget {
-  const ServiceInfoPage({super.key});
+  const ServiceInfoPage({super.key, this.standalone = false});
+
+  final bool standalone;
 
   @override
   State<ServiceInfoPage> createState() => _ServiceInfoPageState();
@@ -17,7 +21,7 @@ class ServiceInfoPage extends StatefulWidget {
 
 String _buildServerPreviewText(ServerPlatformCapability capability) {
   if (capability.isEnhancedServerTarget) {
-    return '${capability.displayName} 服务端更依赖前台服务常驻与后台网页；当前这里先提供管理后台流程预览。';
+    return '${capability.displayName} 服务端已经接到真实本地 HTTP 服务与前台服务常驻链路；通知、后台网页与保活设置会共同参与维持服务端模式。';
   }
   if (capability.isFullServerTarget) {
     return '${capability.displayName} 服务端已经接到真实本地 HTTP 服务，可直接通过独立后台网页查看和管理当前节点。';
@@ -27,7 +31,7 @@ String _buildServerPreviewText(ServerPlatformCapability capability) {
 
 String _buildServerModeDescription(ServerPlatformCapability capability) {
   if (capability.isEnhancedServerTarget) {
-    return '当前按服务端模式展示。Android 目标是移动增强服务端，主要依赖前台服务常驻与后台网页查看状态。';
+    return '当前按服务端模式展示。Android 目标已接到本地 HTTP 服务、前台通知与保活约束适配，可通过后台网页查看状态。';
   }
   if (capability.isFullServerTarget) {
     return '${capability.displayName} 当前属于完整服务端目标，可持续开服，后台网页是主要管理入口。';
@@ -37,7 +41,10 @@ String _buildServerModeDescription(ServerPlatformCapability capability) {
 
 class _ServiceInfoPageState extends State<ServiceInfoPage> {
   ServiceInfoSnapshot? _snapshot;
+  AndroidForegroundServiceSupportState? _androidSupportState;
   bool _loading = true;
+  bool _discovering = false;
+  bool _loadingAndroidSupportState = false;
 
   String get _serverAddress =>
       appdata.settings[remoteServerAddressSettingIndex].trim();
@@ -52,6 +59,9 @@ class _ServiceInfoPageState extends State<ServiceInfoPage> {
     App.serviceConfigVersion.addListener(_handleServiceConfigChanged);
     App.serviceRuntimeVersion.addListener(_handleServiceConfigChanged);
     _reloadSnapshot();
+    if (currentServerPlatformCapability().isEnhancedServerTarget) {
+      _reloadAndroidSupportState();
+    }
   }
 
   @override
@@ -63,6 +73,9 @@ class _ServiceInfoPageState extends State<ServiceInfoPage> {
 
   void _handleServiceConfigChanged() {
     _reloadSnapshot();
+    if (currentServerPlatformCapability().isEnhancedServerTarget) {
+      _reloadAndroidSupportState();
+    }
   }
 
   ServiceInfoSnapshot _placeholderSnapshot() {
@@ -99,31 +112,57 @@ class _ServiceInfoPageState extends State<ServiceInfoPage> {
     });
   }
 
+  Future<void> _reloadAndroidSupportState() async {
+    if (!currentServerPlatformCapability().isEnhancedServerTarget) {
+      return;
+    }
+    if (mounted) {
+      setState(() {
+        _loadingAndroidSupportState = true;
+      });
+    }
+    final supportState =
+        await AndroidForegroundServiceController.instance.readSupportState();
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _androidSupportState = supportState;
+      _loadingAndroidSupportState = false;
+    });
+  }
+
+  Future<void> _requestAndroidNotificationPermission() async {
+    final granted = await AndroidForegroundServiceController.instance
+        .requestNotificationPermission();
+    await _reloadAndroidSupportState();
+    if (!mounted) {
+      return;
+    }
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(granted ? '通知权限已更新'.tl : '通知权限仍未开启'.tl)),
+    );
+  }
+
+  Future<void> _openAndroidNotificationSettings() async {
+    await AndroidForegroundServiceController.instance
+        .openNotificationSettings();
+    await _reloadAndroidSupportState();
+  }
+
+  Future<void> _openAndroidBatteryOptimizationSettings() async {
+    await AndroidForegroundServiceController.instance
+        .openBatteryOptimizationSettings();
+    await _reloadAndroidSupportState();
+  }
+
   Future<void> _editServerAddress() async {
-    final controller = TextEditingController(text: _serverAddress);
-    final result = await showDialog<String>(
+    final result = await showModalBottomSheet<String>(
       context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: Text('服务端地址'.tl),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          decoration: InputDecoration(
-            hintText: '例如：http://192.168.1.20:9527'.tl,
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(dialogContext).pop(),
-            child: Text('取消'.tl),
-          ),
-          TextButton(
-            onPressed: () =>
-                Navigator.of(dialogContext).pop(controller.text.trim()),
-            child: Text('保存'.tl),
-          ),
-        ],
-      ),
+      isScrollControlled: true,
+      showDragHandle: true,
+      useSafeArea: true,
+      builder: (_) => _ServerAddressEditorSheet(initialValue: _serverAddress),
     );
     if (!mounted || result == null) {
       return;
@@ -133,11 +172,87 @@ class _ServiceInfoPageState extends State<ServiceInfoPage> {
     App.notifyServiceConfigChanged();
   }
 
-  void _showPendingDiscoveryMessage() {
+  Future<void> _scanLocalNetwork() async {
+    if (_discovering) {
+      return;
+    }
+    setState(() {
+      _discovering = true;
+    });
+    try {
+      final result = await LocalNetworkServiceDiscovery().scan(
+        preferredAddress: _serverAddress,
+        fallbackPort: _adminPort,
+      );
+      if (!mounted) {
+        return;
+      }
+      if (result.candidates.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              '未发现可用服务，已扫描 ${result.scannedHostCount} 个地址 / ${result.scannedSubnetCount} 个网段'
+                  .tl,
+            ),
+          ),
+        );
+        return;
+      }
+
+      final selected = result.candidates.length == 1
+          ? result.candidates.first
+          : await showModalBottomSheet<ServiceDiscoveryCandidate>(
+              context: context,
+              showDragHandle: true,
+              builder: (sheetContext) {
+                return SafeArea(
+                  child: ListView.separated(
+                    shrinkWrap: true,
+                    itemCount: result.candidates.length,
+                    separatorBuilder: (_, __) => const Divider(height: 1),
+                    itemBuilder: (context, index) {
+                      final candidate = result.candidates[index];
+                      final countText = candidate.comicCount == null
+                          ? '--'
+                          : candidate.comicCount.toString();
+                      return ListTile(
+                        leading: const Icon(Icons.router_outlined),
+                        title: Text(candidate.address),
+                        subtitle: Text(
+                          '${candidate.detailText} · 漫画 $countText · ${candidate.latencyMs ?? '--'} ms',
+                        ),
+                        trailing: const Icon(Icons.chevron_right),
+                        onTap: () => Navigator.of(sheetContext).pop(candidate),
+                      );
+                    },
+                  ),
+                );
+              },
+            );
+      if (selected == null || !mounted) {
+        return;
+      }
+      await _applyDiscoveredServer(selected);
+    } finally {
+      if (mounted) {
+        setState(() {
+          _discovering = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _applyDiscoveredServer(
+      ServiceDiscoveryCandidate candidate) async {
+    appdata.settings[remoteServerAddressSettingIndex] = candidate.address;
+    await appdata.updateSettings();
+    App.notifyServiceConfigChanged();
+    await _reloadSnapshot();
+    if (!mounted) {
+      return;
+    }
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('自动发现将优先使用 mDNS / Bonjour，当前还未接入真实扫描逻辑'.tl),
-      ),
+      SnackBar(content: Text('已切换到 ${candidate.address}'.tl)),
     );
   }
 
@@ -301,8 +416,8 @@ class _ServiceInfoPageState extends State<ServiceInfoPage> {
                     child: Text('填写地址'.tl),
                   ),
                   FilledButton.tonal(
-                    onPressed: _showPendingDiscoveryMessage,
-                    child: Text('扫描局域网'.tl),
+                    onPressed: _discovering ? null : _scanLocalNetwork,
+                    child: Text(_discovering ? '扫描中...'.tl : '扫描局域网'.tl),
                   ),
                   FilledButton(
                     onPressed: _loading ? null : _reloadSnapshot,
@@ -319,9 +434,9 @@ class _ServiceInfoPageState extends State<ServiceInfoPage> {
           title: '自动发现策略'.tl,
           child: Text(
             snapshot.discoveryMode == serviceDiscoveryModeMdns
-                ? '当前确定使用 mDNS / Bonjour 作为首选发现方式，比自定义 UDP 广播更收敛，不会对局域网里其他设备做额外噪声扫描。'
+                ? '当前会先按已配置地址端口和当前设备所在私网网段，对 /status 接口做快速探测；后续仍可继续补 mDNS / Bonjour。'
                     .tl
-                : '当前预留 UDP 广播方案，但默认仍建议优先采用 mDNS / Bonjour。'.tl,
+                : '当前会按当前私网网段做快速探测；如需更强的零配置发现，后续可继续补 mDNS / Bonjour。'.tl,
           ),
         ),
       ],
@@ -384,6 +499,26 @@ class _ServiceInfoPageState extends State<ServiceInfoPage> {
           Text(
             _buildServerPreviewText(capability).tl,
           ),
+          if (capability.isEnhancedServerTarget) ...[
+            const SizedBox(height: 12),
+            _InfoRow(
+              label: '通知权限'.tl,
+              value: _loadingAndroidSupportState
+                  ? '读取中'.tl
+                  : _androidSupportState?.notificationsGranted == true
+                      ? '已允许'.tl
+                      : '未允许'.tl,
+            ),
+            const SizedBox(height: 8),
+            _InfoRow(
+              label: '电池优化'.tl,
+              value: _loadingAndroidSupportState
+                  ? '读取中'.tl
+                  : _androidSupportState?.ignoringBatteryOptimizations == true
+                      ? '已忽略限制'.tl
+                      : '仍受系统限制'.tl,
+            ),
+          ],
           const SizedBox(height: 12),
           Wrap(
             spacing: 8,
@@ -455,6 +590,37 @@ class _ServiceInfoPageState extends State<ServiceInfoPage> {
                   capability.isFullServerTarget ? '复制后台地址'.tl : '复制后台地址模板'.tl,
                 ),
               ),
+              if (capability.isEnhancedServerTarget)
+                FilledButton.tonal(
+                  onPressed: _loadingAndroidSupportState
+                      ? null
+                      : _androidSupportState?.notificationsGranted == true
+                          ? _openAndroidNotificationSettings
+                          : _requestAndroidNotificationPermission,
+                  child: Text(
+                    _androidSupportState?.notificationsGranted == true
+                        ? '通知设置'.tl
+                        : '开启通知权限'.tl,
+                  ),
+                ),
+              if (capability.isEnhancedServerTarget)
+                FilledButton.tonal(
+                  onPressed: _loadingAndroidSupportState
+                      ? null
+                      : _openAndroidBatteryOptimizationSettings,
+                  child: Text(
+                    _androidSupportState?.ignoringBatteryOptimizations == true
+                        ? '电池优化设置'.tl
+                        : '关闭电池优化'.tl,
+                  ),
+                ),
+              if (capability.isEnhancedServerTarget)
+                FilledButton.tonal(
+                  onPressed: _loadingAndroidSupportState
+                      ? null
+                      : _reloadAndroidSupportState,
+                  child: Text('刷新保活状态'.tl),
+                ),
               FilledButton.tonal(
                 onPressed: _loading ? null : _reloadSnapshot,
                 child: Text('刷新状态'.tl),
@@ -477,23 +643,182 @@ class _ServiceInfoPageState extends State<ServiceInfoPage> {
     );
   }
 
-  @override
-  Widget build(BuildContext context) {
-    final snapshot = _snapshot ?? _placeholderSnapshot();
+  List<Widget> _buildPageChildren(ServiceInfoSnapshot snapshot) {
+    return [
+      _ModeOverviewCard(snapshot: snapshot, loading: _loading),
+      const SizedBox(height: 12),
+      if (snapshot.isClientMode)
+        _buildClientSection(snapshot)
+      else
+        _buildServerSection(snapshot),
+    ];
+  }
+
+  Widget _buildEmbeddedPage(ServiceInfoSnapshot snapshot) {
     return SizedBox.expand(
       child: RefreshIndicator(
         onRefresh: _reloadSnapshot,
         child: ListView(
+          physics: const AlwaysScrollableScrollPhysics(),
           padding: const EdgeInsets.fromLTRB(12, 12, 12, 24),
-          children: [
-            _ModeOverviewCard(snapshot: snapshot, loading: _loading),
-            const SizedBox(height: 12),
-            if (snapshot.isClientMode)
-              _buildClientSection(snapshot)
-            else
-              _buildServerSection(snapshot),
+          children: _buildPageChildren(snapshot),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildStandalonePage(ServiceInfoSnapshot snapshot) {
+    return Scaffold(
+      body: RefreshIndicator(
+        onRefresh: _reloadSnapshot,
+        child: CustomScrollView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          slivers: [
+            SliverAppbar(
+              title: Text('服务信息'.tl),
+            ),
+            SliverPadding(
+              padding: EdgeInsets.fromLTRB(
+                12,
+                12,
+                12,
+                24 + MediaQuery.of(context).padding.bottom,
+              ),
+              sliver: SliverToBoxAdapter(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: _buildPageChildren(snapshot),
+                ),
+              ),
+            ),
           ],
         ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final snapshot = _snapshot ?? _placeholderSnapshot();
+    if (widget.standalone) {
+      return _buildStandalonePage(snapshot);
+    }
+    return _buildEmbeddedPage(snapshot);
+  }
+}
+
+class _ServerAddressEditorSheet extends StatefulWidget {
+  const _ServerAddressEditorSheet({required this.initialValue});
+
+  final String initialValue;
+
+  @override
+  State<_ServerAddressEditorSheet> createState() =>
+      _ServerAddressEditorSheetState();
+}
+
+class _ServerAddressEditorSheetState extends State<_ServerAddressEditorSheet> {
+  late final TextEditingController _controller =
+      TextEditingController(text: widget.initialValue);
+  final FocusNode _focusNode = FocusNode();
+  bool _pasting = false;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        _focusNode.requestFocus();
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _focusNode.dispose();
+    _controller.dispose();
+    super.dispose();
+  }
+
+  Future<void> _pasteFromClipboard() async {
+    if (_pasting) {
+      return;
+    }
+    setState(() {
+      _pasting = true;
+    });
+    final data = await Clipboard.getData(Clipboard.kTextPlain);
+    if (!mounted) {
+      return;
+    }
+    final text = data?.text ?? '';
+    if (text.isNotEmpty) {
+      _controller.value = TextEditingValue(
+        text: text,
+        selection: TextSelection.collapsed(offset: text.length),
+      );
+    }
+    setState(() {
+      _pasting = false;
+    });
+  }
+
+  void _submit() {
+    Navigator.of(context).pop(_controller.text.trim());
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final bottomInset = MediaQuery.of(context).viewInsets.bottom;
+    return SingleChildScrollView(
+      padding: EdgeInsets.fromLTRB(16, 8, 16, 16 + bottomInset),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            '服务端地址'.tl,
+            style: Theme.of(context).textTheme.titleMedium,
+          ),
+          const SizedBox(height: 8),
+          Text(
+            '支持填写完整地址，例如 http://192.168.1.20:9527'.tl,
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+          const SizedBox(height: 16),
+          TextField(
+            controller: _controller,
+            focusNode: _focusNode,
+            keyboardType: TextInputType.url,
+            textInputAction: TextInputAction.done,
+            autocorrect: false,
+            enableSuggestions: false,
+            decoration: InputDecoration(
+              hintText: '例如：http://192.168.1.20:9527'.tl,
+              border: const OutlineInputBorder(),
+            ),
+            onSubmitted: (_) => _submit(),
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(),
+                child: Text('取消'.tl),
+              ),
+              const Spacer(),
+              FilledButton.tonal(
+                onPressed: _pasting ? null : _pasteFromClipboard,
+                child: Text(_pasting ? '读取剪贴板中...'.tl : '粘贴'.tl),
+              ),
+              const SizedBox(width: 8),
+              FilledButton(
+                onPressed: _submit,
+                child: Text('保存'.tl),
+              ),
+            ],
+          ),
+        ],
       ),
     );
   }

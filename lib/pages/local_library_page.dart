@@ -14,6 +14,7 @@ import 'package:picakeep/foundation/download_model.dart';
 import 'package:picakeep/foundation/local_library.dart';
 import 'package:picakeep/foundation/local_library_settings.dart';
 import 'package:picakeep/foundation/remote_library_data_source.dart';
+import 'package:picakeep/foundation/service_data_source.dart';
 import 'package:picakeep/tools/read_history_helper.dart';
 import 'package:picakeep/tools/translations.dart';
 
@@ -108,10 +109,39 @@ class _LocalLibraryComicTile extends DownloadedComicTile {
 }
 
 class LocalLibraryPage extends StatefulWidget {
-  const LocalLibraryPage({super.key});
+  const LocalLibraryPage({
+    super.key,
+    this.albumOnly = false,
+    this.preferRemoteView = false,
+    this.title,
+    this.remoteRootId,
+  });
+
+  final bool albumOnly;
+  final bool preferRemoteView;
+  final String? title;
+  final String? remoteRootId;
 
   @override
   State<LocalLibraryPage> createState() => _LocalLibraryPageState();
+}
+
+enum _LocalLibraryView {
+  local,
+  aggregate,
+  remote,
+}
+
+String _localLibraryViewLabel(_LocalLibraryView view,
+    {required bool albumOnly}) {
+  switch (view) {
+    case _LocalLibraryView.local:
+      return albumOnly ? '本地图集' : '本地资源';
+    case _LocalLibraryView.aggregate:
+      return '聚合';
+    case _LocalLibraryView.remote:
+      return albumOnly ? '远程 · 图集' : '远程 · 资源库';
+  }
 }
 
 class _LocalLibraryPageState extends State<LocalLibraryPage> {
@@ -120,18 +150,31 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
   final _searchController = TextEditingController();
   bool _loading = true;
   bool _searchMode = false;
+  bool _remoteAvailable = false;
   String? _errorText;
   List<DownloadedItem> _items = const <DownloadedItem>[];
+  late _LocalLibraryView _view = widget.preferRemoteView || _isRemoteRootPage
+      ? _LocalLibraryView.remote
+      : _LocalLibraryView.local;
 
-  bool get _isRemoteMode =>
+  bool get _isClientMode =>
       normalizeAppRuntimeMode(appdata.settings[appRuntimeModeSettingIndex]) ==
       appRuntimeModeClient;
+
+  bool get _isAlbumOnly =>
+      widget.albumOnly ||
+      appdata.settings[localLibraryAlbumOnlySettingIndex] != '0';
+
+  bool get _isRemoteRootPage => widget.remoteRootId?.trim().isNotEmpty == true;
+
+  bool get _showSourceSelector => _remoteAvailable && !_isRemoteRootPage;
 
   @override
   void initState() {
     super.initState();
     App.localDataVersion.addListener(_handleLocalDataChanged);
     App.serviceConfigVersion.addListener(_handleServiceConfigChanged);
+    App.serviceRuntimeVersion.addListener(_handleServiceRuntimeChanged);
     _searchController.addListener(() {
       if (mounted) {
         setState(() {});
@@ -144,27 +187,63 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
   void dispose() {
     App.localDataVersion.removeListener(_handleLocalDataChanged);
     App.serviceConfigVersion.removeListener(_handleServiceConfigChanged);
+    App.serviceRuntimeVersion.removeListener(_handleServiceRuntimeChanged);
     _searchController.dispose();
     super.dispose();
   }
 
   void _handleLocalDataChanged() {
-    if (!_isRemoteMode) {
-      _load();
-    }
+    _load();
   }
 
   void _handleServiceConfigChanged() {
     _load();
   }
 
+  void _handleServiceRuntimeChanged() {
+    _load();
+  }
+
   Future<void> _refreshCurrentLibrary({bool rescan = false}) async {
-    if (_isRemoteMode) {
+    if (_view == _LocalLibraryView.remote && _remoteAvailable) {
       await _load();
       return;
     }
     await _refreshLocalLibrary(rescan: rescan);
     await _load();
+  }
+
+  Future<bool> _checkRemoteAvailability() async {
+    if (!_isClientMode) {
+      return false;
+    }
+    try {
+      final snapshot =
+          await RuntimeServiceDataSourceResolver.current().fetchSnapshot();
+      return snapshot.connectionState == ServiceConnectionState.online;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<List<DownloadedItem>> _loadLocalItems() async {
+    final items = await _manager.getAll();
+    final visibleItems = _isAlbumOnly
+        ? items.where((item) => item.isAlbum).toList(growable: false)
+        : items.cast<DownloadedItem>().toList(growable: false);
+    return _sortItems(visibleItems);
+  }
+
+  Future<List<DownloadedItem>> _loadRemoteItems() async {
+    final rootId = widget.remoteRootId?.trim() ?? '';
+    if (rootId.isNotEmpty) {
+      final items = await _remoteDataSource.fetchItemsForRoot(rootId);
+      return _sortItems(items.toList());
+    }
+    final roots = await _remoteDataSource.fetchRootItems(
+      customLibraryOnly: true,
+    );
+    return _sortItems(roots.cast<DownloadedItem>().toList());
   }
 
   Future<void> _load() async {
@@ -175,15 +254,38 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
       });
     }
     try {
-      final items = _isRemoteMode
-          ? await _remoteDataSource.fetchItems()
-          : await _manager.getAll();
-      final sortedItems = _sortItems(items);
+      final remoteAvailable = await _checkRemoteAvailability();
+      if (!remoteAvailable && _view != _LocalLibraryView.local) {
+        _view = _LocalLibraryView.local;
+      }
+      final localItems = await _loadLocalItems();
+      List<DownloadedItem> items;
+      switch (_view) {
+        case _LocalLibraryView.local:
+          items = localItems;
+          break;
+        case _LocalLibraryView.aggregate:
+          if (!remoteAvailable) {
+            items = localItems;
+            break;
+          }
+          try {
+            final remoteItems = await _loadRemoteItems();
+            items = _sortItems([...localItems, ...remoteItems]);
+          } catch (_) {
+            items = localItems;
+          }
+          break;
+        case _LocalLibraryView.remote:
+          items = remoteAvailable ? await _loadRemoteItems() : localItems;
+          break;
+      }
       if (!mounted) {
         return;
       }
       setState(() {
-        _items = sortedItems;
+        _items = items;
+        _remoteAvailable = remoteAvailable;
         _loading = false;
       });
     } catch (e) {
@@ -192,6 +294,7 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
       }
       setState(() {
         _items = const <DownloadedItem>[];
+        _remoteAvailable = false;
         _errorText = e.toString().trim();
         _loading = false;
       });
@@ -199,17 +302,14 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
   }
 
   List<DownloadedItem> get _filteredItems {
-    final albumOnly = appdata.settings[localLibraryAlbumOnlySettingIndex] != '0';
-    final Iterable<DownloadedItem> baseItems = !_isRemoteMode && albumOnly
-        ? _items.where((item) => item is LocalLibraryComicItem && item.isAlbum)
-        : _items;
     final keyword = _searchController.text.trim().toLowerCase();
     if (keyword.isEmpty) {
-      return baseItems.toList(growable: false);
+      return List<DownloadedItem>.from(_items, growable: false);
     }
-    return baseItems.where((item) {
+    return _items.where((item) {
       return item.name.toLowerCase().contains(keyword) ||
           item.subTitle.toLowerCase().contains(keyword) ||
+          item.sourceDisplayName.toLowerCase().contains(keyword) ||
           item.tags.any((tag) => tag.toLowerCase().contains(keyword)) ||
           (item.fileSystemPath?.toLowerCase().contains(keyword) ?? false);
     }).toList(growable: false);
@@ -337,9 +437,7 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
                       appdata.settings[localLibraryAlbumOnlySettingIndex] =
                           value ? '1' : '0';
                       await appdata.updateSettings();
-                      if (mounted) {
-                        setState(() {});
-                      }
+                      await _load();
                     },
                   ),
                 ),
@@ -352,6 +450,19 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
   }
 
   void _openItem(DownloadedItem item) {
+    if (item is RemoteLibraryRootItem) {
+      Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => LocalLibraryPage(
+            albumOnly: widget.albumOnly,
+            preferRemoteView: true,
+            title: item.name,
+            remoteRootId: item.root.id,
+          ),
+        ),
+      );
+      return;
+    }
     Navigator.of(context).push(
       MaterialPageRoute(builder: (_) => LocalComicDetailPage(comic: item)),
     );
@@ -359,6 +470,7 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
 
   Future<void> _showActions(DownloadedItem item) async {
     final path = item.fileSystemPath?.trim() ?? '';
+    final isRootItem = item is RemoteLibraryRootItem;
     await showModalBottomSheet<void>(
       context: context,
       builder: (sheetContext) {
@@ -368,21 +480,22 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
             children: [
               ListTile(
                 leading: const Icon(Icons.info_outline),
-                title: Text('查看详情'.tl),
+                title: Text(isRootItem ? '打开列表'.tl : '查看详情'.tl),
                 onTap: () {
                   Navigator.of(sheetContext).pop();
                   _openItem(item);
                 },
               ),
-              ListTile(
-                leading: const Icon(Icons.menu_book),
-                title: Text('继续阅读'.tl),
-                onTap: () async {
-                  Navigator.of(sheetContext).pop();
-                  await ensureHistoryBeforeRead(item);
-                  await App.openReader(() => item.createReadingPage());
-                },
-              ),
+              if (!isRootItem)
+                ListTile(
+                  leading: const Icon(Icons.menu_book),
+                  title: Text('继续阅读'.tl),
+                  onTap: () async {
+                    Navigator.of(sheetContext).pop();
+                    await ensureHistoryBeforeRead(item);
+                    await App.openReader(() => item.createReadingPage());
+                  },
+                ),
               if (path.isNotEmpty)
                 ListTile(
                   leading: const Icon(Icons.folder_open),
@@ -410,6 +523,7 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
 
   void _showDesktopMenu(DownloadedItem item, TapDownDetails details) {
     final path = item.fileSystemPath?.trim() ?? '';
+    final isRootItem = item is RemoteLibraryRootItem;
     showMenu(
       context: context,
       position: RelativeRect.fromLTRB(
@@ -420,7 +534,7 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
       ),
       items: [
         PopupMenuItem<void>(
-          child: Text('查看详情'.tl),
+          child: Text(isRootItem ? '打开列表'.tl : '查看详情'.tl),
           onTap: () {
             Future.delayed(const Duration(milliseconds: 120), () {
               if (mounted) {
@@ -429,15 +543,16 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
             });
           },
         ),
-        PopupMenuItem<void>(
-          child: Text('继续阅读'.tl),
-          onTap: () {
-            Future.delayed(const Duration(milliseconds: 120), () async {
-              await ensureHistoryBeforeRead(item);
-              await App.openReader(() => item.createReadingPage());
-            });
-          },
-        ),
+        if (!isRootItem)
+          PopupMenuItem<void>(
+            child: Text('继续阅读'.tl),
+            onTap: () {
+              Future.delayed(const Duration(milliseconds: 120), () async {
+                await ensureHistoryBeforeRead(item);
+                await App.openReader(() => item.createReadingPage());
+              });
+            },
+          ),
         if (path.isNotEmpty)
           PopupMenuItem<void>(
             child: Text('打开目录'.tl),
@@ -487,26 +602,35 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
 
   Widget _buildEmptyState() {
     final hasKeyword = _searchController.text.trim().isNotEmpty;
+    final viewLabel = _localLibraryViewLabel(_view, albumOnly: _isAlbumOnly).tl;
     final emptyTitle = hasKeyword
-        ? (_isRemoteMode ? '没有匹配的远程漫画' : '没有匹配的本地图集')
+        ? '没有匹配的$viewLabel'
         : (_errorText?.trim().isNotEmpty == true
-            ? (_isRemoteMode ? '远程漫画库暂不可用' : '本地漫画库暂不可用')
-            : (_isRemoteMode ? '暂无远程漫画' : '暂无本地图集'));
+            ? '$viewLabel暂不可用'
+            : '暂无$viewLabel');
     final emptyDescription = hasKeyword
         ? '尝试调整搜索关键词'.tl
         : (_errorText?.trim().isNotEmpty == true
             ? _errorText!
-            : _isRemoteMode
-                ? '请确认服务端地址和服务状态后再刷新远程漫画库'.tl
-                : '可在工具-本地文件管理中添加本地漫画路径'.tl);
-    final refreshLabel = _isRemoteMode ? '刷新远程漫画'.tl : '刷新本地漫画'.tl;
+            : _view == _LocalLibraryView.remote ||
+                    _view == _LocalLibraryView.aggregate
+                ? (_isAlbumOnly
+                    ? '请确认服务端地址和服务状态后再刷新远程图集'.tl
+                    : '请确认服务端地址和服务状态后再刷新远程资源库'.tl)
+                : _isAlbumOnly
+                    ? '可在工具-本地文件管理中添加图集目录'.tl
+                    : '可在工具-本地文件管理中添加本地漫画路径'.tl);
+    final refreshLabel = (_view == _LocalLibraryView.remote && _remoteAvailable)
+        ? (_isAlbumOnly ? '刷新远程图集'.tl : '刷新远程资源库'.tl)
+        : (_isAlbumOnly ? '刷新图集'.tl : '刷新资源库'.tl);
     return SliverToBoxAdapter(
       child: Padding(
         padding: const EdgeInsets.all(24),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(Icons.photo_library_outlined, size: 64, color: Colors.grey),
+            const Icon(Icons.photo_library_outlined,
+                size: 64, color: Colors.grey),
             const SizedBox(height: 16),
             Text(
               emptyTitle.tl,
@@ -546,13 +670,49 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
         ),
       );
     }
-    return Text(_isRemoteMode ? '远程漫画库'.tl : '本地图集'.tl);
+    return Text((widget.title ?? (_isAlbumOnly ? '图集' : '资源库')).tl);
+  }
+
+  Widget _buildSourceSelector() {
+    return SliverToBoxAdapter(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+        child: Align(
+          alignment: Alignment.centerLeft,
+          child: SegmentedButton<_LocalLibraryView>(
+            showSelectedIcon: false,
+            segments: [
+              for (final view in _LocalLibraryView.values)
+                ButtonSegment<_LocalLibraryView>(
+                  value: view,
+                  label: Text(
+                    _localLibraryViewLabel(view, albumOnly: _isAlbumOnly).tl,
+                  ),
+                ),
+            ],
+            selected: {_view},
+            onSelectionChanged: (selection) {
+              if (selection.isEmpty || selection.first == _view) {
+                return;
+              }
+              setState(() {
+                _view = selection.first;
+              });
+              _load();
+            },
+          ),
+        ),
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     final items = _filteredItems;
-    final refreshTooltip = _isRemoteMode ? '刷新远程漫画'.tl : '刷新本地漫画'.tl;
+    final refreshTooltip =
+        (_view == _LocalLibraryView.remote && _remoteAvailable)
+            ? (_isAlbumOnly ? '刷新远程图集'.tl : '刷新远程资源库'.tl)
+            : (_isAlbumOnly ? '刷新图集'.tl : '刷新资源库'.tl);
     return Scaffold(
       body: _loading
           ? const Center(child: CircularProgressIndicator())
@@ -568,14 +728,15 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
                         await _refreshCurrentLibrary();
                       },
                     ),
-                    if (!_isRemoteMode)
+                    if (!widget.albumOnly)
                       IconButton(
                         icon: Icon(
-                          appdata.settings[localLibraryAlbumOnlySettingIndex] != '0'
+                          appdata.settings[localLibraryAlbumOnlySettingIndex] !=
+                                  '0'
                               ? Icons.tune
                               : Icons.tune_outlined,
                         ),
-                        tooltip: '本地图集显示设置'.tl,
+                        tooltip: '资源库显示设置'.tl,
                         onPressed: _showFilterDialog,
                       ),
                     IconButton(
@@ -597,6 +758,7 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
                     ),
                   ],
                 ),
+                if (_showSourceSelector) _buildSourceSelector(),
                 if (items.isEmpty)
                   _buildEmptyState()
                 else
@@ -630,6 +792,13 @@ class _LocalLibraryFilesPageState extends State<LocalLibraryFilesPage> {
   final _manager = LocalLibraryManager();
   bool _loading = true;
   List<LocalLibrarySource> _sources = const <LocalLibrarySource>[];
+
+  static const _androidCommonPaths = <String>[
+    '/storage/emulated/0/Download',
+    '/storage/emulated/0/Android/data',
+    '/storage/emulated/0/Pictures',
+    '/sdcard/Download',
+  ];
 
   @override
   void initState() {
@@ -699,12 +868,38 @@ class _LocalLibraryFilesPageState extends State<LocalLibraryFilesPage> {
                       ),
                     ],
                   ),
+                  if (App.isAndroid) ...[
+                    const SizedBox(height: 12),
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        '安卓常用目录'.tl,
+                        style: Theme.of(context).textTheme.labelLarge,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [
+                        for (final path in _androidCommonPaths)
+                          ActionChip(
+                            label: Text(path),
+                            onPressed: () {
+                              controller.text = path;
+                              setStateDialog(() {});
+                            },
+                          ),
+                      ],
+                    ),
+                  ],
                   if (isDesktop && controller.text.trim().isNotEmpty) ...[
                     const SizedBox(height: 12),
                     SizedBox(
                       width: double.infinity,
                       child: OutlinedButton.icon(
-                        onPressed: () => _openDirectoryPath(context, controller.text.trim()),
+                        onPressed: () =>
+                            _openDirectoryPath(context, controller.text.trim()),
                         icon: const Icon(Icons.launch),
                         label: Text('打开当前目录'.tl),
                       ),
@@ -801,6 +996,33 @@ class _LocalLibraryFilesPageState extends State<LocalLibraryFilesPage> {
                     '自定义路径始终参与扫描；可添加下载目录、单个图集目录或递归总目录。'.tl,
                   ),
                 ),
+                if (App.isAndroid) ...[
+                  Card.outlined(
+                    margin: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+                    child: Padding(
+                      padding: const EdgeInsets.all(12),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            '安卓目录访问'.tl,
+                            style: Theme.of(context).textTheme.titleMedium,
+                          ),
+                          const SizedBox(height: 8),
+                          Text(
+                            '这里仅保留普通目录选择与路径管理；受限目录请到设置页的下载目录弹窗中长按“浏览”处理。'.tl,
+                          ),
+                          const SizedBox(height: 12),
+                          FilledButton.icon(
+                            onPressed: _showAddPathDialog,
+                            icon: const Icon(Icons.folder_open),
+                            label: Text('选择目录'.tl),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
                 const Divider(height: 1),
                 for (final source in _sources) ...[
                   ListTile(
@@ -816,7 +1038,8 @@ class _LocalLibraryFilesPageState extends State<LocalLibraryFilesPage> {
                         IconButton(
                           icon: const Icon(Icons.folder_open),
                           tooltip: '打开目录'.tl,
-                          onPressed: () => _openDirectoryPath(context, source.path),
+                          onPressed: () =>
+                              _openDirectoryPath(context, source.path),
                         ),
                         if (source.isCustom)
                           IconButton(
@@ -845,7 +1068,8 @@ class LocalLibraryStoragePage extends StatefulWidget {
   const LocalLibraryStoragePage({super.key});
 
   @override
-  State<LocalLibraryStoragePage> createState() => _LocalLibraryStoragePageState();
+  State<LocalLibraryStoragePage> createState() =>
+      _LocalLibraryStoragePageState();
 }
 
 class _LocalLibraryStoragePageState extends State<LocalLibraryStoragePage> {
@@ -903,14 +1127,17 @@ class _LocalLibraryStoragePageState extends State<LocalLibraryStoragePage> {
                   leading: Icon(_localLibrarySourceIcon(entry.source)),
                   title: Text(entry.title),
                   subtitle: Text(
-                    '${_formatLocalLibrarySize(entry.sizeMb)} · ${'共 @a 个图集'.tlParams({'a': entry.comicCount.toString()})}\n${entry.path}',
+                    '${_formatLocalLibrarySize(entry.sizeMb)} · ${'共 @a 个图集'.tlParams({
+                          'a': entry.comicCount.toString()
+                        })}\n${entry.path}',
                   ),
                   isThreeLine: true,
                   trailing: const Icon(Icons.chevron_right),
                   onTap: () {
                     Navigator.of(context).push(
                       MaterialPageRoute(
-                        builder: (_) => _LocalLibraryStorageDetailPage(entry: entry),
+                        builder: (_) =>
+                            _LocalLibraryStorageDetailPage(entry: entry),
                       ),
                     );
                   },
@@ -941,7 +1168,8 @@ class _LocalLibraryStorageDetailPage extends StatelessWidget {
             title: Text(_formatLocalLibrarySize(entry.sizeMb)),
             subtitle: Text(entry.path),
             isThreeLine: false,
-            trailing: Text('共 @a 个图集'.tlParams({'a': entry.comicCount.toString()})),
+            trailing:
+                Text('共 @a 个图集'.tlParams({'a': entry.comicCount.toString()})),
           ),
           const Divider(height: 1),
           for (final child in children) ...[

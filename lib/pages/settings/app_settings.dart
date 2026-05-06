@@ -233,6 +233,496 @@ Future<void> _runRescanLocalComics(BuildContext context) async {
   }
 }
 
+class _AndroidStorageAccessController {
+  _AndroidStorageAccessController._();
+
+  static final _AndroidStorageAccessController instance =
+      _AndroidStorageAccessController._();
+
+  static const MethodChannel _channel =
+      MethodChannel('com.example.picakeep/storage_access');
+
+  Future<bool> hasManageAllFilesAccess() async {
+    if (!App.isAndroid) {
+      return true;
+    }
+    try {
+      return await _channel.invokeMethod<bool>('hasManageAllFilesAccess') ??
+          false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<void> openManageAllFilesAccessSettings() async {
+    if (!App.isAndroid) {
+      return;
+    }
+    try {
+      await _channel.invokeMethod<void>('openManageAllFilesAccessSettings');
+    } catch (_) {}
+  }
+}
+
+bool _isAndroidRootModeEnabled() {
+  return normalizeAndroidRootMode(appdata.settings[androidRootModeSettingIndex]) ==
+      '1';
+}
+
+Future<bool> _requestAndroidRootAccess() async {
+  if (!App.isAndroid) {
+    return false;
+  }
+  try {
+    final result = await Process.run(
+      'su',
+      ['-c', 'id'],
+    ).timeout(const Duration(seconds: 3));
+    final output = '${result.stdout}${result.stderr}'.toLowerCase();
+    return result.exitCode == 0 && output.contains('uid=0');
+  } catch (_) {
+    return false;
+  }
+}
+
+String _escapeShellPath(String value) {
+  return "'${value.replaceAll("'", "'\"'\"'")}'";
+}
+
+String _joinDirectoryPath(String parent, String child) {
+  if (parent.isEmpty || parent == '/') {
+    return '/$child';
+  }
+  if (parent.endsWith('/')) {
+    return '$parent$child';
+  }
+  return '$parent/$child';
+}
+
+String? _parentDirectoryPath(String path) {
+  final normalized = path.trim();
+  if (normalized.isEmpty || normalized == '/') {
+    return null;
+  }
+  final segments = normalized.split('/')..removeWhere((e) => e.isEmpty);
+  if (segments.isEmpty) {
+    return '/';
+  }
+  segments.removeLast();
+  if (segments.isEmpty) {
+    return '/';
+  }
+  return '/${segments.join('/')}';
+}
+
+Future<List<String>> _listDirectoriesWithDartIo(String path) async {
+  final directory = Directory(path);
+  if (!await directory.exists()) {
+    throw Exception('目录不存在或当前应用不可访问'.tl);
+  }
+  final entities = directory
+      .listSync(followLinks: false)
+      .whereType<Directory>()
+      .map((directory) {
+        final segments = directory.uri.pathSegments
+            .where((segment) => segment.isNotEmpty)
+            .toList(growable: false);
+        if (segments.isEmpty) {
+          return '';
+        }
+        return segments.last.trim();
+      })
+      .where((name) => name.isNotEmpty)
+      .toSet()
+      .toList()
+    ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+  return entities;
+}
+
+Future<List<String>> _listDirectoriesWithRoot(String path) async {
+  final command = 'cd ${_escapeShellPath(path)} && ls -1Ap';
+  final result = await Process.run(
+    'su',
+    ['-c', command],
+  ).timeout(const Duration(seconds: 4));
+  if (result.exitCode != 0) {
+    throw Exception(result.stderr.toString().trim().isEmpty
+        ? 'Root 模式目录读取失败'.tl
+        : result.stderr.toString().trim());
+  }
+  final directories = result.stdout
+      .toString()
+      .split('\n')
+      .map((line) => line.trim())
+      .where((line) => line.endsWith('/'))
+      .map((line) => line.substring(0, line.length - 1))
+      .where((line) =>
+          line.isNotEmpty &&
+          line != '.' &&
+          line != '..' &&
+          line != './' &&
+          line != '../')
+      .toSet()
+      .toList()
+    ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+  return directories;
+}
+
+Future<String?> _openInternalDirectoryBrowser(
+  BuildContext context, {
+  required String title,
+  String? initialPath,
+}) async {
+  if (!App.isAndroid) {
+    return null;
+  }
+  final hasAllFilesAccess =
+      await _AndroidStorageAccessController.instance.hasManageAllFilesAccess();
+  final useRoot = _isAndroidRootModeEnabled() && !hasAllFilesAccess;
+  if (!hasAllFilesAccess && !useRoot) {
+    if (context.mounted) {
+      _showSettingMessage(
+        context,
+        '长按“浏览”前，请先授予安卓全部文件访问权限或开启 Root 模式'.tl,
+      );
+    }
+    return null;
+  }
+  if (!context.mounted) {
+    return null;
+  }
+  return Navigator.of(context).push<String>(
+    MaterialPageRoute(
+      builder: (_) => _InternalDirectoryBrowserPage(
+        title: title,
+        initialPath: initialPath,
+        useRoot: useRoot,
+      ),
+    ),
+  );
+}
+
+class _InternalDirectoryBrowserPage extends StatefulWidget {
+  const _InternalDirectoryBrowserPage({
+    required this.title,
+    required this.initialPath,
+    required this.useRoot,
+  });
+
+  final String title;
+  final String? initialPath;
+  final bool useRoot;
+
+  @override
+  State<_InternalDirectoryBrowserPage> createState() =>
+      _InternalDirectoryBrowserPageState();
+}
+
+class _InternalDirectoryBrowserPageState
+    extends State<_InternalDirectoryBrowserPage> {
+  static const _androidPresetRoots = <String>[
+    '/',
+    '/storage',
+    '/storage/emulated',
+    '/storage/emulated/0',
+    '/storage/emulated/0/Android',
+    '/storage/emulated/0/Android/data',
+    '/sdcard',
+  ];
+
+  late String _currentPath;
+  bool _loading = true;
+  String? _errorText;
+  List<String> _children = const <String>[];
+
+  @override
+  void initState() {
+    super.initState();
+    _currentPath = _normalizeInitialPath(widget.initialPath);
+    _loadCurrentPath();
+  }
+
+  String _normalizeInitialPath(String? path) {
+    final value = path?.trim() ?? '';
+    if (value.isNotEmpty) {
+      return value;
+    }
+    return widget.useRoot ? '/' : '/storage/emulated/0';
+  }
+
+  Future<void> _loadCurrentPath() async {
+    if (mounted) {
+      setState(() {
+        _loading = true;
+        _errorText = null;
+      });
+    }
+    try {
+      final children = widget.useRoot
+          ? await _listDirectoriesWithRoot(_currentPath)
+          : await _listDirectoriesWithDartIo(_currentPath);
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _children = children;
+        _loading = false;
+      });
+    } catch (e) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _children = const <String>[];
+        _errorText = e.toString().trim();
+        _loading = false;
+      });
+    }
+  }
+
+  void _openChild(String name) {
+    setState(() {
+      _currentPath = _joinDirectoryPath(_currentPath, name);
+    });
+    _loadCurrentPath();
+  }
+
+  void _openParent() {
+    final parent = _parentDirectoryPath(_currentPath);
+    if (parent == null) {
+      return;
+    }
+    setState(() {
+      _currentPath = parent;
+    });
+    _loadCurrentPath();
+  }
+
+  Widget _buildPresetRoots() {
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      children: [
+        for (final path in _androidPresetRoots)
+          ActionChip(
+            label: Text(path),
+            onPressed: () {
+              setState(() {
+                _currentPath = path;
+              });
+              _loadCurrentPath();
+            },
+          ),
+      ],
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(widget.title),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.refresh),
+            onPressed: _loadCurrentPath,
+            tooltip: '刷新'.tl,
+          ),
+        ],
+      ),
+      body: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  widget.useRoot
+                      ? '当前使用 Root 模式浏览目录'.tl
+                      : '当前使用安卓全部文件访问权限浏览目录'.tl,
+                  style: Theme.of(context).textTheme.labelLarge,
+                ),
+                const SizedBox(height: 8),
+                SelectableText(
+                  _currentPath,
+                  style: Theme.of(context).textTheme.bodyMedium,
+                ),
+                const SizedBox(height: 12),
+                _buildPresetRoots(),
+                const SizedBox(height: 12),
+                SizedBox(
+                  width: double.infinity,
+                  child: FilledButton.icon(
+                    onPressed: () => Navigator.of(context).pop(_currentPath),
+                    icon: const Icon(Icons.check),
+                    label: Text('选择当前文件夹'.tl),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 8),
+          Expanded(
+            child: _loading
+                ? const Center(child: CircularProgressIndicator())
+                : ListView(
+                    children: [
+                      if (_parentDirectoryPath(_currentPath) != null)
+                        ListTile(
+                          leading: const Icon(Icons.arrow_upward),
+                          title: Text('上一级'.tl),
+                          onTap: _openParent,
+                        ),
+                      if (_errorText != null)
+                        ListTile(
+                          leading: const Icon(Icons.error_outline),
+                          title: Text('目录读取失败'.tl),
+                          subtitle: Text(_errorText!),
+                        ),
+                      if (_children.isEmpty && _errorText == null)
+                        ListTile(
+                          leading: const Icon(Icons.folder_off_outlined),
+                          title: Text('当前目录下没有可浏览的子文件夹'.tl),
+                        ),
+                      for (final child in _children)
+                        ListTile(
+                          leading: const Icon(Icons.folder_outlined),
+                          title: Text(child),
+                          subtitle: Text(_joinDirectoryPath(_currentPath, child)),
+                          trailing: const Icon(Icons.chevron_right),
+                          onTap: () => _openChild(child),
+                        ),
+                    ],
+                  ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _AndroidManageAllFilesAccessTile extends StatefulWidget {
+  const _AndroidManageAllFilesAccessTile();
+
+  @override
+  State<_AndroidManageAllFilesAccessTile> createState() =>
+      _AndroidManageAllFilesAccessTileState();
+}
+
+class _AndroidManageAllFilesAccessTileState
+    extends State<_AndroidManageAllFilesAccessTile> {
+  bool? _granted;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    final granted =
+        await _AndroidStorageAccessController.instance.hasManageAllFilesAccess();
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _granted = granted;
+    });
+  }
+
+  Future<void> _openSettings() async {
+    await _AndroidStorageAccessController.instance
+        .openManageAllFilesAccessSettings();
+    await Future<void>.delayed(const Duration(milliseconds: 300));
+    await _load();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final granted = _granted;
+    return ListTile(
+      leading: const Icon(Icons.folder_copy_outlined),
+      title: Text('安卓全部文件访问权限'.tl),
+      subtitle: Text(
+        granted == null
+            ? '正在检测权限状态'.tl
+            : granted
+                ? '已授权；长按“浏览”可进入内置文件夹浏览页'.tl
+                : '未授权；点击这里跳转系统设置页申请权限'.tl,
+      ),
+      trailing: Icon(
+        granted == true ? Icons.check_circle_outline : Icons.chevron_right,
+      ),
+      onTap: _openSettings,
+    );
+  }
+}
+
+class _AndroidRootModeTile extends StatefulWidget {
+  const _AndroidRootModeTile();
+
+  @override
+  State<_AndroidRootModeTile> createState() => _AndroidRootModeTileState();
+}
+
+class _AndroidRootModeTileState extends State<_AndroidRootModeTile> {
+  bool _busy = false;
+
+  Future<void> _setValue(bool value) async {
+    if (_busy) {
+      return;
+    }
+    setState(() {
+      _busy = true;
+    });
+    try {
+      if (value) {
+        final granted = await _requestAndroidRootAccess();
+        if (!granted) {
+          if (mounted) {
+            _showSettingMessage(context, '未获取到 Root 授权，Root 模式未开启'.tl);
+          }
+          return;
+        }
+      }
+      appdata.settings[androidRootModeSettingIndex] = value ? '1' : '0';
+      await appdata.updateSettings();
+      if (mounted) {
+        setState(() {});
+      }
+      if (mounted && value) {
+        _showSettingMessage(context, 'Root 模式已开启，可长按“浏览”进入内置文件夹浏览页'.tl);
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _busy = false;
+        });
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final enabled = _isAndroidRootModeEnabled();
+    return buildResponsiveSettingTile(
+      leading: const Icon(Icons.admin_panel_settings_outlined),
+      title: Text('Root 模式'.tl),
+      subtitle: Text(
+        enabled
+            ? '已开启；启用后会优先用于长按“浏览”的受限目录访问'.tl
+            : '关闭状态；开启时会立即尝试申请 su 权限'.tl,
+      ),
+      trailingWidth: 60,
+      trailing: Switch(
+        value: enabled,
+        onChanged: _busy ? null : _setValue,
+      ),
+    );
+  }
+}
+
 Widget buildAppSettings(double width, BuildContext context) {
   return buildTwoColumnLayout(width, [
     const _AppServiceSettingsSection(),
@@ -251,6 +741,8 @@ Widget buildAppSettings(double width, BuildContext context) {
     const _DownloadDirTile(),
     const _OriginalDownloadDirTile(),
     const _LocalComicPathsTile(),
+    if (App.isAndroid) const _AndroidManageAllFilesAccessTile(),
+    if (App.isAndroid) const _AndroidRootModeTile(),
     const _LocalAlbumImageSortTile(),
     const _LocalLibraryListSortTile(),
     _ManagedDataSourceModeTile(
@@ -412,15 +904,23 @@ class _ManagedDataSourceModeTileState
     required String label,
     required bool isFirst,
     required bool isLast,
+    required bool vertical,
   }) {
     final colorScheme = Theme.of(context).colorScheme;
     final selected = _currentValue == value;
-    final radius = BorderRadius.only(
-      topLeft: isFirst ? const Radius.circular(999) : Radius.zero,
-      bottomLeft: isFirst ? const Radius.circular(999) : Radius.zero,
-      topRight: isLast ? const Radius.circular(999) : Radius.zero,
-      bottomRight: isLast ? const Radius.circular(999) : Radius.zero,
-    );
+    final radius = vertical
+        ? BorderRadius.only(
+            topLeft: isFirst ? const Radius.circular(20) : Radius.zero,
+            topRight: isFirst ? const Radius.circular(20) : Radius.zero,
+            bottomLeft: isLast ? const Radius.circular(20) : Radius.zero,
+            bottomRight: isLast ? const Radius.circular(20) : Radius.zero,
+          )
+        : BorderRadius.only(
+            topLeft: isFirst ? const Radius.circular(999) : Radius.zero,
+            bottomLeft: isFirst ? const Radius.circular(999) : Radius.zero,
+            topRight: isLast ? const Radius.circular(999) : Radius.zero,
+            bottomRight: isLast ? const Radius.circular(999) : Radius.zero,
+          );
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       onTap: _busy ? null : () => _selectValue(value),
@@ -428,9 +928,12 @@ class _ManagedDataSourceModeTileState
         decoration: BoxDecoration(
           color: selected ? colorScheme.primaryContainer : Colors.transparent,
           border: Border(
-            left: isFirst
-                ? BorderSide.none
-                : BorderSide(color: colorScheme.outlineVariant),
+            left: !vertical && !isFirst
+                ? BorderSide(color: colorScheme.outlineVariant)
+                : BorderSide.none,
+            top: vertical && !isFirst
+                ? BorderSide(color: colorScheme.outlineVariant)
+                : BorderSide.none,
           ),
           borderRadius: radius,
         ),
@@ -464,31 +967,56 @@ class _ManagedDataSourceModeTileState
       MapEntry(managedDataSourceModeCurrentAndOriginal, '本+原应用'),
       MapEntry(managedDataSourceModeOriginalOnly, '仅原应用'),
     ];
-    return Opacity(
-      opacity: _busy ? 0.7 : 1,
-      child: Container(
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(999),
-          border: Border.all(color: Theme.of(context).colorScheme.outline),
-        ),
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(999),
-          child: Row(
-            children: [
-              for (int i = 0; i < options.length; i++)
-                Expanded(
-                  child: _buildSegment(
-                    context,
-                    value: options[i].key,
-                    label: options[i].value,
-                    isFirst: i == 0,
-                    isLast: i == options.length - 1,
-                  ),
-                ),
-            ],
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final vertical = constraints.maxWidth < 210;
+        final radius = BorderRadius.circular(vertical ? 20 : 999);
+        return Opacity(
+          opacity: _busy ? 0.7 : 1,
+          child: Container(
+            decoration: BoxDecoration(
+              borderRadius: radius,
+              border: Border.all(color: Theme.of(context).colorScheme.outline),
+            ),
+            child: ClipRRect(
+              borderRadius: radius,
+              child: vertical
+                  ? Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        for (int i = 0; i < options.length; i++)
+                          SizedBox(
+                            width: double.infinity,
+                            child: _buildSegment(
+                              context,
+                              value: options[i].key,
+                              label: options[i].value,
+                              isFirst: i == 0,
+                              isLast: i == options.length - 1,
+                              vertical: true,
+                            ),
+                          ),
+                      ],
+                    )
+                  : Row(
+                      children: [
+                        for (int i = 0; i < options.length; i++)
+                          Expanded(
+                            child: _buildSegment(
+                              context,
+                              value: options[i].key,
+                              label: options[i].value,
+                              isFirst: i == 0,
+                              isLast: i == options.length - 1,
+                              vertical: false,
+                            ),
+                          ),
+                      ],
+                    ),
+            ),
           ),
-        ),
-      ),
+        );
+      },
     );
   }
 
@@ -501,13 +1029,34 @@ class _ManagedDataSourceModeTileState
       padding: const EdgeInsets.symmetric(horizontal: 16),
       child: LayoutBuilder(
         builder: (context, constraints) {
+          final narrowLayout = constraints.maxWidth < 560;
           final availableSelectorWidth =
               constraints.maxWidth - reservedRefreshWidth;
-          final selectorWidth = availableSelectorWidth < minimumSelectorWidth
-              ? minimumSelectorWidth
-              : (availableSelectorWidth < selectorMaxWidth
-                  ? availableSelectorWidth
-                  : selectorMaxWidth);
+          final selectorWidth = narrowLayout
+              ? constraints.maxWidth
+              : (availableSelectorWidth < minimumSelectorWidth
+                  ? minimumSelectorWidth
+                  : (availableSelectorWidth < selectorMaxWidth
+                      ? availableSelectorWidth
+                      : selectorMaxWidth));
+          if (narrowLayout) {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.refresh),
+                  title: Text('数据管理-刷新本地漫画'.tl),
+                  subtitle: Text(
+                    '重新加载下载目录；数据库路径仅作用于本地收藏、图片收藏和历史数据'.tl,
+                  ),
+                  onTap: widget.onRefresh,
+                ),
+                const SizedBox(height: 8),
+                _buildSelector(context),
+              ],
+            );
+          }
           return Row(
             crossAxisAlignment: CrossAxisAlignment.center,
             children: [
@@ -584,20 +1133,40 @@ class _DownloadDirTileState extends State<_DownloadDirTile> {
                   ),
                 ),
                 const SizedBox(width: 8),
-                ElevatedButton.icon(
-                  style: ElevatedButton.styleFrom(
-                    minimumSize: const Size(0, 48),
-                  ),
-                  onPressed: () async {
-                    final picked = await _pickFolder();
-                    if (picked != null) {
-                      controller.text = picked;
+                GestureDetector(
+                  onLongPress: () async {
+                    final browsed = await _openInternalDirectoryBrowser(
+                      context,
+                      title: '选择本应用下载目录'.tl,
+                      initialPath: controller.text,
+                    );
+                    if (browsed != null) {
+                      controller.text = browsed;
                     }
                   },
-                  icon: const Icon(Icons.folder_open, size: 18),
-                  label: Text('浏览'.tl),
+                  child: OutlinedButton.icon(
+                    style: OutlinedButton.styleFrom(
+                      minimumSize: const Size(0, 48),
+                    ),
+                    onPressed: () async {
+                      final picked = await _pickFolder();
+                      if (picked != null) {
+                        controller.text = picked;
+                      }
+                    },
+                    icon: const Icon(Icons.folder_open, size: 18),
+                    label: Text('浏览'.tl),
+                  ),
                 ),
               ],
+            ),
+            const SizedBox(height: 10),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                '提示：点按“浏览”调用系统目录选择；长按“浏览”打开内置文件夹浏览，仅在已授予安卓全部文件访问权限或开启 Root 模式后可用。'.tl,
+                style: Theme.of(ctx).textTheme.bodySmall,
+              ),
             ),
             if (isDesktop && controller.text.isNotEmpty) ...[
               const SizedBox(height: 12),
@@ -731,20 +1300,40 @@ class _OriginalDownloadDirTileState extends State<_OriginalDownloadDirTile> {
                   ),
                 ),
                 const SizedBox(width: 8),
-                ElevatedButton.icon(
-                  style: ElevatedButton.styleFrom(
-                    minimumSize: const Size(0, 48),
-                  ),
-                  onPressed: () async {
-                    final picked = await _pickFolder();
-                    if (picked != null) {
-                      controller.text = picked;
+                GestureDetector(
+                  onLongPress: () async {
+                    final browsed = await _openInternalDirectoryBrowser(
+                      context,
+                      title: '选择原应用下载目录'.tl,
+                      initialPath: controller.text,
+                    );
+                    if (browsed != null) {
+                      controller.text = browsed;
                     }
                   },
-                  icon: const Icon(Icons.folder_open, size: 18),
-                  label: Text('浏览'.tl),
+                  child: OutlinedButton.icon(
+                    style: OutlinedButton.styleFrom(
+                      minimumSize: const Size(0, 48),
+                    ),
+                    onPressed: () async {
+                      final picked = await _pickFolder();
+                      if (picked != null) {
+                        controller.text = picked;
+                      }
+                    },
+                    icon: const Icon(Icons.folder_open, size: 18),
+                    label: Text('浏览'.tl),
+                  ),
                 ),
               ],
+            ),
+            const SizedBox(height: 10),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                '提示：点按“浏览”调用系统目录选择；长按“浏览”打开内置文件夹浏览，仅在已授予安卓全部文件访问权限或开启 Root 模式后可用。'.tl,
+                style: Theme.of(ctx).textTheme.bodySmall,
+              ),
             ),
             if (isDesktop && controller.text.isNotEmpty) ...[
               const SizedBox(height: 12),

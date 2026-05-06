@@ -1,4 +1,7 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:dynamic_color/dynamic_color.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'foundation/app.dart';
@@ -27,7 +30,7 @@ void main() async {
   await initWindowManagerIfDesktop();
 
   try {
-    await syncDesktopLocalServerRuntimeForCurrentMode();
+    await syncLocalServerRuntimeForCurrentMode();
   } catch (e, s) {
     debugPrint('Failed to sync local server runtime: $e\n$s');
   }
@@ -68,6 +71,9 @@ class _PicaKeepAppState extends State<PicaKeepApp> with WidgetsBindingObserver {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     App.updater = _refreshApp;
+    App.serviceConfigVersion.addListener(_handleServiceStateSyncRequest);
+    App.serviceRuntimeVersion.addListener(_handleServiceStateSyncRequest);
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     if (appdata.settings[12] == '1') {
       blockScreenshot();
     }
@@ -76,6 +82,8 @@ class _PicaKeepAppState extends State<PicaKeepApp> with WidgetsBindingObserver {
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    App.serviceConfigVersion.removeListener(_handleServiceStateSyncRequest);
+    App.serviceRuntimeVersion.removeListener(_handleServiceStateSyncRequest);
     if (App.updater == _refreshApp) {
       App.updater = null;
     }
@@ -111,6 +119,13 @@ class _PicaKeepAppState extends State<PicaKeepApp> with WidgetsBindingObserver {
     if (mounted) {
       setState(() {});
     }
+  }
+
+  void _handleServiceStateSyncRequest() {
+    if (!App.isAndroid) {
+      return;
+    }
+    unawaited(syncAndroidForegroundServiceForCurrentMode());
   }
 
   ThemeMode _getThemeMode() {
@@ -186,7 +201,7 @@ class _PicaKeepAppState extends State<PicaKeepApp> with WidgetsBindingObserver {
             if (App.isDesktop) {
               return WindowFrame(child: child);
             }
-            return child;
+            return _MobileSystemUiFrame(child: child);
           },
           theme: ThemeData(
             colorScheme: _buildLightScheme(lightDynamic),
@@ -205,6 +220,36 @@ class _PicaKeepAppState extends State<PicaKeepApp> with WidgetsBindingObserver {
               appdata.settings[13] == '1' ? const AuthPage() : const MainPage(),
         );
       },
+    );
+  }
+}
+
+class _MobileSystemUiFrame extends StatelessWidget {
+  const _MobileSystemUiFrame({required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final backgroundColor = theme.scaffoldBackgroundColor;
+    final overlayStyle = SystemUiOverlayStyle(
+      statusBarColor: Colors.transparent,
+      statusBarIconBrightness: isDark ? Brightness.light : Brightness.dark,
+      statusBarBrightness: isDark ? Brightness.dark : Brightness.light,
+      systemNavigationBarColor: backgroundColor,
+      systemNavigationBarIconBrightness:
+          isDark ? Brightness.light : Brightness.dark,
+      systemNavigationBarDividerColor: Colors.transparent,
+    );
+    SystemChrome.setSystemUIOverlayStyle(overlayStyle);
+    return AnnotatedRegion<SystemUiOverlayStyle>(
+      value: overlayStyle,
+      child: ColoredBox(
+        color: backgroundColor,
+        child: child,
+      ),
     );
   }
 }

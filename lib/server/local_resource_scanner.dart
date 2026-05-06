@@ -1,6 +1,8 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:sqlite3/sqlite3.dart';
+
 class ServerResourceRootSummary {
   const ServerResourceRootSummary({
     required this.id,
@@ -57,12 +59,27 @@ class ServerResourceEpisodeSummary {
       };
 }
 
+class _ServerResourceMetadata {
+  const _ServerResourceMetadata({
+    required this.subtitle,
+    required this.tags,
+    required this.sourceDisplayName,
+  });
+
+  final String subtitle;
+  final List<String> tags;
+  final String sourceDisplayName;
+}
+
 class ServerResourceItemSummary {
   const ServerResourceItemSummary({
     required this.id,
     required this.rootId,
     required this.sourceTitle,
+    required this.sourceDisplayName,
     required this.title,
+    required this.subtitle,
+    required this.tags,
     required this.path,
     required this.imageCount,
     required this.totalBytes,
@@ -73,7 +90,10 @@ class ServerResourceItemSummary {
   final String id;
   final String rootId;
   final String sourceTitle;
+  final String sourceDisplayName;
   final String title;
+  final String subtitle;
+  final List<String> tags;
   final String path;
   final int imageCount;
   final int totalBytes;
@@ -86,7 +106,10 @@ class ServerResourceItemSummary {
         'id': id,
         'rootId': rootId,
         'sourceTitle': sourceTitle,
+        'sourceDisplayName': sourceDisplayName,
         'title': title,
+        'subtitle': subtitle,
+        'tags': tags,
         'path': path,
         'imageCount': imageCount,
         'totalBytes': totalBytes,
@@ -210,21 +233,75 @@ class LocalResourceScanner {
     String rootTitle,
     Directory root,
   ) async {
-    final results = <ServerResourceItemSummary>[];
-    final rootItem = await _scanComicItem(rootId, rootTitle, root);
-    if (rootItem != null) {
-      results.add(rootItem);
-      return results;
+    if (rootId.startsWith('custom_')) {
+      return _scanCustomRootItems(rootId, rootTitle, root);
     }
 
+    final metadataByDirectory = _loadManagedRootMetadata(rootTitle, root);
+    final results = <ServerResourceItemSummary>[];
     final children = await _listDirectories(root);
     for (final child in children) {
-      final item = await _scanComicItem(rootId, rootTitle, child);
+      final item = await _scanComicItem(
+        rootId,
+        rootTitle,
+        child,
+        metadataByDirectory,
+      );
       if (item != null) {
         results.add(item);
       }
     }
+    if (results.isNotEmpty) {
+      return results;
+    }
 
+    final rootItem = await _scanComicItem(
+      rootId,
+      rootTitle,
+      root,
+      metadataByDirectory,
+    );
+    if (rootItem != null) {
+      results.add(rootItem);
+    }
+    return results;
+  }
+
+  Future<List<ServerResourceItemSummary>> _scanCustomRootItems(
+    String rootId,
+    String rootTitle,
+    Directory root,
+  ) async {
+    final results = <ServerResourceItemSummary>[];
+    final directories = _collectLeafAlbumDirectories(root);
+    for (final directory in directories) {
+      final images = _listDirectVisibleImages(directory);
+      final episode = await _buildEpisodeSummary(
+        index: 1,
+        title: _directoryTitle(directory),
+        directory: directory,
+        images: images,
+      );
+      if (episode == null) {
+        continue;
+      }
+      results.add(
+        ServerResourceItemSummary(
+          id: _buildItemId(rootId, directory.path),
+          rootId: rootId,
+          sourceTitle: rootTitle,
+          sourceDisplayName: '图集',
+          title: _directoryTitle(directory),
+          subtitle: '${episode.imageCount} 张图片',
+          tags: const <String>[],
+          path: directory.path,
+          imageCount: episode.imageCount,
+          totalBytes: episode.totalBytes,
+          coverPath: episode.coverPath,
+          episodes: [episode],
+        ),
+      );
+    }
     return results;
   }
 
@@ -232,6 +309,7 @@ class LocalResourceScanner {
     String rootId,
     String rootTitle,
     Directory directory,
+    Map<String, _ServerResourceMetadata> metadataByDirectory,
   ) async {
     final directImages = await _listImageFiles(directory, recursive: false);
     final episodes = <ServerResourceEpisodeSummary>[];
@@ -282,17 +360,219 @@ class LocalResourceScanner {
 
     final imageCount = episodes.fold<int>(0, (sum, item) => sum + item.imageCount);
     final totalBytes = episodes.fold<int>(0, (sum, item) => sum + item.totalBytes);
+    final normalizedDirectoryPath = _normalizePath(directory.path);
+    final metadata = metadataByDirectory[normalizedDirectoryPath] ??
+        metadataByDirectory[_normalizePath(_basename(directory.path))];
+    final fallbackSubtitle = episodes.length > 1
+        ? '${episodes.length} 个章节'
+        : '$imageCount 张图片';
+    final subtitle = _firstNonEmptyValue([
+      metadata?.subtitle,
+      fallbackSubtitle,
+    ]);
+    final sourceDisplayName = _firstNonEmptyValue([
+      metadata?.sourceDisplayName,
+      rootTitle,
+    ]);
     return ServerResourceItemSummary(
       id: _buildItemId(rootId, directory.path),
       rootId: rootId,
       sourceTitle: rootTitle,
+      sourceDisplayName: sourceDisplayName,
       title: _directoryTitle(directory),
+      subtitle: subtitle,
+      tags: metadata?.tags ?? const <String>[],
       path: directory.path,
       imageCount: imageCount,
       totalBytes: totalBytes,
       coverPath: episodes.first.coverPath,
       episodes: episodes,
     );
+  }
+
+  Map<String, _ServerResourceMetadata> _loadManagedRootMetadata(
+    String rootTitle,
+    Directory root,
+  ) {
+    final dbFile = File('${root.path}${Platform.pathSeparator}download.db');
+    if (!dbFile.existsSync()) {
+      return const <String, _ServerResourceMetadata>{};
+    }
+
+    Database? db;
+    final results = <String, _ServerResourceMetadata>{};
+    try {
+      db = sqlite3.open(dbFile.path);
+      final rows = db.select(
+        'select id, subtitle, directory, json from download',
+      );
+      for (final row in rows) {
+        final rawDirectory = row['directory']?.toString() ?? '';
+        final normalizedDirectoryPath =
+            _normalizeManagedDirectoryPath(root.path, rawDirectory);
+        final normalizedBasename = _normalizePath(_basename(rawDirectory));
+        if (normalizedDirectoryPath.isEmpty && normalizedBasename.isEmpty) {
+          continue;
+        }
+        final data = _decodeJsonMap(row['json']?.toString());
+        final metadata = _extractDownloadMetadata(
+          id: row['id']?.toString() ?? '',
+          subtitle: row['subtitle']?.toString() ?? '',
+          data: data,
+          fallbackSourceDisplayName: rootTitle,
+        );
+        if (normalizedDirectoryPath.isNotEmpty) {
+          results[normalizedDirectoryPath] = metadata;
+        }
+        if (normalizedBasename.isNotEmpty) {
+          results.putIfAbsent(normalizedBasename, () => metadata);
+        }
+      }
+    } catch (_) {
+      return const <String, _ServerResourceMetadata>{};
+    } finally {
+      db?.dispose();
+    }
+    return results;
+  }
+
+  _ServerResourceMetadata _extractDownloadMetadata({
+    required String id,
+    required String subtitle,
+    required Map<String, dynamic>? data,
+    required String fallbackSourceDisplayName,
+  }) {
+    final comicItem = data?['comicItem'];
+    final comicItemMap = comicItem is Map
+        ? comicItem.map((key, value) => MapEntry(key.toString(), value))
+        : null;
+    return _ServerResourceMetadata(
+      subtitle: _firstNonEmptyValue([
+        subtitle,
+        data?['subtitle']?.toString(),
+        data?['subTitle']?.toString(),
+        data?['author']?.toString(),
+        comicItemMap?['subTitle']?.toString(),
+        comicItemMap?['author']?.toString(),
+      ]),
+      tags: _normalizeTagValues(
+        data?['tagList'] ??
+            data?['tags'] ??
+            data?['metadataTags'] ??
+            comicItemMap?['tagList'] ??
+            comicItemMap?['tags'],
+      ),
+      sourceDisplayName: _firstNonEmptyValue([
+        data?['sourceDisplayName']?.toString(),
+        _inferSourceDisplayName(id, data),
+        fallbackSourceDisplayName,
+      ]),
+    );
+  }
+
+  String _normalizeManagedDirectoryPath(String rootPath, String directory) {
+    final normalizedDirectory = directory.trim();
+    if (normalizedDirectory.isEmpty) {
+      return '';
+    }
+
+    final unifiedDirectory = normalizedDirectory.replaceAll('\\', '/');
+    final isAbsolute = unifiedDirectory.startsWith('/') ||
+        RegExp(r'^[a-zA-Z]:/').hasMatch(unifiedDirectory);
+    if (isAbsolute) {
+      return _normalizePath(unifiedDirectory);
+    }
+
+    final normalizedRoot = rootPath.trim().replaceAll('\\', '/');
+    if (normalizedRoot.isEmpty) {
+      return _normalizePath(unifiedDirectory);
+    }
+    final joinedRoot = normalizedRoot.endsWith('/')
+        ? normalizedRoot.substring(0, normalizedRoot.length - 1)
+        : normalizedRoot;
+    return _normalizePath('$joinedRoot/$unifiedDirectory');
+  }
+
+  Map<String, dynamic>? _decodeJsonMap(String? raw) {
+    if (raw == null || raw.trim().isEmpty) {
+      return null;
+    }
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is Map) {
+        return decoded.map((key, value) => MapEntry(key.toString(), value));
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  List<String> _normalizeTagValues(Object? raw) {
+    if (raw is List) {
+      return raw
+          .map((entry) => entry.toString().trim())
+          .where((entry) => entry.isNotEmpty)
+          .toSet()
+          .toList(growable: false);
+    }
+    if (raw is String) {
+      final normalized = raw.trim();
+      if (normalized.isEmpty) {
+        return const <String>[];
+      }
+      if (normalized.startsWith('[') && normalized.endsWith(']')) {
+        final decoded = _decodeJsonMap('{"tags":$normalized}')?['tags'];
+        if (decoded != null) {
+          return _normalizeTagValues(decoded);
+        }
+      }
+      return normalized
+          .split(RegExp(r'\s*[,，]\s*'))
+          .map((entry) => entry.trim())
+          .where((entry) => entry.isNotEmpty)
+          .toSet()
+          .toList(growable: false);
+    }
+    final single = raw?.toString().trim() ?? '';
+    if (single.isEmpty) {
+      return const <String>[];
+    }
+    return <String>[single];
+  }
+
+  String _firstNonEmptyValue(Iterable<String?> values) {
+    for (final value in values) {
+      final normalized = value?.trim() ?? '';
+      if (normalized.isNotEmpty) {
+        return normalized;
+      }
+    }
+    return '';
+  }
+
+  String _inferSourceDisplayName(String id, Map<String, dynamic>? data) {
+    final sourceKey = (data?['sourceKey']?.toString() ?? '').trim().toLowerCase();
+    if (sourceKey == 'copy_manga') return '拷贝漫画';
+    if (sourceKey == 'komiic') return 'Komiic';
+    if (sourceKey == 'jm') return '禁漫';
+    if (sourceKey == 'hitomi') return 'Hitomi';
+    if (sourceKey == 'nhentai') return 'NHentai';
+    if (sourceKey == 'htmanga') return '绅士漫画';
+    if (sourceKey == 'ehentai') return 'E-Hentai';
+    if (sourceKey == 'picacg') return '哔咔';
+
+    final normalizedId = id.trim().toLowerCase();
+    if (normalizedId.startsWith('jm')) return '禁漫';
+    if (normalizedId.startsWith('hitomi')) return 'Hitomi';
+    if (normalizedId.startsWith('nhentai')) return 'NHentai';
+    if (normalizedId.startsWith('ht')) return '绅士漫画';
+    if (normalizedId.contains('-')) {
+      final prefix = normalizedId.split('-').first;
+      if (prefix == 'copy_manga') return '拷贝漫画';
+      if (prefix == 'komiic') return 'Komiic';
+    }
+    if (RegExp(r'^[0-9a-f]{24}$').hasMatch(normalizedId)) return '哔咔';
+    if (RegExp(r'^\d+$').hasMatch(normalizedId)) return 'E-Hentai';
+    return '';
   }
 
   Future<ServerResourceEpisodeSummary?> _buildEpisodeSummary({
@@ -356,6 +636,74 @@ class LocalResourceScanner {
     }
     results.sort(_compareEntityPath);
     return results;
+  }
+
+  List<File> _listDirectVisibleImages(Directory directory) {
+    final results = <File>[];
+    for (final entity in _safeList(directory)) {
+      if (entity is! File) {
+        continue;
+      }
+      if (!_isImageFile(entity.path)) {
+        continue;
+      }
+      results.add(entity);
+    }
+    results.sort(_compareEntityPath);
+    final visibleFiles = results.where((file) => !_isCoverLikeFile(file.path)).toList();
+    return visibleFiles.isNotEmpty ? visibleFiles : results;
+  }
+
+  List<Directory> _collectLeafAlbumDirectories(Directory root) {
+    final results = <Directory>[];
+
+    bool visit(Directory directory) {
+      final children = _safeList(directory);
+      final hasImages = children.any(_isVisibleImageFile);
+      var hasAlbumDescendant = false;
+      for (final child in children.whereType<Directory>()) {
+        if (visit(child)) {
+          hasAlbumDescendant = true;
+        }
+      }
+      if (hasImages && !hasAlbumDescendant) {
+        results.add(directory);
+        return true;
+      }
+      return hasImages || hasAlbumDescendant;
+    }
+
+    visit(root);
+    results.sort(_compareEntityPath);
+    return results;
+  }
+
+  List<FileSystemEntity> _safeList(Directory directory) {
+    try {
+      return directory.listSync(recursive: false, followLinks: false);
+    } catch (_) {
+      return const <FileSystemEntity>[];
+    }
+  }
+
+  bool _isVisibleImageFile(FileSystemEntity entity) {
+    return entity is File &&
+        _isImageFile(entity.path) &&
+        !_basename(entity.path).startsWith('.');
+  }
+
+  bool _isCoverLikeFile(String path) {
+    final name = _basename(path).toLowerCase();
+    return name == 'cover.jpg' ||
+        name == 'cover.jpeg' ||
+        name == 'cover.png' ||
+        name == 'cover.webp';
+  }
+
+  String _basename(String path) {
+    final normalized = path.replaceAll('\\', '/');
+    final parts = normalized.split('/').where((entry) => entry.isNotEmpty).toList();
+    return parts.isEmpty ? normalized : parts.last;
   }
 
   String _buildItemId(String rootId, String path) {

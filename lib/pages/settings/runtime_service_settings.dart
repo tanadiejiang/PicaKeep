@@ -35,11 +35,11 @@ class _AppServiceSettingsSectionState
   Future<void> _syncLocalServerRuntime({
     bool restartIfRunning = false,
   }) async {
-    if (!canManageDesktopLocalServerRuntime()) {
+    if (!canManageLocalServerRuntime()) {
       return;
     }
     try {
-      await syncDesktopLocalServerRuntimeForCurrentMode(
+      await syncLocalServerRuntimeForCurrentMode(
         restartIfRunning: restartIfRunning,
       );
     } catch (e) {
@@ -77,6 +77,86 @@ class _AppServiceSettingsSectionState
     await _syncLocalServerRuntime();
   }
 
+  Widget _buildModeOption(
+    BuildContext context, {
+    required String value,
+    required String label,
+    required bool selected,
+    required bool isFirst,
+    required bool isLast,
+  }) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final radius = BorderRadius.only(
+      topLeft: isFirst ? const Radius.circular(999) : Radius.zero,
+      bottomLeft: isFirst ? const Radius.circular(999) : Radius.zero,
+      topRight: isLast ? const Radius.circular(999) : Radius.zero,
+      bottomRight: isLast ? const Radius.circular(999) : Radius.zero,
+    );
+    return Expanded(
+      child: InkWell(
+        borderRadius: radius,
+        onTap: selected ? null : () => _setMode(value),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 160),
+          height: 36,
+          decoration: BoxDecoration(
+            color: selected
+                ? colorScheme.primaryContainer
+                : Colors.transparent,
+            border: Border(
+              left: isFirst
+                  ? BorderSide.none
+                  : BorderSide(color: colorScheme.outlineVariant),
+            ),
+            borderRadius: radius,
+          ),
+          alignment: Alignment.center,
+          child: Text(
+            label,
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w600,
+              color: selected
+                  ? colorScheme.onPrimaryContainer
+                  : colorScheme.onSurface,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildModeSelector(
+    BuildContext context, {
+    required List<String> modeValues,
+    required List<String> modeTitles,
+    required String currentMode,
+  }) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return Container(
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: colorScheme.outline),
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(999),
+        child: Row(
+          children: [
+            for (int i = 0; i < modeValues.length; i++)
+              _buildModeOption(
+                context,
+                value: modeValues[i],
+                label: modeTitles[i],
+                selected: currentMode == modeValues[i],
+                isFirst: i == 0,
+                isLast: i == modeValues.length - 1,
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final capability = currentServerPlatformCapability();
@@ -99,15 +179,12 @@ class _AppServiceSettingsSectionState
               'b': serverPlatformTierLabel(capability.tier),
             }),
           ),
-          trailingWidth: 140,
-          trailing: Select(
-            width: 140,
-            initialValue: currentMode,
-            values: modeValues,
-            titles: modeTitles,
-            onChanged: (value) {
-              _setMode(value);
-            },
+          trailingWidth: 200,
+          trailing: _buildModeSelector(
+            context,
+            modeValues: modeValues,
+            modeTitles: modeTitles,
+            currentMode: currentMode,
           ),
         ),
         ListTile(
@@ -267,7 +344,7 @@ class _ServiceAdminPortTileState extends State<_ServiceAdminPortTile> {
     await appdata.updateSettings();
     App.notifyServiceConfigChanged();
     try {
-      await syncDesktopLocalServerRuntimeForCurrentMode(
+      await syncLocalServerRuntimeForCurrentMode(
         restartIfRunning: true,
       );
     } catch (e) {

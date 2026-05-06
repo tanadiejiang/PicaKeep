@@ -9,6 +9,7 @@ import 'package:picakeep/foundation/app.dart';
 import 'package:picakeep/foundation/download.dart';
 import 'package:picakeep/foundation/history.dart';
 import 'package:picakeep/foundation/local_library.dart';
+import 'package:picakeep/foundation/remote_library_data_source.dart';
 import 'package:picakeep/tools/read_history_helper.dart';
 import 'package:picakeep/tools/translations.dart';
 
@@ -18,6 +19,7 @@ class _HistoryDownloadedComicTile extends DownloadedComicTile {
     required super.name,
     required super.author,
     required super.imagePath,
+    super.imageProvider,
     required super.type,
     required super.tag,
     required super.size,
@@ -67,6 +69,11 @@ class _HistoryPageState extends State<HistoryPage> {
         item.target.startsWith('local_album::')) {
       return '图集';
     }
+    final cover = item.cover.trim();
+    if (item.type == HistoryType.other &&
+        (cover.startsWith('http://') || cover.startsWith('https://'))) {
+      return '远程资源';
+    }
     return item.type.name;
   }
 
@@ -100,6 +107,14 @@ class _HistoryPageState extends State<HistoryPage> {
     }
   }
 
+  ImageProvider<Object>? _coverImageProvider(History item) {
+    final cover = item.cover.trim();
+    if (cover.startsWith('http://') || cover.startsWith('https://')) {
+      return NetworkImage(cover);
+    }
+    return null;
+  }
+
   File _coverFile(History item) {
     final key = _cacheKey(item);
     final cached = _coverCache[key];
@@ -124,11 +139,11 @@ class _HistoryPageState extends State<HistoryPage> {
       }
     } catch (_) {}
 
-    final localComic =
-        LocalLibraryManager().findCachedByCandidates(item.candidateDownloadIds());
+    final localComic = LocalLibraryManager()
+        .findCachedByCandidates(item.candidateDownloadIds());
     if (localComic != null) {
-      final file =
-          resolveLocalComicCover(localComic, legacyTargets: item.candidateDownloadIds());
+      final file = resolveLocalComicCover(localComic,
+          legacyTargets: item.candidateDownloadIds());
       if (file.existsSync()) {
         _coverCache[key] = file;
         return file;
@@ -180,22 +195,31 @@ class _HistoryPageState extends State<HistoryPage> {
     await dm.init();
     var comic =
         await dm.getComicOrNullFromCandidates(item.candidateDownloadIds());
-    comic ??=
-        await LocalLibraryManager().findByCandidates(item.candidateDownloadIds());
+    comic ??= await LocalLibraryManager()
+        .findByCandidates(item.candidateDownloadIds());
+    comic ??= await const RemoteLibraryDataSource()
+        .findByCandidates(item.candidateDownloadIds());
     if (comic != null) {
       if (!mounted) return;
       await ensureHistoryBeforeRead(
         comic,
         legacyTargets: item.candidateDownloadIds(),
       );
-      final cover =
-          resolveLocalComicCover(comic, legacyTargets: item.candidateDownloadIds());
+      final cover = resolveLocalComicCover(comic,
+          legacyTargets: item.candidateDownloadIds());
+      final remoteCover =
+          comic is RemoteLibraryComicItem ? comic.coverUrl.trim() : '';
       if (!mounted) return;
       setState(() {
         item.target = comic!.id;
         item.title = comic.name;
         item.subtitle = comic.subTitle;
-        if (cover.existsSync()) {
+        if (comic is RemoteLibraryComicItem && comic.isCustomLibraryRoot) {
+          item.type = HistoryType.localAlbum;
+        }
+        if (remoteCover.isNotEmpty) {
+          item.cover = remoteCover;
+        } else if (cover.existsSync()) {
           item.cover = cover.path;
         }
       });
@@ -271,6 +295,7 @@ class _HistoryPageState extends State<HistoryPage> {
                       name: comic.title,
                       author: comic.subtitle,
                       imagePath: cover,
+                      imageProvider: _coverImageProvider(comic),
                       type: _typeLabel(comic),
                       tag: const [],
                       size: _formatTime(comic.time),

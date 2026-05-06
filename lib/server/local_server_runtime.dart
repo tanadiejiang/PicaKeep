@@ -185,9 +185,10 @@ class LocalServerRuntime {
       final summary = server.buildSummaryPayload();
       return LocalServerRuntimeSnapshot(
         lifecycle: _state.lifecycle,
-        statusText: (summary['statusText']?.toString().trim().isNotEmpty ?? false)
-            ? summary['statusText'].toString()
-            : _statusTextForLifecycle(_state.lifecycle),
+        statusText:
+            (summary['statusText']?.toString().trim().isNotEmpty ?? false)
+                ? summary['statusText'].toString()
+                : _statusTextForLifecycle(_state.lifecycle),
         detailText: (summary['message']?.toString().trim().isNotEmpty ?? false)
             ? summary['message'].toString()
             : _detailTextForLifecycle(_state),
@@ -195,12 +196,12 @@ class LocalServerRuntime {
         host: summary['host']?.toString() ?? config.host,
         port: _readInt(summary['port']) ?? config.port,
         logRequests: summary['logRequests'] == true,
-        currentDownloadRoot:
-            summary['currentDownloadRoot']?.toString() ?? config.currentDownloadRoot,
-        originalDownloadRoot:
-            summary['originalDownloadRoot']?.toString() ?? config.originalDownloadRoot,
-        customLibraryRoots:
-            _readStringList(summary['customLibraryRoots'], config.customLibraryRoots),
+        currentDownloadRoot: summary['currentDownloadRoot']?.toString() ??
+            config.currentDownloadRoot,
+        originalDownloadRoot: summary['originalDownloadRoot']?.toString() ??
+            config.originalDownloadRoot,
+        customLibraryRoots: _readStringList(
+            summary['customLibraryRoots'], config.customLibraryRoots),
         statusUrl: summary['statusUrl']?.toString(),
         adminUrl: summary['adminUrl']?.toString(),
         comicCount: _readInt(summary['comicCount']),
@@ -276,7 +277,9 @@ class LocalServerRuntime {
       },
       originalDownloadRoot: switch (mode) {
         managedDataSourceModeCurrentAndOriginal =>
-          originalDownloadRoot != currentDownloadRoot ? originalDownloadRoot : '',
+          originalDownloadRoot != currentDownloadRoot
+              ? originalDownloadRoot
+              : '',
         managedDataSourceModeOriginalOnly => originalDownloadRoot,
         _ => '',
       },
@@ -333,7 +336,8 @@ class LocalServerRuntime {
     if (snapshot.roots.isEmpty) {
       return '当前服务未启动，且还没有可纳入管理的本地资源目录。配置完成后可通过 ${_buildStatusUrl(config)} 暴露状态接口。';
     }
-    final availableRootCount = snapshot.roots.where((root) => root.exists).length;
+    final availableRootCount =
+        snapshot.roots.where((root) => root.exists).length;
     final missingRootCount = snapshot.roots.length - availableRootCount;
     final buffer = StringBuffer(
       '当前服务未启动，但已预扫描到 ${snapshot.totalComicCount} 本漫画、${snapshot.totalBytes} 字节资源。',
@@ -370,7 +374,7 @@ class LocalServerRuntime {
     if (state.lastMessage?.trim().isNotEmpty == true) {
       return state.lastMessage!.trim();
     }
-    return '当前本地服务尚未启动。配置文件与资源路径已准备，可继续接桌面端服务模式启动链路。';
+    return '当前本地服务尚未启动。配置文件与资源路径已准备，可直接在设置或服务信息页启动本地服务。';
   }
 
   String _buildStatusUrl(PicaKeepServerConfig config) {
@@ -415,8 +419,7 @@ class LocalServerRuntime {
 
   void _scheduleNotify() {
     _pendingNotifyTimer?.cancel();
-    _pendingNotifyTimer =
-        Timer(const Duration(milliseconds: 250), _notifyNow);
+    _pendingNotifyTimer = Timer(const Duration(milliseconds: 250), _notifyNow);
   }
 
   void _notify() {

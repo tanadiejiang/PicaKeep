@@ -189,6 +189,7 @@ class PicaKeepAdminServer {
         'generatedAt': snapshot.generatedAt.toIso8601String(),
         'totalComicCount': snapshot.totalComicCount,
         'totalBytes': snapshot.totalBytes,
+        'roots': snapshot.roots.map(_buildLibraryRootPayload).toList(),
         'items': snapshot.items.map(_buildLibraryItemPayload).toList(),
       });
     }
@@ -287,6 +288,19 @@ class PicaKeepAdminServer {
     return null;
   }
 
+  Map<String, dynamic> _buildLibraryRootPayload(
+    ServerResourceRootSummary root,
+  ) {
+    return {
+      'id': root.id,
+      'title': root.title,
+      'path': root.path,
+      'exists': root.exists,
+      'itemCount': root.itemCount,
+      'totalBytes': root.totalBytes,
+    };
+  }
+
   Map<String, dynamic> _buildLibraryItemPayload(
     ServerResourceItemSummary item, {
     bool includePages = false,
@@ -296,10 +310,10 @@ class PicaKeepAdminServer {
       'id': item.id,
       'rootId': item.rootId,
       'sourceTitle': item.sourceTitle,
+      'sourceDisplayName': item.sourceDisplayName,
       'title': item.title,
-      'subtitle': item.hasMultipleEpisodes
-          ? '${item.episodes.length} 个章节'
-          : '${item.imageCount} 张图片',
+      'subtitle': item.subtitle,
+      'tags': item.tags,
       'path': item.path,
       'imageCount': item.imageCount,
       'totalBytes': item.totalBytes,

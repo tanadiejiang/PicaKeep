@@ -350,7 +350,7 @@ extension ToolBar on ComicReadingPage {
       }
       yield Positioned(
         left: 4,
-        top: 4 + MediaQuery.of(context).padding.top,
+        top: 4 + MediaQuery.of(context).viewPadding.top,
         child: IconButton(
           iconSize: 24,
           icon: const Icon(Icons.close),
@@ -422,7 +422,7 @@ extension ToolBar on ComicReadingPage {
                         ),
                       ],
                     ),
-                  ).paddingTop(MediaQuery.of(context).padding.top),
+                  ).paddingTop(MediaQuery.of(context).viewPadding.top),
                 )
               : const SizedBox(
                   width: 0,

@@ -333,6 +333,7 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
 
     add('ID', [_displayIdFor(comic)]);
     add('作者', [comic.subTitle]);
+    add('漫画源', [comic.sourceDisplayName]);
     add('时间', [_formatTime(comic.time)]);
     add('路径', [_displayPathFor(comic)]);
     if (comic.tags.isNotEmpty) {

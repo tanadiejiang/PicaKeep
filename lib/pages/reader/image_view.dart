@@ -64,6 +64,7 @@ extension ImageExt on ComicReadingPage {
         itemPositionsListener: logic.itemScrollListener,
         itemCount: logic.urls.length,
         addSemanticIndexes: false,
+        minCacheExtent: MediaQuery.of(context).size.height * 3,
         scrollController: logic.scrollController,
         scrollBehavior: const MaterialScrollBehavior()
             .copyWith(scrollbars: false, dragDevices: _kTouchLikeDeviceTypes),
@@ -89,6 +90,7 @@ extension ImageExt on ComicReadingPage {
             ImageProvider image = createImageProvider(type, logic, index, target);
             return ComicImage(
               filterQuality: FilterQuality.medium,
+              gaplessPlayback: true,
               image: image,
               width: imageWidth,
               height: imageWidth * 1.2,
@@ -474,23 +476,39 @@ extension ImageExt on ComicReadingPage {
   /// preload image
   void precacheComicImage(ComicReadingPageLogic logic, BuildContext context,
       int index, String target) {
-    if (logic.requestedLoadingItems.length != logic.length) {
+    if (logic.requestedLoadingItems.length != logic.length + 1) {
       logic.requestedLoadingItems = List.filled(logic.length + 1, false);
     }
-    int precacheNum = int.parse(appdata.settings[28]) + index;
-    for (; index < precacheNum; index++) {
-      if (index >= logic.urls.length || logic.requestedLoadingItems[index]) {
-        return;
+
+    var precacheEnd = int.parse(appdata.settings[28]) + index;
+    if (precacheEnd > logic.urls.length) {
+      precacheEnd = logic.urls.length;
+    }
+    for (var current = index; current < precacheEnd; current++) {
+      if (current < 0 ||
+          current >= logic.urls.length ||
+          logic.requestedLoadingItems[current]) {
+        continue;
       }
-      precacheImage(createImageProvider(type, logic, index, target), context);
+      logic.requestedLoadingItems[current] = true;
+      precacheImage(createImageProvider(type, logic, current, target), context);
     }
     if (!ImageManager.haveTask) {
-      precacheNum += 3;
-      for (; index < precacheNum; index++) {
-        if (index >= logic.urls.length || logic.requestedLoadingItems[index]) {
-          return;
+      var extraEnd = precacheEnd + 3;
+      if (extraEnd > logic.urls.length) {
+        extraEnd = logic.urls.length;
+      }
+      for (var current = precacheEnd; current < extraEnd; current++) {
+        if (current < 0 ||
+            current >= logic.urls.length ||
+            logic.requestedLoadingItems[current]) {
+          continue;
         }
-        precacheImage(createImageProvider(type, logic, index, target), context);
+        logic.requestedLoadingItems[current] = true;
+        precacheImage(
+          createImageProvider(type, logic, current, target),
+          context,
+        );
       }
     }
   }
