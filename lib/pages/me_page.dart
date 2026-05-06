@@ -2,15 +2,20 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:picakeep/base.dart';
 import 'package:picakeep/foundation/app.dart';
+import 'package:picakeep/foundation/app_runtime_mode.dart';
 import 'package:picakeep/foundation/history.dart';
 import 'package:picakeep/foundation/download.dart';
 import 'package:picakeep/foundation/local_data_source.dart';
 import 'package:picakeep/foundation/local_library.dart';
+import 'package:picakeep/foundation/remote_library_data_source.dart';
+import 'package:picakeep/foundation/service_data_source.dart';
 import 'package:picakeep/tools/translations.dart';
 import 'package:picakeep/tools/read_history_helper.dart';
 import 'package:picakeep/foundation/image_favorites.dart';
 import 'history_page.dart';
 import 'image_favorites.dart';
+import 'app_capabilities_page.dart';
+import 'service_info_page.dart';
 import 'tools.dart';
 import 'download_page.dart';
 import 'local_library_page.dart';
@@ -25,6 +30,8 @@ class MePage extends StatefulWidget {
 class _MePageState extends State<MePage> {
   int _downloadCount = 0;
   bool _loadingDownloadCount = false;
+  bool _loadingRemoteSummary = false;
+  ServiceInfoSnapshot? _remoteSnapshot;
 
   @override
   void initState() {
@@ -34,22 +41,32 @@ class _MePageState extends State<MePage> {
         setState(() {});
         _loadDownloadCount();
         _loadLocalLibraryCount();
+        _loadRemoteLibrarySummary();
       }
     }, "me_page");
     App.localDataVersion.addListener(_handleLocalDataChanged);
+    App.serviceConfigVersion.addListener(_handleServiceStateChanged);
+    App.serviceRuntimeVersion.addListener(_handleServiceStateChanged);
     _loadDownloadCount();
     _loadLocalLibraryCount();
+    _loadRemoteLibrarySummary();
   }
 
   @override
   void dispose() {
     App.localDataVersion.removeListener(_handleLocalDataChanged);
+    App.serviceConfigVersion.removeListener(_handleServiceStateChanged);
+    App.serviceRuntimeVersion.removeListener(_handleServiceStateChanged);
     StateController.remove<SimpleController>("me_page");
     super.dispose();
   }
 
   void _handleLocalDataChanged() {
     _reloadLocalCounts();
+  }
+
+  void _handleServiceStateChanged() {
+    _loadRemoteLibrarySummary();
   }
 
   Future<int> _resolveDownloadCount({required bool forceRefresh}) async {
@@ -122,6 +139,93 @@ class _MePageState extends State<MePage> {
     } catch (_) {}
   }
 
+  Future<void> _loadRemoteLibrarySummary() async {
+    if (_loadingRemoteSummary) {
+      return;
+    }
+    _loadingRemoteSummary = true;
+    try {
+      final mode =
+          normalizeAppRuntimeMode(appdata.settings[appRuntimeModeSettingIndex]);
+      if (mode != appRuntimeModeClient) {
+        if (mounted) {
+          setState(() {
+            _remoteSnapshot = null;
+          });
+        }
+        return;
+      }
+      final snapshot =
+          await RuntimeServiceDataSourceResolver.current().fetchSnapshot();
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _remoteSnapshot = snapshot.isClientMode &&
+                snapshot.connectionState == ServiceConnectionState.online
+            ? snapshot
+            : null;
+      });
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _remoteSnapshot = null;
+        });
+      }
+    } finally {
+      _loadingRemoteSummary = false;
+    }
+  }
+
+  bool get _showRemoteLibraryEntry =>
+      _remoteSnapshot?.connectionState == ServiceConnectionState.online;
+
+  int get _remoteComicCount => _remoteSnapshot?.comicCount ?? 0;
+
+  Future<void> _openLocalLibraryPage(BuildContext context) {
+    return Navigator.of(context)
+        .push(
+          MaterialPageRoute(
+            builder: (_) => const LocalLibraryPage(
+              albumOnly: true,
+              title: '图集',
+            ),
+          ),
+        )
+        .then((_) => _loadLocalLibraryCount());
+  }
+
+  Future<void> _openRemoteLibraryPage(BuildContext context) {
+    return Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => const LocalLibraryPage(
+          preferRemoteView: true,
+          title: '远程 · 资源库',
+        ),
+      ),
+    );
+  }
+
+  Future<void> _openToolsPage(BuildContext context) {
+    return Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => const ToolsPage()),
+    );
+  }
+
+  Future<void> _openServiceInfoPage(BuildContext context) {
+    return Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => const ServiceInfoPage(standalone: true),
+      ),
+    );
+  }
+
+  Future<void> _openAppCapabilitiesPage(BuildContext context) {
+    return Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => const AppCapabilitiesPage()),
+    );
+  }
+
   String _historyTitle(int recentCount) {
     try {
       return "${"历史记录".tl}(${HistoryManager().count()})";
@@ -169,6 +273,14 @@ class _MePageState extends State<MePage> {
     return File('');
   }
 
+  ImageProvider<Object>? _coverImageProvider(History item) {
+    final cover = item.cover.trim();
+    if (cover.startsWith('http://') || cover.startsWith('https://')) {
+      return NetworkImage(cover);
+    }
+    return null;
+  }
+
   @override
   Widget build(BuildContext context) {
     return SizedBox.expand(
@@ -192,7 +304,10 @@ class _MePageState extends State<MePage> {
                             const SizedBox(height: 12),
                             _buildDownloadCard(context),
                             const SizedBox(height: 12),
-                            _buildLocalLibraryCard(context),
+                            _buildLibraryAccessSection(
+                              context,
+                              horizontal: true,
+                            ),
                           ],
                         ),
                       ),
@@ -213,7 +328,10 @@ class _MePageState extends State<MePage> {
                   const SizedBox(height: 12),
                   _buildDownloadCard(context),
                   const SizedBox(height: 12),
-                  _buildLocalLibraryCard(context),
+                  _buildLibraryAccessSection(
+                    context,
+                    horizontal: false,
+                  ),
                   const SizedBox(height: 12),
                   _buildImageFavoriteCard(context),
                   const SizedBox(height: 12),
@@ -290,6 +408,20 @@ class _MePageState extends State<MePage> {
   }
 
   Widget _buildCoverImage(BuildContext context, History item) {
+    final imageProvider = _coverImageProvider(item);
+    if (imageProvider != null) {
+      return Image(
+        image: imageProvider,
+        width: 96,
+        height: 128,
+        fit: BoxFit.cover,
+        filterQuality: FilterQuality.medium,
+        errorBuilder: (context, error, stackTrace) {
+          return _historyPlaceholder(context);
+        },
+      );
+    }
+
     final cover = _coverFile(item);
     if (!cover.existsSync()) {
       return _historyPlaceholder(context);
@@ -313,6 +445,8 @@ class _MePageState extends State<MePage> {
       var comic =
           await dm.getComicOrNullFromCandidates(history.candidateDownloadIds());
       comic ??= await LocalLibraryManager()
+          .findByCandidates(history.candidateDownloadIds());
+      comic ??= await const RemoteLibraryDataSource()
           .findByCandidates(history.candidateDownloadIds());
       if (comic != null) {
         if (!context.mounted) return;
@@ -360,16 +494,40 @@ class _MePageState extends State<MePage> {
   }
 
   Widget _buildLocalLibraryCard(BuildContext context) {
-    final total = LocalLibraryManager().cachedVisibleCount;
+    final total = LocalLibraryManager().cachedAlbumCount;
     return _MePageCard(
       icon: const Icon(Icons.photo_library),
-      title: "本地图集".tl,
-      description: "共 @a 个本地项目".tlParams({"a": total.toString()}),
-      onTap: () => Navigator.of(context)
-          .push(
-            MaterialPageRoute(builder: (_) => const LocalLibraryPage()),
-          )
-          .then((_) => _loadLocalLibraryCount()),
+      title: '图集'.tl,
+      description: '共 @a 个图集'.tlParams({'a': total.toString()}),
+      onTap: () => _openLocalLibraryPage(context),
+    );
+  }
+
+  Widget _buildRemoteLibraryCard(BuildContext context) {
+    final available = _showRemoteLibraryEntry;
+    return _MePageCard(
+      icon: Icon(
+        available ? Icons.cloud_sync_outlined : Icons.cloud_off_outlined,
+      ),
+      title: '远程 · 资源库'.tl,
+      description: available
+          ? '共 @a 个远程项目'.tlParams({'a': _remoteComicCount.toString()})
+          : '未连接远程服务'.tl,
+      onTap: available ? () => _openRemoteLibraryPage(context) : null,
+    );
+  }
+
+  Widget _buildLibraryAccessSection(
+    BuildContext context, {
+    required bool horizontal,
+  }) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Expanded(child: _buildLocalLibraryCard(context)),
+        const SizedBox(width: 12),
+        Expanded(child: _buildRemoteLibraryCard(context)),
+      ],
     );
   }
 
@@ -393,12 +551,113 @@ class _MePageState extends State<MePage> {
   }
 
   Widget _buildToolsCard(BuildContext context) {
-    return _MePageCard(
-      icon: const Icon(Icons.build_circle),
-      title: "工具".tl,
-      description: "本地工具".tl,
-      onTap: () => Navigator.of(context).push(
-        MaterialPageRoute(builder: (_) => const ToolsPage()),
+    final quickActions = [
+      _QuickToolAction(
+        label: '服务信息'.tl,
+        icon: Icons.router_outlined,
+        onTap: () => _openServiceInfoPage(context),
+      ),
+      _QuickToolAction(
+        label: '本地文件'.tl,
+        icon: Icons.folder_open,
+        onTap: () => _openToolsPage(context),
+      ),
+      _QuickToolAction(
+        label: '图集'.tl,
+        icon: Icons.photo_library,
+        onTap: () => _openLocalLibraryPage(context),
+      ),
+      _QuickToolAction(
+        label: 'APP能力'.tl,
+        icon: Icons.cloud_sync_outlined,
+        onTap: () => _openAppCapabilitiesPage(context),
+      ),
+    ];
+
+    return Card.outlined(
+      margin: EdgeInsets.zero,
+      color: Colors.transparent,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          ListTile(
+            leading: const Icon(Icons.build_circle),
+            title: Text("工具".tl),
+            subtitle: Text("使用工具发现更多漫画".tl),
+            trailing: const Icon(Icons.chevron_right),
+            mouseCursor: SystemMouseCursors.click,
+            onTap: () => _openToolsPage(context),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+            child: Material(
+              color: Colors.transparent,
+              child: InkWell(
+                borderRadius: BorderRadius.circular(12),
+                mouseCursor: SystemMouseCursors.click,
+                onTap: () => _openToolsPage(context),
+                child: SizedBox(
+                  width: double.infinity,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 2),
+                    child: Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: quickActions,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _QuickToolAction extends StatelessWidget {
+  const _QuickToolAction({
+    required this.label,
+    required this.icon,
+    required this.onTap,
+  });
+
+  final String label;
+  final IconData icon;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return Material(
+      color: colorScheme.secondaryContainer.withValues(alpha: 0.72),
+      borderRadius: BorderRadius.circular(999),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(999),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                icon,
+                size: 14,
+                color: colorScheme.onSecondaryContainer,
+              ),
+              const SizedBox(width: 4),
+              Text(
+                label,
+                style: TextStyle(
+                  fontSize: 12,
+                  color: colorScheme.onSecondaryContainer,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -409,36 +668,44 @@ class _MePageCard extends StatelessWidget {
     required this.icon,
     required this.title,
     required this.description,
-    required this.onTap,
+    this.onTap,
   });
 
   final Widget icon;
   final String title;
   final String description;
-  final VoidCallback onTap;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(12),
-      child: Card.outlined(
-        margin: EdgeInsets.zero,
-        color: Colors.transparent,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            ListTile(
-              leading: icon,
-              title: Text(title),
-              trailing: const Icon(Icons.chevron_right),
-              mouseCursor: SystemMouseCursors.click,
-            ),
-            Padding(
-              padding: const EdgeInsets.only(left: 16, bottom: 16, top: 8),
-              child: Text(description),
-            ),
-          ],
+    final enabled = onTap != null;
+    return Opacity(
+      opacity: enabled ? 1 : 0.7,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(12),
+        child: Card.outlined(
+          margin: EdgeInsets.zero,
+          color: Colors.transparent,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              ListTile(
+                leading: icon,
+                title: Text(title),
+                trailing: Icon(
+                  enabled ? Icons.chevron_right : Icons.remove,
+                ),
+                mouseCursor: enabled
+                    ? SystemMouseCursors.click
+                    : SystemMouseCursors.basic,
+              ),
+              Padding(
+                padding: const EdgeInsets.only(left: 16, bottom: 16, top: 8),
+                child: Text(description),
+              ),
+            ],
+          ),
         ),
       ),
     );

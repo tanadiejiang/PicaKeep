@@ -51,6 +51,46 @@ part 'reading_settings.dart';
 
 part 'reading_data.dart';
 
+SystemUiOverlayStyle _readerOverlayStyle(bool useDarkBackground) {
+  final isDark = useDarkBackground;
+  return SystemUiOverlayStyle(
+    statusBarColor: Colors.transparent,
+    statusBarIconBrightness: isDark ? Brightness.light : Brightness.dark,
+    statusBarBrightness: isDark ? Brightness.dark : Brightness.light,
+    systemNavigationBarColor: isDark ? Colors.black : Colors.white,
+    systemNavigationBarIconBrightness:
+        isDark ? Brightness.light : Brightness.dark,
+    systemNavigationBarDividerColor: Colors.transparent,
+  );
+}
+
+void _showReaderSystemUi({required bool useDarkBackground}) {
+  SystemChrome.setSystemUIOverlayStyle(
+    _readerOverlayStyle(useDarkBackground),
+  );
+  SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+}
+
+void _hideReaderSystemUi({required bool useDarkBackground}) {
+  SystemChrome.setSystemUIOverlayStyle(
+    _readerOverlayStyle(useDarkBackground),
+  );
+  SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+}
+
+void _syncReaderSystemUi({
+  required bool useDarkBackground,
+  required bool visible,
+}) {
+  WidgetsBinding.instance.addPostFrameCallback((_) {
+    if (visible) {
+      _showReaderSystemUi(useDarkBackground: useDarkBackground);
+    } else {
+      _hideReaderSystemUi(useDarkBackground: useDarkBackground);
+    }
+  });
+}
+
 ///阅读器
 class ComicReadingPage extends StatelessWidget {
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
@@ -112,7 +152,7 @@ class ComicReadingPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return StateBuilder<ComicReadingPageLogic>(initState: (logic) {
-      SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersive);
+      _syncReaderSystemUi(useDarkBackground: useDarkBackground, visible: false);
       if (appdata.settings[14] == "1") {
         setKeepScreenOn();
       }
@@ -172,105 +212,116 @@ class ComicReadingPage extends StatelessWidget {
             StateController.findOrNull<WindowFrameController>()?.resetTheme());
       }
     }, builder: (logic) {
+      _syncReaderSystemUi(
+        useDarkBackground: useDarkBackground,
+        visible: logic.tools,
+      );
       return DefaultTextStyle.merge(
         style: TextStyle(
           color: useDarkBackground ? Colors.white : null,
           fontSize: 16,
         ),
-        child: Scaffold(
-          backgroundColor: useDarkBackground ? Colors.black : null,
-          endDrawerEnableOpenDragGesture: false,
-          key: _scaffoldKey,
-          endDrawer: Drawer(
-            child: buildEpsView(),
-          ),
-          floatingActionButton: buildEpChangeButton(logic),
-          body: StateBuilder<ComicReadingPageLogic>(builder: (logic) {
-            if (logic.isLoading) {
-              history?.readEpisode.add(logic.order);
-              loadInfo(logic);
-              return const Center(
-                child: CircularProgressIndicator(),
-              );
-            } else if (logic.urls.isNotEmpty) {
-              if (logic.readingMethod ==
-                      ReadingMethod.topToBottomContinuously &&
-                  !logic.haveUsedInitialPage &&
-                  initialPage != 0) {
-                Future.microtask(() {
-                  logic.jumpToPage(initialPage);
-                  logic.haveUsedInitialPage = true;
-                });
-              }
-              //监听音量键
-              if (appdata.settings[7] == "1") {
-                if (logic.listenVolume == null) {
-                  logic.listenVolume = ListenVolumeController(
-                      () => logic.jumpToLastPage(),
-                      () => logic.jumpToNextPage());
-                  logic.listenVolume!.listenVolumeChange();
-                }
-              } else if (logic.listenVolume != null) {
-                logic.listenVolume!.stop();
-                logic.listenVolume = null;
-              }
+        child: AnnotatedRegion<SystemUiOverlayStyle>(
+          value: _readerOverlayStyle(useDarkBackground),
+          child: MediaQuery.removePadding(
+            context: context,
+            removeTop: true,
+            child: Scaffold(
+              backgroundColor: useDarkBackground ? Colors.black : null,
+              endDrawerEnableOpenDragGesture: false,
+              key: _scaffoldKey,
+              endDrawer: Drawer(
+                child: buildEpsView(),
+              ),
+              floatingActionButton: buildEpChangeButton(logic),
+              body: StateBuilder<ComicReadingPageLogic>(builder: (logic) {
+                if (logic.isLoading) {
+                  history?.readEpisode.add(logic.order);
+                  loadInfo(logic);
+                  return const Center(
+                    child: CircularProgressIndicator(),
+                  );
+                } else if (logic.urls.isNotEmpty) {
+                  if (logic.readingMethod ==
+                          ReadingMethod.topToBottomContinuously &&
+                      !logic.haveUsedInitialPage &&
+                      initialPage != 0) {
+                    Future.microtask(() {
+                      logic.jumpToPage(initialPage);
+                      logic.haveUsedInitialPage = true;
+                    });
+                  }
+                  //监听音量键
+                  if (appdata.settings[7] == "1") {
+                    if (logic.listenVolume == null) {
+                      logic.listenVolume = ListenVolumeController(
+                          () => logic.jumpToLastPage(),
+                          () => logic.jumpToNextPage());
+                      logic.listenVolume!.listenVolumeChange();
+                    }
+                  } else if (logic.listenVolume != null) {
+                    logic.listenVolume!.stop();
+                    logic.listenVolume = null;
+                  }
 
-              if (appdata.settings[9] == "4") {
-                logic.scrollManager ??= ScrollManager(logic);
-              }
+                  if (appdata.settings[9] == "4") {
+                    logic.scrollManager ??= ScrollManager(logic);
+                  }
 
-              var body = Listener(
-                onPointerMove: TapController.onPointerMove,
-                onPointerUp: TapController.onTapUp,
-                onPointerDown: TapController.onTapDown,
-                behavior: HitTestBehavior.translucent,
-                onPointerCancel: TapController.onTapCancel,
-                child: Stack(
-                  children: [
-                    buildComicView(
-                      logic,
-                      context,
-                      readingData.id,
-                    ),
-                    if (MediaQuery.of(context).platformBrightness ==
-                            Brightness.dark &&
-                        appdata.appSettings.reduceBrightnessInDarkMode)
-                      Positioned(
-                        top: 0,
-                        bottom: 0,
-                        left: 0,
-                        right: 0,
-                        child: IgnorePointer(
-                          child: ColoredBox(
-                            color: Colors.black.withValues(alpha: 0.2),
-                          ),
+                  var body = Listener(
+                    onPointerMove: TapController.onPointerMove,
+                    onPointerUp: TapController.onTapUp,
+                    onPointerDown: TapController.onTapDown,
+                    behavior: HitTestBehavior.translucent,
+                    onPointerCancel: TapController.onTapCancel,
+                    child: Stack(
+                      children: [
+                        buildComicView(
+                          logic,
+                          context,
+                          readingData.id,
                         ),
-                      ),
+                        if (MediaQuery.of(context).platformBrightness ==
+                                Brightness.dark &&
+                            appdata.appSettings.reduceBrightnessInDarkMode)
+                          Positioned(
+                            top: 0,
+                            bottom: 0,
+                            left: 0,
+                            right: 0,
+                            child: IgnorePointer(
+                              child: ColoredBox(
+                                color: Colors.black.withValues(alpha: 0.2),
+                              ),
+                            ),
+                          ),
 
-                    if (appdata.appSettings.showPageInfoInReader)
-                      buildPageInfoText(logic, context),
+                        if (appdata.appSettings.showPageInfoInReader)
+                          buildPageInfoText(logic, context),
 
-                    //底部工具栏
-                    buildBottomToolBar(logic, context, readingData.hasEp),
+                        //底部工具栏
+                        buildBottomToolBar(logic, context, readingData.hasEp),
 
-                    ...buildButtons(logic, context),
+                        ...buildButtons(logic, context),
 
-                    //顶部工具栏
-                    buildTopToolBar(logic, context),
-                  ],
-                ),
-              );
+                        //顶部工具栏
+                        buildTopToolBar(logic, context),
+                      ],
+                    ),
+                  );
 
-              return KeyboardListener(
-                focusNode: logic.focusNode,
-                autofocus: true,
-                onKeyEvent: logic.handleKeyboard,
-                child: body,
-              );
-            } else {
-              return buildErrorView(logic, context);
-            }
-          }),
+                  return KeyboardListener(
+                    focusNode: logic.focusNode,
+                    autofocus: true,
+                    onKeyEvent: logic.handleKeyboard,
+                    child: body,
+                  );
+                } else {
+                  return buildErrorView(logic, context);
+                }
+              }),
+            ),
+          ),
         ),
       );
     });

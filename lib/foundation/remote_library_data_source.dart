@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:flutter/widgets.dart';
 import 'package:picakeep/base.dart';
+import 'package:picakeep/foundation/app.dart';
 import 'package:picakeep/foundation/app_runtime_mode.dart';
 import 'package:picakeep/foundation/download_model.dart';
 import 'package:picakeep/foundation/local_favorites.dart';
@@ -83,6 +84,131 @@ class RemoteLibraryEpisode {
       };
 }
 
+class RemoteLibraryRootSummary {
+  const RemoteLibraryRootSummary({
+    required this.id,
+    required this.title,
+    required this.path,
+    required this.exists,
+    required this.itemCount,
+    required this.totalBytes,
+  });
+
+  final String id;
+  final String title;
+  final String path;
+  final bool exists;
+  final int itemCount;
+  final int totalBytes;
+
+  bool get isManagedDownloadRoot =>
+      id == 'current_download' || id == 'original_download';
+
+  bool get isCustomLibraryRoot => id.startsWith('custom_');
+
+  String get displayTitle {
+    final normalized = path.replaceAll('\\', '/');
+    final parts =
+        normalized.split('/').where((entry) => entry.isNotEmpty).toList();
+    final fallback = title.trim();
+    if (parts.isEmpty) {
+      return fallback.isNotEmpty ? fallback : id;
+    }
+    final leaf = parts.last.trim();
+    return leaf.isNotEmpty ? leaf : (fallback.isNotEmpty ? fallback : id);
+  }
+
+  factory RemoteLibraryRootSummary.fromJson(Map<String, dynamic> json) {
+    return RemoteLibraryRootSummary(
+      id: _readText(json['id']),
+      title: _readText(json['title'], fallback: '远程目录'),
+      path: _readText(json['path']),
+      exists: json['exists'] != false,
+      itemCount: _readInt(json['itemCount']) ?? 0,
+      totalBytes: _readInt(json['totalBytes']) ?? 0,
+    );
+  }
+}
+
+class RemoteLibraryRootItem extends DownloadedItem {
+  RemoteLibraryRootItem({
+    required this.root,
+    this.coverUrl,
+  }) {
+    comicSize = root.totalBytes > 0 ? root.totalBytes / (1024 * 1024) : null;
+  }
+
+  final RemoteLibraryRootSummary root;
+  final String? coverUrl;
+
+  @override
+  double? comicSize;
+
+  @override
+  DownloadType get type => DownloadType.other;
+
+  @override
+  String get name => root.displayTitle;
+
+  @override
+  List<String> get eps => const [];
+
+  @override
+  List<int> get downloadedEps => const [];
+
+  @override
+  String get id => 'remote_root::${root.id}';
+
+  @override
+  String get subTitle {
+    final count = root.itemCount;
+    if (root.isManagedDownloadRoot) {
+      return '$count 部漫画';
+    }
+    return '$count 个项目';
+  }
+
+  @override
+  List<String> get tags => const [];
+
+  @override
+  String get sourceDisplayName =>
+      root.isManagedDownloadRoot ? '远程已下载' : '远程资源库';
+
+  @override
+  bool get canDelete => false;
+
+  @override
+  String? get fileSystemPath => root.path;
+
+  @override
+  String? get localCoverPath => null;
+
+  ImageProvider<Object>? get coverImageProvider {
+    final trimmed = coverUrl?.trim() ?? '';
+    if (trimmed.isEmpty) {
+      return null;
+    }
+    return NetworkImage(trimmed);
+  }
+
+  @override
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'rootId': root.id,
+        'title': name,
+        'path': root.path,
+        'itemCount': root.itemCount,
+        'totalBytes': root.totalBytes,
+        'coverUrl': coverUrl,
+      };
+
+  @override
+  Widget createReadingPage({int? ep, int? page}) {
+    throw const RemoteLibraryDataSourceException('远程目录不支持直接阅读');
+  }
+}
+
 class RemoteLibraryComicItem extends DownloadedItem {
   RemoteLibraryComicItem({
     required this.client,
@@ -96,6 +222,9 @@ class RemoteLibraryComicItem extends DownloadedItem {
     required this.episodesData,
     required this.imageCount,
     required this.totalBytes,
+    this.subtitle = '',
+    this.metadataTags = const <String>[],
+    this.metadataSourceDisplayName = '',
   }) {
     comicSize = totalBytes > 0 ? totalBytes / (1024 * 1024) : null;
     directory = null;
@@ -113,6 +242,9 @@ class RemoteLibraryComicItem extends DownloadedItem {
   final List<RemoteLibraryEpisode> episodesData;
   final int imageCount;
   final int totalBytes;
+  final String subtitle;
+  final List<String> metadataTags;
+  final String metadataSourceDisplayName;
 
   @override
   double? comicSize;
@@ -120,6 +252,11 @@ class RemoteLibraryComicItem extends DownloadedItem {
   bool get hasMultipleEpisodes => episodesData.length > 1;
 
   bool get hasCompletePages => episodesData.every((episode) => episode.hasPages);
+
+  bool get isManagedDownloadRoot =>
+      rootId == 'current_download' || rootId == 'original_download';
+
+  bool get isCustomLibraryRoot => rootId.startsWith('custom_');
 
   ImageProvider<Object>? get coverImageProvider {
     if (coverUrl.trim().isEmpty) {
@@ -131,6 +268,27 @@ class RemoteLibraryComicItem extends DownloadedItem {
   List<String> get pageUrls => [
         for (final episode in episodesData) ...episode.pages,
       ];
+
+  Iterable<String> get candidateValues sync* {
+    yield remoteId;
+    yield title;
+    if (detailUrl.isNotEmpty) {
+      yield detailUrl;
+    }
+    if (remotePath.isNotEmpty) {
+      yield remotePath;
+    }
+  }
+
+  bool matchesCandidates(Set<String> candidates) {
+    for (final value in candidateValues) {
+      final normalized = value.trim();
+      if (normalized.isNotEmpty && candidates.contains(normalized)) {
+        return true;
+      }
+    }
+    return false;
+  }
 
   RemoteLibraryEpisode? episodeForReading(int ep) {
     if (episodesData.isEmpty) {
@@ -167,6 +325,9 @@ class RemoteLibraryComicItem extends DownloadedItem {
       episodesData: episodesData ?? this.episodesData,
       imageCount: imageCount,
       totalBytes: totalBytes,
+      subtitle: subtitle,
+      metadataTags: metadataTags,
+      metadataSourceDisplayName: metadataSourceDisplayName,
     );
   }
 
@@ -199,6 +360,12 @@ class RemoteLibraryComicItem extends DownloadedItem {
           episodes.fold<int>(0, (sum, episode) => sum + episode.imageCount),
       totalBytes: _readInt(json['totalBytes']) ??
           episodes.fold<int>(0, (sum, episode) => sum + episode.totalBytes),
+      subtitle: _readText(
+        json['subtitle'],
+        fallback: _readText(json['author']),
+      ),
+      metadataTags: _readStringList(json['tags']),
+      metadataSourceDisplayName: _readText(json['sourceDisplayName']),
     );
   }
 
@@ -219,20 +386,38 @@ class RemoteLibraryComicItem extends DownloadedItem {
   String get id => remoteId;
 
   @override
-  String get subTitle =>
-      hasMultipleEpisodes ? '${episodesData.length} 个章节' : '$imageCount 张图片';
+  String get subTitle {
+    final label = subtitle.trim();
+    if (label.isNotEmpty) {
+      return label;
+    }
+    return hasMultipleEpisodes ? '${episodesData.length} 个章节' : '$imageCount 张图片';
+  }
 
   @override
-  List<String> get tags => const [];
+  List<String> get tags => metadataTags;
 
   @override
-  String get sourceDisplayName => sourceTitle;
+  String get sourceDisplayName {
+    if (isCustomLibraryRoot) {
+      return '图集';
+    }
+    final metadataLabel = metadataSourceDisplayName.trim();
+    if (metadataLabel.isNotEmpty) {
+      return metadataLabel;
+    }
+    final label = sourceTitle.trim();
+    if (label.isNotEmpty) {
+      return label;
+    }
+    return isManagedDownloadRoot ? '远程已下载' : '远程资源';
+  }
 
   @override
   bool get canDelete => false;
 
   @override
-  String? get fileSystemPath => null;
+  String? get fileSystemPath => remotePath.trim().isEmpty ? null : remotePath;
 
   @override
   String? get localCoverPath => null;
@@ -244,6 +429,9 @@ class RemoteLibraryComicItem extends DownloadedItem {
         'rootId': rootId,
         'title': title,
         'sourceTitle': sourceTitle,
+        'sourceDisplayName': metadataSourceDisplayName,
+        'subtitle': subtitle,
+        'tags': metadataTags,
         'path': remotePath,
         'coverUrl': coverUrl,
         'detailUrl': detailUrl,
@@ -343,6 +531,11 @@ class RemoteLibraryReadingData extends ReadingData {
 
   @override
   Future<List<String>> loadEpNetwork(int ep) async {
+    final cachedEpisode = item.episodeForReading(ep);
+    if (cachedEpisode != null && cachedEpisode.hasPages) {
+      return cachedEpisode.pages;
+    }
+
     final detail = await item.client.fetchItemDetail(item.id);
     final episode = detail.episodeForReading(ep);
     if (episode == null) {
@@ -361,11 +554,45 @@ class RemoteLibraryReadingData extends ReadingData {
       'remote::$ep::$page::${item.client.resolveUrlString(url)}';
 }
 
+class _RemoteLibrarySnapshot {
+  const _RemoteLibrarySnapshot({
+    required this.roots,
+    required this.items,
+  });
+
+  final List<RemoteLibraryRootSummary> roots;
+  final List<RemoteLibraryComicItem> items;
+}
+
 class RemoteLibraryDataSource {
   const RemoteLibraryDataSource();
 
   Future<List<RemoteLibraryComicItem>> fetchItems() async {
     return RemoteLibraryClient.fromCurrentSettings().fetchItems();
+  }
+
+  Future<List<RemoteLibraryComicItem>> fetchItemsForRoot(String rootId) async {
+    return RemoteLibraryClient.fromCurrentSettings().fetchItemsForRoot(rootId);
+  }
+
+  Future<List<RemoteLibraryRootItem>> fetchRootItems({
+    bool managedDownloadOnly = false,
+    bool customLibraryOnly = false,
+  }) async {
+    return RemoteLibraryClient.fromCurrentSettings().fetchRootItems(
+      managedDownloadOnly: managedDownloadOnly,
+      customLibraryOnly: customLibraryOnly,
+    );
+  }
+
+  Future<RemoteLibraryComicItem?> findByCandidates(
+    Iterable<String> candidates, {
+    bool fetchDetail = false,
+  }) {
+    return RemoteLibraryClient.fromCurrentSettings().findItemByCandidates(
+      candidates,
+      fetchDetail: fetchDetail,
+    );
   }
 }
 
@@ -373,11 +600,42 @@ class RemoteLibraryClient {
   RemoteLibraryClient._({
     required this.baseUrl,
     required this.baseUri,
-  });
+  }) : _httpClient = HttpClient()
+          ..connectionTimeout = const Duration(seconds: 5)
+          ..idleTimeout = const Duration(seconds: 20)
+          ..maxConnectionsPerHost = 12;
+
+  static final Map<String, RemoteLibraryClient> _instances = {};
 
   final String baseUrl;
   final Uri baseUri;
+  final HttpClient _httpClient;
   final Map<String, RemoteLibraryComicItem> _detailCache = {};
+  final Map<String, Future<RemoteLibraryComicItem>> _pendingDetailRequests = {};
+  Future<_RemoteLibrarySnapshot>? _pendingSnapshotRequest;
+  _RemoteLibrarySnapshot? _snapshotCache;
+  int? _lastLocalDataVersion;
+  int? _lastServiceConfigVersion;
+  int? _lastServiceRuntimeVersion;
+
+  void _invalidateCachesForAppStateIfNeeded() {
+    final localDataVersion = App.localDataVersion.value;
+    final serviceConfigVersion = App.serviceConfigVersion.value;
+    final serviceRuntimeVersion = App.serviceRuntimeVersion.value;
+    final shouldInvalidate = _lastLocalDataVersion != localDataVersion ||
+        _lastServiceConfigVersion != serviceConfigVersion ||
+        _lastServiceRuntimeVersion != serviceRuntimeVersion;
+    _lastLocalDataVersion = localDataVersion;
+    _lastServiceConfigVersion = serviceConfigVersion;
+    _lastServiceRuntimeVersion = serviceRuntimeVersion;
+    if (!shouldInvalidate) {
+      return;
+    }
+    _snapshotCache = null;
+    _pendingSnapshotRequest = null;
+    _detailCache.clear();
+    _pendingDetailRequests.clear();
+  }
 
   factory RemoteLibraryClient.fromCurrentSettings() {
     final rawAddress = appdata.settings[remoteServerAddressSettingIndex];
@@ -389,27 +647,206 @@ class RemoteLibraryClient {
     if (baseUri == null || !baseUri.hasAuthority) {
       throw const RemoteLibraryDataSourceException('当前远程服务地址格式无效');
     }
-    return RemoteLibraryClient._(
-      baseUrl: normalizedAddress,
-      baseUri: baseUri,
+    return _instances.putIfAbsent(
+      normalizedAddress,
+      () => RemoteLibraryClient._(
+        baseUrl: normalizedAddress,
+        baseUri: baseUri,
+      ),
     );
   }
 
-  Future<List<RemoteLibraryComicItem>> fetchItems() async {
-    final payload = await _getJsonMap('/api/library/items');
-    final items = payload['items'];
-    if (items is! List) {
-      return const [];
+  Future<List<RemoteLibraryComicItem>> fetchItems({bool forceRefresh = false}) async {
+    return (await _fetchSnapshot(forceRefresh: forceRefresh)).items;
+  }
+
+  Future<List<RemoteLibraryComicItem>> fetchItemsForRoot(
+    String rootId, {
+    bool forceRefresh = false,
+  }) async {
+    final normalized = rootId.trim();
+    if (normalized.isEmpty) {
+      return const <RemoteLibraryComicItem>[];
     }
+    final items = await fetchItems(forceRefresh: forceRefresh);
     return items
-        .whereType<Map>()
-        .map(
-          (item) => RemoteLibraryComicItem.fromJson(
-            item.map((key, value) => MapEntry(key.toString(), value)),
-            this,
-          ),
-        )
+        .where((item) => item.rootId == normalized)
         .toList(growable: false);
+  }
+
+  Future<List<RemoteLibraryRootItem>> fetchRootItems({
+    bool managedDownloadOnly = false,
+    bool customLibraryOnly = false,
+    bool forceRefresh = false,
+  }) async {
+    final snapshot = await _fetchSnapshot(forceRefresh: forceRefresh);
+    return _buildRootItemsFromSnapshot(
+      snapshot,
+      managedDownloadOnly: managedDownloadOnly,
+      customLibraryOnly: customLibraryOnly,
+    );
+  }
+
+  Future<_RemoteLibrarySnapshot> _fetchSnapshot({
+    bool forceRefresh = false,
+  }) async {
+    _invalidateCachesForAppStateIfNeeded();
+    if (!forceRefresh) {
+      final cached = _snapshotCache;
+      if (cached != null) {
+        return cached;
+      }
+      final pending = _pendingSnapshotRequest;
+      if (pending != null) {
+        return pending;
+      }
+    }
+
+    final request = _fetchSnapshotFromNetwork();
+    _pendingSnapshotRequest = request;
+    try {
+      final snapshot = await request;
+      _snapshotCache = snapshot;
+      for (final item in snapshot.items) {
+        _detailCache[item.id] = item;
+      }
+      return snapshot;
+    } finally {
+      if (identical(_pendingSnapshotRequest, request)) {
+        _pendingSnapshotRequest = null;
+      }
+    }
+  }
+
+  Future<_RemoteLibrarySnapshot> _fetchSnapshotFromNetwork() async {
+    final payload = await _getJsonMap('/api/library/items');
+    final itemsValue = payload['items'];
+    final items = itemsValue is! List
+        ? const <RemoteLibraryComicItem>[]
+        : itemsValue
+            .whereType<Map>()
+            .map(
+              (item) => RemoteLibraryComicItem.fromJson(
+                item.map((key, value) => MapEntry(key.toString(), value)),
+                this,
+              ),
+            )
+            .toList(growable: false);
+    final roots = _readRoots(payload['roots'], items);
+    return _RemoteLibrarySnapshot(
+      roots: roots,
+      items: items,
+    );
+  }
+
+  List<RemoteLibraryRootItem> _buildRootItemsFromSnapshot(
+    _RemoteLibrarySnapshot snapshot, {
+    required bool managedDownloadOnly,
+    required bool customLibraryOnly,
+  }) {
+    final roots = snapshot.roots.where((root) {
+      if (!root.exists || root.itemCount <= 0) {
+        return false;
+      }
+      if (managedDownloadOnly && !root.isManagedDownloadRoot) {
+        return false;
+      }
+      if (customLibraryOnly && !root.isCustomLibraryRoot) {
+        return false;
+      }
+      return true;
+    }).toList(growable: false);
+
+    return roots.map((root) {
+      String? coverUrl;
+      for (final item in snapshot.items) {
+        if (item.rootId != root.id) {
+          continue;
+        }
+        final value = item.coverUrl.trim();
+        if (value.isNotEmpty) {
+          coverUrl = value;
+          break;
+        }
+      }
+      return RemoteLibraryRootItem(root: root, coverUrl: coverUrl);
+    }).toList(growable: false);
+  }
+
+  List<RemoteLibraryRootSummary> _readRoots(
+    Object? value,
+    List<RemoteLibraryComicItem> items,
+  ) {
+    if (value is List) {
+      final roots = value
+          .whereType<Map>()
+          .map(
+            (root) => RemoteLibraryRootSummary.fromJson(
+              root.map((key, value) => MapEntry(key.toString(), value)),
+            ),
+          )
+          .toList(growable: false);
+      if (roots.isNotEmpty) {
+        return roots;
+      }
+    }
+    return _deriveRoots(items);
+  }
+
+  List<RemoteLibraryRootSummary> _deriveRoots(
+    List<RemoteLibraryComicItem> items,
+  ) {
+    final grouped = <String, List<RemoteLibraryComicItem>>{};
+    for (final item in items) {
+      grouped.putIfAbsent(item.rootId, () => <RemoteLibraryComicItem>[]).add(item);
+    }
+    final roots = <RemoteLibraryRootSummary>[];
+    grouped.forEach((rootId, groupItems) {
+      if (groupItems.isEmpty) {
+        return;
+      }
+      final first = groupItems.first;
+      roots.add(
+        RemoteLibraryRootSummary(
+          id: rootId,
+          title: first.sourceTitle,
+          path: first.remotePath,
+          exists: true,
+          itemCount: groupItems.length,
+          totalBytes: groupItems.fold<int>(
+            0,
+            (sum, item) => sum + item.totalBytes,
+          ),
+        ),
+      );
+    });
+    roots.sort((a, b) => a.displayTitle.compareTo(b.displayTitle));
+    return roots.toList(growable: false);
+  }
+
+  Future<RemoteLibraryComicItem?> findItemByCandidates(
+    Iterable<String> candidates, {
+    bool fetchDetail = false,
+  }) async {
+    final normalized = candidates
+        .map((candidate) => candidate.trim())
+        .where((candidate) => candidate.isNotEmpty)
+        .toSet();
+    if (normalized.isEmpty) {
+      return null;
+    }
+
+    final items = await fetchItems();
+    for (final item in items) {
+      if (!item.matchesCandidates(normalized)) {
+        continue;
+      }
+      if (fetchDetail) {
+        return await fetchItemDetail(item.id);
+      }
+      return item;
+    }
+    return null;
   }
 
   Future<RemoteLibraryComicItem> fetchItemDetail(String itemId) async {
@@ -417,6 +854,24 @@ class RemoteLibraryClient {
     if (cached != null && cached.hasCompletePages) {
       return cached;
     }
+
+    final pending = _pendingDetailRequests[itemId];
+    if (pending != null) {
+      return pending;
+    }
+
+    final request = _fetchItemDetailFromNetwork(itemId);
+    _pendingDetailRequests[itemId] = request;
+    try {
+      return await request;
+    } finally {
+      if (identical(_pendingDetailRequests[itemId], request)) {
+        _pendingDetailRequests.remove(itemId);
+      }
+    }
+  }
+
+  Future<RemoteLibraryComicItem> _fetchItemDetailFromNetwork(String itemId) async {
     final payload = await _getJsonMap(
       '/api/library/items/${Uri.encodeComponent(itemId)}',
     );
@@ -426,9 +881,8 @@ class RemoteLibraryClient {
   }
 
   Stream<List<int>> loadImage(String url) async* {
-    final client = HttpClient()..connectionTimeout = const Duration(seconds: 5);
     try {
-      final request = await client.getUrl(resolveUri(url)).timeout(
+      final request = await _httpClient.getUrl(resolveUri(url)).timeout(
             const Duration(seconds: 5),
           );
       final response = await request.close().timeout(
@@ -440,8 +894,8 @@ class RemoteLibraryClient {
         );
       }
       yield* response;
-    } finally {
-      client.close(force: true);
+    } on SocketException {
+      throw const RemoteLibraryDataSourceException('无法连接远程图片资源');
     }
   }
 
@@ -467,9 +921,8 @@ class RemoteLibraryClient {
   }
 
   Future<Map<String, dynamic>> _getJsonMap(String path) async {
-    final client = HttpClient()..connectionTimeout = const Duration(seconds: 5);
     try {
-      final request = await client.getUrl(resolveUri(path)).timeout(
+      final request = await _httpClient.getUrl(resolveUri(path)).timeout(
             const Duration(seconds: 5),
           );
       request.headers.set(HttpHeaders.acceptHeader, 'application/json');
@@ -498,8 +951,6 @@ class RemoteLibraryClient {
       throw const RemoteLibraryDataSourceException('无法连接远程服务');
     } on FormatException {
       throw const RemoteLibraryDataSourceException('服务端返回了不可解析的数据');
-    } finally {
-      client.close(force: true);
     }
   }
 }

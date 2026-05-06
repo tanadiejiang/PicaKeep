@@ -128,6 +128,7 @@ class Appdata {
     "", //98 客户端服务端地址
     "mdns", //99 局域网发现方式
     "9527", //100 服务端后台端口
+    "0", //101 安卓 Root 浏览模式
   ];
 
   List<String> implicitData = [
@@ -224,6 +225,8 @@ class Appdata {
         settings[serviceDiscoveryModeSettingIndex]);
     settings[serviceAdminPortSettingIndex] =
         normalizeServiceAdminPortValue(settings[serviceAdminPortSettingIndex]);
+    settings[androidRootModeSettingIndex] =
+        normalizeAndroidRootMode(settings[androidRootModeSettingIndex]);
     setManagedDataSourceMode(settings[managedDataSourceModeSettingIndex]);
   }
 

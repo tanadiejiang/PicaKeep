@@ -5,12 +5,15 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:picakeep/base.dart';
 import 'package:picakeep/foundation/app.dart';
+import 'package:picakeep/foundation/app_runtime_mode.dart';
 import 'package:picakeep/foundation/download.dart';
 import 'package:picakeep/foundation/download_model.dart';
 import 'package:picakeep/foundation/local_data_source.dart';
 import 'package:picakeep/foundation/local_favorites.dart';
 import 'package:picakeep/foundation/local_library.dart';
 import 'package:picakeep/foundation/local_library_settings.dart';
+import 'package:picakeep/foundation/remote_library_data_source.dart';
+import 'package:picakeep/foundation/service_data_source.dart';
 import 'package:picakeep/foundation/ui_mode.dart';
 import 'package:picakeep/tools/translations.dart';
 import 'package:picakeep/components/comic_tile.dart';
@@ -23,6 +26,17 @@ import 'package:picakeep/tools/tags_translation.dart';
 import 'local_comic_detail_page.dart';
 
 void _toComicInfoPage(BuildContext context, DownloadedItem comic) {
+  if (comic is RemoteLibraryRootItem) {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => DownloadPage(
+          remoteRootId: comic.root.id,
+          title: comic.name,
+        ),
+      ),
+    );
+    return;
+  }
   Navigator.of(context).push(MaterialPageRoute(
     builder: (_) => LocalComicDetailPage(comic: comic),
   ));
@@ -134,12 +148,110 @@ bool _matchesDownloadedKeyword(DownloadedItem item, String keyword) {
   return words.every((word) => terms.any((term) => term.contains(word)));
 }
 
+String _downloadedItemAuthor(DownloadedItem item) {
+  final direct = item.subTitle.trim();
+  if (direct.isNotEmpty) {
+    return direct;
+  }
+  try {
+    final json = item.toJson();
+    for (final key in const ['subtitle', 'subTitle', 'author']) {
+      final value = json[key]?.toString().trim();
+      if (value != null && value.isNotEmpty) {
+        return value;
+      }
+    }
+    final comicItem = json['comicItem'];
+    if (comicItem is Map) {
+      for (final key in const ['subtitle', 'subTitle', 'author']) {
+        final value = comicItem[key]?.toString().trim();
+        if (value != null && value.isNotEmpty) {
+          return value;
+        }
+      }
+    }
+  } catch (_) {}
+  return '';
+}
+
+List<String> _downloadedItemTags(DownloadedItem item) {
+  if (item.tags.isNotEmpty) {
+    return item.tags;
+  }
+  try {
+    final json = item.toJson();
+    for (final key in const ['tags', 'tagList', 'metadataTags']) {
+      final raw = json[key];
+      if (raw is List) {
+        final values = raw
+            .map((entry) => entry.toString().trim())
+            .where((entry) => entry.isNotEmpty)
+            .toList(growable: false);
+        if (values.isNotEmpty) {
+          return values;
+        }
+      }
+    }
+    final comicItem = json['comicItem'];
+    if (comicItem is Map) {
+      for (final key in const ['tags', 'tagList']) {
+        final raw = comicItem[key];
+        if (raw is List) {
+          final values = raw
+              .map((entry) => entry.toString().trim())
+              .where((entry) => entry.isNotEmpty)
+              .toList(growable: false);
+          if (values.isNotEmpty) {
+            return values;
+          }
+        }
+      }
+    }
+  } catch (_) {}
+  return const <String>[];
+}
+
+String _downloadedItemSource(DownloadedItem item) {
+  final direct = item.sourceDisplayName.trim();
+  if (direct.isNotEmpty) {
+    return direct;
+  }
+  try {
+    final json = item.toJson();
+    for (final key in const ['sourceDisplayName', 'metadataSourceDisplayName', 'sourceTitle']) {
+      final value = json[key]?.toString().trim();
+      if (value != null && value.isNotEmpty) {
+        return value;
+      }
+    }
+  } catch (_) {}
+  return downloadTypeDisplayName(item.type);
+}
+
+enum _DownloadedLibraryView {
+  local,
+  aggregate,
+  remote,
+}
+
+String _downloadedLibraryViewLabel(_DownloadedLibraryView view) {
+  switch (view) {
+    case _DownloadedLibraryView.local:
+      return '本地已下载';
+    case _DownloadedLibraryView.aggregate:
+      return '聚合';
+    case _DownloadedLibraryView.remote:
+      return '远程 · 已下载';
+  }
+}
+
 class _DownloadedPageComicTile extends DownloadedComicTile {
   const _DownloadedPageComicTile({
     required this.comicId,
     required super.name,
     required super.author,
     required super.imagePath,
+    super.imageProvider,
     required super.type,
     required super.tag,
     required super.size,
@@ -155,6 +267,20 @@ class _DownloadedPageComicTile extends DownloadedComicTile {
 }
 
 class DownloadPageLogic extends StateController {
+  DownloadPageLogic({
+    this.remoteRootId,
+    this.pageTitle,
+  }) {
+    if (remoteRootId?.trim().isNotEmpty == true) {
+      _view = _DownloadedLibraryView.remote;
+    }
+  }
+
+  final String? remoteRootId;
+  final String? pageTitle;
+  final RemoteLibraryDataSource _remoteDataSource =
+      const RemoteLibraryDataSource();
+
   bool loading = true;
   bool selecting = false;
   int selectedNum = 0;
@@ -166,39 +292,82 @@ class DownloadPageLogic extends StateController {
   String keyword = "";
   String keyword_ = "";
   VoidCallback? _localDataListener;
+  VoidCallback? _serviceStateListener;
   bool _isRefreshingFromLocalData = false;
+  _DownloadedLibraryView _view = _DownloadedLibraryView.local;
+  bool remoteAvailable = false;
+
+  Future<void> _refreshFromNotifier() async {
+    if (_isRefreshingFromLocalData) {
+      return;
+    }
+    _isRefreshingFromLocalData = true;
+    try {
+      loading = true;
+      update();
+      await DownloadManager().init();
+      await reload();
+    } finally {
+      _isRefreshingFromLocalData = false;
+    }
+  }
 
   void bindLocalDataRefresh() {
-    _localDataListener ??= () async {
-      if (_isRefreshingFromLocalData) {
-        return;
-      }
-      _isRefreshingFromLocalData = true;
-      try {
-        loading = true;
-        update();
-        await DownloadManager().init();
-        await reload();
-      } finally {
-        _isRefreshingFromLocalData = false;
-      }
-    };
+    _localDataListener ??= _refreshFromNotifier;
+    _serviceStateListener ??= _refreshFromNotifier;
     App.localDataVersion.addListener(_localDataListener!);
+    App.serviceConfigVersion.addListener(_serviceStateListener!);
+    App.serviceRuntimeVersion.addListener(_serviceStateListener!);
   }
 
   void unbindLocalDataRefresh() {
-    final listener = _localDataListener;
-    if (listener == null) {
-      return;
+    final localListener = _localDataListener;
+    if (localListener != null) {
+      App.localDataVersion.removeListener(localListener);
+      _localDataListener = null;
     }
-    App.localDataVersion.removeListener(listener);
-    _localDataListener = null;
+
+    final serviceListener = _serviceStateListener;
+    if (serviceListener != null) {
+      App.serviceConfigVersion.removeListener(serviceListener);
+      App.serviceRuntimeVersion.removeListener(serviceListener);
+      _serviceStateListener = null;
+    }
   }
 
   bool get _usesManagedDownloadSources =>
       normalizeManagedDataSourceMode(
           appdata.settings[managedDataSourceModeSettingIndex]) !=
       managedDataSourceModeCurrentOnly;
+
+  bool get _isClientMode =>
+      normalizeAppRuntimeMode(appdata.settings[appRuntimeModeSettingIndex]) ==
+      appRuntimeModeClient;
+
+  bool get _isRemoteRootPage => remoteRootId?.trim().isNotEmpty == true;
+
+  bool get showSourceSelector => remoteAvailable && !_isRemoteRootPage;
+
+  void _setView(_DownloadedLibraryView nextView) {
+    if (_view == nextView) {
+      return;
+    }
+    _view = nextView;
+    refresh();
+  }
+
+  Future<bool> _checkRemoteAvailability() async {
+    if (!_isClientMode) {
+      return false;
+    }
+    try {
+      final snapshot =
+          await RuntimeServiceDataSourceResolver.current().fetchSnapshot();
+      return snapshot.connectionState == ServiceConnectionState.online;
+    } catch (_) {
+      return false;
+    }
+  }
 
   void change() {
     loading = !loading;
@@ -214,7 +383,7 @@ class DownloadPageLogic extends StateController {
       return;
     }
     keyword_ = keyword;
-    comics.clear();
+    comics = <DownloadedItem>[];
     if (keyword == "") {
       comics.addAll(baseComics);
     } else {
@@ -232,9 +401,23 @@ class DownloadPageLogic extends StateController {
     searchMode = false;
     selecting = false;
     selectedNum = 0;
-    selected.clear();
-    comics.clear();
-    change();
+    selected = <bool>[];
+    comics = <DownloadedItem>[];
+    baseComics = <DownloadedItem>[];
+    loading = true;
+    update();
+    unawaited(_reloadVisibleComics());
+  }
+
+  Future<void> _reloadVisibleComics() async {
+    try {
+      await DownloadManager().init();
+      await reload();
+    } catch (e) {
+      loading = false;
+      update();
+      print('[PicaKeep] DownloadPage reload failed: $e');
+    }
   }
 
   Future<void> reload() async {
@@ -254,14 +437,42 @@ class DownloadPageLogic extends StateController {
     if (appdata.settings[26][1] == "1") {
       direction = 'asc';
     }
-    comics = await _loadComics(order, direction);
-    baseComics = comics.toList();
+    remoteAvailable = await _checkRemoteAvailability();
+    if (!remoteAvailable && _view != _DownloadedLibraryView.local) {
+      _view = _DownloadedLibraryView.local;
+    }
+    comics = List<DownloadedItem>.from(await _loadComics(order, direction));
+    baseComics = List<DownloadedItem>.from(comics);
     resetSelected(comics.length);
     loading = false;
     update();
   }
 
   Future<List<DownloadedItem>> _loadComics(
+      String order, String direction) async {
+    final localItems = await _loadLocalComics(order, direction);
+    if (!remoteAvailable) {
+      return localItems;
+    }
+
+    switch (_view) {
+      case _DownloadedLibraryView.local:
+        return localItems;
+      case _DownloadedLibraryView.aggregate:
+        try {
+          final remoteItems = await _loadRemoteComics(order, direction);
+          final merged = <DownloadedItem>[...localItems, ...remoteItems];
+          _sortItems(merged, order, direction);
+          return merged;
+        } catch (_) {
+          return localItems;
+        }
+      case _DownloadedLibraryView.remote:
+        return _loadRemoteComics(order, direction);
+    }
+  }
+
+  Future<List<DownloadedItem>> _loadLocalComics(
       String order, String direction) async {
     if (!_usesManagedDownloadSources) {
       await DownloadManager().init();
@@ -273,6 +484,19 @@ class DownloadPageLogic extends StateController {
         items.where((item) => !item.isAlbum).cast<DownloadedItem>().toList();
     _sortItems(downloads, order, direction);
     return downloads;
+  }
+
+  Future<List<DownloadedItem>> _loadRemoteComics(
+      String order, String direction) async {
+    final rootId = remoteRootId?.trim() ?? '';
+    final downloads = rootId.isNotEmpty
+        ? await _remoteDataSource.fetchItemsForRoot(rootId)
+        : (await _remoteDataSource.fetchItems())
+            .where((item) => item.isManagedDownloadRoot)
+            .toList(growable: false);
+    final items = downloads.cast<DownloadedItem>().toList();
+    _sortItems(items, order, direction);
+    return items;
   }
 
   void _sortItems(List<DownloadedItem> items, String order, String direction) {
@@ -298,10 +522,17 @@ class DownloadPageLogic extends StateController {
   }
 
   bool canDeleteItem(DownloadedItem item) {
-    return item.canDelete && !_usesManagedDownloadSources;
+    return item.canDelete &&
+        !_usesManagedDownloadSources &&
+        item is! RemoteLibraryComicItem &&
+        item is! RemoteLibraryRootItem;
   }
 
   Future<int> rescanDisk() async {
+    if (_view == _DownloadedLibraryView.remote) {
+      await reload();
+      return 0;
+    }
     if (!_usesManagedDownloadSources) {
       await DownloadManager().init();
       final count = DownloadManager().scanDirectoryForComics();
@@ -314,28 +545,37 @@ class DownloadPageLogic extends StateController {
   }
 
   String emptyStatePathText() {
+    if (_view == _DownloadedLibraryView.remote) {
+      return '远程服务'.tl;
+    }
     final mode = normalizeManagedDataSourceMode(
       appdata.settings[managedDataSourceModeSettingIndex],
     );
     final currentPath = (DownloadManager().path ?? appdata.settings[22]).trim();
     final originalPath =
         appdata.settings[originalDownloadDirSettingIndex].trim();
-    switch (mode) {
-      case managedDataSourceModeCurrentAndOriginal:
-        return [
+    final localText = switch (mode) {
+      managedDataSourceModeCurrentAndOriginal => [
           if (currentPath.isNotEmpty) currentPath,
           if (originalPath.isNotEmpty && originalPath != currentPath)
             originalPath,
-        ].join(' / ');
-      case managedDataSourceModeOriginalOnly:
-        return originalPath;
-      case managedDataSourceModeCurrentOnly:
-      default:
-        return currentPath;
+        ].join(' / '),
+      managedDataSourceModeOriginalOnly => originalPath,
+      _ => currentPath,
+    };
+    if (_view == _DownloadedLibraryView.aggregate && remoteAvailable) {
+      return [
+        if (localText.isNotEmpty) localText,
+        '远程服务'.tl,
+      ].join(' / ');
     }
+    return localText;
   }
 
   File coverFor(DownloadedItem item) {
+    if (item is RemoteLibraryComicItem) {
+      return File('');
+    }
     if (item is LocalLibraryComicItem) {
       final path = item.localCoverPath?.trim();
       if (path != null && path.isNotEmpty) {
@@ -345,7 +585,23 @@ class DownloadPageLogic extends StateController {
     return DownloadManager().getCover(item.id);
   }
 
+  ImageProvider<Object>? coverImageProviderFor(DownloadedItem item) {
+    if (item is RemoteLibraryComicItem) {
+      return item.coverImageProvider;
+    }
+    if (item is RemoteLibraryRootItem) {
+      return item.coverImageProvider;
+    }
+    return null;
+  }
+
   String pathFor(DownloadedItem item) {
+    if (item is RemoteLibraryComicItem) {
+      return item.remotePath.isNotEmpty ? item.remotePath : item.detailUrl;
+    }
+    if (item is RemoteLibraryRootItem) {
+      return item.root.path;
+    }
     final fsPath = item.fileSystemPath?.trim();
     if (fsPath != null && fsPath.isNotEmpty) {
       return fsPath;
@@ -360,39 +616,46 @@ class DownloadPageLogic extends StateController {
 }
 
 class DownloadPage extends StatelessWidget {
-  const DownloadPage({super.key});
+  const DownloadPage({
+    super.key,
+    this.remoteRootId,
+    this.title,
+  });
+
+  final String? remoteRootId;
+  final String? title;
 
   @override
   Widget build(BuildContext context) {
     return StateBuilder<DownloadPageLogic>(
-      init: DownloadPageLogic(),
-      initState: (logic) => logic.bindLocalDataRefresh(),
+      init: DownloadPageLogic(
+        remoteRootId: remoteRootId,
+        pageTitle: title,
+      ),
+      initState: (logic) {
+        logic.bindLocalDataRefresh();
+        logic.refresh();
+      },
       dispose: (logic) => logic.unbindLocalDataRefresh(),
       builder: (logic) {
         if (logic.loading) {
-          Future.wait([
-            _getComics(logic),
-            Future.delayed(const Duration(milliseconds: 300))
-          ]).then((v) {
-            logic.resetSelected(logic.comics.length);
-            logic.change();
-          });
           return const Scaffold(
             body: Center(
               child: CircularProgressIndicator(),
             ),
           );
-        } else {
-          return Scaffold(
-            floatingActionButton: _buildFAB(context, logic),
-            body: SmoothCustomScrollView(
-              slivers: [
-                _buildAppbar(context, logic),
-                _buildComics(context, logic)
-              ],
-            ),
-          );
         }
+        return Scaffold(
+          floatingActionButton: _buildFAB(context, logic),
+          body: SmoothCustomScrollView(
+            slivers: [
+              _buildAppbar(context, logic),
+              if (logic.showSourceSelector)
+                _buildSourceSelector(context, logic),
+              _buildComics(context, logic)
+            ],
+          ),
+        );
       },
     );
   }
@@ -416,30 +679,13 @@ class DownloadPage extends StatelessWidget {
     );
   }
 
-  Future<void> _getComics(DownloadPageLogic logic) async {
-    var order = '', direction = 'desc';
-    switch (appdata.settings[26][0]) {
-      case "0":
-        order = 'time';
-      case "1":
-        order = 'title';
-      case "2":
-        order = 'subtitle';
-      case "3":
-        order = 'size';
-      default:
-        throw UnimplementedError();
-    }
-    if (appdata.settings[26][1] == "1") {
-      direction = 'asc';
-    }
-    logic.comics = await logic._loadComics(order, direction);
-    logic.baseComics = logic.comics.toList();
-  }
-
   Widget _buildItem(BuildContext context, DownloadPageLogic logic, int index) {
-    bool selected = logic.selected[index];
-    var type = logic.comics[index].type.name;
+    final item = logic.comics[index];
+    final selected = logic.selected[index];
+    final type = _downloadedItemSource(item);
+    final author = _downloadedItemAuthor(item);
+    final tags = _downloadedItemTags(item);
+    final isRootItem = item is RemoteLibraryRootItem;
     return Padding(
       padding: const EdgeInsets.all(2),
       child: Container(
@@ -450,12 +696,13 @@ class DownloadPage extends StatelessWidget {
           borderRadius: const BorderRadius.all(Radius.circular(16)),
         ),
         child: _DownloadedPageComicTile(
-          comicId: logic.comics[index].id,
-          name: logic.comics[index].name,
-          author: logic.comics[index].subTitle,
-          imagePath: logic.coverFor(logic.comics[index]),
+          comicId: item.id,
+          name: item.name,
+          author: author,
+          imagePath: logic.coverFor(item),
+          imageProvider: logic.coverImageProviderFor(item),
           type: type,
-          tag: logic.comics[index].tags,
+          tag: tags,
           onTap: () async {
             if (logic.selecting) {
               logic.selected[index] = !logic.selected[index];
@@ -464,6 +711,8 @@ class DownloadPage extends StatelessWidget {
                 logic.selecting = false;
               }
               logic.update();
+            } else if (isRootItem) {
+              _toComicInfoPage(context, item);
             } else {
               _showInfo(index, logic, context);
             }
@@ -492,6 +741,8 @@ class DownloadPage extends StatelessWidget {
 
   void _showDesktopMenu(BuildContext context, DownloadPageLogic logic,
       int index, TapDownDetails details) {
+    final item = logic.comics[index];
+    final isRootItem = item is RemoteLibraryRootItem;
     showMenu(
       context: context,
       position: RelativeRect.fromLTRB(
@@ -502,12 +753,18 @@ class DownloadPage extends StatelessWidget {
       ),
       items: [
         PopupMenuItem(
-          child: Text("阅读".tl),
+          child: Text(isRootItem ? "打开列表".tl : "阅读".tl),
           onTap: () {
-            logic.comics[index].read();
+            if (isRootItem) {
+              Future.delayed(const Duration(milliseconds: 120), () {
+                _toComicInfoPage(App.globalContext!, item);
+              });
+              return;
+            }
+            item.read();
           },
         ),
-        if (logic.canDeleteItem(logic.comics[index]))
+        if (logic.canDeleteItem(item))
           PopupMenuItem(
             child: Text("删除".tl),
             onTap: () {
@@ -525,7 +782,7 @@ class DownloadPage extends StatelessWidget {
                       TextButton(
                         onPressed: () {
                           Navigator.pop(ctx);
-                          DownloadManager().delete([logic.comics[index].id]);
+                          DownloadManager().delete([item.id]);
                           logic.comics.removeAt(index);
                           logic.selected.removeAt(index);
                           logic.update();
@@ -662,9 +919,12 @@ class DownloadPage extends StatelessWidget {
         },
       );
     } else {
+      final defaultTitle = logic.pageTitle?.trim().isNotEmpty == true
+          ? logic.pageTitle!.trim()
+          : "已下载".tl;
       return logic.selecting
           ? Text("已选择 @num 个项目".tlParams({"num": logic.selectedNum.toString()}))
-          : Text("已下载".tl);
+          : Text(defaultTitle);
     }
   }
 
@@ -688,6 +948,34 @@ class DownloadPage extends StatelessWidget {
             )
           : null,
       actions: _buildActions(context, logic),
+    );
+  }
+
+  Widget _buildSourceSelector(BuildContext context, DownloadPageLogic logic) {
+    return SliverToBoxAdapter(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+        child: Align(
+          alignment: Alignment.centerLeft,
+          child: SegmentedButton<_DownloadedLibraryView>(
+            showSelectedIcon: false,
+            segments: [
+              for (final view in _DownloadedLibraryView.values)
+                ButtonSegment<_DownloadedLibraryView>(
+                  value: view,
+                  label: Text(_downloadedLibraryViewLabel(view).tl),
+                ),
+            ],
+            selected: {logic._view},
+            onSelectionChanged: (selection) {
+              if (selection.isEmpty) {
+                return;
+              }
+              logic._setView(selection.first);
+            },
+          ),
+        ),
+      ),
     );
   }
 
@@ -951,6 +1239,9 @@ class DownloadedComicInfoView extends StatefulWidget {
 
 class _DownloadedComicInfoViewState extends State<DownloadedComicInfoView> {
   String name = "";
+  String author = "";
+  String source = "";
+  List<String> tags = const <String>[];
   List<String> eps = [];
   List<int> downloadedEps = [];
   late final comic = widget.item;
@@ -993,12 +1284,73 @@ class _DownloadedComicInfoViewState extends State<DownloadedComicInfoView> {
         mainAxisAlignment: MainAxisAlignment.start,
         children: [
           Padding(
-            padding: const EdgeInsets.fromLTRB(0, 16, 0, 16),
+            padding: const EdgeInsets.fromLTRB(0, 16, 0, 12),
             child: Text(
               name,
               style: const TextStyle(fontSize: 22),
             ),
           ),
+          if (author.isNotEmpty || source.isNotEmpty || tags.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (author.isNotEmpty)
+                    Row(
+                      children: [
+                        Icon(
+                          Icons.person_outline,
+                          size: 16,
+                          color: Theme.of(context).colorScheme.outline,
+                        ),
+                        const SizedBox(width: 6),
+                        Expanded(child: Text(author)),
+                      ],
+                    ),
+                  if (author.isNotEmpty && source.isNotEmpty)
+                    const SizedBox(height: 8),
+                  if (source.isNotEmpty)
+                    Row(
+                      children: [
+                        Icon(
+                          Icons.source_outlined,
+                          size: 16,
+                          color: Theme.of(context).colorScheme.outline,
+                        ),
+                        const SizedBox(width: 6),
+                        Expanded(child: Text(source)),
+                      ],
+                    ),
+                  if (tags.isNotEmpty) ...[
+                    const SizedBox(height: 10),
+                    Wrap(
+                      spacing: 6,
+                      runSpacing: 6,
+                      children: [
+                        for (final tag in tags)
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 4,
+                            ),
+                            decoration: BoxDecoration(
+                              color: Theme.of(context)
+                                  .colorScheme
+                                  .secondaryContainer,
+                              borderRadius: BorderRadius.circular(999),
+                            ),
+                            child: Text(
+                              _translateDownloadedTag(tag),
+                              style: const TextStyle(fontSize: 12),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ],
+                ],
+              ),
+            ),
           Expanded(
             child: GridView.builder(
               gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
@@ -1079,6 +1431,9 @@ class _DownloadedComicInfoViewState extends State<DownloadedComicInfoView> {
 
   void getInfo() {
     name = comic.name;
+    author = _downloadedItemAuthor(comic);
+    source = _downloadedItemSource(comic);
+    tags = _downloadedItemTags(comic);
     eps = comic.eps;
     downloadedEps = comic.downloadedEps;
   }

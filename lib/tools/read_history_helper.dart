@@ -4,9 +4,13 @@ import 'package:picakeep/foundation/download.dart';
 import 'package:picakeep/foundation/download_model.dart';
 import 'package:picakeep/foundation/history.dart';
 import 'package:picakeep/foundation/local_library.dart';
+import 'package:picakeep/foundation/remote_library_data_source.dart';
 
 HistoryType _historyTypeForDownload(DownloadedItem c) {
   if (c is LocalLibraryComicItem && c.isAlbum) {
+    return HistoryType.localAlbum;
+  }
+  if (c is RemoteLibraryComicItem && c.isCustomLibraryRoot) {
     return HistoryType.localAlbum;
   }
   switch (c.type) {
@@ -44,8 +48,8 @@ File resolveLocalComicCover(DownloadedItem comic,
   }
 
   try {
-    final localItem =
-        LocalLibraryManager().findCachedByCandidates([comic.id, ...legacyTargets]);
+    final localItem = LocalLibraryManager()
+        .findCachedByCandidates([comic.id, ...legacyTargets]);
     final coverPath = localItem?.localCoverPath?.trim();
     if (coverPath != null && coverPath.isNotEmpty) {
       final file = File(coverPath);
@@ -81,9 +85,17 @@ File resolveLocalComicCover(DownloadedItem comic,
 /// Inserts or refreshes a history row before opening [ComicReadingPage].
 Future<void> ensureHistoryBeforeRead(DownloadedItem comic,
     {Iterable<String> legacyTargets = const <String>[]}) async {
-  final coverFile =
-      resolveLocalComicCover(comic, legacyTargets: legacyTargets);
-  final cover = coverFile.existsSync() ? coverFile.path : '';
+  String cover = '';
+  if (comic is RemoteLibraryComicItem) {
+    cover = comic.coverUrl.trim();
+  }
+  if (cover.isEmpty) {
+    final coverFile =
+        resolveLocalComicCover(comic, legacyTargets: legacyTargets);
+    if (coverFile.existsSync()) {
+      cover = coverFile.path;
+    }
+  }
   await History.ensureForLocalRead(
     target: comic.id,
     type: _historyTypeForDownload(comic),
