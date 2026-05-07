@@ -130,6 +130,8 @@ class Appdata {
     "9527", //100 服务端后台端口
     "0", //101 安卓 Root 浏览模式
     "0", //102 安卓 Shizuku 浏览模式
+    "local", //103 已下载页来源视图
+    "local", //104 资源库页来源视图
   ];
 
   List<String> implicitData = [
@@ -218,6 +220,10 @@ class Appdata {
     settings[localLibraryShowAllDatabaseRecordsSettingIndex] =
         normalizeLocalLibraryShowAllDatabaseRecords(
             settings[localLibraryShowAllDatabaseRecordsSettingIndex]);
+    settings[downloadedLibraryViewSettingIndex] =
+        normalizeDownloadedLibraryView(settings[downloadedLibraryViewSettingIndex]);
+    settings[localLibraryViewSettingIndex] =
+        normalizeLocalLibraryView(settings[localLibraryViewSettingIndex]);
     settings[appRuntimeModeSettingIndex] =
         normalizeAppRuntimeMode(settings[appRuntimeModeSettingIndex]);
     settings[remoteServerAddressSettingIndex] =
@@ -309,6 +315,11 @@ class Appdata {
       settings[localLibraryShowAllDatabaseRecordsSettingIndex] =
           normalizeLocalLibraryShowAllDatabaseRecords(
               settings[localLibraryShowAllDatabaseRecordsSettingIndex]);
+      settings[downloadedLibraryViewSettingIndex] =
+          normalizeDownloadedLibraryView(
+              settings[downloadedLibraryViewSettingIndex]);
+      settings[localLibraryViewSettingIndex] =
+          normalizeLocalLibraryView(settings[localLibraryViewSettingIndex]);
       setManagedDataSourceMode(settings[managedDataSourceModeSettingIndex]);
       settings[22] = downloadPath;
       settings[13] = authRequired;

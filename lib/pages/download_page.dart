@@ -247,6 +247,29 @@ String _downloadedLibraryViewLabel(_DownloadedLibraryView view) {
   }
 }
 
+_DownloadedLibraryView _downloadedLibraryViewFromSetting(String value) {
+  switch (normalizeDownloadedLibraryView(value)) {
+    case 'aggregate':
+      return _DownloadedLibraryView.aggregate;
+    case 'remote':
+      return _DownloadedLibraryView.remote;
+    case 'local':
+    default:
+      return _DownloadedLibraryView.local;
+  }
+}
+
+String _downloadedLibraryViewToSetting(_DownloadedLibraryView view) {
+  switch (view) {
+    case _DownloadedLibraryView.aggregate:
+      return 'aggregate';
+    case _DownloadedLibraryView.remote:
+      return 'remote';
+    case _DownloadedLibraryView.local:
+      return 'local';
+  }
+}
+
 class _DownloadedPageComicTile extends DownloadedComicTile {
   const _DownloadedPageComicTile({
     required this.comicId,
@@ -275,6 +298,10 @@ class DownloadPageLogic extends StateController {
   }) {
     if (remoteRootId?.trim().isNotEmpty == true) {
       _view = _DownloadedLibraryView.remote;
+    } else {
+      _view = _downloadedLibraryViewFromSetting(
+        appdata.settings[downloadedLibraryViewSettingIndex],
+      );
     }
   }
 
@@ -354,11 +381,14 @@ class DownloadPageLogic extends StateController {
 
   bool get showSourceSelector => remoteAvailable && !_isRemoteRootPage;
 
-  void _setView(_DownloadedLibraryView nextView) {
+  Future<void> _setView(_DownloadedLibraryView nextView) async {
     if (_view == nextView) {
       return;
     }
     _view = nextView;
+    appdata.settings[downloadedLibraryViewSettingIndex] =
+        _downloadedLibraryViewToSetting(nextView);
+    await appdata.updateSettings();
     refresh();
   }
 
@@ -913,13 +943,10 @@ class DownloadPage extends StatelessWidget {
       showModalBottomSheet(
         context: context,
         isScrollControlled: true,
-        showDragHandle: true,
-        useSafeArea: true,
+        showDragHandle: false,
+        useSafeArea: false,
         builder: (context) {
-          return FractionallySizedBox(
-            heightFactor: 0.92,
-            child: DownloadedComicInfoView(item, logic),
-          );
+          return DownloadedComicInfoView(item, logic);
         },
       );
     } else {
@@ -1051,7 +1078,7 @@ class DownloadPage extends StatelessWidget {
               if (selection.isEmpty) {
                 return;
               }
-              logic._setView(selection.first);
+              unawaited(logic._setView(selection.first));
             },
           ),
         ),
@@ -1416,20 +1443,11 @@ class _DownloadedComicInfoViewState extends State<DownloadedComicInfoView> {
         padding: const EdgeInsets.fromLTRB(16, 0, 16, 0),
         child: ConstrainedBox(
           constraints: BoxConstraints(
-            maxHeight: mediaQuery.size.height * 0.78,
+            maxHeight: mediaQuery.size.height * 0.54,
           ),
           child: Column(
             children: [
-              const SizedBox(height: 8),
-              Container(
-                width: 40,
-                height: 4,
-                decoration: BoxDecoration(
-                  color: theme.colorScheme.outlineVariant,
-                  borderRadius: BorderRadius.circular(999),
-                ),
-              ),
-              const SizedBox(height: 12),
+              const SizedBox(height: 4),
               Material(
                 color: theme.colorScheme.surfaceContainerLow,
                 surfaceTintColor: theme.colorScheme.surfaceTint,

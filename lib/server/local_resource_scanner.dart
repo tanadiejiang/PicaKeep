@@ -61,14 +61,20 @@ class ServerResourceEpisodeSummary {
 
 class _ServerResourceMetadata {
   const _ServerResourceMetadata({
+    required this.title,
     required this.subtitle,
+    required this.displayId,
     required this.tags,
     required this.sourceDisplayName,
+    required this.episodeTitles,
   });
 
+  final String title;
   final String subtitle;
+  final String displayId;
   final List<String> tags;
   final String sourceDisplayName;
+  final List<String> episodeTitles;
 }
 
 class ServerResourceItemSummary {
@@ -78,6 +84,7 @@ class ServerResourceItemSummary {
     required this.sourceTitle,
     required this.sourceDisplayName,
     required this.title,
+    required this.displayId,
     required this.subtitle,
     required this.tags,
     required this.path,
@@ -92,6 +99,7 @@ class ServerResourceItemSummary {
   final String sourceTitle;
   final String sourceDisplayName;
   final String title;
+  final String displayId;
   final String subtitle;
   final List<String> tags;
   final String path;
@@ -108,6 +116,7 @@ class ServerResourceItemSummary {
         'sourceTitle': sourceTitle,
         'sourceDisplayName': sourceDisplayName,
         'title': title,
+        'displayId': displayId,
         'subtitle': subtitle,
         'tags': tags,
         'path': path,
@@ -292,6 +301,7 @@ class LocalResourceScanner {
           sourceTitle: rootTitle,
           sourceDisplayName: '图集',
           title: _directoryTitle(directory),
+          displayId: _directoryTitle(directory),
           subtitle: '${episode.imageCount} 张图片',
           tags: const <String>[],
           path: directory.path,
@@ -363,8 +373,12 @@ class LocalResourceScanner {
     final normalizedDirectoryPath = _normalizePath(directory.path);
     final metadata = metadataByDirectory[normalizedDirectoryPath] ??
         metadataByDirectory[_normalizePath(_basename(directory.path))];
-    final fallbackSubtitle = episodes.length > 1
-        ? '${episodes.length} 个章节'
+    final titledEpisodes = _applyEpisodeTitles(
+      episodes,
+      metadata?.episodeTitles ?? const <String>[],
+    );
+    final fallbackSubtitle = titledEpisodes.length > 1
+        ? '${titledEpisodes.length} 个章节'
         : '$imageCount 张图片';
     final subtitle = _firstNonEmptyValue([
       metadata?.subtitle,
@@ -374,19 +388,28 @@ class LocalResourceScanner {
       metadata?.sourceDisplayName,
       rootTitle,
     ]);
+    final title = _firstNonEmptyValue([
+      metadata?.title,
+      _directoryTitle(directory),
+    ]);
+    final displayId = _firstNonEmptyValue([
+      metadata?.displayId,
+      _buildItemId(rootId, directory.path),
+    ]);
     return ServerResourceItemSummary(
       id: _buildItemId(rootId, directory.path),
       rootId: rootId,
       sourceTitle: rootTitle,
       sourceDisplayName: sourceDisplayName,
-      title: _directoryTitle(directory),
+      title: title,
+      displayId: displayId,
       subtitle: subtitle,
       tags: metadata?.tags ?? const <String>[],
       path: directory.path,
       imageCount: imageCount,
       totalBytes: totalBytes,
-      coverPath: episodes.first.coverPath,
-      episodes: episodes,
+      coverPath: titledEpisodes.first.coverPath,
+      episodes: titledEpisodes,
     );
   }
 
@@ -404,7 +427,7 @@ class LocalResourceScanner {
     try {
       db = sqlite3.open(dbFile.path);
       final rows = db.select(
-        'select id, subtitle, directory, json from download',
+        'select id, title, subtitle, directory, json from download',
       );
       for (final row in rows) {
         final rawDirectory = row['directory']?.toString() ?? '';
@@ -417,6 +440,7 @@ class LocalResourceScanner {
         final data = _decodeJsonMap(row['json']?.toString());
         final metadata = _extractDownloadMetadata(
           id: row['id']?.toString() ?? '',
+          title: row['title']?.toString() ?? '',
           subtitle: row['subtitle']?.toString() ?? '',
           data: data,
           fallbackSourceDisplayName: rootTitle,
@@ -438,6 +462,7 @@ class LocalResourceScanner {
 
   _ServerResourceMetadata _extractDownloadMetadata({
     required String id,
+    required String title,
     required String subtitle,
     required Map<String, dynamic>? data,
     required String fallbackSourceDisplayName,
@@ -447,6 +472,11 @@ class LocalResourceScanner {
         ? comicItem.map((key, value) => MapEntry(key.toString(), value))
         : null;
     return _ServerResourceMetadata(
+      title: _firstNonEmptyValue([
+        data?['title']?.toString(),
+        comicItemMap?['title']?.toString(),
+        title,
+      ]),
       subtitle: _firstNonEmptyValue([
         subtitle,
         data?['subtitle']?.toString(),
@@ -454,6 +484,14 @@ class LocalResourceScanner {
         data?['author']?.toString(),
         comicItemMap?['subTitle']?.toString(),
         comicItemMap?['author']?.toString(),
+      ]),
+      displayId: _firstNonEmptyValue([
+        data?['displayId']?.toString(),
+        data?['comicId']?.toString(),
+        comicItemMap?['displayId']?.toString(),
+        comicItemMap?['comicId']?.toString(),
+        comicItemMap?['id']?.toString(),
+        id,
       ]),
       tags: _normalizeTagValues(
         data?['tagList'] ??
@@ -467,6 +505,7 @@ class LocalResourceScanner {
         _inferSourceDisplayName(id, data),
         fallbackSourceDisplayName,
       ]),
+      episodeTitles: _extractEpisodeTitles(data, comicItemMap),
     );
   }
 
@@ -537,6 +576,87 @@ class LocalResourceScanner {
       return const <String>[];
     }
     return <String>[single];
+  }
+
+  List<String> _extractEpisodeTitles(
+    Map<String, dynamic>? data,
+    Map<String, dynamic>? comicItemMap,
+  ) {
+    for (final raw in [
+      data?['chapters'],
+      data?['eps'],
+      comicItemMap?['chapters'],
+      comicItemMap?['eps'],
+    ]) {
+      final titles = _normalizeEpisodeTitles(raw);
+      if (titles.isNotEmpty) {
+        return titles;
+      }
+    }
+    return const <String>[];
+  }
+
+  List<String> _normalizeEpisodeTitles(Object? raw) {
+    if (raw is List) {
+      return raw
+          .map((entry) => _episodeTitleFromValue(entry))
+          .where((entry) => entry.isNotEmpty)
+          .toList(growable: false);
+    }
+    if (raw is Map) {
+      final entries = raw.entries.toList()
+        ..sort((a, b) =>
+            (int.tryParse(a.key.toString()) ?? 0).compareTo(
+              int.tryParse(b.key.toString()) ?? 0,
+            ));
+      return entries
+          .map((entry) => _episodeTitleFromValue(entry.value))
+          .where((entry) => entry.isNotEmpty)
+          .toList(growable: false);
+    }
+    final single = _episodeTitleFromValue(raw);
+    return single.isEmpty ? const <String>[] : <String>[single];
+  }
+
+  String _episodeTitleFromValue(Object? raw) {
+    if (raw == null) {
+      return '';
+    }
+    if (raw is String) {
+      return raw.trim();
+    }
+    if (raw is Map) {
+      final mapped = raw.map((key, value) => MapEntry(key.toString(), value));
+      return _firstNonEmptyValue([
+        mapped['title']?.toString(),
+        mapped['name']?.toString(),
+        mapped['chapter']?.toString(),
+      ]);
+    }
+    return raw.toString().trim();
+  }
+
+  List<ServerResourceEpisodeSummary> _applyEpisodeTitles(
+    List<ServerResourceEpisodeSummary> episodes,
+    List<String> titles,
+  ) {
+    if (episodes.isEmpty || titles.isEmpty) {
+      return episodes;
+    }
+    return [
+      for (var i = 0; i < episodes.length; i++)
+        ServerResourceEpisodeSummary(
+          index: episodes[i].index,
+          title: i < titles.length && titles[i].trim().isNotEmpty
+              ? titles[i].trim()
+              : episodes[i].title,
+          path: episodes[i].path,
+          imageCount: episodes[i].imageCount,
+          totalBytes: episodes[i].totalBytes,
+          coverPath: episodes[i].coverPath,
+          imagePaths: episodes[i].imagePaths,
+        ),
+    ];
   }
 
   String _firstNonEmptyValue(Iterable<String?> values) {

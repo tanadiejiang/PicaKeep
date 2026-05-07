@@ -92,6 +92,7 @@ class RemoteLibraryRootSummary {
     required this.exists,
     required this.itemCount,
     required this.totalBytes,
+    this.previewCoverUrls = const <String>[],
   });
 
   final String id;
@@ -100,6 +101,7 @@ class RemoteLibraryRootSummary {
   final bool exists;
   final int itemCount;
   final int totalBytes;
+  final List<String> previewCoverUrls;
 
   bool get isManagedDownloadRoot =>
       id == 'current_download' || id == 'original_download';
@@ -126,6 +128,7 @@ class RemoteLibraryRootSummary {
       exists: json['exists'] != false,
       itemCount: _readInt(json['itemCount']) ?? 0,
       totalBytes: _readInt(json['totalBytes']) ?? 0,
+      previewCoverUrls: _readStringList(json['previewCoverUrls']),
     );
   }
 }
@@ -140,6 +143,8 @@ class RemoteLibraryRootItem extends DownloadedItem {
 
   final RemoteLibraryRootSummary root;
   final String? coverUrl;
+
+  List<String> get previewCoverUrls => root.previewCoverUrls;
 
   @override
   double? comicSize;
@@ -201,6 +206,7 @@ class RemoteLibraryRootItem extends DownloadedItem {
         'itemCount': root.itemCount,
         'totalBytes': root.totalBytes,
         'coverUrl': coverUrl,
+        'previewCoverUrls': previewCoverUrls,
       };
 
   @override
@@ -223,6 +229,7 @@ class RemoteLibraryComicItem extends DownloadedItem {
     required this.imageCount,
     required this.totalBytes,
     this.subtitle = '',
+    this.displayId = '',
     this.metadataTags = const <String>[],
     this.metadataSourceDisplayName = '',
   }) {
@@ -243,6 +250,7 @@ class RemoteLibraryComicItem extends DownloadedItem {
   final int imageCount;
   final int totalBytes;
   final String subtitle;
+  final String displayId;
   final List<String> metadataTags;
   final String metadataSourceDisplayName;
 
@@ -326,6 +334,7 @@ class RemoteLibraryComicItem extends DownloadedItem {
       imageCount: imageCount,
       totalBytes: totalBytes,
       subtitle: subtitle,
+      displayId: displayId,
       metadataTags: metadataTags,
       metadataSourceDisplayName: metadataSourceDisplayName,
     );
@@ -380,6 +389,16 @@ class RemoteLibraryComicItem extends DownloadedItem {
           fallback: _readText(
             nestedComicItem['subtitle'],
             fallback: _readText(nestedComicItem['author']),
+          ),
+        ),
+      ),
+      displayId: _readText(
+        json['displayId'],
+        fallback: _readText(
+          nestedComicItem['displayId'],
+          fallback: _readText(
+            nestedComicItem['comicId'],
+            fallback: _readText(nestedComicItem['id']),
           ),
         ),
       ),
@@ -466,6 +485,7 @@ class RemoteLibraryComicItem extends DownloadedItem {
         'sourceTitle': sourceTitle,
         'sourceDisplayName': metadataSourceDisplayName,
         'subtitle': subtitle,
+        'displayId': displayId,
         'tags': metadataTags,
         'path': remotePath,
         'coverUrl': coverUrl,
@@ -794,17 +814,33 @@ class RemoteLibraryClient {
 
     return roots.map((root) {
       String? coverUrl;
+      final previewCoverUrls = <String>[
+        ...root.previewCoverUrls,
+      ];
       for (final item in snapshot.items) {
         if (item.rootId != root.id) {
           continue;
         }
         final value = item.coverUrl.trim();
         if (value.isNotEmpty) {
-          coverUrl = value;
-          break;
+          coverUrl ??= value;
+          if (!previewCoverUrls.contains(value) && previewCoverUrls.length < 4) {
+            previewCoverUrls.add(value);
+          }
         }
       }
-      return RemoteLibraryRootItem(root: root, coverUrl: coverUrl);
+      return RemoteLibraryRootItem(
+        root: RemoteLibraryRootSummary(
+          id: root.id,
+          title: root.title,
+          path: root.path,
+          exists: root.exists,
+          itemCount: root.itemCount,
+          totalBytes: root.totalBytes,
+          previewCoverUrls: previewCoverUrls,
+        ),
+        coverUrl: coverUrl,
+      );
     }).toList(growable: false);
   }
 
@@ -852,6 +888,11 @@ class RemoteLibraryClient {
             0,
             (sum, item) => sum + item.totalBytes,
           ),
+          previewCoverUrls: groupItems
+              .map((item) => item.coverUrl.trim())
+              .where((item) => item.isNotEmpty)
+              .take(4)
+              .toList(growable: false),
         ),
       );
     });

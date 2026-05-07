@@ -243,84 +243,84 @@ class ComicReadingPage extends StatelessWidget {
                       child: CircularProgressIndicator(),
                     );
                   } else if (logic.urls.isNotEmpty) {
-                  if (logic.readingMethod ==
-                          ReadingMethod.topToBottomContinuously &&
-                      !logic.haveUsedInitialPage &&
-                      initialPage != 0) {
-                    Future.microtask(() {
-                      logic.jumpToPage(initialPage);
-                      logic.haveUsedInitialPage = true;
-                    });
-                  }
-                  //监听音量键
-                  if (appdata.settings[7] == "1") {
-                    if (logic.listenVolume == null) {
-                      logic.listenVolume = ListenVolumeController(
-                          () => logic.jumpToLastPage(),
-                          () => logic.jumpToNextPage());
-                      logic.listenVolume!.listenVolumeChange();
+                    if (logic.readingMethod ==
+                            ReadingMethod.topToBottomContinuously &&
+                        !logic.haveUsedInitialPage &&
+                        initialPage != 0) {
+                      Future.microtask(() {
+                        logic.jumpToPage(initialPage);
+                        logic.haveUsedInitialPage = true;
+                      });
                     }
-                  } else if (logic.listenVolume != null) {
-                    logic.listenVolume!.stop();
-                    logic.listenVolume = null;
-                  }
+                    //监听音量键
+                    if (appdata.settings[7] == "1") {
+                      if (logic.listenVolume == null) {
+                        logic.listenVolume = ListenVolumeController(
+                            () => logic.jumpToLastPage(),
+                            () => logic.jumpToNextPage());
+                        logic.listenVolume!.listenVolumeChange();
+                      }
+                    } else if (logic.listenVolume != null) {
+                      logic.listenVolume!.stop();
+                      logic.listenVolume = null;
+                    }
 
-                  if (appdata.settings[9] == "4") {
-                    logic.scrollManager ??= ScrollManager(logic);
-                  }
+                    if (appdata.settings[9] == "4") {
+                      logic.scrollManager ??= ScrollManager(logic);
+                    }
 
-                  var body = Listener(
-                    onPointerMove: TapController.onPointerMove,
-                    onPointerUp: TapController.onTapUp,
-                    onPointerDown: TapController.onTapDown,
-                    behavior: HitTestBehavior.translucent,
-                    onPointerCancel: TapController.onTapCancel,
-                    child: Stack(
-                      children: [
-                        buildComicView(
-                          logic,
-                          context,
-                          readingData.id,
-                        ),
-                        if (MediaQuery.of(context).platformBrightness ==
-                                Brightness.dark &&
-                            appdata.appSettings.reduceBrightnessInDarkMode)
-                          Positioned(
-                            top: 0,
-                            bottom: 0,
-                            left: 0,
-                            right: 0,
-                            child: IgnorePointer(
-                              child: ColoredBox(
-                                color: Colors.black.withValues(alpha: 0.2),
+                    var body = Listener(
+                      onPointerMove: TapController.onPointerMove,
+                      onPointerUp: TapController.onTapUp,
+                      onPointerDown: TapController.onTapDown,
+                      behavior: HitTestBehavior.translucent,
+                      onPointerCancel: TapController.onTapCancel,
+                      child: Stack(
+                        children: [
+                          buildComicView(
+                            logic,
+                            context,
+                            readingData.id,
+                          ),
+                          if (MediaQuery.of(context).platformBrightness ==
+                                  Brightness.dark &&
+                              appdata.appSettings.reduceBrightnessInDarkMode)
+                            Positioned(
+                              top: 0,
+                              bottom: 0,
+                              left: 0,
+                              right: 0,
+                              child: IgnorePointer(
+                                child: ColoredBox(
+                                  color: Colors.black.withValues(alpha: 0.2),
+                                ),
                               ),
                             ),
-                          ),
 
-                        if (appdata.appSettings.showPageInfoInReader)
-                          buildPageInfoText(logic, context),
+                          if (appdata.appSettings.showPageInfoInReader)
+                            buildPageInfoText(logic, context),
 
-                        //底部工具栏
-                        buildBottomToolBar(logic, context, readingData.hasEp),
+                          //底部工具栏
+                          buildBottomToolBar(logic, context, readingData.hasEp),
 
-                        ...buildButtons(logic, context),
+                          ...buildButtons(logic, context),
 
-                        //顶部工具栏
-                        buildTopToolBar(logic, context),
-                      ],
-                    ),
-                  );
+                          //顶部工具栏
+                          buildTopToolBar(logic, context),
+                        ],
+                      ),
+                    );
 
-                  return KeyboardListener(
-                    focusNode: logic.focusNode,
-                    autofocus: true,
-                    onKeyEvent: logic.handleKeyboard,
-                    child: body,
-                  );
-                } else {
-                  return buildErrorView(logic, context);
-                }
-              }),
+                    return KeyboardListener(
+                      focusNode: logic.focusNode,
+                      autofocus: true,
+                      onKeyEvent: logic.handleKeyboard,
+                      child: body,
+                    );
+                  } else {
+                    return buildErrorView(logic, context);
+                  }
+                }),
               ),
             ),
           ),
@@ -408,6 +408,11 @@ class ComicReadingPage extends StatelessWidget {
                         showModalBottomSheet(
                           context: context,
                           useSafeArea: false,
+                          showDragHandle: false,
+                          constraints: BoxConstraints(
+                            maxHeight:
+                                MediaQuery.of(context).size.height * 0.56,
+                          ),
                           builder: (context) {
                             return buildEpsView();
                           },
@@ -483,6 +488,10 @@ class ComicReadingPage extends StatelessWidget {
       showModalBottomSheet(
         context: context,
         useSafeArea: false,
+        showDragHandle: false,
+        constraints: BoxConstraints(
+          maxHeight: MediaQuery.of(context).size.height * 0.56,
+        ),
         builder: (context) {
           return buildEpsView();
         },

@@ -108,6 +108,146 @@ class _LocalLibraryComicTile extends DownloadedComicTile {
   bool get enableLongPressed => false;
 }
 
+class _RemoteRootCollage extends StatelessWidget {
+  const _RemoteRootCollage({required this.urls});
+
+  final List<String> urls;
+
+  @override
+  Widget build(BuildContext context) {
+    final visibleUrls = urls
+        .map((entry) => entry.trim())
+        .where((entry) => entry.isNotEmpty)
+        .take(4)
+        .toList(growable: false);
+    if (visibleUrls.isEmpty) {
+      return const Center(child: Icon(Icons.image_not_supported));
+    }
+    return GridView.builder(
+      physics: const NeverScrollableScrollPhysics(),
+      padding: EdgeInsets.zero,
+      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: 2,
+        mainAxisSpacing: 1.5,
+        crossAxisSpacing: 1.5,
+      ),
+      itemCount: visibleUrls.length,
+      itemBuilder: (context, index) {
+        return Image.network(
+          visibleUrls[index],
+          fit: BoxFit.cover,
+          errorBuilder: (_, __, ___) => Container(
+            color: Theme.of(context).colorScheme.secondaryContainer,
+            child: const Icon(Icons.broken_image_outlined, size: 18),
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _LocalLibraryRemoteRootCard extends StatelessWidget {
+  const _LocalLibraryRemoteRootCard({
+    required this.item,
+    required this.sizeText,
+    required this.onTap,
+    required this.onSecondaryTap,
+  });
+
+  final RemoteLibraryRootItem item;
+  final String sizeText;
+  final VoidCallback onTap;
+  final void Function(TapDownDetails details) onSecondaryTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
+      child: Material(
+        color: Colors.transparent,
+        borderRadius: BorderRadius.circular(8),
+        elevation: 1,
+        child: InkWell(
+          onTap: onTap,
+          onSecondaryTapDown: onSecondaryTap,
+          borderRadius: BorderRadius.circular(8),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(10, 10, 10, 10),
+            child: Row(
+              children: [
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(8),
+                  child: SizedBox(
+                    width: 92,
+                    height: 124,
+                    child: Container(
+                      color: Theme.of(context).colorScheme.secondaryContainer,
+                      child: _RemoteRootCollage(urls: item.previewCoverUrls),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        item.name,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.titleMedium,
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        item.subTitle,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        sizeText,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                              color: Theme.of(context).colorScheme.outline,
+                            ),
+                      ),
+                      const SizedBox(height: 8),
+                      Wrap(
+                        spacing: 6,
+                        runSpacing: 6,
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 4,
+                            ),
+                            decoration: BoxDecoration(
+                              color: Theme.of(context)
+                                  .colorScheme
+                                  .secondaryContainer,
+                              borderRadius: BorderRadius.circular(999),
+                            ),
+                            child: Text(
+                              item.sourceDisplayName,
+                              style: const TextStyle(fontSize: 12),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class LocalLibraryPage extends StatefulWidget {
   const LocalLibraryPage({
     super.key,
@@ -144,6 +284,29 @@ String _localLibraryViewLabel(_LocalLibraryView view,
   }
 }
 
+_LocalLibraryView _localLibraryViewFromSetting(String value) {
+  switch (normalizeLocalLibraryView(value)) {
+    case 'aggregate':
+      return _LocalLibraryView.aggregate;
+    case 'remote':
+      return _LocalLibraryView.remote;
+    case 'local':
+    default:
+      return _LocalLibraryView.local;
+  }
+}
+
+String _localLibraryViewToSetting(_LocalLibraryView view) {
+  switch (view) {
+    case _LocalLibraryView.aggregate:
+      return 'aggregate';
+    case _LocalLibraryView.remote:
+      return 'remote';
+    case _LocalLibraryView.local:
+      return 'local';
+  }
+}
+
 class _LocalLibraryPageState extends State<LocalLibraryPage> {
   final _manager = LocalLibraryManager();
   final _remoteDataSource = const RemoteLibraryDataSource();
@@ -155,7 +318,9 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
   List<DownloadedItem> _items = const <DownloadedItem>[];
   late _LocalLibraryView _view = widget.preferRemoteView || _isRemoteRootPage
       ? _LocalLibraryView.remote
-      : _LocalLibraryView.local;
+      : _localLibraryViewFromSetting(
+          appdata.settings[localLibraryViewSettingIndex],
+        );
 
   bool get _isClientMode =>
       normalizeAppRuntimeMode(appdata.settings[appRuntimeModeSettingIndex]) ==
@@ -168,6 +333,19 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
   bool get _isRemoteRootPage => widget.remoteRootId?.trim().isNotEmpty == true;
 
   bool get _showSourceSelector => _remoteAvailable && !_isRemoteRootPage;
+
+  Future<void> _setView(_LocalLibraryView nextView) async {
+    if (_view == nextView) {
+      return;
+    }
+    setState(() {
+      _view = nextView;
+    });
+    appdata.settings[localLibraryViewSettingIndex] =
+        _localLibraryViewToSetting(nextView);
+    await appdata.updateSettings();
+    await _load();
+  }
 
   @override
   void initState() {
@@ -257,6 +435,8 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
       final remoteAvailable = await _checkRemoteAvailability();
       if (!remoteAvailable && _view != _LocalLibraryView.local) {
         _view = _LocalLibraryView.local;
+        appdata.settings[localLibraryViewSettingIndex] = 'local';
+        await appdata.updateSettings();
       }
       final localItems = await _loadLocalItems();
       List<DownloadedItem> items;
@@ -580,6 +760,19 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
   }
 
   Widget _buildItem(DownloadedItem item) {
+    if (item is RemoteLibraryRootItem) {
+      return Padding(
+        padding: const EdgeInsets.all(2),
+        child: _LocalLibraryRemoteRootCard(
+          item: item,
+          sizeText: item.comicSize == null
+              ? '未知大小'.tl
+              : _formatLocalLibrarySize(item.comicSize!),
+          onTap: () => _openItem(item),
+          onSecondaryTap: (details) => _showDesktopMenu(item, details),
+        ),
+      );
+    }
     return Padding(
       padding: const EdgeInsets.all(2),
       child: _LocalLibraryComicTile(
@@ -695,10 +888,7 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
               if (selection.isEmpty || selection.first == _view) {
                 return;
               }
-              setState(() {
-                _view = selection.first;
-              });
-              _load();
+              _setView(selection.first);
             },
           ),
         ),

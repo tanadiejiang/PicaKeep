@@ -40,7 +40,8 @@ class _LocalRecommendation {
 
 class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
   final _scrollController = ScrollController();
-  final List<LocalLibraryComicItem> _localItems = [];
+  final _remoteDataSource = const RemoteLibraryDataSource();
+  final List<DownloadedItem> _localItems = [];
 
   bool _reverseEpsOrder = false;
   bool _showFullEps = false;
@@ -75,7 +76,20 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
   }
 
   Future<void> _loadLocalItems() async {
-    final items = await LocalLibraryManager().getAll();
+    List<DownloadedItem> items;
+    final current = widget.comic;
+    if (current is RemoteLibraryComicItem) {
+      try {
+        final rootId = current.rootId.trim();
+        items = rootId.isNotEmpty
+            ? await _remoteDataSource.fetchItemsForRoot(rootId)
+            : await _remoteDataSource.fetchItems();
+      } catch (_) {
+        items = const <DownloadedItem>[];
+      }
+    } else {
+      items = await LocalLibraryManager().getAll();
+    }
     if (!mounted) return;
     setState(() {
       _localItems
@@ -119,6 +133,45 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
       }
     } catch (_) {}
     return tag;
+  }
+
+  String _recommendationAuthor(DownloadedItem item) {
+    final direct = item.subTitle.trim();
+    if (direct.isNotEmpty) {
+      return direct;
+    }
+    try {
+      final json = item.toJson();
+      for (final key in const ['subtitle', 'subTitle', 'author']) {
+        final value = json[key]?.toString().trim();
+        if (value != null && value.isNotEmpty) {
+          return value;
+        }
+      }
+    } catch (_) {}
+    return '';
+  }
+
+  List<String> _recommendationTags(DownloadedItem item) {
+    if (item.tags.isNotEmpty) {
+      return item.tags;
+    }
+    try {
+      final json = item.toJson();
+      for (final key in const ['tags', 'tagList', 'metadataTags']) {
+        final raw = json[key];
+        if (raw is List) {
+          final values = raw
+              .map((entry) => entry.toString().trim())
+              .where((entry) => entry.isNotEmpty)
+              .toList(growable: false);
+          if (values.isNotEmpty) {
+            return values;
+          }
+        }
+      }
+    } catch (_) {}
+    return const <String>[];
   }
 
   List<String> _historyTargetsFor(DownloadedItem comic) {
@@ -287,7 +340,8 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
     } else {
       final directory = comic.directory?.trim();
       if (directory != null && directory.isNotEmpty) {
-        final rootPath = (DownloadManager().path ?? appdata.settings[22]).trim();
+        final rootPath =
+            (DownloadManager().path ?? appdata.settings[22]).trim();
         fullPath = rootPath.isNotEmpty
             ? '$rootPath${Platform.pathSeparator}$directory'
             : directory;
@@ -351,8 +405,8 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
 
     final current = widget.comic;
     final currentName = current.name;
-    final currentAuthor = current.subTitle.trim().toLowerCase();
-    final currentTags = current.tags
+    final currentAuthor = _recommendationAuthor(current).trim().toLowerCase();
+    final currentTags = _recommendationTags(current)
         .map((e) => e.trim().toLowerCase())
         .where((e) => e.isNotEmpty)
         .toSet();
@@ -361,17 +415,19 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
 
     final recommendations = <_LocalRecommendation>[];
     for (final item in _localItems) {
-      if (item.id == current.id ||
-          item.originalId == current.id ||
-          item.name == current.name) {
+      final sameId = item.id == current.id;
+      final sameName = item.name == current.name;
+      final sameLocalOriginalId = item is LocalLibraryComicItem &&
+          (item.originalId == current.id || item.originalId == current.name);
+      if (sameId || sameName || sameLocalOriginalId) {
         continue;
       }
 
       final nameScore = _nameSimilarity(currentName, item.name);
-      final itemAuthor = item.subTitle.trim().toLowerCase();
+      final itemAuthor = _recommendationAuthor(item).trim().toLowerCase();
       final sameAuthor =
           currentAuthor.isNotEmpty && currentAuthor == itemAuthor;
-      final itemTags = item.tags
+      final itemTags = _recommendationTags(item)
           .map((e) => e.trim().toLowerCase())
           .where((e) => e.isNotEmpty)
           .toSet();
@@ -589,7 +645,15 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
   }
 
   Widget _buildCover(BuildContext context, double width, double height) {
-    final cover = resolveLocalComicCover(widget.comic);
+    final legacyTargets = <String>{
+      ..._historyTargetsFor(widget.comic),
+      if (widget.comic is RemoteLibraryComicItem)
+        ...(widget.comic as RemoteLibraryComicItem).candidateValues,
+    };
+    final cover = resolveLocalComicCover(
+      widget.comic,
+      legacyTargets: legacyTargets,
+    );
     final coverProvider = widget.comic is RemoteLibraryComicItem
         ? (widget.comic as RemoteLibraryComicItem).coverImageProvider
         : widget.comic is RemoteLibraryRootItem
@@ -807,7 +871,16 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
 
   Widget _recommendationTile(_LocalRecommendation recommendation) {
     final item = recommendation.item;
-    final cover = resolveLocalComicCover(item);
+    final cover = resolveLocalComicCover(
+      item,
+      legacyTargets: _historyTargetsFor(item),
+    );
+    final coverProvider = item is RemoteLibraryComicItem
+        ? item.coverImageProvider
+        : item is RemoteLibraryRootItem
+            ? item.coverImageProvider
+            : null;
+    final author = _recommendationAuthor(item);
     return InkWell(
       borderRadius: BorderRadius.circular(12),
       onTap: () {
@@ -830,7 +903,14 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
               clipBehavior: Clip.antiAlias,
               child: cover.existsSync()
                   ? Image.file(cover, fit: BoxFit.cover)
-                  : const Icon(Icons.image_not_supported),
+                  : coverProvider != null
+                      ? Image(
+                          image: coverProvider,
+                          fit: BoxFit.cover,
+                          errorBuilder: (_, __, ___) =>
+                              const Icon(Icons.image_not_supported),
+                        )
+                      : const Icon(Icons.image_not_supported),
             ),
             const SizedBox(width: 12),
             Expanded(
@@ -845,9 +925,9 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
                         fontSize: 14, fontWeight: FontWeight.w500),
                   ),
                   const SizedBox(height: 4),
-                  if (item.subTitle.isNotEmpty)
+                  if (author.isNotEmpty)
                     Text(
-                      item.subTitle,
+                      author,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
@@ -1160,7 +1240,11 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
         SliverToBoxAdapter(
           child: Padding(
             padding: const EdgeInsets.fromLTRB(18, 12, 18, 0),
-            child: Text('暂无可推荐的本地漫画'.tl),
+            child: Text(
+              widget.comic is RemoteLibraryComicItem
+                  ? '暂无可推荐的远程内容'.tl
+                  : '暂无可推荐的本地漫画'.tl,
+            ),
           ),
         ),
       ];
