@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:sqlite3/sqlite3.dart';
+import 'package:picakeep/foundation/download_model.dart';
 
 class ServerResourceRootSummary {
   const ServerResourceRootSummary({
@@ -253,6 +254,7 @@ class LocalResourceScanner {
       final item = await _scanComicItem(
         rootId,
         rootTitle,
+        root.path,
         child,
         metadataByDirectory,
       );
@@ -267,6 +269,7 @@ class LocalResourceScanner {
     final rootItem = await _scanComicItem(
       rootId,
       rootTitle,
+      root.path,
       root,
       metadataByDirectory,
     );
@@ -318,6 +321,7 @@ class LocalResourceScanner {
   Future<ServerResourceItemSummary?> _scanComicItem(
     String rootId,
     String rootTitle,
+    String rootPath,
     Directory directory,
     Map<String, _ServerResourceMetadata> metadataByDirectory,
   ) async {
@@ -370,9 +374,11 @@ class LocalResourceScanner {
 
     final imageCount = episodes.fold<int>(0, (sum, item) => sum + item.imageCount);
     final totalBytes = episodes.fold<int>(0, (sum, item) => sum + item.totalBytes);
-    final normalizedDirectoryPath = _normalizePath(directory.path);
-    final metadata = metadataByDirectory[normalizedDirectoryPath] ??
-        metadataByDirectory[_normalizePath(_basename(directory.path))];
+    final metadata = _resolveManagedMetadata(
+      metadataByDirectory,
+      rootPath,
+      directory.path,
+    );
     final titledEpisodes = _applyEpisodeTitles(
       episodes,
       metadata?.episodeTitles ?? const <String>[],
@@ -430,26 +436,37 @@ class LocalResourceScanner {
         'select id, title, subtitle, directory, json from download',
       );
       for (final row in rows) {
+        final rawId = row['id']?.toString() ?? '';
         final rawDirectory = row['directory']?.toString() ?? '';
-        final normalizedDirectoryPath =
-            _normalizeManagedDirectoryPath(root.path, rawDirectory);
-        final normalizedBasename = _normalizePath(_basename(rawDirectory));
-        if (normalizedDirectoryPath.isEmpty && normalizedBasename.isEmpty) {
-          continue;
-        }
-        final data = _decodeJsonMap(row['json']?.toString());
+        final rawJson = row['json']?.toString() ?? '';
+        final data = _decodeJsonMap(rawJson);
+        final parsedItem = parseDownloadedItemRecordJson(
+          rawId,
+          rawJson,
+          directory: rawDirectory,
+        );
         final metadata = _extractDownloadMetadata(
-          id: row['id']?.toString() ?? '',
+          id: rawId,
           title: row['title']?.toString() ?? '',
           subtitle: row['subtitle']?.toString() ?? '',
           data: data,
+          parsedItem: parsedItem,
           fallbackSourceDisplayName: rootTitle,
         );
-        if (normalizedDirectoryPath.isNotEmpty) {
-          results[normalizedDirectoryPath] = metadata;
+        final lookupKeys = _metadataLookupKeysForStoredRecord(
+          root.path,
+          rawId,
+          rawDirectory,
+        );
+        if (lookupKeys.isEmpty) {
+          continue;
         }
-        if (normalizedBasename.isNotEmpty) {
-          results.putIfAbsent(normalizedBasename, () => metadata);
+        for (final key in lookupKeys) {
+          if (key.contains('/') || key.startsWith('id::')) {
+            results[key] = metadata;
+          } else {
+            results.putIfAbsent(key, () => metadata);
+          }
         }
       }
     } catch (_) {
@@ -465,19 +482,29 @@ class LocalResourceScanner {
     required String title,
     required String subtitle,
     required Map<String, dynamic>? data,
+    required DownloadedItem? parsedItem,
     required String fallbackSourceDisplayName,
   }) {
     final comicItem = data?['comicItem'];
     final comicItemMap = comicItem is Map
         ? comicItem.map((key, value) => MapEntry(key.toString(), value))
         : null;
+    final parsedJson = parsedItem?.toJson();
+    final parsedTags = parsedItem?.tags
+            .map((entry) => entry.trim())
+            .where((entry) => entry.isNotEmpty)
+            .toList(growable: false) ??
+        const <String>[];
+    final parsedEpisodeTitles = _parsedEpisodeTitles(parsedItem);
     return _ServerResourceMetadata(
       title: _firstNonEmptyValue([
+        parsedItem?.name,
+        title,
         data?['title']?.toString(),
         comicItemMap?['title']?.toString(),
-        title,
       ]),
       subtitle: _firstNonEmptyValue([
+        parsedItem?.subTitle,
         subtitle,
         data?['subtitle']?.toString(),
         data?['subTitle']?.toString(),
@@ -488,24 +515,27 @@ class LocalResourceScanner {
       displayId: _firstNonEmptyValue([
         data?['displayId']?.toString(),
         data?['comicId']?.toString(),
+        parsedJson?['displayId']?.toString(),
+        parsedJson?['comicId']?.toString(),
+        parsedJson?['comicID']?.toString(),
         comicItemMap?['displayId']?.toString(),
         comicItemMap?['comicId']?.toString(),
         comicItemMap?['id']?.toString(),
+        parsedItem?.id,
         id,
       ]),
-      tags: _normalizeTagValues(
-        data?['tagList'] ??
-            data?['tags'] ??
-            data?['metadataTags'] ??
-            comicItemMap?['tagList'] ??
-            comicItemMap?['tags'],
-      ),
+      tags: parsedTags.isNotEmpty
+          ? parsedTags
+          : _extractTagValues(data, comicItemMap),
       sourceDisplayName: _firstNonEmptyValue([
         data?['sourceDisplayName']?.toString(),
+        parsedItem?.sourceDisplayName,
         _inferSourceDisplayName(id, data),
         fallbackSourceDisplayName,
       ]),
-      episodeTitles: _extractEpisodeTitles(data, comicItemMap),
+      episodeTitles: parsedEpisodeTitles.isNotEmpty
+          ? parsedEpisodeTitles
+          : _extractEpisodeTitles(data, comicItemMap),
     );
   }
 
@@ -532,6 +562,95 @@ class LocalResourceScanner {
     return _normalizePath('$joinedRoot/$unifiedDirectory');
   }
 
+  String _relativeManagedDirectoryPath(String rootPath, String directoryPath) {
+    final normalizedRoot = _normalizePath(rootPath);
+    final normalizedDirectory = _normalizePath(directoryPath);
+    if (normalizedRoot.isEmpty || normalizedDirectory.isEmpty) {
+      return '';
+    }
+    if (normalizedDirectory == normalizedRoot) {
+      return '';
+    }
+    final prefix = '$normalizedRoot/';
+    if (!normalizedDirectory.startsWith(prefix)) {
+      return '';
+    }
+    return normalizedDirectory.substring(prefix.length);
+  }
+
+  List<String> _metadataLookupKeysForStoredRecord(
+    String rootPath,
+    String rawId,
+    String rawDirectory,
+  ) {
+    final keys = <String>[];
+
+    void add(String value) {
+      final normalized = value.trim();
+      if (normalized.isEmpty || keys.contains(normalized)) {
+        return;
+      }
+      keys.add(normalized);
+    }
+
+    final normalizedDirectoryPath =
+        _normalizeManagedDirectoryPath(rootPath, rawDirectory);
+    final relativeDirectoryPath =
+        _relativeManagedDirectoryPath(rootPath, normalizedDirectoryPath);
+
+    add('id::${rawId.trim()}');
+    add(normalizedDirectoryPath);
+    add(relativeDirectoryPath);
+    add(_normalizePath(rawDirectory));
+    add(_normalizePath(_basename(rawDirectory)));
+    add(_normalizePath(_basename(normalizedDirectoryPath)));
+    add(_normalizePath(_basename(relativeDirectoryPath)));
+    return keys;
+  }
+
+  List<String> _metadataLookupKeysForResolvedDirectory(
+    String rootPath,
+    String directoryPath,
+  ) {
+    final keys = <String>[];
+
+    void add(String value) {
+      final normalized = value.trim();
+      if (normalized.isEmpty || keys.contains(normalized)) {
+        return;
+      }
+      keys.add(normalized);
+    }
+
+    final normalizedDirectoryPath = _normalizePath(directoryPath);
+    final relativeDirectoryPath =
+        _relativeManagedDirectoryPath(rootPath, normalizedDirectoryPath);
+
+    add(normalizedDirectoryPath);
+    add(relativeDirectoryPath);
+    add(_normalizePath(_basename(directoryPath)));
+    add(_normalizePath(_basename(normalizedDirectoryPath)));
+    add(_normalizePath(_basename(relativeDirectoryPath)));
+    return keys;
+  }
+
+  _ServerResourceMetadata? _resolveManagedMetadata(
+    Map<String, _ServerResourceMetadata> metadataByDirectory,
+    String rootPath,
+    String directoryPath,
+  ) {
+    for (final key in _metadataLookupKeysForResolvedDirectory(
+      rootPath,
+      directoryPath,
+    )) {
+      final metadata = metadataByDirectory[key];
+      if (metadata != null) {
+        return metadata;
+      }
+    }
+    return null;
+  }
+
   Map<String, dynamic>? _decodeJsonMap(String? raw) {
     if (raw == null || raw.trim().isEmpty) {
       return null;
@@ -545,10 +664,89 @@ class LocalResourceScanner {
     return null;
   }
 
+  List<String> _parsedEpisodeTitles(DownloadedItem? parsedItem) {
+    if (parsedItem == null) {
+      return const <String>[];
+    }
+    final titles = parsedItem.eps
+        .map((entry) => entry.trim())
+        .where((entry) => entry.isNotEmpty)
+        .toList(growable: false);
+    if (titles.isEmpty) {
+      return const <String>[];
+    }
+    if (titles.length == 1 && titles.first == parsedItem.name.trim()) {
+      return const <String>[];
+    }
+    return titles;
+  }
+
+  Iterable<Map<String, dynamic>> _candidateMetadataMaps(
+    Map<String, dynamic>? data,
+    Map<String, dynamic>? comicItemMap,
+  ) sync* {
+    for (final map in [
+      data,
+      comicItemMap,
+      _asStringDynamicMap(data?['comic']),
+      _asStringDynamicMap(data?['gallery']),
+      _asStringDynamicMap(data?['metadata']),
+      _asStringDynamicMap(data?['detail']),
+      _asStringDynamicMap(comicItemMap?['comic']),
+      _asStringDynamicMap(comicItemMap?['gallery']),
+      _asStringDynamicMap(comicItemMap?['metadata']),
+      _asStringDynamicMap(comicItemMap?['detail']),
+    ]) {
+      if (map != null) {
+        yield map;
+      }
+    }
+  }
+
+  Map<String, dynamic>? _asStringDynamicMap(Object? raw) {
+    if (raw is Map) {
+      return raw.map((key, value) => MapEntry(key.toString(), value));
+    }
+    return null;
+  }
+
+  List<String> _extractTagValues(
+    Map<String, dynamic>? data,
+    Map<String, dynamic>? comicItemMap,
+  ) {
+    for (final map in _candidateMetadataMaps(data, comicItemMap)) {
+      for (final key in const [
+        'tagList',
+        'tags',
+        'metadataTags',
+        'categories',
+        'category',
+        'groups',
+        'labels',
+        'keywords',
+      ]) {
+        final tags = _normalizeTagValues(map[key]);
+        if (tags.isNotEmpty) {
+          return tags;
+        }
+      }
+    }
+    return const <String>[];
+  }
+
   List<String> _normalizeTagValues(Object? raw) {
     if (raw is List) {
       return raw
-          .map((entry) => entry.toString().trim())
+          .map(_tagValueFromEntry)
+          .map((entry) => entry.trim())
+          .where((entry) => entry.isNotEmpty)
+          .toSet()
+          .toList(growable: false);
+    }
+    if (raw is Map) {
+      return raw.values
+          .expand(_normalizeTagValues)
+          .map((entry) => entry.trim())
           .where((entry) => entry.isNotEmpty)
           .toSet()
           .toList(growable: false);
@@ -560,6 +758,12 @@ class LocalResourceScanner {
       }
       if (normalized.startsWith('[') && normalized.endsWith(']')) {
         final decoded = _decodeJsonMap('{"tags":$normalized}')?['tags'];
+        if (decoded != null) {
+          return _normalizeTagValues(decoded);
+        }
+      }
+      if (normalized.startsWith('{') && normalized.endsWith('}')) {
+        final decoded = _decodeJsonMap(normalized);
         if (decoded != null) {
           return _normalizeTagValues(decoded);
         }
@@ -578,19 +782,40 @@ class LocalResourceScanner {
     return <String>[single];
   }
 
+  String _tagValueFromEntry(Object? raw) {
+    if (raw == null) {
+      return '';
+    }
+    if (raw is Map) {
+      final mapped = raw.map((key, value) => MapEntry(key.toString(), value));
+      return _firstNonEmptyValue([
+        mapped['tag']?.toString(),
+        mapped['name']?.toString(),
+        mapped['title']?.toString(),
+        mapped['value']?.toString(),
+      ]);
+    }
+    return raw.toString().trim();
+  }
+
   List<String> _extractEpisodeTitles(
     Map<String, dynamic>? data,
     Map<String, dynamic>? comicItemMap,
   ) {
-    for (final raw in [
-      data?['chapters'],
-      data?['eps'],
-      comicItemMap?['chapters'],
-      comicItemMap?['eps'],
-    ]) {
-      final titles = _normalizeEpisodeTitles(raw);
-      if (titles.isNotEmpty) {
-        return titles;
+    for (final map in _candidateMetadataMaps(data, comicItemMap)) {
+      for (final key in const [
+        'chapters',
+        'eps',
+        'episodes',
+        'episodeList',
+        'chapterList',
+        'epList',
+        'epNames',
+      ]) {
+        final titles = _normalizeEpisodeTitles(map[key]);
+        if (titles.isNotEmpty) {
+          return titles;
+        }
       }
     }
     return const <String>[];
@@ -631,6 +856,9 @@ class LocalResourceScanner {
         mapped['title']?.toString(),
         mapped['name']?.toString(),
         mapped['chapter']?.toString(),
+        mapped['epName']?.toString(),
+        mapped['shortTitle']?.toString(),
+        mapped['value']?.toString(),
       ]);
     }
     return raw.toString().trim();

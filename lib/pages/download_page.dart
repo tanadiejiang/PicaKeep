@@ -1376,7 +1376,7 @@ class _DownloadedComicInfoViewState extends State<DownloadedComicInfoView> {
     if (comic is! RemoteLibraryComicItem) {
       return;
     }
-    if (comic.tags.isNotEmpty && comic.hasCompletePages) {
+    if (comic.hasUsableDetailPayload) {
       return;
     }
     setState(() {

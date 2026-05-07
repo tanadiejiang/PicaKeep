@@ -1,5 +1,6 @@
 // ignore_for_file: prefer_const_constructors, avoid_unused_constructor_parameters, no_leading_underscores_for_local_identifiers
 
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -101,6 +102,91 @@ abstract class DownloadedItem {
   bool get canDelete => true;
 
   Widget createReadingPage({int? ep, int? page});
+}
+
+DownloadedItem? parseDownloadedItemRecordJson(
+  String id,
+  String rawJson, {
+  DateTime? time,
+  String? directory,
+}) {
+  try {
+    final decoded = jsonDecode(rawJson);
+    if (decoded is! Map) {
+      return null;
+    }
+    return parseDownloadedItemRecordData(
+      id,
+      decoded.map((key, value) => MapEntry(key.toString(), value)),
+      time: time,
+      directory: directory,
+    );
+  } catch (_) {
+    return null;
+  }
+}
+
+DownloadedItem? parseDownloadedItemRecordData(
+  String id,
+  Map<String, dynamic> data, {
+  DateTime? time,
+  String? directory,
+}) {
+  final normalizedId = id.trim();
+  DownloadedItem? comic;
+
+  bool isPicacgLikeId(String value) {
+    return RegExp(r'^[0-9a-fA-F]{24}$').hasMatch(value.trim());
+  }
+
+  bool isNumericId(String value) {
+    return RegExp(r'^\d+$').hasMatch(value.trim());
+  }
+
+  try {
+    if (normalizedId.contains('-')) {
+      comic = CustomDownloadedItem.fromJson(data);
+    } else if (normalizedId.startsWith('jm')) {
+      comic = DownloadedJmComic.fromMap(data);
+    } else if (normalizedId.startsWith('hitomi')) {
+      comic = DownloadedHitomiComic.fromMap(data);
+    } else if (normalizedId.startsWith('nhentai')) {
+      comic = NhentaiDownloadedComic.fromJson(data);
+    } else if (normalizedId.startsWith('Ht')) {
+      comic = DownloadedHtComic.fromJson(data);
+    } else if (isNumericId(normalizedId)) {
+      comic = DownloadedGallery.fromJson(data);
+    } else {
+      comic = isPicacgLikeId(normalizedId)
+          ? DownloadedComic.fromJson(data)
+          : ScannedDownloadedComic.fromJson(data);
+    }
+  } catch (_) {}
+
+  comic ??= _parseDownloadedItemFallback(data);
+  if (comic == null) {
+    return null;
+  }
+
+  comic.time = time;
+  comic.directory = directory;
+  return comic;
+}
+
+DownloadedItem? _parseDownloadedItemFallback(Map<String, dynamic> data) {
+  if (data.containsKey('comicItem')) {
+    return DownloadedComic.fromJson(data);
+  }
+  if (data.containsKey('galleryTitle') || data.containsKey('gallery')) {
+    return DownloadedGallery.fromJson(data);
+  }
+  if (data.containsKey('comicID')) {
+    return NhentaiDownloadedComic.fromJson(data);
+  }
+  if (data.containsKey('sourceKey')) {
+    return CustomDownloadedItem.fromJson(data);
+  }
+  return null;
 }
 
 class DownloadedComic extends DownloadedItem {

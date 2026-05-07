@@ -42,6 +42,7 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
   final _scrollController = ScrollController();
   final _remoteDataSource = const RemoteLibraryDataSource();
   final List<DownloadedItem> _localItems = [];
+  late DownloadedItem _comic;
 
   bool _reverseEpsOrder = false;
   bool _showFullEps = false;
@@ -54,7 +55,9 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
   @override
   void initState() {
     super.initState();
+    _comic = widget.comic;
     _scrollController.addListener(_handleScroll);
+    _loadRemoteDetailIfNeeded();
     _loadLocalItems();
   }
 
@@ -77,7 +80,7 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
 
   Future<void> _loadLocalItems() async {
     List<DownloadedItem> items;
-    final current = widget.comic;
+    final current = _comic;
     if (current is RemoteLibraryComicItem) {
       try {
         final rootId = current.rootId.trim();
@@ -98,14 +101,28 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
     });
   }
 
+  Future<void> _loadRemoteDetailIfNeeded() async {
+    final current = _comic;
+    if (current is! RemoteLibraryComicItem || current.hasUsableDetailPayload) {
+      return;
+    }
+    try {
+      final detail = await current.client.fetchItemDetail(current.id);
+      if (!mounted) return;
+      setState(() {
+        _comic = detail;
+      });
+    } catch (_) {}
+  }
+
   String get _sourceLabel {
-    final label = widget.comic.sourceDisplayName.trim();
+    final label = _comic.sourceDisplayName.trim();
     if (label.isNotEmpty) return label.tl;
-    return downloadTypeDisplayName(widget.comic.type).tl;
+    return downloadTypeDisplayName(_comic.type).tl;
   }
 
   bool get _isAlbum {
-    final comic = widget.comic;
+    final comic = _comic;
     if (comic is LocalLibraryComicItem) return comic.isAlbum;
     return comic.sourceDisplayName == '图集';
   }
@@ -214,11 +231,11 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
 
   Future<void> _onRead({int? ep, int? page}) async {
     await ensureHistoryBeforeRead(
-      widget.comic,
-      legacyTargets: _historyTargetsFor(widget.comic),
+      _comic,
+      legacyTargets: _historyTargetsFor(_comic),
     );
     await App.openReader(
-      () => widget.comic.createReadingPage(ep: ep, page: page),
+      () => _comic.createReadingPage(ep: ep, page: page),
     );
     await Future<void>.delayed(const Duration(milliseconds: 50));
     if (mounted) {
@@ -227,7 +244,7 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
   }
 
   Future<void> _onDelete() async {
-    if (!widget.comic.canDelete) {
+    if (!_comic.canDelete) {
       _showMessage('当前项目不支持在此删除'.tl);
       return;
     }
@@ -235,7 +252,7 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
       context: context,
       builder: (ctx) => AlertDialog(
         title: Text('确认删除'.tl),
-        content: Text('确定要删除"${widget.comic.name}"吗？'),
+        content: Text('确定要删除"${_comic.name}"吗？'),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
@@ -249,18 +266,18 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
       ),
     );
     if (confirmed == true) {
-      await DownloadManager().delete([widget.comic.id]);
+      await DownloadManager().delete([_comic.id]);
       if (mounted) Navigator.of(context).pop();
     }
   }
 
   Future<void> _onDeleteEpisode(int ep) async {
-    if (!widget.comic.canDelete) return;
+    if (!_comic.canDelete) return;
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: Text('删除章节'.tl),
-        content: Text('确定要删除"${widget.comic.eps[ep]}"吗？'),
+        content: Text('确定要删除"${_comic.eps[ep]}"吗？'),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
@@ -274,7 +291,7 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
       ),
     );
     if (confirmed == true) {
-      final error = await DownloadManager().deleteEpisode(widget.comic, ep);
+      final error = await DownloadManager().deleteEpisode(_comic, ep);
       if (error != null) _showMessage(error);
       if (mounted) setState(() {});
     }
@@ -294,7 +311,7 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
 
   String? _getDescription() {
     try {
-      final json = widget.comic.toJson();
+      final json = _comic.toJson();
       final candidates = [
         json['description'],
         json['comicItem'] is Map ? json['comicItem']['description'] : null,
@@ -323,10 +340,19 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
       }
     }
     final json = comic.toJson();
-    for (final key in const ['comicId', 'id', 'itemId']) {
+    for (final key in const ['displayId', 'comicId', 'id', 'itemId']) {
       final value = json[key]?.toString().trim();
       if (value != null && value.isNotEmpty) {
         return value;
+      }
+    }
+    final comicItem = json['comicItem'];
+    if (comicItem is Map) {
+      for (final key in const ['displayId', 'comicId', 'id']) {
+        final value = comicItem[key]?.toString().trim();
+        if (value != null && value.isNotEmpty) {
+          return value;
+        }
       }
     }
     return comic.id;
@@ -373,7 +399,7 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
   }
 
   Map<String, List<String>> _buildInfoGroups() {
-    final comic = widget.comic;
+    final comic = _comic;
     final groups = <String, List<String>>{};
 
     void add(String key, Iterable<String?> values) {
@@ -403,7 +429,7 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
     );
     if (mode == '5') return const [];
 
-    final current = widget.comic;
+    final current = _comic;
     final currentName = current.name;
     final currentAuthor = _recommendationAuthor(current).trim().toLowerCase();
     final currentTags = _recommendationTags(current)
@@ -646,18 +672,18 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
 
   Widget _buildCover(BuildContext context, double width, double height) {
     final legacyTargets = <String>{
-      ..._historyTargetsFor(widget.comic),
-      if (widget.comic is RemoteLibraryComicItem)
-        ...(widget.comic as RemoteLibraryComicItem).candidateValues,
+      ..._historyTargetsFor(_comic),
+      if (_comic is RemoteLibraryComicItem)
+        ...(_comic as RemoteLibraryComicItem).candidateValues,
     };
     final cover = resolveLocalComicCover(
-      widget.comic,
+      _comic,
       legacyTargets: legacyTargets,
     );
-    final coverProvider = widget.comic is RemoteLibraryComicItem
-        ? (widget.comic as RemoteLibraryComicItem).coverImageProvider
-        : widget.comic is RemoteLibraryRootItem
-            ? (widget.comic as RemoteLibraryRootItem).coverImageProvider
+    final coverProvider = _comic is RemoteLibraryComicItem
+        ? (_comic as RemoteLibraryComicItem).coverImageProvider
+        : _comic is RemoteLibraryRootItem
+            ? (_comic as RemoteLibraryRootItem).coverImageProvider
             : null;
     final hasLocalCover = cover.existsSync();
     return GestureDetector(
@@ -672,7 +698,7 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
         clipBehavior: Clip.antiAlias,
         child: hasLocalCover
             ? Hero(
-                tag: 'local-cover-${widget.comic.id}',
+                tag: 'local-cover-${_comic.id}',
                 child: Image.file(
                   cover,
                   fit: BoxFit.cover,
@@ -705,7 +731,7 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
         clipBehavior: Clip.antiAlias,
         child: InteractiveViewer(
           child: Hero(
-            tag: 'local-cover-${widget.comic.id}',
+            tag: 'local-cover-${_comic.id}',
             child: Image.file(cover, fit: BoxFit.contain),
           ),
         ),
@@ -962,7 +988,7 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
 
   @override
   Widget build(BuildContext context) {
-    final comic = widget.comic;
+    final comic = _comic;
     final description = _getDescription();
     final history = _historyFor(comic);
     final infoGroups = _buildInfoGroups();
@@ -1043,7 +1069,7 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
   }
 
   Widget _buildComicInfo(BuildContext context, dynamic history) {
-    final comic = widget.comic;
+    final comic = _comic;
     final canContinue = history != null && (history.ep > 0 || history.page > 0);
     return LayoutBuilder(builder: (context, constraints) {
       final compact = constraints.maxWidth < 500;
@@ -1112,7 +1138,7 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
   }
 
   List<Widget> _buildEpisodes(BuildContext context) {
-    final comic = widget.comic;
+    final comic = _comic;
     if (comic.eps.isEmpty) return const [];
     var length = comic.eps.length;
     if (!_showFullEps) length = math.min(length, 20);
@@ -1241,7 +1267,7 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
           child: Padding(
             padding: const EdgeInsets.fromLTRB(18, 12, 18, 0),
             child: Text(
-              widget.comic is RemoteLibraryComicItem
+              _comic is RemoteLibraryComicItem
                   ? '暂无可推荐的远程内容'.tl
                   : '暂无可推荐的本地漫画'.tl,
             ),
