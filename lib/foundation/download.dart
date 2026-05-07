@@ -1,11 +1,11 @@
-// ignore_for_file: no_leading_underscores_for_local_identifiers, avoid_unused_constructor_parameters
-
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:path_provider/path_provider.dart';
 import 'package:sqlite3/sqlite3.dart';
 import '../base.dart';
 import '../tools/extensions.dart';
+import 'cover_thumbnail_cache.dart';
 import 'download_model.dart';
 
 class DownloadManager with _DownloadDb {
@@ -220,6 +220,15 @@ class DownloadManager with _DownloadDb {
     } catch (e) {
       return e.toString();
     }
+  }
+
+  File getCoverForDisplay(String id) {
+    final coverFile = getCover(id);
+    final coverPath = coverFile.path.trim();
+    if (coverPath.isEmpty) {
+      return coverFile;
+    }
+    return File(CoverThumbnailCache.displayPathForCover(coverPath));
   }
 
   File getCover(String id) {

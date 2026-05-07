@@ -81,6 +81,7 @@ class _SmoothScrollProviderState extends State<SmoothScrollProvider> {
   late final bool _ownsController;
 
   double? _futurePosition;
+  bool _animateToScheduled = false;
 
   static bool _isMouseScroll = App.isDesktop;
 
@@ -112,6 +113,7 @@ class _SmoothScrollProviderState extends State<SmoothScrollProvider> {
     return Listener(
       behavior: HitTestBehavior.translucent,
       onPointerDown: (_) {
+        _futurePosition = null;
         if (_isMouseScroll) {
           setState(() {
             _isMouseScroll = false;
@@ -140,11 +142,7 @@ class _SmoothScrollProviderState extends State<SmoothScrollProvider> {
           position.minScrollExtent,
           position.maxScrollExtent,
         );
-        _controller.animateTo(
-          _futurePosition!,
-          duration: _fastAnimationDuration,
-          curve: Curves.linear,
-        );
+        _scheduleAnimateTo();
       },
       child: widget.builder(
         context,
@@ -154,5 +152,27 @@ class _SmoothScrollProviderState extends State<SmoothScrollProvider> {
             : const ClampingScrollPhysics(),
       ),
     );
+  }
+
+  void _scheduleAnimateTo() {
+    if (_animateToScheduled) {
+      return;
+    }
+    _animateToScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _animateToScheduled = false;
+      if (!mounted || !_controller.hasClients) {
+        return;
+      }
+      final target = _futurePosition;
+      if (target == null) {
+        return;
+      }
+      _controller.animateTo(
+        target,
+        duration: _fastAnimationDuration,
+        curve: Curves.linear,
+      );
+    });
   }
 }

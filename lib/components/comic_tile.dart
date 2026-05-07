@@ -27,6 +27,8 @@ class DownloadedComicTile extends StatelessWidget {
     required this.author,
     required this.imagePath,
     this.imageProvider,
+    this.readingHistoryOverride,
+    this.isFavoriteOverride,
     required this.type,
     required this.tag,
     required this.size,
@@ -38,6 +40,8 @@ class DownloadedComicTile extends StatelessWidget {
   final String size;
   final File imagePath;
   final ImageProvider<Object>? imageProvider;
+  final History? readingHistoryOverride;
+  final bool? isFavoriteOverride;
   final String author;
   final String name;
   final void Function() onTap;
@@ -64,8 +68,8 @@ class DownloadedComicTile extends StatelessWidget {
 
   bool get showReadingPosition => appdata.settings[73] == '1';
 
-  History? get readingHistory =>
-      comicID == null ? null : HistoryManager().findSync(comicID!);
+  History? get readingHistory => readingHistoryOverride ??
+      (comicID == null ? null : HistoryManager().findSync(comicID!));
 
   @override
   Widget build(BuildContext context) {
@@ -80,13 +84,7 @@ class DownloadedComicTile extends StatelessWidget {
       child = _buildBriefMode(context);
     }
 
-    var isFavorite = false;
-    if (showFavorite) {
-      final target = comicID;
-      isFavorite = target == null
-          ? _checkFavorite()
-          : LocalFavoritesManager().isExist(target);
-    }
+    final isFavorite = showFavorite ? _resolveFavoriteState() : false;
 
     if (!isFavorite) {
       return child;
@@ -115,6 +113,15 @@ class DownloadedComicTile extends StatelessWidget {
         )
       ],
     );
+  }
+
+  bool _resolveFavoriteState() {
+    final override = isFavoriteOverride;
+    if (override != null) {
+      return override;
+    }
+    final target = comicID;
+    return target == null ? _checkFavorite() : LocalFavoritesManager().isExist(target);
   }
 
   bool _checkFavorite() {
@@ -284,9 +291,10 @@ class DownloadedComicTile extends StatelessWidget {
   Widget _buildImage() {
     return LayoutBuilder(
       builder: (context, constraints) {
+        final maxDevicePixelRatio = App.isMobile ? 2.0 : 3.0;
         final devicePixelRatio = MediaQuery.of(context)
             .devicePixelRatio
-            .clamp(1.0, 3.0)
+            .clamp(1.0, maxDevicePixelRatio)
             .toDouble();
         final cacheWidth = constraints.maxWidth.isFinite
             ? (constraints.maxWidth * devicePixelRatio).round()
@@ -309,9 +317,9 @@ class DownloadedComicTile extends StatelessWidget {
           image: resolvedProvider,
           fit: BoxFit.cover,
           height: double.infinity,
-          gaplessPlayback: true,
-          filterQuality: FilterQuality.medium,
-          isAntiAlias: true,
+          gaplessPlayback: false,
+          filterQuality: FilterQuality.low,
+          isAntiAlias: false,
           errorBuilder: (_, __, ___) =>
               const Center(child: Icon(Icons.image_not_supported)),
         );

@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart' hide Row;
 import 'package:path_provider/path_provider.dart';
 import 'package:sqlite3/sqlite3.dart';
+import 'package:picakeep/foundation/cover_thumbnail_cache.dart';
 import 'package:picakeep/foundation/image_loader/stream_image_provider.dart';
 import 'package:picakeep/pages/reader/comic_reading_page.dart';
 
@@ -737,19 +738,24 @@ class LocalLibraryManager {
     return items;
   }
 
+  String coverPathForDisplay(String path) {
+    return CoverThumbnailCache.displayPathForCover(path);
+  }
+
   ImageProvider<Object> imageProviderForLocalPath(String path) {
+    final displayPath = coverPathForDisplay(path);
     try {
-      final file = File(path);
+      final file = File(displayPath);
       if (file.existsSync()) {
         return FileImage(file);
       }
     } catch (_) {}
     return StreamImageProvider(
       () async {
-        final bytes = await _readFileBytes(path);
+        final bytes = await _readFileBytes(displayPath) ?? await _readFileBytes(path);
         return Stream<List<int>>.value(bytes ?? const <int>[]);
       },
-      'local_file::$path',
+      'local_file::$displayPath',
     );
   }
 

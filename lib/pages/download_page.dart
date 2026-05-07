@@ -8,8 +8,10 @@ import 'package:flutter/services.dart';
 import 'package:picakeep/base.dart';
 import 'package:picakeep/foundation/app.dart';
 import 'package:picakeep/foundation/app_runtime_mode.dart';
+import 'package:picakeep/foundation/cover_thumbnail_cache.dart';
 import 'package:picakeep/foundation/download.dart';
 import 'package:picakeep/foundation/download_model.dart';
+import 'package:picakeep/foundation/history.dart';
 import 'package:picakeep/foundation/local_data_source.dart';
 import 'package:picakeep/foundation/local_favorites.dart';
 import 'package:picakeep/foundation/local_library.dart';
@@ -230,6 +232,39 @@ String _downloadedItemSource(DownloadedItem item) {
   return downloadTypeDisplayName(item.type);
 }
 
+String _downloadedItemSizeText(DownloadedItem item) {
+  final size = item.comicSize;
+  return size != null ? '${size.toStringAsFixed(2)}MB' : '未知大小'.tl;
+}
+
+class _DownloadedCoverThumbnailTask {
+  const _DownloadedCoverThumbnailTask({
+    required this.itemId,
+    required this.coverPath,
+  });
+
+  final String itemId;
+  final String coverPath;
+}
+
+class _DownloadedTileViewModel {
+  const _DownloadedTileViewModel({
+    required this.author,
+    required this.type,
+    required this.tags,
+    required this.size,
+    this.readingHistoryOverride,
+    this.isFavoriteOverride,
+  });
+
+  final String author;
+  final String type;
+  final List<String> tags;
+  final String size;
+  final History? readingHistoryOverride;
+  final bool? isFavoriteOverride;
+}
+
 enum _DownloadedLibraryView {
   local,
   aggregate,
@@ -277,6 +312,8 @@ class _DownloadedPageComicTile extends DownloadedComicTile {
     required super.author,
     required super.imagePath,
     super.imageProvider,
+    super.readingHistoryOverride,
+    super.isFavoriteOverride,
     required super.type,
     required super.tag,
     required super.size,
@@ -310,9 +347,15 @@ class DownloadPageLogic extends StateController {
   final RemoteLibraryDataSource _remoteDataSource =
       const RemoteLibraryDataSource();
   final Map<String, ImageProvider<Object>> _coverImageProviders = {};
+  final Map<String, _DownloadedTileViewModel> _tileViewModels = {};
   final Set<String> _queuedCoverIds = <String>{};
+  final Set<String> _queuedCoverThumbnailIds = <String>{};
+  final Queue<_DownloadedCoverThumbnailTask> _coverThumbnailQueue =
+      Queue<_DownloadedCoverThumbnailTask>();
   final Queue<LocalLibraryComicItem> _coverResolveQueue = Queue<LocalLibraryComicItem>();
   bool _coverResolveQueueRunning = false;
+  bool _coverThumbnailQueueRunning = false;
+  bool _coverRefreshScheduled = false;
 
   bool loading = true;
   bool selecting = false;
@@ -440,9 +483,14 @@ class DownloadPageLogic extends StateController {
     comics = <DownloadedItem>[];
     baseComics = <DownloadedItem>[];
     _coverImageProviders.clear();
+    _tileViewModels.clear();
     _queuedCoverIds.clear();
+    _queuedCoverThumbnailIds.clear();
     _coverResolveQueue.clear();
+    _coverThumbnailQueue.clear();
     _coverResolveQueueRunning = false;
+    _coverThumbnailQueueRunning = false;
+    _coverRefreshScheduled = false;
     loading = true;
     update();
     unawaited(_reloadVisibleComics());
@@ -484,11 +532,168 @@ class DownloadPageLogic extends StateController {
         List<DownloadedItem>.from(await _loadComics(order, direction));
     final visibleIds = loadedComics.map((item) => item.id).toSet();
     _coverImageProviders.removeWhere((key, _) => !visibleIds.contains(key));
+    await _prepareTileViewModels(loadedComics);
     baseComics = loadedComics;
+    _prefetchCoverThumbnails(loadedComics);
     keyword_ = '__stale__';
     find();
     loading = false;
     update();
+  }
+
+  bool get _showFavoriteBadge => appdata.settings[72] == '1';
+
+  bool get _showReadingPosition => appdata.settings[73] == '1';
+
+  Future<void> _prepareTileViewModels(List<DownloadedItem> items) async {
+    final showFavoriteBadge = _showFavoriteBadge;
+    final showReadingPosition = _showReadingPosition;
+    final readingHistoryById =
+        showReadingPosition ? await _buildReadingHistoryById(items) : const <String, History>{};
+    final favoriteById =
+        showFavoriteBadge ? await _buildFavoriteById(items) : const <String, bool>{};
+
+    _tileViewModels
+      ..clear()
+      ..addEntries(items.map(
+        (item) => MapEntry(
+          item.id,
+          _DownloadedTileViewModel(
+            author: _downloadedItemAuthor(item),
+            type: _downloadedItemSource(item),
+            tags: _downloadedItemTags(item),
+            size: _downloadedItemSizeText(item),
+            readingHistoryOverride:
+                showReadingPosition ? readingHistoryById[item.id] : null,
+            isFavoriteOverride:
+                showFavoriteBadge ? (favoriteById[item.id] ?? false) : null,
+          ),
+        ),
+      ));
+  }
+
+  Future<Map<String, History>> _buildReadingHistoryById(
+      List<DownloadedItem> items) async {
+    final ids = items
+        .where((item) => item is! RemoteLibraryRootItem)
+        .map((item) => item.id.trim())
+        .where((id) => id.isNotEmpty)
+        .toSet();
+    if (ids.isEmpty) {
+      return const <String, History>{};
+    }
+    final manager = HistoryManager();
+    await manager.init();
+    return manager.findManySync(ids);
+  }
+
+  Future<Map<String, bool>> _buildFavoriteById(
+      List<DownloadedItem> items) async {
+    final ids = items
+        .where((item) => item is! RemoteLibraryRootItem)
+        .map((item) => item.id.trim())
+        .where((id) => id.isNotEmpty)
+        .toSet();
+    if (ids.isEmpty) {
+      return const <String, bool>{};
+    }
+    final manager = LocalFavoritesManager();
+    await manager.init();
+    return manager.existsMany(ids);
+  }
+
+  _DownloadedTileViewModel _viewModelFor(DownloadedItem item) {
+    return _tileViewModels[item.id] ??
+        _DownloadedTileViewModel(
+          author: _downloadedItemAuthor(item),
+          type: _downloadedItemSource(item),
+          tags: _downloadedItemTags(item),
+          size: _downloadedItemSizeText(item),
+        );
+  }
+
+  void _prefetchCoverThumbnails(List<DownloadedItem> items) {
+    if (App.isMobile) {
+      return;
+    }
+    for (final item in items) {
+      _queueCoverThumbnailForItem(item);
+    }
+  }
+
+  void _queueCoverThumbnailForItem(
+    DownloadedItem item, [
+    String? explicitCoverPath,
+  ]) {
+    if (App.isMobile ||
+        item is RemoteLibraryComicItem ||
+        item is RemoteLibraryRootItem) {
+      return;
+    }
+
+    final coverPath = (explicitCoverPath ?? _coverPathForItem(item)).trim();
+    if (coverPath.isEmpty || CoverThumbnailCache.hasFreshThumbnail(coverPath)) {
+      return;
+    }
+    if (!_queuedCoverThumbnailIds.add(item.id)) {
+      return;
+    }
+    _coverThumbnailQueue.add(
+      _DownloadedCoverThumbnailTask(itemId: item.id, coverPath: coverPath),
+    );
+    if (!_coverThumbnailQueueRunning) {
+      unawaited(_drainCoverThumbnailQueue());
+    }
+  }
+
+  String _coverPathForItem(DownloadedItem item) {
+    if (item is LocalLibraryComicItem) {
+      return item.localCoverPath?.trim() ?? '';
+    }
+    return DownloadManager().getCover(item.id).path.trim();
+  }
+
+  Future<void> _drainCoverThumbnailQueue() async {
+    if (_coverThumbnailQueueRunning) {
+      return;
+    }
+    _coverThumbnailQueueRunning = true;
+    try {
+      while (_coverThumbnailQueue.isNotEmpty) {
+        final task = _coverThumbnailQueue.removeFirst();
+        try {
+          if (!baseComics.any((comic) => comic.id == task.itemId)) {
+            continue;
+          }
+          final result = await CoverThumbnailCache.ensureForCoverPath(task.coverPath);
+          if (result != null &&
+              result.isNotEmpty &&
+              result != task.coverPath &&
+              baseComics.any((comic) => comic.id == task.itemId)) {
+            _coverImageProviders.remove(task.itemId);
+            _scheduleCoverRefresh();
+          }
+        } finally {
+          _queuedCoverThumbnailIds.remove(task.itemId);
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 40));
+      }
+    } finally {
+      _coverThumbnailQueueRunning = false;
+    }
+  }
+
+  void _scheduleCoverRefresh() {
+    if (_coverRefreshScheduled) {
+      return;
+    }
+    _coverRefreshScheduled = true;
+    Future<void>.delayed(const Duration(milliseconds: 180), () {
+      _coverRefreshScheduled = false;
+      if (!loading) {
+        update();
+      }
+    });
   }
 
   Future<List<DownloadedItem>> _loadComics(
@@ -613,18 +818,40 @@ class DownloadPageLogic extends StateController {
     return localText;
   }
 
+  bool _useDirectMobileLocalCoverPath(DownloadedItem item) {
+    return App.isMobile &&
+        item is! RemoteLibraryComicItem &&
+        item is! RemoteLibraryRootItem;
+  }
+
   File coverFor(DownloadedItem item) {
     if (item is RemoteLibraryComicItem) {
       return File('');
     }
     if (item is LocalLibraryComicItem) {
       final path = item.localCoverPath?.trim();
-      return path != null && path.isNotEmpty ? File(path) : File('');
+      if (path != null && path.isNotEmpty) {
+        if (_useDirectMobileLocalCoverPath(item)) {
+          return File(path);
+        }
+        _queueCoverThumbnailForItem(item, path);
+        return File(LocalLibraryManager().coverPathForDisplay(path));
+      }
+      return File('');
     }
-    return DownloadManager().getCover(item.id);
+    final coverFile = DownloadManager().getCover(item.id);
+    if (_useDirectMobileLocalCoverPath(item)) {
+      return coverFile;
+    }
+    _queueCoverThumbnailForItem(item, coverFile.path);
+    return DownloadManager().getCoverForDisplay(item.id);
   }
 
   ImageProvider<Object>? coverImageProviderFor(DownloadedItem item) {
+    if (_useDirectMobileLocalCoverPath(item) && item is! LocalLibraryComicItem) {
+      return null;
+    }
+
     final cachedProvider = _coverImageProviders[item.id];
     if (cachedProvider != null) {
       return cachedProvider;
@@ -638,6 +865,10 @@ class DownloadPageLogic extends StateController {
     } else if (item is LocalLibraryComicItem) {
       final coverPath = item.localCoverPath?.trim();
       if (coverPath != null && coverPath.isNotEmpty) {
+        if (_useDirectMobileLocalCoverPath(item)) {
+          return null;
+        }
+        _queueCoverThumbnailForItem(item, coverPath);
         provider = LocalLibraryManager().imageProviderForLocalPath(coverPath);
       } else {
         _queueLocalCoverResolve(item);
@@ -680,9 +911,10 @@ class DownloadPageLogic extends StateController {
         }
         final path = await LocalLibraryManager().resolveCoverPathForItem(item);
         if (path != null && path.trim().isNotEmpty) {
+          _queueCoverThumbnailForItem(item, path);
           _coverImageProviders[item.id] =
               LocalLibraryManager().imageProviderForLocalPath(path);
-          update();
+          _scheduleCoverRefresh();
         }
         _queuedCoverIds.remove(item.id);
         await Future<void>.delayed(const Duration(milliseconds: 80));
@@ -745,7 +977,9 @@ class DownloadPage extends StatelessWidget {
         return Scaffold(
           floatingActionButton: _buildFAB(context, logic),
           body: SmoothCustomScrollView(
-            cacheExtent: MediaQuery.of(context).size.height * 2.5,
+            cacheExtent: App.isMobile
+                ? MediaQuery.of(context).size.height * 0.6
+                : MediaQuery.of(context).size.height,
             slivers: [
               _buildAppbar(context, logic),
               if (logic.showSourceSelector)
@@ -768,23 +1002,25 @@ class DownloadPage extends StatelessWidget {
     return SliverGrid(
       delegate: SliverChildBuilderDelegate(
         childCount: comics.length,
-        addAutomaticKeepAlives: true,
+        addAutomaticKeepAlives: false,
         addRepaintBoundaries: true,
         addSemanticIndexes: false,
         (context, index) {
           return _buildItem(context, logic, index);
         },
       ),
-      gridDelegate: SliverGridDelegateWithComics(),
+      gridDelegate: SliverGridDelegateWithComics(
+        false,
+        null,
+        appdata.settings[44],
+      ),
     );
   }
 
   Widget _buildItem(BuildContext context, DownloadPageLogic logic, int index) {
     final item = logic.comics[index];
+    final viewModel = logic._viewModelFor(item);
     final selected = logic.selected[index];
-    final type = _downloadedItemSource(item);
-    final author = _downloadedItemAuthor(item);
-    final tags = _downloadedItemTags(item);
     final isRootItem = item is RemoteLibraryRootItem;
     final coverFile = logic.coverFor(item);
     final coverProvider = logic.coverImageProviderFor(item);
@@ -800,11 +1036,13 @@ class DownloadPage extends StatelessWidget {
         child: _DownloadedPageComicTile(
           comicId: item.id,
           name: item.name,
-          author: author,
+          author: viewModel.author,
           imagePath: coverFile,
           imageProvider: coverProvider,
-          type: type,
-          tag: tags,
+          readingHistoryOverride: viewModel.readingHistoryOverride,
+          isFavoriteOverride: viewModel.isFavoriteOverride,
+          type: viewModel.type,
+          tag: viewModel.tags,
           onTap: () async {
             if (logic.selecting) {
               logic.selected[index] = !logic.selected[index];
@@ -819,13 +1057,7 @@ class DownloadPage extends StatelessWidget {
               _showInfo(index, logic, context);
             }
           },
-          size: () {
-            if (logic.comics[index].comicSize != null) {
-              return "${logic.comics[index].comicSize!.toStringAsFixed(2)}MB";
-            } else {
-              return "未知大小".tl;
-            }
-          }.call(),
+          size: viewModel.size,
           onLongTap: () {
             if (logic.selecting) return;
             logic.selected[index] = true;
