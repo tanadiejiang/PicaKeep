@@ -37,11 +37,32 @@ HistoryType _historyTypeForDownload(DownloadedItem c) {
   }
 }
 
+String _firstEpisodeCoverPath(LocalLibraryComicItem item) {
+  final keys = item.episodeFiles.keys.toList()..sort();
+  for (final key in keys) {
+    final files = item.episodeFiles[key] ?? const <String>[];
+    for (final file in files) {
+      final path = file.trim();
+      if (path.isNotEmpty && File(path).existsSync()) {
+        return path;
+      }
+    }
+  }
+  return '';
+}
+
 String resolveLocalComicCoverPath(DownloadedItem comic,
     {Iterable<String> legacyTargets = const <String>[]}) {
   final directPath = comic.localCoverPath?.trim();
   if (directPath != null && directPath.isNotEmpty) {
     return directPath;
+  }
+
+  if (comic is LocalLibraryComicItem) {
+    final firstEpisodeCover = _firstEpisodeCoverPath(comic);
+    if (firstEpisodeCover.isNotEmpty) {
+      return firstEpisodeCover;
+    }
   }
 
   try {
@@ -50,6 +71,12 @@ String resolveLocalComicCoverPath(DownloadedItem comic,
     final coverPath = localItem?.localCoverPath?.trim();
     if (coverPath != null && coverPath.isNotEmpty) {
       return coverPath;
+    }
+    if (localItem != null) {
+      final firstEpisodeCover = _firstEpisodeCoverPath(localItem);
+      if (firstEpisodeCover.isNotEmpty) {
+        return firstEpisodeCover;
+      }
     }
   } catch (_) {}
 

@@ -135,11 +135,14 @@ class _SettingsPageState extends State<SettingsPage> {
   double offset = 0;
   bool _isDraggingPage = false;
   int _pageTransitionToken = 0;
+  LocalHistoryEntry? _subPageHistoryEntry;
+  bool _isRemovingSubPageHistoryEntry = false;
 
   late final HorizontalDragGestureRecognizer gestureRecognizer;
 
   void _openPage(int id) {
     if (enableTwoViews) {
+      _removeSubPageHistoryEntry();
       setState(() {
         currentPage = id;
         offset = 0;
@@ -154,6 +157,7 @@ class _SettingsPageState extends State<SettingsPage> {
       offset = width;
       _isDraggingPage = false;
     });
+    _ensureSubPageHistoryEntry();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted || transitionToken != _pageTransitionToken) {
         return;
@@ -164,9 +168,12 @@ class _SettingsPageState extends State<SettingsPage> {
     });
   }
 
-  void _closePage({bool animate = true}) {
+  void _closePage({bool animate = true, bool removeHistoryEntry = true}) {
     if (currentPage == -1) {
       return;
+    }
+    if (removeHistoryEntry) {
+      _removeSubPageHistoryEntry();
     }
     if (enableTwoViews || !animate) {
       setState(() {
@@ -191,6 +198,41 @@ class _SettingsPageState extends State<SettingsPage> {
         offset = 0;
       });
     });
+  }
+
+  void _ensureSubPageHistoryEntry() {
+    if (enableTwoViews || currentPage == -1 || _subPageHistoryEntry != null) {
+      return;
+    }
+    final route = ModalRoute.of(context);
+    if (route == null) {
+      return;
+    }
+    final entry = LocalHistoryEntry(onRemove: _handleSubPageHistoryRemoved);
+    route.addLocalHistoryEntry(entry);
+    _subPageHistoryEntry = entry;
+  }
+
+  void _removeSubPageHistoryEntry() {
+    final entry = _subPageHistoryEntry;
+    if (entry == null) {
+      return;
+    }
+    _subPageHistoryEntry = null;
+    _isRemovingSubPageHistoryEntry = true;
+    entry.remove();
+    _isRemovingSubPageHistoryEntry = false;
+  }
+
+  void _handleSubPageHistoryRemoved() {
+    _subPageHistoryEntry = null;
+    if (_isRemovingSubPageHistoryEntry ||
+        !mounted ||
+        enableTwoViews ||
+        currentPage == -1) {
+      return;
+    }
+    _closePage(removeHistoryEntry: false);
   }
 
   @override
@@ -231,24 +273,25 @@ class _SettingsPageState extends State<SettingsPage> {
 
   @override
   dispose() {
-    super.dispose();
+    _removeSubPageHistoryEntry();
     gestureRecognizer.dispose();
-    App.temporaryDisablePopGesture = false;
+    super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    if (currentPage != -1 && !enableTwoViews) {
-      App.temporaryDisablePopGesture = true;
-    } else {
-      App.temporaryDisablePopGesture = false;
-    }
-    return PopScope(
-      canPop: currentPage == -1 || enableTwoViews,
-      onPopInvokedWithResult: (didPop, _) => handlePopInvoked(didPop),
-      child: Material(
-        child: buildBody(),
-      ),
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) {
+        return;
+      }
+      if (currentPage != -1 && !enableTwoViews) {
+        _ensureSubPageHistoryEntry();
+      } else {
+        _removeSubPageHistoryEntry();
+      }
+    });
+    return Material(
+      child: buildBody(),
     );
   }
 

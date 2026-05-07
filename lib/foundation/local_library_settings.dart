@@ -7,6 +7,8 @@ const localLibraryListSortSettingIndex = 93;
 const localLibraryAlbumOnlySettingIndex = 94;
 const localDetailRecommendationSettingIndex = 95;
 const localLibraryShowAllDatabaseRecordsSettingIndex = 96;
+const downloadedLibraryViewSettingIndex = 103;
+const localLibraryViewSettingIndex = 104;
 const androidRootModeSettingIndex = 101;
 const androidShizukuModeSettingIndex = 102;
 
@@ -55,6 +57,26 @@ String normalizeLocalDetailRecommendationMode(String? value) {
 
 String normalizeLocalLibraryShowAllDatabaseRecords(String? value) {
   return value == '1' ? '1' : '0';
+}
+
+String normalizeDownloadedLibraryView(String? value) {
+  switch (value) {
+    case 'aggregate':
+    case 'remote':
+      return value!;
+    default:
+      return 'local';
+  }
+}
+
+String normalizeLocalLibraryView(String? value) {
+  switch (value) {
+    case 'aggregate':
+    case 'remote':
+      return value!;
+    default:
+      return 'local';
+  }
 }
 
 String normalizeAndroidRootMode(String? value) {

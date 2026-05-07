@@ -189,7 +189,9 @@ class PicaKeepAdminServer {
         'generatedAt': snapshot.generatedAt.toIso8601String(),
         'totalComicCount': snapshot.totalComicCount,
         'totalBytes': snapshot.totalBytes,
-        'roots': snapshot.roots.map(_buildLibraryRootPayload).toList(),
+        'roots': snapshot.roots
+            .map((root) => _buildLibraryRootPayload(root, snapshot.items))
+            .toList(),
         'items': snapshot.items.map(_buildLibraryItemPayload).toList(),
       });
     }
@@ -290,7 +292,20 @@ class PicaKeepAdminServer {
 
   Map<String, dynamic> _buildLibraryRootPayload(
     ServerResourceRootSummary root,
+    Iterable<ServerResourceItemSummary> items,
   ) {
+    final previewCoverUrls = <String>[];
+    for (final item in items) {
+      if (item.rootId != root.id || item.coverPath?.trim().isEmpty != false) {
+        continue;
+      }
+      previewCoverUrls.add(
+        '/api/library/items/${Uri.encodeComponent(item.id)}/cover',
+      );
+      if (previewCoverUrls.length >= 4) {
+        break;
+      }
+    }
     return {
       'id': root.id,
       'title': root.title,
@@ -298,6 +313,7 @@ class PicaKeepAdminServer {
       'exists': root.exists,
       'itemCount': root.itemCount,
       'totalBytes': root.totalBytes,
+      'previewCoverUrls': previewCoverUrls,
     };
   }
 
@@ -312,6 +328,7 @@ class PicaKeepAdminServer {
       'sourceTitle': item.sourceTitle,
       'sourceDisplayName': item.sourceDisplayName,
       'title': item.title,
+      'displayId': item.displayId,
       'subtitle': item.subtitle,
       'tags': item.tags,
       'path': item.path,

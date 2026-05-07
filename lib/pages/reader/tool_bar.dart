@@ -1,7 +1,8 @@
-﻿part of pica_reader;
+part of pica_reader;
 
 extension ToolBar on ComicReadingPage {
-  bool get isReversed => appdata.settings[9] == "2" || appdata.settings[9] == "6";
+  bool get isReversed =>
+      appdata.settings[9] == "2" || appdata.settings[9] == "6";
 
   Future<void> _showLocalAlbumImageSortDialog(
     ComicReadingPageLogic logic,
@@ -173,7 +174,8 @@ extension ToolBar on ComicReadingPage {
                             var image = await _persistentCurrentImage();
                             if (image != null) {
                               var otherInfo = <String, dynamic>{};
-                              otherInfo["eps"] = readingData.eps?.keys.toList() ?? [];
+                              otherInfo["eps"] =
+                                  readingData.eps?.keys.toList() ?? [];
                               otherInfo["url"] = logic.urls[logic.index - 1];
                               otherInfo["sourceKey"] = logic.data.sourceKey;
                               otherInfo["downloadId"] = logic.data.downloadId;
@@ -184,7 +186,8 @@ extension ToolBar on ComicReadingPage {
                                   logic.order,
                                   logic.index,
                                   otherInfo);
-                              if (!ImageFavoriteManager.exist(id, logic.order, logic.index)) {
+                              if (!ImageFavoriteManager.exist(
+                                  id, logic.order, logic.index)) {
                                 ImageFavoriteManager.add(favorite);
                                 showToast(message: "已添加至图片收藏".tl);
                               } else {
@@ -350,7 +353,7 @@ extension ToolBar on ComicReadingPage {
       }
       yield Positioned(
         left: 4,
-        top: 4 + MediaQuery.of(context).viewPadding.top,
+        top: 4 + MediaQuery.of(context).padding.top,
         child: IconButton(
           iconSize: 24,
           icon: const Icon(Icons.close),
@@ -375,8 +378,10 @@ extension ToolBar on ComicReadingPage {
               ? Material(
                   surfaceTintColor: Theme.of(context).colorScheme.surfaceTint,
                   elevation: 3,
-                  shadowColor:
-                      Theme.of(context).colorScheme.shadow.withValues(alpha: 0.3),
+                  shadowColor: Theme.of(context)
+                      .colorScheme
+                      .shadow
+                      .withValues(alpha: 0.3),
                   child: SizedBox(
                     width: MediaQuery.of(context).size.width,
                     child: Row(
@@ -422,7 +427,7 @@ extension ToolBar on ComicReadingPage {
                         ),
                       ],
                     ),
-                  ).paddingTop(MediaQuery.of(context).viewPadding.top),
+                  ).paddingTop(MediaQuery.of(context).padding.top),
                 )
               : const SizedBox(
                   width: 0,
