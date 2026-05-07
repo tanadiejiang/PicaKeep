@@ -120,7 +120,10 @@ class RemoteLibraryRootSummary {
     return leaf.isNotEmpty ? leaf : (fallback.isNotEmpty ? fallback : id);
   }
 
-  factory RemoteLibraryRootSummary.fromJson(Map<String, dynamic> json) {
+  factory RemoteLibraryRootSummary.fromJson(
+    Map<String, dynamic> json,
+    RemoteLibraryClient client,
+  ) {
     return RemoteLibraryRootSummary(
       id: _readText(json['id']),
       title: _readText(json['title'], fallback: '远程目录'),
@@ -128,7 +131,10 @@ class RemoteLibraryRootSummary {
       exists: json['exists'] != false,
       itemCount: _readInt(json['itemCount']) ?? 0,
       totalBytes: _readInt(json['totalBytes']) ?? 0,
-      previewCoverUrls: _readStringList(json['previewCoverUrls']),
+      previewCoverUrls: _readStringList(json['previewCoverUrls'])
+          .map(client.resolveUrlString)
+          .where((entry) => entry.isNotEmpty)
+          .toList(growable: false),
     );
   }
 }
@@ -260,6 +266,29 @@ class RemoteLibraryComicItem extends DownloadedItem {
   bool get hasMultipleEpisodes => episodesData.length > 1;
 
   bool get hasCompletePages => episodesData.every((episode) => episode.hasPages);
+
+  bool get hasMetadataTags =>
+      metadataTags.any((tag) => tag.trim().isNotEmpty);
+
+  bool get hasMeaningfulEpisodeTitles {
+    if (episodesData.isEmpty) {
+      return false;
+    }
+    final itemTitle = title.trim();
+    for (final episode in episodesData) {
+      final episodeTitle = episode.title.trim();
+      if (episodeTitle.isEmpty || episodeTitle == '未命名章节') {
+        continue;
+      }
+      if (itemTitle.isEmpty || episodeTitle != itemTitle) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  bool get hasUsableDetailPayload =>
+      hasCompletePages && hasMetadataTags && hasMeaningfulEpisodeTitles;
 
   bool get isManagedDownloadRoot =>
       rootId == 'current_download' || rootId == 'original_download';
@@ -854,6 +883,7 @@ class RemoteLibraryClient {
           .map(
             (root) => RemoteLibraryRootSummary.fromJson(
               root.map((key, value) => MapEntry(key.toString(), value)),
+              this,
             ),
           )
           .toList(growable: false);
@@ -927,7 +957,7 @@ class RemoteLibraryClient {
 
   Future<RemoteLibraryComicItem> fetchItemDetail(String itemId) async {
     final cached = _detailCache[itemId];
-    if (cached != null && cached.hasCompletePages) {
+    if (cached != null && cached.hasUsableDetailPayload) {
       return cached;
     }
 

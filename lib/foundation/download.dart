@@ -590,120 +590,20 @@ abstract mixin class _DownloadDb {
 
 DownloadedItem? _getComicFromJson(
     String id, String json, DateTime time, String? directory) {
-  DownloadedItem? comic;
-
-  bool isPicacgLikeId(String value) {
-    return RegExp(r'^[0-9a-fA-F]{24}$').hasMatch(value.trim());
-  }
-  try {
-    final data = jsonDecode(json) as Map<String, dynamic>;
-
-    // Primary: use ID prefix matching (consistent with original PicaComic)
-    if (id.contains('-')) {
-      // Custom sources: copy_manga, Komiic, etc.
-      try {
-        comic = CustomDownloadedItem.fromJson(data);
-      } catch (e) {
-        print(
-            '[PicaKeep] CustomDownloadedItem.fromJson failed for id="$id": $e');
-      }
-    } else if (id.startsWith("jm")) {
-      try {
-        comic = DownloadedJmComic.fromMap(data);
-      } catch (e) {
-        print('[PicaKeep] DownloadedJmComic.fromMap failed for id="$id": $e');
-      }
-    } else if (id.startsWith("hitomi")) {
-      try {
-        comic = DownloadedHitomiComic.fromMap(data);
-      } catch (e) {
-        print(
-            '[PicaKeep] DownloadedHitomiComic.fromMap failed for id="$id": $e');
-      }
-    } else if (id.startsWith("nhentai")) {
-      try {
-        comic = NhentaiDownloadedComic.fromJson(data);
-      } catch (e) {
-        print(
-            '[PicaKeep] NhentaiDownloadedComic.fromJson failed for id="$id": $e');
-      }
-    } else if (id.startsWith("Ht")) {
-      try {
-        comic = DownloadedHtComic.fromJson(data);
-      } catch (e) {
-        print('[PicaKeep] DownloadedHtComic.fromJson failed for id="$id": $e');
-      }
-    } else if (id.isNum) {
-      // E-Hentai: pure numeric ID like "2971848"
-      try {
-        comic = DownloadedGallery.fromJson(data);
-      } catch (e) {
-        print('[PicaKeep] DownloadedGallery.fromJson failed for id="$id": $e');
-      }
-    } else {
-      // Picacg ObjectId or local records synthesized by rescan
-      try {
-        comic = isPicacgLikeId(id)
-            ? DownloadedComic.fromJson(data)
-            : ScannedDownloadedComic.fromJson(data);
-      } catch (e) {
-        print('[PicaKeep] DownloadedComic parse failed for id="$id": $e');
-      }
-    }
-
-    // Fallback: if primary parsing failed, try JSON key detection
-    if (comic == null) {
-      print(
-          '[PicaKeep] Primary parsing failed for id="$id", trying fallback...');
-      if (data.containsKey("comicItem")) {
-        try {
-          comic = DownloadedComic.fromJson(data);
-        } catch (e) {
-          print(
-              '[PicaKeep] Fallback DownloadedComic.fromJson failed for id="$id": $e');
-        }
-      } else if (data.containsKey("galleryTitle")) {
-        try {
-          comic = DownloadedGallery.fromJson(data);
-        } catch (e) {
-          print(
-              '[PicaKeep] Fallback DownloadedGallery.fromJson failed for id="$id": $e');
-        }
-      } else if (data.containsKey("comicID")) {
-        try {
-          comic = NhentaiDownloadedComic.fromJson(data);
-        } catch (e) {
-          print(
-              '[PicaKeep] Fallback NhentaiDownloadedComic.fromJson failed for id="$id": $e');
-        }
-      } else if (data.containsKey("sourceKey")) {
-        try {
-          comic = CustomDownloadedItem.fromJson(data);
-        } catch (e) {
-          print(
-              '[PicaKeep] Fallback CustomDownloadedItem.fromJson failed for id="$id": $e');
-        }
-      }
-    }
-
-    if (comic == null) {
-      print(
-          '[PicaKeep] _getComicFromJson FAILED for id="$id": unable to parse with any method');
-      final jsonSample =
-          json.length > 300 ? '${json.substring(0, 300)}...[TRUNCATED]' : json;
-      print('[PicaKeep] JSON sample: $jsonSample');
-      return null;
-    }
-
-    comic.time = time;
-    comic.directory = directory;
+  final comic = parseDownloadedItemRecordJson(
+    id,
+    json,
+    time: time,
+    directory: directory,
+  );
+  if (comic != null) {
     return comic;
-  } catch (e, s) {
-    final jsonSample =
-        json.length > 300 ? '${json.substring(0, 300)}...[TRUNCATED]' : json;
-    print('[PicaKeep] _getComicFromJson FAILED for id="$id": $e');
-    print('[PicaKeep] Stack: $s');
-    print('[PicaKeep] JSON sample: $jsonSample');
-    return null;
   }
+
+  final jsonSample =
+      json.length > 300 ? '${json.substring(0, 300)}...[TRUNCATED]' : json;
+  print(
+      '[PicaKeep] _getComicFromJson FAILED for id="$id": unable to parse with any method');
+  print('[PicaKeep] JSON sample: $jsonSample');
+  return null;
 }
