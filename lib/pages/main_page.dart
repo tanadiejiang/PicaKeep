@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:picakeep/foundation/app.dart';
@@ -29,6 +31,7 @@ class _MainPageState extends State<MainPage> {
   final observer = NaviObserver();
   final _navigatorKey = GlobalKey<NavigatorState>();
   bool _isPaneActionNavigating = false;
+  Timer? _clipboardCheckTimer;
 
   bool get _showServiceInfoTab =>
       normalizeAppRuntimeMode(appdata.settings[appRuntimeModeSettingIndex]) ==
@@ -121,8 +124,14 @@ class _MainPageState extends State<MainPage> {
     }
   }
 
-  void checkClipboard() {
-    checkLocalClipboard();
+  void _scheduleClipboardCheck() {
+    _clipboardCheckTimer?.cancel();
+    _clipboardCheckTimer = Timer(const Duration(milliseconds: 900), () {
+      if (!mounted) {
+        return;
+      }
+      checkLocalClipboard();
+    });
   }
 
   @override
@@ -134,12 +143,13 @@ class _MainPageState extends State<MainPage> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       StateController.find<MainPageHub>().pushPage = _openHubPage;
+      _scheduleClipboardCheck();
     });
-    checkClipboard();
   }
 
   @override
   void dispose() {
+    _clipboardCheckTimer?.cancel();
     App.serviceConfigVersion.removeListener(_handleServiceConfigChanged);
     super.dispose();
   }

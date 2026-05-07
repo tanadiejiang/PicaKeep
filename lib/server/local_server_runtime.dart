@@ -118,8 +118,13 @@ class LocalServerRuntime {
       _notify();
       try {
         await server.start(config: config);
-      } catch (_) {
+      } catch (e) {
         _server = null;
+        if (_isPortAlreadyBoundError(e)) {
+          _state.markError('端口 ${config.port} 已被占用');
+          _notify();
+          return;
+        }
         _notify();
         rethrow;
       }
@@ -169,13 +174,28 @@ class LocalServerRuntime {
       _notify();
       try {
         await nextServer.start(config: config);
-      } catch (_) {
+      } catch (e) {
         _server = null;
+        if (_isPortAlreadyBoundError(e)) {
+          _state.markError('端口 ${config.port} 已被占用');
+          _notify();
+          return;
+        }
         _notify();
         rethrow;
       }
       _notify();
     });
+  }
+
+  bool _isPortAlreadyBoundError(Object error) {
+    if (error is! SocketException) {
+      return false;
+    }
+    final message = error.message.toLowerCase();
+    return error.osError?.errorCode == 10048 ||
+        message.contains('only one usage of each socket address') ||
+        message.contains('只允许使用一次');
   }
 
   Future<LocalServerRuntimeSnapshot> readSnapshot() async {

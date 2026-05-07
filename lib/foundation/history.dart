@@ -267,6 +267,7 @@ class HistoryManager {
 
   late Database _db;
   Database? _secondaryDb;
+  bool _initialized = false;
 
   int get length => count();
 
@@ -311,6 +312,7 @@ class HistoryManager {
     _secondaryDb = nextSecondaryDb;
     _reconcileManagedHistoryStorage();
     _cachedHistory = null;
+    _initialized = true;
 
     if (!identical(previousDb, nextDb)) {
       try {
@@ -333,6 +335,7 @@ class HistoryManager {
     } catch (_) {}
     _secondaryDb = null;
     _cachedHistory = null;
+    _initialized = false;
   }
 
   void _configureDatabase(Database db) {
@@ -653,6 +656,9 @@ class HistoryManager {
   }
 
   History? find(String target) {
+    if (!_initialized) {
+      return null;
+    }
     _cachedHistory ??= {
       for (final item in getAll()) item.target: true,
     };
@@ -664,6 +670,9 @@ class HistoryManager {
   }
 
   List<History> getAll() {
+    if (!_initialized) {
+      return const <History>[];
+    }
     final merged = <String, History>{};
     for (final db in databases) {
       final res = db.select("""

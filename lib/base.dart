@@ -129,6 +129,7 @@ class Appdata {
     "mdns", //99 局域网发现方式
     "9527", //100 服务端后台端口
     "0", //101 安卓 Root 浏览模式
+    "0", //102 安卓 Shizuku 浏览模式
   ];
 
   List<String> implicitData = [
@@ -227,6 +228,8 @@ class Appdata {
         normalizeServiceAdminPortValue(settings[serviceAdminPortSettingIndex]);
     settings[androidRootModeSettingIndex] =
         normalizeAndroidRootMode(settings[androidRootModeSettingIndex]);
+    settings[androidShizukuModeSettingIndex] =
+        normalizeAndroidShizukuMode(settings[androidShizukuModeSettingIndex]);
     setManagedDataSourceMode(settings[managedDataSourceModeSettingIndex]);
   }
 

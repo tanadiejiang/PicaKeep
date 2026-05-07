@@ -78,6 +78,8 @@ class _ComicImageState extends State<ComicImage> with WidgetsBindingObserver {
   late DisposableBuildContext<State<ComicImage>> _scrollAwareContext;
   Object? _lastException;
   ImageStreamCompleterHandle? _completerHandle;
+  int _lastReportedChunkBytes = 0;
+  DateTime? _lastChunkUpdateAt;
 
   static final Map<int, Size> _cache = {};
 
@@ -183,6 +185,24 @@ class _ComicImageState extends State<ComicImage> with WidgetsBindingObserver {
   }
 
   void _handleImageChunk(ImageChunkEvent event) {
+    final previousProgress = _loadingProgress;
+    final now = DateTime.now();
+    final bytesDelta = event.cumulativeBytesLoaded - _lastReportedChunkBytes;
+    final shouldReport =
+        previousProgress == null ||
+        event.expectedTotalBytes != previousProgress.expectedTotalBytes ||
+        bytesDelta >= 128 * 1024 ||
+        (event.expectedTotalBytes != null &&
+            event.cumulativeBytesLoaded >= event.expectedTotalBytes!) ||
+        _lastChunkUpdateAt == null ||
+        now.difference(_lastChunkUpdateAt!) >= const Duration(milliseconds: 80);
+
+    if (!shouldReport || !mounted) {
+      return;
+    }
+
+    _lastReportedChunkBytes = event.cumulativeBytesLoaded;
+    _lastChunkUpdateAt = now;
     setState(() {
       _loadingProgress = event;
       _lastException = null;
@@ -215,6 +235,8 @@ class _ComicImageState extends State<ComicImage> with WidgetsBindingObserver {
       _loadingProgress = null;
       _frameNumber = null;
       _wasSynchronouslyLoaded = false;
+      _lastReportedChunkBytes = 0;
+      _lastChunkUpdateAt = null;
     });
 
     _imageStream = newStream;
@@ -297,7 +319,7 @@ class _ComicImageState extends State<ComicImage> with WidgetsBindingObserver {
     }
 
     var width = widget.width??MediaQuery.of(context).size.width;
-    double? height;
+    double? height = widget.height;
 
     Size? cacheSize = _cache[widget.image.hashCode];
     if(cacheSize != null){
@@ -311,12 +333,15 @@ class _ComicImageState extends State<ComicImage> with WidgetsBindingObserver {
     }
 
     if(_imageInfo != null){
-      // Record the height and the width of the image
-      _cache[widget.image.hashCode] = Size(
-          _imageInfo!.image.width.toDouble(),
-          _imageInfo!.image.height.toDouble()
+      final imageSize = Size(
+        _imageInfo!.image.width.toDouble(),
+        _imageInfo!.image.height.toDouble(),
       );
-      // build image
+      _cache[widget.image.hashCode] = imageSize;
+      if (imageSize.width > 0) {
+        height = imageSize.height * (width / imageSize.width);
+        height = height.ceilToDouble();
+      }
       Widget result = RawImage(
         // Do not clone the image, because RawImage is a stateless wrapper.
         // The image will be disposed by this state object when it is not needed

@@ -621,7 +621,10 @@ class _NaviPopScope extends StatelessWidget {
         ? child
         : PopScope(
             canPop: App.isAndroid ? false : true,
-            onPopInvokedWithResult: (value, result) {
+            onPopInvokedWithResult: (didPop, result) {
+              if (didPop || App.temporaryDisablePopGesture) {
+                return;
+              }
               action();
             },
             child: child,

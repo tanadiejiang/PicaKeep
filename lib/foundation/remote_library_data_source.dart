@@ -335,14 +335,21 @@ class RemoteLibraryComicItem extends DownloadedItem {
     Map<String, dynamic> json,
     RemoteLibraryClient client,
   ) {
+    final nestedComicItem = _readNestedMap(json['comicItem']);
     final itemId = _readText(json['id']);
-    final title = _readText(json['title'], fallback: '未命名漫画');
+    final title = _readText(
+      json['title'],
+      fallback: _readText(nestedComicItem['title'], fallback: '未命名漫画'),
+    );
     final detailUrl = client.resolveUrlString(_readText(json['detailUrl']));
     final episodes = _readEpisodeList(json['episodes'], client, title);
     final coverUrl = client.resolveUrlString(
       _readText(
         json['coverUrl'],
-        fallback: episodes.isEmpty ? '' : episodes.first.coverUrl,
+        fallback: _readText(
+          nestedComicItem['coverUrl'],
+          fallback: episodes.isEmpty ? '' : episodes.first.coverUrl,
+        ),
       ),
     );
 
@@ -351,7 +358,13 @@ class RemoteLibraryComicItem extends DownloadedItem {
       remoteId: itemId.isEmpty ? title : itemId,
       rootId: _readText(json['rootId']),
       title: title,
-      sourceTitle: _readText(json['sourceTitle'], fallback: '远程资源'),
+      sourceTitle: _readText(
+        json['sourceTitle'],
+        fallback: _readText(
+          nestedComicItem['sourceTitle'],
+          fallback: '远程资源',
+        ),
+      ),
       remotePath: _readText(json['path']),
       coverUrl: coverUrl,
       detailUrl: detailUrl,
@@ -362,10 +375,32 @@ class RemoteLibraryComicItem extends DownloadedItem {
           episodes.fold<int>(0, (sum, episode) => sum + episode.totalBytes),
       subtitle: _readText(
         json['subtitle'],
-        fallback: _readText(json['author']),
+        fallback: _readText(
+          json['author'],
+          fallback: _readText(
+            nestedComicItem['subtitle'],
+            fallback: _readText(nestedComicItem['author']),
+          ),
+        ),
       ),
-      metadataTags: _readStringList(json['tags']),
-      metadataSourceDisplayName: _readText(json['sourceDisplayName']),
+      metadataTags: _readFirstStringList([
+        json['tags'],
+        json['tagList'],
+        json['metadataTags'],
+        nestedComicItem['tags'],
+        nestedComicItem['tagList'],
+        nestedComicItem['metadataTags'],
+      ]),
+      metadataSourceDisplayName: _readText(
+        json['sourceDisplayName'],
+        fallback: _readText(
+          json['metadataSourceDisplayName'],
+          fallback: _readText(
+            nestedComicItem['sourceDisplayName'],
+            fallback: _readText(nestedComicItem['metadataSourceDisplayName']),
+          ),
+        ),
+      ),
     );
   }
 
@@ -978,4 +1013,24 @@ List<String> _readStringList(Object? value) {
         .toList(growable: false);
   }
   return const [];
+}
+
+Map<String, dynamic> _readNestedMap(Object? value) {
+  if (value is Map<String, dynamic>) {
+    return value;
+  }
+  if (value is Map) {
+    return value.map((key, entry) => MapEntry(key.toString(), entry));
+  }
+  return const <String, dynamic>{};
+}
+
+List<String> _readFirstStringList(Iterable<Object?> values) {
+  for (final value in values) {
+    final entries = _readStringList(value);
+    if (entries.isNotEmpty) {
+      return entries;
+    }
+  }
+  return const <String>[];
 }

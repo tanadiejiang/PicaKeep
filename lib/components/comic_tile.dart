@@ -282,25 +282,40 @@ class DownloadedComicTile extends StatelessWidget {
   }
 
   Widget _buildImage() {
-    final provider = imageProvider;
-    if (provider != null) {
-      return Image(
-        image: provider,
-        fit: BoxFit.cover,
-        height: double.infinity,
-        errorBuilder: (_, __, ___) =>
-            const Center(child: Icon(Icons.image_not_supported)),
-      );
-    }
-    if (imagePath.path.isEmpty) {
-      return const Center(child: Icon(Icons.image_not_supported));
-    }
-    return Image.file(
-      imagePath,
-      fit: BoxFit.cover,
-      height: double.infinity,
-      errorBuilder: (_, __, ___) =>
-          const Center(child: Icon(Icons.image_not_supported)),
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final devicePixelRatio = MediaQuery.of(context)
+            .devicePixelRatio
+            .clamp(1.0, 3.0)
+            .toDouble();
+        final cacheWidth = constraints.maxWidth.isFinite
+            ? (constraints.maxWidth * devicePixelRatio).round()
+            : null;
+
+        final provider = imageProvider;
+        final resolvedProvider = provider != null
+            ? ResizeImage.resizeIfNeeded(cacheWidth, null, provider)
+            : imagePath.path.isEmpty
+                ? null
+                : ResizeImage.resizeIfNeeded(
+                    cacheWidth,
+                    null,
+                    FileImage(imagePath),
+                  );
+        if (resolvedProvider == null) {
+          return const Center(child: Icon(Icons.image_not_supported));
+        }
+        return Image(
+          image: resolvedProvider,
+          fit: BoxFit.cover,
+          height: double.infinity,
+          gaplessPlayback: true,
+          filterQuality: FilterQuality.medium,
+          isAntiAlias: true,
+          errorBuilder: (_, __, ___) =>
+              const Center(child: Icon(Icons.image_not_supported)),
+        );
+      },
     );
   }
 }

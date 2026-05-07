@@ -133,7 +133,7 @@ class App {
         .push<T>(AppPageRoute(builder: (context) => page()));
   }
 
-  static bool get enablePopGesture => isIOS;
+  static bool get enablePopGesture => isMobile;
 
   static String? _currentRoute() {
     return ModalRoute.of(globalContext!)?.toString();

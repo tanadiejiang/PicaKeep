@@ -10,6 +10,7 @@ import 'package:picakeep/foundation/download.dart';
 import 'package:picakeep/foundation/download_model.dart';
 import 'package:picakeep/foundation/local_library.dart';
 import 'package:picakeep/foundation/local_library_settings.dart';
+import 'package:picakeep/foundation/remote_library_data_source.dart';
 import 'package:picakeep/tools/read_history_helper.dart';
 import 'package:picakeep/tools/tags_translation.dart';
 import 'package:picakeep/tools/translations.dart';
@@ -589,8 +590,14 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
 
   Widget _buildCover(BuildContext context, double width, double height) {
     final cover = resolveLocalComicCover(widget.comic);
+    final coverProvider = widget.comic is RemoteLibraryComicItem
+        ? (widget.comic as RemoteLibraryComicItem).coverImageProvider
+        : widget.comic is RemoteLibraryRootItem
+            ? (widget.comic as RemoteLibraryRootItem).coverImageProvider
+            : null;
+    final hasLocalCover = cover.existsSync();
     return GestureDetector(
-      onTap: cover.existsSync() ? () => _showCoverPreview(cover) : null,
+      onTap: hasLocalCover ? () => _showCoverPreview(cover) : null,
       child: Container(
         width: width,
         height: height,
@@ -599,16 +606,26 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
           borderRadius: BorderRadius.circular(12),
         ),
         clipBehavior: Clip.antiAlias,
-        child: cover.existsSync()
+        child: hasLocalCover
             ? Hero(
                 tag: 'local-cover-${widget.comic.id}',
                 child: Image.file(
                   cover,
                   fit: BoxFit.cover,
+                  filterQuality: FilterQuality.medium,
+                  isAntiAlias: true,
                   errorBuilder: (_, __, ___) => _placeholderCover(),
                 ),
               )
-            : _placeholderCover(),
+            : coverProvider != null
+                ? Image(
+                    image: coverProvider,
+                    fit: BoxFit.cover,
+                    filterQuality: FilterQuality.medium,
+                    isAntiAlias: true,
+                    errorBuilder: (_, __, ___) => _placeholderCover(),
+                  )
+                : _placeholderCover(),
       ),
     );
   }

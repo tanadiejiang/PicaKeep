@@ -33,11 +33,16 @@ class DesktopScrollbarDragBehavior extends StatelessWidget {
 }
 
 class SmoothCustomScrollView extends StatelessWidget {
-  const SmoothCustomScrollView(
-      {super.key, required this.slivers, this.controller});
+  const SmoothCustomScrollView({
+    super.key,
+    required this.slivers,
+    this.controller,
+    this.cacheExtent,
+  });
 
   final ScrollController? controller;
   final List<Widget> slivers;
+  final double? cacheExtent;
 
   @override
   Widget build(BuildContext context) {
@@ -47,6 +52,7 @@ class SmoothCustomScrollView extends StatelessWidget {
         return CustomScrollView(
           controller: controller,
           physics: physics,
+          cacheExtent: cacheExtent,
           slivers: slivers,
         );
       },

@@ -8,6 +8,7 @@ const localLibraryAlbumOnlySettingIndex = 94;
 const localDetailRecommendationSettingIndex = 95;
 const localLibraryShowAllDatabaseRecordsSettingIndex = 96;
 const androidRootModeSettingIndex = 101;
+const androidShizukuModeSettingIndex = 102;
 
 const localAlbumImageSortNameAsc = '0';
 const localAlbumImageSortNameDesc = '1';
@@ -57,6 +58,10 @@ String normalizeLocalLibraryShowAllDatabaseRecords(String? value) {
 }
 
 String normalizeAndroidRootMode(String? value) {
+  return value == '1' ? '1' : '0';
+}
+
+String normalizeAndroidShizukuMode(String? value) {
   return value == '1' ? '1' : '0';
 }
 
