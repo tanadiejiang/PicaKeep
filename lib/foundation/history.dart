@@ -669,6 +669,30 @@ class HistoryManager {
         (_secondaryDb != null ? _findInDb(_secondaryDb!, target) : null);
   }
 
+  Map<String, History> findManySync(Iterable<String> targets) {
+    if (!_initialized) {
+      return const <String, History>{};
+    }
+    final remaining = <String>{
+      for (final target in targets)
+        if (target.trim().isNotEmpty) target.trim(),
+    };
+    if (remaining.isEmpty) {
+      return const <String, History>{};
+    }
+    final result = <String, History>{};
+    for (final item in getAll()) {
+      if (!remaining.remove(item.target)) {
+        continue;
+      }
+      result[item.target] = item;
+      if (remaining.isEmpty) {
+        break;
+      }
+    }
+    return result;
+  }
+
   List<History> getAll() {
     if (!_initialized) {
       return const <History>[];

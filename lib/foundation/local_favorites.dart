@@ -953,6 +953,21 @@ class LocalFavoritesManager {
     return _cachedFavoritedTargets.containsKey(normalized);
   }
 
+  Map<String, bool> existsMany(Iterable<String> targets) {
+    if (_favoritedTargetsDirty) {
+      _cacheFavoritedTargets();
+    }
+    final result = <String, bool>{};
+    for (final target in targets) {
+      final normalized = target.trim();
+      if (normalized.isEmpty) {
+        continue;
+      }
+      result[normalized] = _cachedFavoritedTargets.containsKey(normalized);
+    }
+    return result;
+  }
+
   void _cacheFavoritedTargets() {
     _favoritedTargetsDirty = false;
     _cachedFavoritedTargets.clear();
