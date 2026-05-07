@@ -60,6 +60,11 @@ class _HistoryPageState extends State<HistoryPage> {
     super.initState();
     comics.addAll(HistoryManager().getAll());
     DownloadManager().init();
+    LocalLibraryManager().ensureLoaded().then((_) {
+      if (mounted) {
+        setState(() {});
+      }
+    });
   }
 
   String _cacheKey(History item) => '${item.type.value}|${item.target}';
@@ -112,6 +117,20 @@ class _HistoryPageState extends State<HistoryPage> {
     if (cover.startsWith('http://') || cover.startsWith('https://')) {
       return NetworkImage(cover);
     }
+    if (cover.isNotEmpty && (cover.startsWith('/') || cover.contains(':\\'))) {
+      return LocalLibraryManager().imageProviderForLocalPath(cover);
+    }
+    final localComic =
+        LocalLibraryManager().findCachedByCandidates(item.candidateDownloadIds());
+    if (localComic != null) {
+      final coverPath = resolveLocalComicCoverPath(
+        localComic,
+        legacyTargets: item.candidateDownloadIds(),
+      );
+      if (coverPath.isNotEmpty) {
+        return LocalLibraryManager().imageProviderForLocalPath(coverPath);
+      }
+    }
     return null;
   }
 
@@ -125,10 +144,8 @@ class _HistoryPageState extends State<HistoryPage> {
     final c = item.cover.trim();
     if (c.isNotEmpty && (c.startsWith('/') || c.contains(':\\'))) {
       final f = File(c);
-      if (f.existsSync()) {
-        _coverCache[key] = f;
-        return f;
-      }
+      _coverCache[key] = f;
+      return f;
     }
     try {
       final file =
@@ -142,9 +159,12 @@ class _HistoryPageState extends State<HistoryPage> {
     final localComic = LocalLibraryManager()
         .findCachedByCandidates(item.candidateDownloadIds());
     if (localComic != null) {
-      final file = resolveLocalComicCover(localComic,
-          legacyTargets: item.candidateDownloadIds());
-      if (file.existsSync()) {
+      final coverPath = resolveLocalComicCoverPath(
+        localComic,
+        legacyTargets: item.candidateDownloadIds(),
+      );
+      if (coverPath.isNotEmpty) {
+        final file = File(coverPath);
         _coverCache[key] = file;
         return file;
       }
@@ -205,8 +225,10 @@ class _HistoryPageState extends State<HistoryPage> {
         comic,
         legacyTargets: item.candidateDownloadIds(),
       );
-      final cover = resolveLocalComicCover(comic,
-          legacyTargets: item.candidateDownloadIds());
+      final coverPath = resolveLocalComicCoverPath(
+        comic,
+        legacyTargets: item.candidateDownloadIds(),
+      );
       final remoteCover =
           comic is RemoteLibraryComicItem ? comic.coverUrl.trim() : '';
       if (!mounted) return;
@@ -219,8 +241,8 @@ class _HistoryPageState extends State<HistoryPage> {
         }
         if (remoteCover.isNotEmpty) {
           item.cover = remoteCover;
-        } else if (cover.existsSync()) {
-          item.cover = cover.path;
+        } else if (coverPath.isNotEmpty) {
+          item.cover = coverPath;
         }
       });
       await App.openReader(

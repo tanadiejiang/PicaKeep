@@ -1,9 +1,12 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:flutter/widgets.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter/widgets.dart' hide Row;
 import 'package:path_provider/path_provider.dart';
 import 'package:sqlite3/sqlite3.dart';
+import 'package:picakeep/foundation/image_loader/stream_image_provider.dart';
 import 'package:picakeep/pages/reader/comic_reading_page.dart';
 
 import '../base.dart';
@@ -72,6 +75,97 @@ class LocalLibraryStorageChildEntry {
   final String sourceDisplayName;
 }
 
+class _LocalDirectoryEntry {
+  const _LocalDirectoryEntry({
+    required this.name,
+    required this.path,
+    required this.isDirectory,
+  });
+
+  final String name;
+  final String path;
+  final bool isDirectory;
+}
+
+class _LocalLibraryCachedItem {
+  const _LocalLibraryCachedItem({
+    this.coverPath,
+    this.episodeFiles = const <int, List<String>>{},
+  });
+
+  final String? coverPath;
+  final Map<int, List<String>> episodeFiles;
+
+  factory _LocalLibraryCachedItem.fromJson(Map<String, dynamic> json) {
+    final episodes = <int, List<String>>{};
+    final rawEpisodes = json['episodeFiles'];
+    if (rawEpisodes is Map) {
+      for (final entry in rawEpisodes.entries) {
+        final key = int.tryParse(entry.key.toString());
+        final value = entry.value;
+        if (key != null && value is List) {
+          episodes[key] = value.map((e) => e.toString()).toList();
+        }
+      }
+    }
+    final cover = json['coverPath']?.toString().trim();
+    return _LocalLibraryCachedItem(
+      coverPath: cover == null || cover.isEmpty ? null : cover,
+      episodeFiles: episodes,
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+        'coverPath': coverPath,
+        'episodeFiles': {
+          for (final entry in episodeFiles.entries)
+            entry.key.toString(): entry.value,
+        },
+      };
+}
+
+class _LocalLibrarySourceCache {
+  _LocalLibrarySourceCache(this.file, this.items);
+
+  final File file;
+  final Map<String, _LocalLibraryCachedItem> items;
+
+  _LocalLibraryCachedItem? itemFor(String rawId, String directoryPath) {
+    return items[_cacheItemKey(rawId, directoryPath)];
+  }
+
+  void setItem(
+    String rawId,
+    String directoryPath,
+    _LocalLibraryCachedItem item,
+  ) {
+    items[_cacheItemKey(rawId, directoryPath)] = item;
+  }
+
+  Future<void> save() async {
+    try {
+      await file.parent.create(recursive: true);
+      await file.writeAsString(
+        jsonEncode({
+          'version': 1,
+          'items': {
+            for (final entry in items.entries) entry.key: entry.value.toJson(),
+          },
+        }),
+        flush: true,
+      );
+    } catch (_) {}
+  }
+
+  static String _cacheItemKey(String rawId, String directoryPath) {
+    final id = rawId.trim();
+    if (id.isNotEmpty) {
+      return 'id::$id';
+    }
+    return 'path::$directoryPath';
+  }
+}
+
 class LocalLibraryComicItem extends DownloadedItem {
   LocalLibraryComicItem({
     required this.itemId,
@@ -86,6 +180,7 @@ class LocalLibraryComicItem extends DownloadedItem {
     required List<int> downloadedEps,
     required List<String> eps,
     required String? localCoverPath,
+    required bool localStorageExists,
     required bool canDelete,
     required this.aliases,
     this.favoriteTarget,
@@ -99,6 +194,7 @@ class LocalLibraryComicItem extends DownloadedItem {
         _downloadedEps = downloadedEps,
         _eps = eps,
         _localCoverPath = localCoverPath,
+        _localStorageExists = localStorageExists,
         _canDelete = canDelete;
 
   final String itemId;
@@ -113,6 +209,7 @@ class LocalLibraryComicItem extends DownloadedItem {
   final List<int> _downloadedEps;
   final List<String> _eps;
   final String? _localCoverPath;
+  final bool _localStorageExists;
   final bool _canDelete;
   final List<String> aliases;
   final String? favoriteTarget;
@@ -150,12 +247,16 @@ class LocalLibraryComicItem extends DownloadedItem {
   @override
   String? get fileSystemPath => _fileSystemPath;
 
+  bool get localStorageExists => _localStorageExists;
+
   @override
   bool get canDelete => _canDelete;
 
   bool get hasMultipleEpisodes =>
       episodeFiles.length > 1 ||
-      (!episodeFiles.containsKey(0) && episodeFiles.containsKey(1));
+      (!episodeFiles.containsKey(0) && episodeFiles.containsKey(1)) ||
+      _eps.length > 1 ||
+      _downloadedEps.length > 1;
 
   bool get isAlbum =>
       itemId.startsWith('local_album::') || sourceDisplayName == '图集';
@@ -181,12 +282,14 @@ class LocalLibraryComicItem extends DownloadedItem {
         'downloadedEps': downloadedEps,
         'eps': eps,
         'localCoverPath': localCoverPath,
+        'localStorageExists': localStorageExists,
         'favoriteTarget': favoriteTarget,
         'comicSize': comicSize,
       };
 
   @override
   Widget createReadingPage({int? ep, int? page}) {
+    LocalLibraryManager.pauseBackgroundCoverCache();
     final hasEp = hasMultipleEpisodes;
     final epsMap = hasEp
         ? {
@@ -198,6 +301,7 @@ class LocalLibraryComicItem extends DownloadedItem {
       id: id,
       downloadId: id,
       sourceKey: LocalLibraryManager._sourceKeyForDownloadType(type),
+      directoryPath: fileSystemPath ?? '',
       hasEp: hasEp,
       comicType: comicTypeForDownloadType(type),
       eps: epsMap,
@@ -216,6 +320,7 @@ class LocalPathReadingData extends ReadingData {
     required this.id,
     required this.downloadId,
     required this.sourceKey,
+    required this.directoryPath,
     required this.hasEp,
     required this.comicType,
     this.eps,
@@ -231,6 +336,8 @@ class LocalPathReadingData extends ReadingData {
   }
 
   final Map<int, List<String>> _episodeFiles;
+
+  final String directoryPath;
 
   final bool supportsImageSort;
 
@@ -277,13 +384,18 @@ class LocalPathReadingData extends ReadingData {
 
   @override
   Future<List<String>> loadEp(int ep) async {
-    final files = hasEp
-        ? List<String>.from(_episodeFiles[ep] ?? const <String>[])
-        : List<String>.from(_episodeFiles[0] ?? const <String>[]);
+    final key = hasEp ? ep : 0;
+    if (!_episodeFiles.containsKey(key) && directoryPath.isNotEmpty) {
+      _episodeFiles[key] = await LocalLibraryManager._buildDownloadedEpisodeFilesForEp(
+        directoryPath,
+        key,
+      );
+    }
+    final files = List<String>.from(_episodeFiles[key] ?? const <String>[]);
     if (!supportsImageSort) {
       return files;
     }
-    return LocalLibraryManager._sortImagePaths(
+    return await LocalLibraryManager._sortImagePathsAsync(
       files,
       sortMode: localImageSortMode,
     );
@@ -291,17 +403,13 @@ class LocalPathReadingData extends ReadingData {
 
   @override
   Stream<List<int>> loadImage(int ep, int page, String url) async* {
-    final file = File(url);
-    if (await file.exists()) {
-      yield await file.readAsBytes();
-    } else {
-      yield const <int>[];
-    }
+    final bytes = await LocalLibraryManager._readFileBytes(url);
+    yield bytes ?? const <int>[];
   }
 
   @override
   ImageProvider createImageProvider(int ep, int page, String url) {
-    return FileImage(File(url));
+    return LocalLibraryManager.instance.imageProviderForLocalPath(url);
   }
 
   @override
@@ -320,6 +428,8 @@ class LocalPathReadingData extends ReadingData {
 
 class LocalLibraryManager {
   static final LocalLibraryManager instance = LocalLibraryManager._();
+  static const MethodChannel _storageAccessChannel =
+      MethodChannel('com.example.picakeep/storage_access');
 
   factory LocalLibraryManager() => instance;
 
@@ -327,6 +437,8 @@ class LocalLibraryManager {
 
   bool _loaded = false;
   Future<void>? _refreshTask;
+  Future<List<LocalLibraryComicItem>>? _managedDownloadsLoadTask;
+  Future<void> _backgroundCacheTask = Future<void>.value();
   final List<LocalLibraryComicItem> _items = [];
   final List<LocalLibraryStorageEntry> _storageEntries = [];
   final Map<String, LocalLibraryComicItem> _idIndex = {};
@@ -339,6 +451,167 @@ class LocalLibraryManager {
     }
     final support = await getApplicationSupportDirectory();
     return _joinPath(support.path, 'download');
+  }
+
+  Future<Directory> _localCacheRoot() async {
+    final support = await getApplicationSupportDirectory();
+    return Directory(_joinPath(support.path, 'local_library_cache'));
+  }
+
+  Future<_LocalLibrarySourceCache> _loadSourceCache(
+    LocalLibrarySource source,
+  ) async {
+    final root = await _localCacheRoot();
+    final file = File(_joinPath(root.path, '${_safeCacheName(source.id)}.json'));
+    if (!file.existsSync()) {
+      return _LocalLibrarySourceCache(file, <String, _LocalLibraryCachedItem>{});
+    }
+    try {
+      final data = jsonDecode(await file.readAsString()) as Map<String, dynamic>;
+      final rawItems = data['items'];
+      final items = <String, _LocalLibraryCachedItem>{};
+      if (rawItems is Map) {
+        for (final entry in rawItems.entries) {
+          final value = entry.value;
+          if (value is Map) {
+            items[entry.key.toString()] = _LocalLibraryCachedItem.fromJson(
+              Map<String, dynamic>.from(value),
+            );
+          }
+        }
+      }
+      return _LocalLibrarySourceCache(file, items);
+    } catch (_) {
+      return _LocalLibrarySourceCache(file, <String, _LocalLibraryCachedItem>{});
+    }
+  }
+
+  Future<File> _writeDatabaseSnapshot(
+    LocalLibrarySource source,
+    Uint8List dbBytes,
+  ) async {
+    final root = await _localCacheRoot();
+    final dbDir = Directory(_joinPath(root.path, 'db'));
+    await dbDir.create(recursive: true);
+    final file = File(_joinPath(dbDir.path, '${_safeCacheName(source.id)}.db'));
+    await file.writeAsBytes(dbBytes, flush: true);
+    return file;
+  }
+
+  void _warmManagedDownloadCache(
+    LocalLibrarySource source,
+    _LocalLibrarySourceCache cache,
+    List<LocalLibraryComicItem> items, {
+    required int eagerCount,
+  }) {
+    Future<void> run() async {
+      var changed = false;
+      for (int i = 0; i < items.length; i++) {
+        if (_isCoverCachePaused) {
+          await Future<void>.delayed(const Duration(milliseconds: 500));
+          i--;
+          continue;
+        }
+        final item = items[i];
+        final rawId = item.originalId;
+        final dirPath = item.fileSystemPath?.trim() ?? '';
+        if (dirPath.isEmpty || !item.localStorageExists) {
+          continue;
+        }
+        final existing = cache.itemFor(rawId, dirPath);
+        if (existing?.coverPath?.trim().isNotEmpty == true) {
+          continue;
+        }
+        await Future<void>.delayed(
+          Duration(milliseconds: i < eagerCount ? 1500 : 5000),
+        );
+        if (_isCoverCachePaused) {
+          i--;
+          continue;
+        }
+        final coverPath = await _resolveCoverPathForCacheOnly(item, existing);
+        if (coverPath == null || coverPath.trim().isEmpty) {
+          continue;
+        }
+        cache.setItem(
+          rawId,
+          dirPath,
+          _LocalLibraryCachedItem(
+            coverPath: coverPath,
+            episodeFiles: existing?.episodeFiles ?? const <int, List<String>>{},
+          ),
+        );
+        changed = true;
+        if (i % 8 == 0) {
+          await cache.save();
+          changed = false;
+        }
+      }
+      if (changed) {
+        await cache.save();
+      }
+    }
+
+    _backgroundCacheTask = _backgroundCacheTask.then((_) => run());
+  }
+
+  Future<String?> _resolveNamedCoverPath(String dirPath) async {
+    for (final candidate in const [
+      'cover.jpg',
+      'cover.jpeg',
+      'cover.png',
+      'cover.webp',
+    ]) {
+      final path = _joinPath(dirPath, candidate);
+      if (await _fileExists(path)) {
+        return path;
+      }
+    }
+    return null;
+  }
+
+  static DateTime? _coverCachePausedUntil;
+
+  static bool get _isCoverCachePaused {
+    final until = _coverCachePausedUntil;
+    return until != null && DateTime.now().isBefore(until);
+  }
+
+  static void pauseBackgroundCoverCache({
+    Duration duration = const Duration(minutes: 30),
+  }) {
+    _coverCachePausedUntil = DateTime.now().add(duration);
+  }
+
+  static void resumeBackgroundCoverCache() {
+    _coverCachePausedUntil = null;
+  }
+
+  Future<String?> _resolveCoverPathForCacheOnly(
+    LocalLibraryComicItem item,
+    _LocalLibraryCachedItem? existing,
+  ) async {
+    final dirPath = item.fileSystemPath?.trim() ?? '';
+    if (dirPath.isEmpty || !item.localStorageExists) {
+      return null;
+    }
+    for (final candidate in const [
+      'cover.jpg',
+      'cover.jpeg',
+      'cover.png',
+      'cover.webp',
+    ]) {
+      final path = _joinPath(dirPath, candidate);
+      if (await _fileExists(path)) {
+        return path;
+      }
+    }
+    final ep = item.hasMultipleEpisodes ? 1 : 0;
+    final files = await _buildDownloadedEpisodeFilesForEp(dirPath, ep);
+    if (files.isEmpty) {
+      return null;
+    }
+    return files.first;
   }
 
   String? get configuredOriginalDownloadPath {
@@ -403,14 +676,14 @@ class LocalLibraryManager {
 
     final sources = await _buildSources();
     for (final source in sources) {
-      final directory = Directory(source.path);
-      if (!directory.existsSync()) {
+      final sourceExists = await _directoryExists(source.path);
+      if (!sourceExists) {
         continue;
       }
-      if (source.isManagedDownload || _isDownloadDirectory(source.path)) {
-        _scanDownloadSource(source);
+      if (source.isManagedDownload || await _isDownloadDirectoryAsync(source.path)) {
+        await _scanDownloadSource(source);
       } else {
-        _scanAlbumSource(source);
+        await _scanAlbumSource(source);
       }
     }
 
@@ -433,6 +706,66 @@ class LocalLibraryManager {
     final items = List<LocalLibraryComicItem>.from(_items);
     _sortItems(items, localLibraryListSort);
     return items;
+  }
+
+  Future<List<LocalLibraryComicItem>> getManagedDownloads() {
+    final activeTask = _managedDownloadsLoadTask;
+    if (activeTask != null) {
+      return activeTask;
+    }
+
+    late final Future<List<LocalLibraryComicItem>> task;
+    task = _loadManagedDownloadsInternal().whenComplete(() {
+      if (identical(_managedDownloadsLoadTask, task)) {
+        _managedDownloadsLoadTask = null;
+      }
+    });
+    _managedDownloadsLoadTask = task;
+    return task;
+  }
+
+  Future<List<LocalLibraryComicItem>> _loadManagedDownloadsInternal() async {
+    final items = <LocalLibraryComicItem>[];
+    final sources = await _buildSources();
+    for (final source in sources.where((source) => source.isManagedDownload)) {
+      if (!await _directoryExists(source.path)) {
+        continue;
+      }
+      items.addAll(await _loadManagedDownloadSourceMetadata(source));
+    }
+    _sortItems(items, localLibraryListSort);
+    return items;
+  }
+
+  ImageProvider<Object> imageProviderForLocalPath(String path) {
+    try {
+      final file = File(path);
+      if (file.existsSync()) {
+        return FileImage(file);
+      }
+    } catch (_) {}
+    return StreamImageProvider(
+      () async {
+        final bytes = await _readFileBytes(path);
+        return Stream<List<int>>.value(bytes ?? const <int>[]);
+      },
+      'local_file::$path',
+    );
+  }
+
+  Future<String?> resolveCoverPathForItem(LocalLibraryComicItem item) async {
+    if (!item.localStorageExists) {
+      return null;
+    }
+    final cached = item.localCoverPath?.trim();
+    if (cached != null && cached.isNotEmpty) {
+      return cached;
+    }
+    final dirPath = item.fileSystemPath?.trim();
+    if (dirPath == null || dirPath.isEmpty) {
+      return null;
+    }
+    return _resolveNamedCoverPath(dirPath);
   }
 
   Future<int> get downloadCount async {
@@ -489,21 +822,25 @@ class LocalLibraryManager {
     final sources = await _buildSources();
     var count = 0;
     for (final source in sources) {
-      if (!(source.isManagedDownload || _isDownloadDirectory(source.path))) {
+      final sourceLooksLikeDownload =
+          source.isManagedDownload || await _isDownloadDirectoryAsync(source.path);
+      if (!sourceLooksLikeDownload) {
         continue;
       }
-      final directory = Directory(source.path);
-      if (!directory.existsSync()) {
+      if (!await _directoryExists(source.path)) {
         if (!source.isManagedDownload) {
           continue;
         }
         try {
-          directory.createSync(recursive: true);
-        } catch (_) {
+          Directory(source.path).createSync(recursive: true);
+        } catch (_) {}
+        if (!await _directoryExists(source.path)) {
           continue;
         }
       }
-      count += _rescanManagedDownloadSource(source.path);
+      if (Directory(source.path).existsSync()) {
+        count += _rescanManagedDownloadSource(source.path);
+      }
     }
     await refresh();
     return count;
@@ -585,28 +922,164 @@ class LocalLibraryManager {
     return sources;
   }
 
-  void _scanDownloadSource(LocalLibrarySource source) {
+  Future<List<LocalLibraryComicItem>> _loadManagedDownloadSourceMetadata(
+    LocalLibrarySource source,
+  ) async {
     final dbPath = _joinPath(source.path, 'download.db');
-    final file = File(dbPath);
-    if (!file.existsSync()) {
-      _storageEntries.add(
-        LocalLibraryStorageEntry(
-          id: source.id,
-          title: source.title,
-          path: source.path,
-          sizeMb: _computeDirectorySizeMb(Directory(source.path)),
-          comicCount: 0,
-          children: const <LocalLibraryStorageChildEntry>[],
-          source: source,
-        ),
-      );
+    final dbBytes = await _readFileBytes(dbPath);
+    if (dbBytes == null || dbBytes.isEmpty) {
+      return _loadDirectoryOnlyDownloadSourceMetadata(source);
+    }
+
+    final cache = await _loadSourceCache(source);
+    final sourceDirectoryNames = (await _listDirectoryEntries(source.path))
+        .where((entry) => entry.isDirectory)
+        .map((entry) => entry.name.toLowerCase())
+        .toSet();
+    final openDbPath = (await _writeDatabaseSnapshot(source, dbBytes)).path;
+
+    final items = <LocalLibraryComicItem>[];
+    final db = sqlite3.open(openDbPath);
+    try {
+      final rows = db
+          .select('select * from download order by time desc')
+          .toList()
+        ..sort((a, b) {
+          final score = _downloadRowPriority(
+            (b['id'] as String? ?? '').trim(),
+            (b['directory'] as String? ?? '').trim(),
+          ).compareTo(_downloadRowPriority(
+            (a['id'] as String? ?? '').trim(),
+            (a['directory'] as String? ?? '').trim(),
+          ));
+          if (score != 0) {
+            return score;
+          }
+          return ((b['time'] as int?) ?? 0).compareTo((a['time'] as int?) ?? 0);
+        });
+      final seenDirectories = <String>{};
+
+      for (final row in rows) {
+        final rawId = (row['id'] as String? ?? '').trim();
+        final jsonText = row['json'] as String? ?? '{}';
+        final timeValue = row['time'] as int? ?? 0;
+        final rawDirectory = (row['directory'] as String? ?? '').trim();
+        final baseItem = _parseDownloadedItem(
+              rawId,
+              jsonText,
+              DateTime.fromMillisecondsSinceEpoch(timeValue),
+              rawDirectory,
+            ) ??
+            _downloadedItemFromDbRow(
+              row,
+              DateTime.fromMillisecondsSinceEpoch(timeValue),
+              rawDirectory,
+            );
+        if (baseItem == null) {
+          continue;
+        }
+
+        final itemDirectory = _resolveDownloadItemDirectoryFromMetadata(
+          source.path,
+          rawId,
+          rawDirectory,
+          baseItem,
+        );
+        final dedupeKey = itemDirectory.toLowerCase();
+        if (!seenDirectories.add(dedupeKey)) {
+          continue;
+        }
+
+        final localType = _effectiveDownloadTypeForLocalItem(baseItem, rawId);
+        final eps = baseItem.eps.isNotEmpty
+            ? List<String>.from(baseItem.eps)
+            : _buildLocalEpisodeNames(baseItem.downloadedEps.length);
+        final downloadedEps = baseItem.downloadedEps.isNotEmpty
+            ? List<int>.from(baseItem.downloadedEps)
+            : List<int>.generate(eps.length, (index) => index);
+        final cachedItem = cache.itemFor(rawId, itemDirectory);
+        final localStorageExists = _managedDownloadDirectoryExistsInIndex(
+          source.path,
+          itemDirectory,
+          sourceDirectoryNames,
+        );
+        final item = LocalLibraryComicItem(
+          itemId: 'local_download::${source.id}::$rawId',
+          originalId: rawId,
+          type: localType,
+          name: _metadataTitleForDownloadedRow(row, baseItem),
+          subTitle: _metadataAuthorForDownloadedRow(row, jsonText, baseItem),
+          tags: _metadataTagsForDownloadedRow(row, jsonText, baseItem),
+          sourceDisplayName:
+              _displayNameForDownloaded(baseItem, rawId, localType),
+          fileSystemPath: itemDirectory,
+          episodeFiles: cachedItem?.episodeFiles ?? const <int, List<String>>{},
+          downloadedEps: downloadedEps,
+          eps: eps,
+          localCoverPath: localStorageExists ? cachedItem?.coverPath : null,
+          localStorageExists: localStorageExists,
+          canDelete: false,
+          aliases: [rawId, itemDirectory],
+          favoriteTarget: _favoriteTargetForDownloaded(baseItem, rawId),
+          comicSize: baseItem.comicSize,
+        )..time = baseItem.time;
+        items.add(item);
+      }
+    } finally {
+      db.dispose();
+    }
+    _warmManagedDownloadCache(source, cache, items, eagerCount: 0);
+    return items;
+  }
+
+  Future<List<LocalLibraryComicItem>> _loadDirectoryOnlyDownloadSourceMetadata(
+    LocalLibrarySource source,
+  ) async {
+    final entries = await _listDirectoryEntries(source.path);
+    final items = <LocalLibraryComicItem>[];
+    for (final entry in entries.where((entry) => entry.isDirectory)) {
+      final item = LocalLibraryComicItem(
+        itemId: 'local_download::${source.id}::${entry.name}',
+        originalId: entry.name,
+        type: DownloadType.other,
+        name: entry.name,
+        subTitle: '',
+        tags: const <String>[],
+        sourceDisplayName: '本地扫描',
+        fileSystemPath: entry.path,
+        episodeFiles: const <int, List<String>>{},
+        downloadedEps: const <int>[0],
+        eps: const <String>['全部'],
+        localCoverPath: null,
+        localStorageExists: true,
+        canDelete: false,
+        aliases: [entry.name, entry.path],
+      )..time = DateTime.now();
+      items.add(item);
+    }
+    return items;
+  }
+
+  Future<void> _scanDownloadSource(LocalLibrarySource source) async {
+    final dbPath = _joinPath(source.path, 'download.db');
+    final dbBytes = await _readFileBytes(dbPath);
+    if (dbBytes == null || dbBytes.isEmpty) {
+      await _scanDirectoryOnlyDownloadSource(source);
       return;
     }
 
-    final db = sqlite3.open(dbPath);
+    final cache = await _loadSourceCache(source);
+    final sourceDirectoryNames = (await _listDirectoryEntries(source.path))
+        .where((entry) => entry.isDirectory)
+        .map((entry) => entry.name.toLowerCase())
+        .toSet();
+    final openDbPath = (await _writeDatabaseSnapshot(source, dbBytes)).path;
+
+    final db = sqlite3.open(openDbPath);
+    final sourceItems = <LocalLibraryComicItem>[];
     try {
       final rows = db
-          .select('select id, time, directory, json from download order by time desc')
+          .select('select * from download order by time desc')
           .toList()
         ..sort((a, b) {
           final score = _downloadRowPriority(
@@ -631,67 +1104,69 @@ class LocalLibraryManager {
         final timeValue = row['time'] as int? ?? 0;
         final rawDirectory = (row['directory'] as String? ?? '').trim();
         final baseItem = _parseDownloadedItem(
-          rawId,
-          jsonText,
-          DateTime.fromMillisecondsSinceEpoch(timeValue),
-          rawDirectory,
-        );
+              rawId,
+              jsonText,
+              DateTime.fromMillisecondsSinceEpoch(timeValue),
+              rawDirectory,
+            ) ??
+            _downloadedItemFromDbRow(
+              row,
+              DateTime.fromMillisecondsSinceEpoch(timeValue),
+              rawDirectory,
+            );
         if (baseItem == null) {
           continue;
         }
 
-        final showAllDatabaseRecords =
-            appdata.settings[localLibraryShowAllDatabaseRecordsSettingIndex] ==
-                '1';
-        final itemDirectory =
-            _resolveDownloadItemDirectory(source.path, rawId, rawDirectory);
+        final itemDirectory = _resolveDownloadItemDirectoryFromMetadata(
+          source.path,
+          rawId,
+          rawDirectory,
+          baseItem,
+        );
         final dedupeKey = itemDirectory.toLowerCase();
         if (!seenDirectories.add(dedupeKey)) {
           continue;
         }
-        final itemDirectoryExists = Directory(itemDirectory).existsSync();
-        if (!itemDirectoryExists && !showAllDatabaseRecords) {
-          continue;
-        }
 
-        final episodeFiles = itemDirectoryExists
-            ? _buildDownloadedEpisodeFiles(itemDirectory, baseItem)
-            : const <int, List<String>>{};
-        if (episodeFiles.isEmpty && !showAllDatabaseRecords) {
-          continue;
-        }
-
-        final coverPath = itemDirectoryExists
-            ? _pickCoverPath(itemDirectory, episodeFiles[0] ?? const <String>[])
-            : null;
         final localType = _effectiveDownloadTypeForLocalItem(baseItem, rawId);
+        final sizeMb = baseItem.comicSize ?? 0;
+        final displayedEps = baseItem.eps.isNotEmpty
+            ? List<String>.from(baseItem.eps)
+            : const <String>['全部'];
+        final downloadedEps = baseItem.downloadedEps.isNotEmpty
+            ? List<int>.from(baseItem.downloadedEps)
+            : const <int>[0];
+        final cachedItem = cache.itemFor(rawId, itemDirectory);
+        final localStorageExists = _managedDownloadDirectoryExistsInIndex(
+          source.path,
+          itemDirectory,
+          sourceDirectoryNames,
+        );
         final item = LocalLibraryComicItem(
           itemId: 'local_download::${source.id}::$rawId',
           originalId: rawId,
           type: localType,
-          name: baseItem.name,
-          subTitle: baseItem.subTitle,
-          tags: List<String>.from(baseItem.tags),
+          name: _metadataTitleForDownloadedRow(row, baseItem),
+          subTitle: _metadataAuthorForDownloadedRow(row, jsonText, baseItem),
+          tags: _metadataTagsForDownloadedRow(row, jsonText, baseItem),
           sourceDisplayName:
               _displayNameForDownloaded(baseItem, rawId, localType),
           fileSystemPath: itemDirectory,
-          episodeFiles: episodeFiles,
-          downloadedEps:
-              List<int>.generate(episodeFiles.length, (index) => index),
-          eps: _buildDisplayedEpisodes(baseItem, episodeFiles.length),
-          localCoverPath: coverPath,
+          episodeFiles: cachedItem?.episodeFiles ?? const <int, List<String>>{},
+          downloadedEps: downloadedEps,
+          eps: displayedEps,
+          localCoverPath: localStorageExists ? cachedItem?.coverPath : null,
+          localStorageExists: localStorageExists,
           canDelete: false,
-          aliases: [rawId],
+          aliases: [rawId, itemDirectory],
           favoriteTarget: _favoriteTargetForDownloaded(baseItem, rawId),
-          comicSize: itemDirectoryExists
-              ? (baseItem.comicSize ??
-                  _computeDirectorySizeMb(Directory(itemDirectory)))
-              : (baseItem.comicSize ?? 0),
+          comicSize: sizeMb,
         )..time = baseItem.time;
 
         _indexItem(item);
         _items.add(item);
-        final sizeMb = item.comicSize ?? 0;
+        sourceItems.add(item);
         totalSize += sizeMb;
         children.add(
           LocalLibraryStorageChildEntry(
@@ -709,9 +1184,7 @@ class LocalLibraryManager {
           id: source.id,
           title: source.title,
           path: source.path,
-          sizeMb: totalSize > 0
-              ? totalSize
-              : _computeDirectorySizeMb(Directory(source.path)),
+          sizeMb: totalSize,
           comicCount: children.length,
           children: children,
           source: source,
@@ -720,48 +1193,54 @@ class LocalLibraryManager {
     } finally {
       db.dispose();
     }
+    _warmManagedDownloadCache(source, cache, sourceItems, eagerCount: 0);
   }
 
-  void _scanAlbumSource(LocalLibrarySource source) {
-    final root = Directory(source.path);
-    if (!root.existsSync()) {
-      return;
-    }
-
-    final albumDirs = _collectLeafAlbumDirectories(root);
+  Future<void> _scanDirectoryOnlyDownloadSource(
+    LocalLibrarySource source,
+  ) async {
     final children = <LocalLibraryStorageChildEntry>[];
-
-    for (final dir in albumDirs) {
-      final imageFiles = _sortedAlbumImages(dir);
-      if (imageFiles.isEmpty) {
+    double totalSize = 0;
+    final entries = await _listDirectoryEntries(source.path);
+    for (final entry in entries.where((entry) => entry.isDirectory)) {
+      final episodeFiles = await _buildDownloadedEpisodeFiles(
+        entry.path,
+        null,
+      );
+      if (episodeFiles.isEmpty) {
         continue;
       }
-      final coverPath = _pickCoverPath(dir.path, imageFiles);
-      final sizeMb = _computeDirectorySizeMb(dir);
+      final sizeMb = await _computeDirectorySizeMbForPath(entry.path);
+      final coverPath = await _pickCoverPath(
+        entry.path,
+        episodeFiles[0] ?? const <String>[],
+      );
       final item = LocalLibraryComicItem(
-        itemId: 'local_album::${dir.path}',
-        originalId: dir.path,
-        type: DownloadType.favorite,
-        name: _basename(dir.path),
+        itemId: 'local_download::${source.id}::${entry.name}',
+        originalId: entry.name,
+        type: DownloadType.other,
+        name: entry.name,
         subTitle: '',
         tags: const <String>[],
-        sourceDisplayName: '图集',
-        fileSystemPath: dir.path,
-        episodeFiles: {0: imageFiles},
-        downloadedEps: const <int>[0],
-        eps: const <String>['全部'],
+        sourceDisplayName: '本地扫描',
+        fileSystemPath: entry.path,
+        episodeFiles: episodeFiles,
+        downloadedEps: List<int>.generate(episodeFiles.length, (index) => index),
+        eps: _buildLocalEpisodeNames(episodeFiles.length),
         localCoverPath: coverPath,
+        localStorageExists: true,
         canDelete: false,
-        aliases: [dir.path],
+        aliases: [entry.name, entry.path],
         comicSize: sizeMb,
-      )..time = _computeAlbumTime(dir, imageFiles);
+      )..time = DateTime.now();
       _indexItem(item);
       _items.add(item);
+      totalSize += sizeMb;
       children.add(
         LocalLibraryStorageChildEntry(
           id: item.id,
           title: item.name,
-          path: dir.path,
+          path: entry.path,
           sizeMb: sizeMb,
           sourceDisplayName: item.sourceDisplayName,
         ),
@@ -773,7 +1252,66 @@ class LocalLibraryManager {
         id: source.id,
         title: source.title,
         path: source.path,
-        sizeMb: _computeDirectorySizeMb(root),
+        sizeMb: totalSize,
+        comicCount: children.length,
+        children: children,
+        source: source,
+      ),
+    );
+  }
+
+  Future<void> _scanAlbumSource(LocalLibrarySource source) async {
+    if (!await _directoryExists(source.path)) {
+      return;
+    }
+
+    final albumDirs = await _collectLeafAlbumDirectoryPaths(source.path);
+    final children = <LocalLibraryStorageChildEntry>[];
+
+    for (final dirPath in albumDirs) {
+      final imageFiles = await _sortedAlbumImagesForPath(dirPath);
+      if (imageFiles.isEmpty) {
+        continue;
+      }
+      final coverPath = await _pickCoverPath(dirPath, imageFiles);
+      final sizeMb = await _computeDirectorySizeMbForPath(dirPath);
+      final item = LocalLibraryComicItem(
+        itemId: 'local_album::$dirPath',
+        originalId: dirPath,
+        type: DownloadType.favorite,
+        name: _basename(dirPath),
+        subTitle: '',
+        tags: const <String>[],
+        sourceDisplayName: '图集',
+        fileSystemPath: dirPath,
+        episodeFiles: {0: imageFiles},
+        downloadedEps: const <int>[0],
+        eps: const <String>['全部'],
+        localCoverPath: coverPath,
+        localStorageExists: true,
+        canDelete: false,
+        aliases: [dirPath],
+        comicSize: sizeMb,
+      )..time = await _computeAlbumTimeForPath(dirPath, imageFiles);
+      _indexItem(item);
+      _items.add(item);
+      children.add(
+        LocalLibraryStorageChildEntry(
+          id: item.id,
+          title: item.name,
+          path: dirPath,
+          sizeMb: sizeMb,
+          sourceDisplayName: item.sourceDisplayName,
+        ),
+      );
+    }
+
+    _storageEntries.add(
+      LocalLibraryStorageEntry(
+        id: source.id,
+        title: source.title,
+        path: source.path,
+        sizeMb: await _computeDirectorySizeMbForPath(source.path),
         comicCount: children.length,
         children: children,
         source: source,
@@ -789,10 +1327,6 @@ class LocalLibraryManager {
         _aliasIndex[normalized] = item;
       }
     }
-  }
-
-  static bool _isDownloadDirectory(String path) {
-    return File(_joinPath(path, 'download.db')).existsSync();
   }
 
   static bool _isRescannedLocalRecord(DownloadedItem item, String rawId) {
@@ -827,38 +1361,6 @@ class LocalLibraryManager {
       return '本地扫描';
     }
     return downloadTypeDisplayName(resolvedType);
-  }
-
-  static List<String> _buildDisplayedEpisodes(
-      DownloadedItem item, int episodeCount) {
-    if (episodeCount <= 1) {
-      return item.eps.isNotEmpty ? [item.eps.first] : const <String>[];
-    }
-    if (item.eps.length == episodeCount) {
-      return List<String>.from(item.eps);
-    }
-    return List<String>.generate(episodeCount, (index) => '第${index + 1}章');
-  }
-
-  static String _resolveDownloadItemDirectory(
-    String rootPath,
-    String rawId,
-    String rawDirectory,
-  ) {
-    final candidates = <String>[
-      if (rawDirectory.trim().isNotEmpty) rawDirectory.trim(),
-      rawId,
-      _sanitizeFileName(rawDirectory.trim().isNotEmpty ? rawDirectory : rawId),
-    ];
-
-    for (final candidate in candidates) {
-      final path = _joinPath(rootPath, candidate);
-      if (_directoryExistsSync(path)) {
-        return path;
-      }
-    }
-
-    return _joinPath(rootPath, _sanitizeFileName(rawId));
   }
 
   static int _rescanManagedDownloadSource(String rootPath) {
@@ -960,23 +1462,27 @@ class LocalLibraryManager {
     }
   }
 
-  static Map<int, List<String>> _buildDownloadedEpisodeFiles(
+  static Future<Map<int, List<String>>> _buildDownloadedEpisodeFiles(
     String itemDirectory,
-    DownloadedItem item,
-  ) {
-    final directory = Directory(itemDirectory);
-    final childDirs = directory
-        .listSync()
-        .whereType<Directory>()
-        .where((e) => _containsVisibleImages(e))
-        .toList()
-      ..sort((a, b) => _naturalCompare(_basename(a.path), _basename(b.path)));
+    DownloadedItem? _,
+  ) async {
+    final entries = await _listDirectoryEntries(itemDirectory);
+    final childDirs = entries.where((entry) => entry.isDirectory).toList();
+    final chapterDirs = <_LocalDirectoryEntry>[];
+    for (final childDir in childDirs) {
+      if (await _containsVisibleImagesForPath(childDir.path)) {
+        chapterDirs.add(childDir);
+      }
+    }
+    chapterDirs.sort((a, b) => _naturalCompare(a.name, b.name));
 
     final result = <int, List<String>>{};
-    if (childDirs.isNotEmpty) {
-      for (int i = 0; i < childDirs.length; i++) {
-        final files = _sortedImageFiles(childDirs[i],
-            sortMode: localAlbumImageSortNameAsc);
+    if (chapterDirs.isNotEmpty) {
+      for (int i = 0; i < chapterDirs.length; i++) {
+        final files = await _sortedImageFilesForPath(
+          chapterDirs[i].path,
+          sortMode: localAlbumImageSortNameAsc,
+        );
         if (files.isNotEmpty) {
           result[i + 1] = files;
         }
@@ -984,102 +1490,163 @@ class LocalLibraryManager {
       return result;
     }
 
-    final files =
-        _sortedImageFiles(directory, sortMode: localAlbumImageSortNameAsc);
+    final files = await _sortedImageFilesForPath(
+      itemDirectory,
+      sortMode: localAlbumImageSortNameAsc,
+    );
     if (files.isNotEmpty) {
       result[0] = files;
     }
     return result;
   }
 
-  static List<Directory> _collectLeafAlbumDirectories(Directory root) {
-    final result = <Directory>[];
+  static Future<List<String>> _buildDownloadedEpisodeFilesForEp(
+    String itemDirectory,
+    int ep,
+  ) async {
+    final entries = await _listDirectoryEntries(itemDirectory);
+    final childDirs = entries.where((entry) => entry.isDirectory).toList()
+      ..sort((a, b) => _naturalCompare(a.name, b.name));
+    if (childDirs.isNotEmpty) {
+      final exact = childDirs.where((entry) => entry.name == ep.toString()).toList();
+      final target = exact.isNotEmpty
+          ? exact.first
+          : (ep > 0 && ep <= childDirs.length ? childDirs[ep - 1] : null);
+      if (target != null) {
+        return _sortedImageFilesForPath(
+          target.path,
+          sortMode: localAlbumImageSortNameAsc,
+        );
+      }
+      if (childDirs.length == 1 && (ep == 0 || ep == 1)) {
+        return _sortedImageFilesForPath(
+          childDirs.first.path,
+          sortMode: localAlbumImageSortNameAsc,
+        );
+      }
+    }
+    if (ep == 0 || ep == 1) {
+      return _sortedImageFilesForPath(
+        itemDirectory,
+        sortMode: localAlbumImageSortNameAsc,
+      );
+    }
+    return const <String>[];
+  }
 
-    bool visit(Directory dir) {
-      final children = _safeList(dir);
-      final hasImages = children.any(_isVisibleImageFile);
+  static List<String> _buildLocalEpisodeNames(int episodeCount) {
+    if (episodeCount <= 1) {
+      return const <String>['全部'];
+    }
+    return List<String>.generate(episodeCount, (index) => '第${index + 1}章');
+  }
+
+  static Future<List<String>> _collectLeafAlbumDirectoryPaths(
+    String rootPath,
+  ) async {
+    final result = <String>[];
+
+    Future<bool> visit(String path) async {
+      final children = await _listDirectoryEntries(path);
+      final hasImages = children.any(
+        (entry) => !entry.isDirectory && _isVisibleImagePath(entry.path),
+      );
       var hasAlbumDescendant = false;
-      for (final subDir in children.whereType<Directory>()) {
-        if (visit(subDir)) {
+      for (final subDir in children.where((entry) => entry.isDirectory)) {
+        if (await visit(subDir.path)) {
           hasAlbumDescendant = true;
         }
       }
       if (hasImages && !hasAlbumDescendant) {
-        result.add(dir);
+        result.add(path);
         return true;
       }
       return hasImages || hasAlbumDescendant;
     }
 
-    visit(root);
-    result.sort((a, b) => a.path.compareTo(b.path));
+    await visit(rootPath);
+    result.sort();
     return result;
   }
 
-  static List<String> _sortedAlbumImages(Directory dir) {
-    return _sortedImageFiles(dir,
-        sortMode: LocalLibraryManager.instance.localAlbumImageSort);
+  static Future<List<String>> _sortedAlbumImagesForPath(String dirPath) {
+    return _sortedImageFilesForPath(
+      dirPath,
+      sortMode: LocalLibraryManager.instance.localAlbumImageSort,
+    );
   }
 
-  static List<String> _sortImagePaths(
+  static Future<List<String>> _sortImagePathsAsync(
     Iterable<String> paths, {
     required String sortMode,
-  }) {
-    final files = paths
-        .map((path) => File(path))
-        .where((file) => file.existsSync())
-        .toList();
-    files.sort((a, b) {
-      switch (normalizeLocalAlbumImageSort(sortMode)) {
-        case localAlbumImageSortNameDesc:
-          return -_naturalCompare(_basename(a.path), _basename(b.path));
-        case localAlbumImageSortTimeAsc:
-          return a.statSync().modified.compareTo(b.statSync().modified);
-        case localAlbumImageSortTimeDesc:
-          return b.statSync().modified.compareTo(a.statSync().modified);
-        case localAlbumImageSortNameAsc:
-        default:
-          return _naturalCompare(_basename(a.path), _basename(b.path));
+  }) async {
+    final existing = <String>[];
+    for (final path in paths) {
+      if (await _fileExists(path)) {
+        existing.add(path);
       }
-    });
-    return files.map((file) => file.path).toList();
+    }
+    existing.sort((a, b) => _compareImagePaths(a, b, sortMode));
+    return existing;
   }
 
-  static List<String> _sortedImageFiles(Directory dir,
-      {required String sortMode}) {
-    final files =
-        _safeList(dir).whereType<File>().where(_isVisibleImageFile).toList();
+  static Future<List<String>> _sortedImageFilesForPath(
+    String dirPath, {
+    required String sortMode,
+  }) async {
+    final files = (await _listDirectoryEntries(dirPath))
+        .where((entry) => !entry.isDirectory && _isVisibleImagePath(entry.path))
+        .map((entry) => entry.path)
+        .toList();
     if (files.isEmpty) {
       return const <String>[];
     }
 
-    files.sort((a, b) {
-      switch (normalizeLocalAlbumImageSort(sortMode)) {
-        case localAlbumImageSortNameDesc:
-          return -_naturalCompare(_basename(a.path), _basename(b.path));
-        case localAlbumImageSortTimeAsc:
-          return a.statSync().modified.compareTo(b.statSync().modified);
-        case localAlbumImageSortTimeDesc:
-          return b.statSync().modified.compareTo(a.statSync().modified);
-        case localAlbumImageSortNameAsc:
-        default:
-          return _naturalCompare(_basename(a.path), _basename(b.path));
-      }
-    });
+    files.sort((a, b) => _compareImagePaths(a, b, sortMode));
 
     final visibleFiles =
-        files.where((file) => !_isCoverLikeFile(file)).toList();
+        files.where((path) => !_isCoverLikePath(path)).toList();
     if (visibleFiles.isNotEmpty) {
-      return visibleFiles.map((e) => e.path).toList();
+      return visibleFiles;
     }
-    return files.map((e) => e.path).toList();
+    return files;
+  }
+
+  static int _compareImagePaths(String a, String b, String sortMode) {
+    switch (normalizeLocalAlbumImageSort(sortMode)) {
+      case localAlbumImageSortNameDesc:
+        return -_naturalCompare(_basename(a), _basename(b));
+      case localAlbumImageSortTimeAsc:
+        return _compareFileModifiedTime(a, b);
+      case localAlbumImageSortTimeDesc:
+        return _compareFileModifiedTime(b, a);
+      case localAlbumImageSortNameAsc:
+      default:
+        return _naturalCompare(_basename(a), _basename(b));
+    }
+  }
+
+  static int _compareFileModifiedTime(String a, String b) {
+    try {
+      return File(a).statSync().modified.compareTo(File(b).statSync().modified);
+    } catch (_) {
+      return _naturalCompare(_basename(a), _basename(b));
+    }
+  }
+
+  static Future<bool> _containsVisibleImagesForPath(String dirPath) async {
+    return (await _listDirectoryEntries(dirPath))
+        .any((entry) => !entry.isDirectory && _isVisibleImagePath(entry.path));
   }
 
   static bool _containsVisibleImages(Directory dir) {
     return _safeList(dir).whereType<File>().any(_isVisibleImageFile);
   }
 
-  static String? _pickCoverPath(String dirPath, List<String> orderedImages) {
+  static Future<String?> _pickCoverPath(
+    String dirPath,
+    List<String> orderedImages,
+  ) async {
     for (final candidate in [
       'cover.jpg',
       'cover.jpeg',
@@ -1087,22 +1654,29 @@ class LocalLibraryManager {
       'cover.webp'
     ]) {
       final path = _joinPath(dirPath, candidate);
-      if (File(path).existsSync()) {
+      if (await _fileExists(path)) {
         return path;
       }
     }
     return orderedImages.isNotEmpty ? orderedImages.first : null;
   }
 
-  static DateTime _computeAlbumTime(Directory dir, List<String> images) {
-    DateTime latest = dir.statSync().modified;
-    for (final path in images) {
-      final modified = File(path).statSync().modified;
-      if (modified.isAfter(latest)) {
-        latest = modified;
+  static Future<DateTime> _computeAlbumTimeForPath(
+    String dirPath,
+    List<String> images,
+  ) async {
+    try {
+      var latest = Directory(dirPath).statSync().modified;
+      for (final path in images) {
+        final modified = File(path).statSync().modified;
+        if (modified.isAfter(latest)) {
+          latest = modified;
+        }
       }
+      return latest;
+    } catch (_) {
+      return DateTime.now();
     }
-    return latest;
   }
 
   static double _computeDirectorySizeMb(Directory dir) {
@@ -1117,12 +1691,250 @@ class LocalLibraryManager {
     return bytes / 1024 / 1024;
   }
 
-  static bool _directoryExistsSync(String path) {
+  static Future<double> _computeDirectorySizeMbForPath(String path) async {
     try {
-      return Directory(path).existsSync();
+      if (Directory(path).existsSync()) {
+        return _computeDirectorySizeMb(Directory(path));
+      }
+    } catch (_) {}
+
+    double bytes = 0;
+    Future<void> visit(String dirPath) async {
+      for (final entry in await _listDirectoryEntries(dirPath)) {
+        if (entry.isDirectory) {
+          await visit(entry.path);
+        } else {
+          bytes += await _fileLength(entry.path);
+        }
+      }
+    }
+
+    try {
+      await visit(path);
+    } catch (_) {}
+    return bytes / 1024 / 1024;
+  }
+
+  static String _resolveDownloadItemDirectoryFromMetadata(
+    String rootPath,
+    String rawId,
+    String rawDirectory,
+    DownloadedItem item,
+  ) {
+    final candidates = <String>[
+      if (rawDirectory.trim().isNotEmpty) rawDirectory.trim(),
+      if (item.directory?.trim().isNotEmpty == true) item.directory!.trim(),
+      rawId,
+      item.id,
+      _sanitizeFileName(rawDirectory.trim().isNotEmpty ? rawDirectory : rawId),
+      _sanitizeFileName(item.name),
+    ];
+
+    String? candidate;
+    for (final value in candidates) {
+      final normalized = value.trim();
+      if (normalized.isNotEmpty) {
+        candidate = normalized;
+        break;
+      }
+    }
+    if (candidate == null) {
+      return rootPath;
+    }
+    return candidate.startsWith('/') ? candidate : _joinPath(rootPath, candidate);
+  }
+
+  static bool _managedDownloadDirectoryExistsInIndex(
+    String rootPath,
+    String itemDirectory,
+    Set<String> sourceDirectoryNames,
+  ) {
+    if (sourceDirectoryNames.isEmpty) {
+      return false;
+    }
+    final normalizedRoot = rootPath.replaceAll('\\', '/').replaceFirst(RegExp(r'/+$'), '');
+    final normalizedItem = itemDirectory.replaceAll('\\', '/').replaceFirst(RegExp(r'/+$'), '');
+    final candidateName = normalizedItem.startsWith('$normalizedRoot/')
+        ? normalizedItem.substring(normalizedRoot.length + 1).split('/').first
+        : _basename(normalizedItem);
+    return sourceDirectoryNames.contains(candidateName.toLowerCase());
+  }
+
+  static Future<bool> _directoryExists(String path) async {
+    try {
+      if (Directory(path).existsSync()) {
+        return true;
+      }
+    } catch (_) {}
+    return _existsWithPrivilegedAccess(path);
+  }
+
+  static Future<bool> _fileExists(String path) async {
+    try {
+      if (File(path).existsSync()) {
+        return true;
+      }
+    } catch (_) {}
+    return _existsWithPrivilegedAccess(path);
+  }
+
+  static Future<bool> _isDownloadDirectoryAsync(String path) {
+    return _fileExists(_joinPath(path, 'download.db'));
+  }
+
+  static Future<Uint8List?> _readFileBytes(String path) async {
+    try {
+      final file = File(path);
+      if (file.existsSync()) {
+        return await file.readAsBytes();
+      }
+    } catch (_) {}
+    return _readFileWithPrivilegedAccess(path);
+  }
+
+  static Future<int> _fileLength(String path) async {
+    try {
+      final file = File(path);
+      if (file.existsSync()) {
+        return await file.length();
+      }
+    } catch (_) {}
+    final bytes = await _readFileWithPrivilegedAccess(path);
+    return bytes?.length ?? 0;
+  }
+
+  static Future<List<_LocalDirectoryEntry>> _listDirectoryEntries(
+    String path,
+  ) async {
+    try {
+      final directory = Directory(path);
+      if (directory.existsSync()) {
+        return directory
+            .listSync(followLinks: false)
+            .where((entity) => entity is Directory || entity is File)
+            .map(
+              (entity) => _LocalDirectoryEntry(
+                name: _basename(entity.path),
+                path: entity.path,
+                isDirectory: entity is Directory,
+              ),
+            )
+            .toList();
+      }
+    } catch (_) {}
+    return _listDirectoryEntriesWithPrivilegedAccess(path);
+  }
+
+  static Future<List<_LocalDirectoryEntry>>
+      _listDirectoryEntriesWithPrivilegedAccess(String path) async {
+    if (!Platform.isAndroid) {
+      return const <_LocalDirectoryEntry>[];
+    }
+    final method = _androidPrivilegedAccessMethod('listDirectoryEntries');
+    if (method == null) {
+      return const <_LocalDirectoryEntry>[];
+    }
+    try {
+      final result = await _storageAccessChannel.invokeListMethod<Object>(
+        method,
+        {'path': path},
+      );
+      return (result ?? const <Object>[])
+          .whereType<Map>()
+          .map((item) {
+            final name = item['name']?.toString().trim() ?? '';
+            if (name.isEmpty) {
+              return null;
+            }
+            final type = item['type']?.toString();
+            return _LocalDirectoryEntry(
+              name: name,
+              path: _joinPath(path, name),
+              isDirectory: type == 'directory',
+            );
+          })
+          .whereType<_LocalDirectoryEntry>()
+          .toList();
+    } catch (_) {
+      return const <_LocalDirectoryEntry>[];
+    }
+  }
+
+  static Future<Uint8List?> _readFileWithPrivilegedAccess(String path) async {
+    if (!Platform.isAndroid) {
+      return null;
+    }
+    final method = _androidPrivilegedAccessMethod('readFile');
+    if (method == null) {
+      return null;
+    }
+    try {
+      final result = await _storageAccessChannel.invokeMethod<Object>(
+        method,
+        {'path': path},
+      );
+      if (result is Uint8List) {
+        return result;
+      }
+      if (result is ByteData) {
+        return result.buffer.asUint8List();
+      }
+      if (result is List) {
+        return Uint8List.fromList(result.cast<int>());
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  static Future<bool> _existsWithPrivilegedAccess(String path) async {
+    if (!Platform.isAndroid) {
+      return false;
+    }
+    final method = _androidPrivilegedAccessMethod('exists');
+    if (method == null) {
+      return false;
+    }
+    try {
+      return await _storageAccessChannel.invokeMethod<bool>(
+            method,
+            {'path': path},
+          ) ??
+          false;
     } catch (_) {
       return false;
     }
+  }
+
+  static String? _androidPrivilegedAccessMethod(String operation) {
+    final rootEnabled =
+        normalizeAndroidRootMode(appdata.settings[androidRootModeSettingIndex]) ==
+            '1';
+    if (rootEnabled) {
+      switch (operation) {
+        case 'listDirectoryEntries':
+          return 'listDirectoryEntriesWithRoot';
+        case 'readFile':
+          return 'readFileWithRoot';
+        case 'exists':
+          return 'existsWithRoot';
+      }
+    }
+
+    final shizukuEnabled = normalizeAndroidShizukuMode(
+          appdata.settings[androidShizukuModeSettingIndex],
+        ) ==
+        '1';
+    if (shizukuEnabled) {
+      switch (operation) {
+        case 'listDirectoryEntries':
+          return 'listDirectoryEntriesWithShizuku';
+        case 'readFile':
+          return 'readFileWithShizuku';
+        case 'exists':
+          return 'existsWithShizuku';
+      }
+    }
+    return null;
   }
 
   static List<FileSystemEntity> _safeList(Directory dir) {
@@ -1137,15 +1949,19 @@ class LocalLibraryManager {
     if (entity is! File) {
       return false;
     }
-    final name = _basename(entity.path).toLowerCase();
+    return _isVisibleImagePath(entity.path);
+  }
+
+  static bool _isVisibleImagePath(String path) {
+    final name = _basename(path).toLowerCase();
     return name.endsWith('.jpg') ||
         name.endsWith('.jpeg') ||
         name.endsWith('.png') ||
         name.endsWith('.webp');
   }
 
-  static bool _isCoverLikeFile(File file) {
-    final name = _basename(file.path).toLowerCase();
+  static bool _isCoverLikePath(String path) {
+    final name = _basename(path).toLowerCase();
     return name == 'cover.jpg' ||
         name == 'cover.jpeg' ||
         name == 'cover.png' ||
@@ -1203,6 +2019,11 @@ class LocalLibraryManager {
       return 'unknown';
     }
     return sanitized;
+  }
+
+  static String _safeCacheName(String value) {
+    final sanitized = value.replaceAll(RegExp(r'[^a-zA-Z0-9._-]'), '_');
+    return sanitized.isEmpty ? 'default' : sanitized;
   }
 
   static bool _looksLikeCanonicalDownloadId(String id) {
@@ -1264,6 +2085,283 @@ class LocalLibraryManager {
     } catch (_) {
       return null;
     }
+  }
+
+  static DownloadedItem? _downloadedItemFromDbRow(
+    Row row,
+    DateTime time,
+    String directory,
+  ) {
+    final rawId = _downloadRowText(row, const ['id']) ?? '';
+    if (rawId.isEmpty) {
+      return null;
+    }
+    final title = _downloadRowText(row, const [
+          'title',
+          'name',
+          'comicTitle',
+          'galleryTitle',
+          'label',
+        ]) ??
+        _basename(directory.isNotEmpty ? directory : rawId);
+    final author = _downloadRowText(row, const [
+          'subtitle',
+          'subTitle',
+          'author',
+          'artist',
+          'artists',
+          'uploader',
+          'user',
+          'creator',
+          'group',
+          'circle',
+        ]) ??
+        '';
+    final tags = _downloadRowTags(row, const [
+      'tags',
+      'tag',
+      'tagList',
+      'metadataTags',
+      'categories',
+      'category',
+      'labels',
+    ]);
+    final size = _downloadRowDouble(row, const ['size', 'comicSize', 'totalSize']);
+    final comic = ScannedDownloadedComic(
+      comicId: rawId,
+      title: title,
+      author: author,
+      chapters: const <String>['全部'],
+      downloadedChapters: const <int>[0],
+      size: size,
+      tagList: tags,
+    )
+      ..time = time
+      ..directory = directory;
+    return comic;
+  }
+
+  static double? _downloadRowDouble(Row row, Iterable<String> keys) {
+    for (final key in keys) {
+      try {
+        final raw = row[key];
+        if (raw is num) {
+          return raw.toDouble();
+        }
+        final value = double.tryParse(raw?.toString().trim() ?? '');
+        if (value != null) {
+          return value;
+        }
+      } catch (_) {}
+    }
+    return null;
+  }
+
+  static String _metadataTitleForDownloadedRow(
+    Row row,
+    DownloadedItem fallback,
+  ) {
+    final fromRow = _downloadRowText(row, const [
+      'title',
+      'name',
+      'comicTitle',
+      'galleryTitle',
+      'label',
+    ]);
+    if (fromRow != null) {
+      return fromRow;
+    }
+    return fallback.name;
+  }
+
+  static String? _downloadRowText(Row row, Iterable<String> keys) {
+    for (final key in keys) {
+      try {
+        final value = row[key]?.toString().trim();
+        if (value != null && value.isNotEmpty) {
+          return value;
+        }
+      } catch (_) {}
+    }
+    return null;
+  }
+
+  static List<String> _parseTagValues(Object? raw) {
+    if (raw == null) {
+      return const <String>[];
+    }
+    if (raw is List) {
+      return raw
+          .map((entry) => entry.toString().trim())
+          .where((entry) => entry.isNotEmpty)
+          .toList(growable: false);
+    }
+    final text = raw.toString().trim();
+    if (text.isEmpty) {
+      return const <String>[];
+    }
+    try {
+      final decoded = jsonDecode(text);
+      if (decoded is List) {
+        final values = decoded
+            .map((entry) => entry.toString().trim())
+            .where((entry) => entry.isNotEmpty)
+            .toList(growable: false);
+        if (values.isNotEmpty) {
+          return values;
+        }
+      }
+    } catch (_) {}
+    return text
+        .split(RegExp(r'[,，;；|]'))
+        .map((entry) => entry.trim())
+        .where((entry) => entry.isNotEmpty)
+        .toList(growable: false);
+  }
+
+  static List<String> _downloadRowTags(Row row, Iterable<String> keys) {
+    for (final key in keys) {
+      try {
+        final values = _parseTagValues(row[key]);
+        if (values.isNotEmpty) {
+          return values;
+        }
+      } catch (_) {}
+    }
+    return const <String>[];
+  }
+
+  static String _metadataAuthorForDownloadedRow(
+    Row row,
+    String json,
+    DownloadedItem fallback,
+  ) {
+    final fromRow = _downloadRowText(row, const [
+      'subtitle',
+      'subTitle',
+      'author',
+      'artist',
+      'uploader',
+      'user',
+    ]);
+    if (fromRow != null) {
+      return fromRow;
+    }
+    return _metadataAuthorForDownloadedJson(json, fallback);
+  }
+
+  static List<String> _metadataTagsForDownloadedRow(
+    Row row,
+    String json,
+    DownloadedItem fallback,
+  ) {
+    final fromRow = _downloadRowTags(row, const [
+      'tags',
+      'tag',
+      'tagList',
+      'metadataTags',
+    ]);
+    if (fromRow.isNotEmpty) {
+      return fromRow;
+    }
+    return _metadataTagsForDownloadedJson(json, fallback);
+  }
+
+  static String _metadataAuthorForDownloadedJson(
+    String json,
+    DownloadedItem fallback,
+  ) {
+    final direct = fallback.subTitle.trim();
+    if (direct.isNotEmpty) {
+      return direct;
+    }
+
+    try {
+      final data = jsonDecode(json) as Map<String, dynamic>;
+      String? pick(Map data, Iterable<String> keys) {
+        for (final key in keys) {
+          final value = data[key]?.toString().trim();
+          if (value != null && value.isNotEmpty) {
+            return value;
+          }
+        }
+        return null;
+      }
+
+      final root = pick(data, const [
+        'subtitle',
+        'subTitle',
+        'author',
+        'artist',
+        'uploader',
+        'user',
+      ]);
+      if (root != null) {
+        return root;
+      }
+
+      for (final nestedKey in const ['comicItem', 'comic', 'metadata']) {
+        final nested = data[nestedKey];
+        if (nested is Map) {
+          final value = pick(nested, const [
+            'subtitle',
+            'subTitle',
+            'author',
+            'artist',
+            'uploader',
+            'user',
+          ]);
+          if (value != null) {
+            return value;
+          }
+        }
+      }
+    } catch (_) {}
+    return '';
+  }
+
+  static List<String> _metadataTagsForDownloadedJson(
+    String json,
+    DownloadedItem fallback,
+  ) {
+    if (fallback.tags.isNotEmpty) {
+      return List<String>.from(fallback.tags);
+    }
+
+    try {
+      final data = jsonDecode(json) as Map<String, dynamic>;
+      List<String>? pick(Map data, Iterable<String> keys) {
+        for (final key in keys) {
+          final raw = data[key];
+          if (raw is List) {
+            final values = raw
+                .map((entry) => entry.toString().trim())
+                .where((entry) => entry.isNotEmpty)
+                .toList(growable: false);
+            if (values.isNotEmpty) {
+              return values;
+            }
+          }
+        }
+        return null;
+      }
+
+      final root = pick(data, const ['tags', 'tagList', 'metadataTags']);
+      if (root != null) {
+        return root;
+      }
+
+      for (final nestedKey in const ['comicItem', 'comic', 'metadata']) {
+        final nested = data[nestedKey];
+        if (nested is Map) {
+          final values = pick(nested, const ['tags', 'tagList', 'metadataTags']);
+          if (values != null) {
+            return values;
+          }
+        }
+      }
+    } catch (_) {}
+    return const <String>[];
   }
 
   static String? _favoriteTargetForDownloaded(

@@ -1,4 +1,4 @@
-﻿library pica_reader;
+library pica_reader;
 
 import 'dart:async';
 import 'dart:io';
@@ -75,7 +75,9 @@ void _hideReaderSystemUi({required bool useDarkBackground}) {
   SystemChrome.setSystemUIOverlayStyle(
     _readerOverlayStyle(useDarkBackground),
   );
-  SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+  SystemChrome.setEnabledSystemUIMode(
+    App.isMobile ? SystemUiMode.immersiveSticky : SystemUiMode.immersive,
+  );
 }
 
 void _syncReaderSystemUi({
@@ -162,14 +164,11 @@ class ComicReadingPage extends StatelessWidget {
           DeviceOrientation.landscapeRight
         ]);
       } else if (appdata.settings[76] == "2") {
-        SystemChrome.setPreferredOrientations([
-          DeviceOrientation.portraitUp,
-          DeviceOrientation.portraitDown
-        ]);
+        SystemChrome.setPreferredOrientations(
+            [DeviceOrientation.portraitUp, DeviceOrientation.portraitDown]);
       }
       //进入阅读器时清除内存中的缓存, 并且增大限制
-      BaseImageProvider.clearCache();
-      BaseImageProvider.setCacheSizeLimit(100 * 1024 * 1024);
+      logic.configureReaderCacheLimits();
       logic.openEpsView = openEpsDrawer;
       if (useDarkBackground) {
         Future.microtask(() =>
@@ -178,10 +177,9 @@ class ComicReadingPage extends StatelessWidget {
       }
     }, dispose: (logic) {
       //清除缓存并减小最大缓存
-      BaseImageProvider.clearCache();
-      BaseImageProvider.setCacheSizeLimit(50 * 1024 * 1024);
+      logic.restoreReaderCacheLimits();
       logic.clearPhotoViewControllers();
-      SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+      _showReaderSystemUi(useDarkBackground: useDarkBackground);
       SystemChrome.setPreferredOrientations(DeviceOrientation.values);
       if (logic.listenVolume != null) {
         logic.listenVolume!.stop();
@@ -193,7 +191,8 @@ class ComicReadingPage extends StatelessWidget {
       ComicImage.clear();
       StateController.remove<ComicReadingPageLogic>();
       // 更新本地收藏
-      LocalFavoritesManager().onReadEnd(readingData.favoriteId, readingData.favoriteType);
+      LocalFavoritesManager()
+          .onReadEnd(readingData.favoriteId, readingData.favoriteType);
       // 保存历史记录
       if (history != null) {
         _updateHistory(logic, true);
@@ -225,23 +224,25 @@ class ComicReadingPage extends StatelessWidget {
           value: _readerOverlayStyle(useDarkBackground),
           child: MediaQuery.removePadding(
             context: context,
-            removeTop: true,
-            child: Scaffold(
-              backgroundColor: useDarkBackground ? Colors.black : null,
-              endDrawerEnableOpenDragGesture: false,
-              key: _scaffoldKey,
-              endDrawer: Drawer(
-                child: buildEpsView(),
-              ),
-              floatingActionButton: buildEpChangeButton(logic),
-              body: StateBuilder<ComicReadingPageLogic>(builder: (logic) {
-                if (logic.isLoading) {
-                  history?.readEpisode.add(logic.order);
-                  loadInfo(logic);
-                  return const Center(
-                    child: CircularProgressIndicator(),
-                  );
-                } else if (logic.urls.isNotEmpty) {
+            removeTop: App.isMobile,
+            child: PopScope(
+              canPop: true,
+              child: Scaffold(
+                backgroundColor: useDarkBackground ? Colors.black : null,
+                endDrawerEnableOpenDragGesture: false,
+                key: _scaffoldKey,
+                endDrawer: Drawer(
+                  child: buildEpsView(),
+                ),
+                floatingActionButton: buildEpChangeButton(logic),
+                body: StateBuilder<ComicReadingPageLogic>(builder: (logic) {
+                  if (logic.isLoading) {
+                    history?.readEpisode.add(logic.order);
+                    loadInfo(logic);
+                    return const Center(
+                      child: CircularProgressIndicator(),
+                    );
+                  } else if (logic.urls.isNotEmpty) {
                   if (logic.readingMethod ==
                           ReadingMethod.topToBottomContinuously &&
                       !logic.haveUsedInitialPage &&
@@ -320,6 +321,7 @@ class ComicReadingPage extends StatelessWidget {
                   return buildErrorView(logic, context);
                 }
               }),
+              ),
             ),
           ),
         ),
@@ -424,16 +426,42 @@ class ComicReadingPage extends StatelessWidget {
   }
 
   void loadInfo(ComicReadingPageLogic logic) async {
-    logic.urls = [];
-    var urls = await readingData.loadEp(logic.order);
-    if (urls.isEmpty) {
-      logic.isLoading = false;
-      logic.update();
+    if (logic.isLoadingInfo && logic.loadingOrder == logic.order) {
       return;
     }
-    logic.urls = urls;
-    logic.isLoading = false;
-    logic.update();
+    final requestId = ++logic.chapterLoadRequestId;
+    final order = logic.order;
+    logic.isLoadingInfo = true;
+    logic.loadingOrder = order;
+    logic.errorMessage = null;
+    logic.urls = [];
+    try {
+      final urls = await readingData.loadEp(order);
+      if (StateController.findOrNull<ComicReadingPageLogic>() != logic ||
+          requestId != logic.chapterLoadRequestId ||
+          order != logic.order) {
+        return;
+      }
+      logic.urls = urls;
+      logic.isLoading = false;
+      logic.update();
+    } catch (e) {
+      if (StateController.findOrNull<ComicReadingPageLogic>() != logic ||
+          requestId != logic.chapterLoadRequestId ||
+          order != logic.order) {
+        return;
+      }
+      logic.errorMessage = e.toString().trim();
+      logic.urls = [];
+      logic.isLoading = false;
+      logic.update();
+    } finally {
+      if (StateController.findOrNull<ComicReadingPageLogic>() == logic &&
+          requestId == logic.chapterLoadRequestId) {
+        logic.isLoadingInfo = false;
+        logic.loadingOrder = null;
+      }
+    }
   }
 
   Widget buildEpsView() {
@@ -513,7 +541,8 @@ class ComicReadingPage extends StatelessWidget {
       bytes.addAll(event);
     }
     var dir = Directory.systemTemp;
-    var file = File("${dir.path}/share_${DateTime.now().millisecondsSinceEpoch}.jpg");
+    var file =
+        File("${dir.path}/share_${DateTime.now().millisecondsSinceEpoch}.jpg");
     return file.writeAsBytes(bytes);
   }
 

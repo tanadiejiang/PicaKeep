@@ -37,14 +37,11 @@ HistoryType _historyTypeForDownload(DownloadedItem c) {
   }
 }
 
-File resolveLocalComicCover(DownloadedItem comic,
+String resolveLocalComicCoverPath(DownloadedItem comic,
     {Iterable<String> legacyTargets = const <String>[]}) {
   final directPath = comic.localCoverPath?.trim();
   if (directPath != null && directPath.isNotEmpty) {
-    final file = File(directPath);
-    if (file.existsSync()) {
-      return file;
-    }
+    return directPath;
   }
 
   try {
@@ -52,10 +49,7 @@ File resolveLocalComicCover(DownloadedItem comic,
         .findCachedByCandidates([comic.id, ...legacyTargets]);
     final coverPath = localItem?.localCoverPath?.trim();
     if (coverPath != null && coverPath.isNotEmpty) {
-      final file = File(coverPath);
-      if (file.existsSync()) {
-        return file;
-      }
+      return coverPath;
     }
   } catch (_) {}
 
@@ -65,7 +59,7 @@ File resolveLocalComicCover(DownloadedItem comic,
       ...legacyTargets,
     ]);
     if (file.existsSync()) {
-      return file;
+      return file.path;
     }
   } catch (_) {}
 
@@ -74,12 +68,19 @@ File resolveLocalComicCover(DownloadedItem comic,
     for (final name in ['cover.jpg', 'cover.jpeg', 'cover.png', 'cover.webp']) {
       final file = File('$rootPath${Platform.pathSeparator}$name');
       if (file.existsSync()) {
-        return file;
+        return file.path;
       }
     }
   }
 
-  return File('');
+  return '';
+}
+
+File resolveLocalComicCover(DownloadedItem comic,
+    {Iterable<String> legacyTargets = const <String>[]}) {
+  final coverPath =
+      resolveLocalComicCoverPath(comic, legacyTargets: legacyTargets);
+  return coverPath.isEmpty ? File('') : File(coverPath);
 }
 
 /// Inserts or refreshes a history row before opening [ComicReadingPage].
@@ -90,11 +91,7 @@ Future<void> ensureHistoryBeforeRead(DownloadedItem comic,
     cover = comic.coverUrl.trim();
   }
   if (cover.isEmpty) {
-    final coverFile =
-        resolveLocalComicCover(comic, legacyTargets: legacyTargets);
-    if (coverFile.existsSync()) {
-      cover = coverFile.path;
-    }
+    cover = resolveLocalComicCoverPath(comic, legacyTargets: legacyTargets);
   }
   await History.ensureForLocalRead(
     target: comic.id,

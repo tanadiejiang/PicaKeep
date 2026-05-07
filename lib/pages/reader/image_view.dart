@@ -21,8 +21,44 @@ const Set<PointerDeviceKind> _kTouchLikeDeviceTypes = <PointerDeviceKind>{
   PointerDeviceKind.unknown
 };
 
+class _ReaderImageRequest {
+  const _ReaderImageRequest({required this.provider});
+
+  final ImageProvider provider;
+}
+
 
 extension ImageExt on ComicReadingPage {
+  _ReaderImageRequest _createReaderImageRequest(
+    BuildContext context,
+    ComicReadingPageLogic logic,
+    int index,
+    String target, {
+    double? layoutWidth,
+    double? layoutHeight,
+  }) {
+    final provider = createImageProvider(type, logic, index, target);
+    final mediaQuery = MediaQuery.of(context);
+    final devicePixelRatio =
+        mediaQuery.devicePixelRatio.clamp(1.0, 2.5).toDouble();
+    final size = mediaQuery.size;
+
+    int? cacheWidth;
+
+    if (logic.readingMethod == ReadingMethod.topToBottomContinuously) {
+      final width = layoutWidth ?? size.width;
+      cacheWidth = (width * devicePixelRatio).round();
+    } else if (logic.readingMethod.isTwoPage) {
+      cacheWidth = ((size.width / 2) * devicePixelRatio * 1.35).round();
+    } else {
+      cacheWidth = (size.width * devicePixelRatio * 1.6).round();
+    }
+
+    return _ReaderImageRequest(
+      provider: ResizeImage.resizeIfNeeded(cacheWidth, null, provider),
+    );
+  }
+
   /// build comic image
   Widget buildComicView(
       ComicReadingPageLogic logic, BuildContext context, String target) {
@@ -87,11 +123,18 @@ extension ImageExt on ComicReadingPage {
 
             precacheComicImage(logic, context, index + 1, target);
 
-            ImageProvider image = createImageProvider(type, logic, index, target);
+            final imageRequest = _createReaderImageRequest(
+              context,
+              logic,
+              index,
+              target,
+              layoutWidth: imageWidth,
+              layoutHeight: imageWidth * 1.2,
+            );
             return ComicImage(
-              filterQuality: FilterQuality.medium,
+              filterQuality: FilterQuality.low,
               gaplessPlayback: true,
-              image: image,
+              image: imageRequest.provider,
               width: imageWidth,
               height: imageWidth * 1.2,
               fit: BoxFit.cover,
@@ -117,7 +160,12 @@ extension ImageExt on ComicReadingPage {
         builder: (BuildContext context, int index) {
           ImageProvider? imageProvider;
           if (index != 0 && index != logic.urls.length + 1) {
-            imageProvider = createImageProvider(type, logic, index - 1, target);
+            imageProvider = _createReaderImageRequest(
+              context,
+              logic,
+              index - 1,
+              target,
+            ).provider;
           } else {
             return PhotoViewGalleryPageOptions.customChild(
                 scaleStateController: PhotoViewScaleStateController(),
@@ -237,10 +285,15 @@ extension ImageExt on ComicReadingPage {
         return const SizedBox();
       }
 
+      final imageRequest = _createReaderImageRequest(
+        context,
+        logic,
+        imageIndex,
+        target,
+      );
       return ComicImage(
         key: ValueKey(imageIndex),
-        image: createImageProvider(
-            type, logic, imageIndex, target),
+        image: imageRequest.provider,
         fit: fit,
         alignment: alignment,
       );
@@ -491,7 +544,10 @@ extension ImageExt on ComicReadingPage {
         continue;
       }
       logic.requestedLoadingItems[current] = true;
-      precacheImage(createImageProvider(type, logic, current, target), context);
+      precacheImage(
+        _createReaderImageRequest(context, logic, current, target).provider,
+        context,
+      );
     }
     if (!ImageManager.haveTask) {
       var extraEnd = precacheEnd + 3;
@@ -506,7 +562,7 @@ extension ImageExt on ComicReadingPage {
         }
         logic.requestedLoadingItems[current] = true;
         precacheImage(
-          createImageProvider(type, logic, current, target),
+          _createReaderImageRequest(context, logic, current, target).provider,
           context,
         );
       }

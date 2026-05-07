@@ -233,6 +233,18 @@ Future<void> _runRescanLocalComics(BuildContext context) async {
   }
 }
 
+class _AndroidShizukuStatus {
+  const _AndroidShizukuStatus({
+    required this.installed,
+    required this.running,
+    required this.permissionGranted,
+  });
+
+  final bool installed;
+  final bool running;
+  final bool permissionGranted;
+}
+
 class _AndroidStorageAccessController {
   _AndroidStorageAccessController._();
 
@@ -262,6 +274,121 @@ class _AndroidStorageAccessController {
       await _channel.invokeMethod<void>('openManageAllFilesAccessSettings');
     } catch (_) {}
   }
+
+  Future<_AndroidShizukuStatus> getShizukuStatus() async {
+    if (!App.isAndroid) {
+      return const _AndroidShizukuStatus(
+        installed: false,
+        running: false,
+        permissionGranted: false,
+      );
+    }
+    try {
+      final result = await _channel.invokeMethod<Object>('getShizukuStatus');
+      final map = (result as Map?)?.cast<Object?, Object?>() ?? const {};
+      return _AndroidShizukuStatus(
+        installed: map['installed'] == true,
+        running: map['running'] == true,
+        permissionGranted: map['permissionGranted'] == true,
+      );
+    } catch (_) {
+      return const _AndroidShizukuStatus(
+        installed: false,
+        running: false,
+        permissionGranted: false,
+      );
+    }
+  }
+
+  Future<bool> isShizukuAvailable() async {
+    if (!App.isAndroid) {
+      return false;
+    }
+    try {
+      return await _channel.invokeMethod<bool>('isShizukuAvailable') ?? false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<bool> hasShizukuPermission() async {
+    if (!App.isAndroid) {
+      return false;
+    }
+    try {
+      return await _channel.invokeMethod<bool>('hasShizukuPermission') ?? false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<bool> requestShizukuPermission() async {
+    if (!App.isAndroid) {
+      return false;
+    }
+    try {
+      return await _channel.invokeMethod<bool>('requestShizukuPermission') ??
+          false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<void> openShizukuApp() async {
+    if (!App.isAndroid) {
+      return;
+    }
+    try {
+      await _channel.invokeMethod<void>('openShizukuApp');
+    } catch (_) {}
+  }
+
+  Future<bool> hasRootAccess() async {
+    if (!App.isAndroid) {
+      return false;
+    }
+    try {
+      return await _channel.invokeMethod<bool>('hasRootAccess') ?? false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<List<String>> listDirectoriesWithRoot(String path) async {
+    if (!App.isAndroid) {
+      return const <String>[];
+    }
+    try {
+      final result = await _channel.invokeListMethod<Object>(
+        'listDirectoriesWithRoot',
+        {'path': path},
+      );
+      return (result ?? const <Object>[])
+          .map((item) => item.toString().trim())
+          .where((item) => item.isNotEmpty)
+          .toList(growable: false);
+    } on PlatformException catch (e) {
+      throw Exception((e.message ?? e.code).trim());
+    }
+  }
+
+  Future<List<String>> listDirectoriesWithShizuku(String path) async {
+    if (!App.isAndroid) {
+      return const <String>[];
+    }
+    try {
+      final result = await _channel.invokeListMethod<Object>(
+        'listDirectoriesWithShizuku',
+        {'path': path},
+      );
+      return (result ?? const <Object>[])
+          .map((item) => item.toString().trim())
+          .where((item) => item.isNotEmpty)
+          .toList(growable: false);
+    } on PlatformException catch (e) {
+      throw Exception((e.message ?? e.code).trim());
+    }
+  }
 }
 
 bool _isAndroidRootModeEnabled() {
@@ -269,24 +396,29 @@ bool _isAndroidRootModeEnabled() {
       '1';
 }
 
+bool _isAndroidShizukuModeEnabled() {
+  return normalizeAndroidShizukuMode(
+        appdata.settings[androidShizukuModeSettingIndex],
+      ) ==
+      '1';
+}
+
+Future<void> _setAndroidShizukuModeEnabled(bool value) async {
+  appdata.settings[androidShizukuModeSettingIndex] = value ? '1' : '0';
+  await appdata.updateSettings();
+}
+
+enum _AndroidDirectoryBrowseMode {
+  manageAllFiles,
+  shizuku,
+  root,
+}
+
 Future<bool> _requestAndroidRootAccess() async {
   if (!App.isAndroid) {
     return false;
   }
-  try {
-    final result = await Process.run(
-      'su',
-      ['-c', 'id'],
-    ).timeout(const Duration(seconds: 3));
-    final output = '${result.stdout}${result.stderr}'.toLowerCase();
-    return result.exitCode == 0 && output.contains('uid=0');
-  } catch (_) {
-    return false;
-  }
-}
-
-String _escapeShellPath(String value) {
-  return "'${value.replaceAll("'", "'\"'\"'")}'";
+  return _AndroidStorageAccessController.instance.hasRootAccess();
 }
 
 String _joinDirectoryPath(String parent, String child) {
@@ -320,52 +452,46 @@ Future<List<String>> _listDirectoriesWithDartIo(String path) async {
   if (!await directory.exists()) {
     throw Exception('目录不存在或当前应用不可访问'.tl);
   }
-  final entities = directory
-      .listSync(followLinks: false)
-      .whereType<Directory>()
-      .map((directory) {
-        final segments = directory.uri.pathSegments
-            .where((segment) => segment.isNotEmpty)
-            .toList(growable: false);
-        if (segments.isEmpty) {
-          return '';
-        }
-        return segments.last.trim();
-      })
-      .where((name) => name.isNotEmpty)
-      .toSet()
-      .toList()
+  final directories = <String>{};
+  await for (final entity in directory.list(followLinks: false)) {
+    if (entity is! Directory) {
+      continue;
+    }
+    final segments = entity.uri.pathSegments
+        .where((segment) => segment.isNotEmpty)
+        .toList(growable: false);
+    if (segments.isEmpty) {
+      continue;
+    }
+    final name = segments.last.trim();
+    if (name.isNotEmpty) {
+      directories.add(name);
+    }
+  }
+  final sortedDirectories = directories.toList()
     ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
-  return entities;
+  return sortedDirectories;
 }
 
 Future<List<String>> _listDirectoriesWithRoot(String path) async {
-  final command = 'cd ${_escapeShellPath(path)} && ls -1Ap';
-  final result = await Process.run(
-    'su',
-    ['-c', command],
-  ).timeout(const Duration(seconds: 4));
-  if (result.exitCode != 0) {
-    throw Exception(result.stderr.toString().trim().isEmpty
-        ? 'Root 模式目录读取失败'.tl
-        : result.stderr.toString().trim());
-  }
-  final directories = result.stdout
-      .toString()
-      .split('\n')
-      .map((line) => line.trim())
-      .where((line) => line.endsWith('/'))
-      .map((line) => line.substring(0, line.length - 1))
-      .where((line) =>
-          line.isNotEmpty &&
-          line != '.' &&
-          line != '..' &&
-          line != './' &&
-          line != '../')
-      .toSet()
-      .toList()
-    ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
-  return directories;
+  final rawPath = path.trim().replaceAll('\\', '/');
+  final normalizedPath = rawPath.isEmpty
+      ? '/'
+      : (() {
+          var value = rawPath.startsWith('/') ? rawPath : '/$rawPath';
+          while (value.length > 1 && value.endsWith('/')) {
+            value = value.substring(0, value.length - 1);
+          }
+          return value.isEmpty ? '/' : value;
+        })();
+  return _AndroidStorageAccessController.instance
+      .listDirectoriesWithRoot(normalizedPath);
+}
+
+Future<List<String>> _listDirectoriesWithShizuku(String path) {
+  return _AndroidStorageAccessController.instance.listDirectoriesWithShizuku(
+    path,
+  );
 }
 
 Future<String?> _openInternalDirectoryBrowser(
@@ -376,14 +502,17 @@ Future<String?> _openInternalDirectoryBrowser(
   if (!App.isAndroid) {
     return null;
   }
-  final hasAllFilesAccess =
-      await _AndroidStorageAccessController.instance.hasManageAllFilesAccess();
-  final useRoot = _isAndroidRootModeEnabled() && !hasAllFilesAccess;
-  if (!hasAllFilesAccess && !useRoot) {
+  final controller = _AndroidStorageAccessController.instance;
+  final hasAllFilesAccess = await controller.hasManageAllFilesAccess();
+  final hasShizukuAccess = _isAndroidShizukuModeEnabled() &&
+      await controller.hasShizukuPermission();
+  final hasRootAccess =
+      _isAndroidRootModeEnabled() && await _requestAndroidRootAccess();
+  if (!hasAllFilesAccess && !hasShizukuAccess && !hasRootAccess) {
     if (context.mounted) {
       _showSettingMessage(
         context,
-        '长按“浏览”前，请先授予安卓全部文件访问权限或开启 Root 模式'.tl,
+        '长按“浏览”前，请先授予安卓全部文件访问权限，或开启 Shizuku 授权 / Root 模式'.tl,
       );
     }
     return null;
@@ -391,12 +520,17 @@ Future<String?> _openInternalDirectoryBrowser(
   if (!context.mounted) {
     return null;
   }
+  final browseMode = hasRootAccess
+      ? _AndroidDirectoryBrowseMode.root
+      : hasShizukuAccess
+          ? _AndroidDirectoryBrowseMode.shizuku
+          : _AndroidDirectoryBrowseMode.manageAllFiles;
   return Navigator.of(context).push<String>(
     MaterialPageRoute(
       builder: (_) => _InternalDirectoryBrowserPage(
         title: title,
         initialPath: initialPath,
-        useRoot: useRoot,
+        browseMode: browseMode,
       ),
     ),
   );
@@ -406,12 +540,12 @@ class _InternalDirectoryBrowserPage extends StatefulWidget {
   const _InternalDirectoryBrowserPage({
     required this.title,
     required this.initialPath,
-    required this.useRoot,
+    required this.browseMode,
   });
 
   final String title;
   final String? initialPath;
-  final bool useRoot;
+  final _AndroidDirectoryBrowseMode browseMode;
 
   @override
   State<_InternalDirectoryBrowserPage> createState() =>
@@ -425,13 +559,18 @@ class _InternalDirectoryBrowserPageState
     '/storage',
     '/storage/emulated',
     '/storage/emulated/0',
-    '/storage/emulated/0/Android',
+    '/data/user/0/com.github.pacalini.pica_comic',
+    '/data/data/com.github.pacalini.pica_comic',
+    '/storage/emulated/0/Android/data/com.github.pacalini.pica_comic',
     '/storage/emulated/0/Android/data',
     '/sdcard',
   ];
 
+  late final TextEditingController _pathController;
   late String _currentPath;
   bool _loading = true;
+  bool _showPresetRoots = false;
+  int _pathLoadToken = 0;
   String? _errorText;
   List<String> _children = const <String>[];
 
@@ -439,7 +578,14 @@ class _InternalDirectoryBrowserPageState
   void initState() {
     super.initState();
     _currentPath = _normalizeInitialPath(widget.initialPath);
+    _pathController = TextEditingController(text: _currentPath);
     _loadCurrentPath();
+  }
+
+  @override
+  void dispose() {
+    _pathController.dispose();
+    super.dispose();
   }
 
   String _normalizeInitialPath(String? path) {
@@ -447,10 +593,36 @@ class _InternalDirectoryBrowserPageState
     if (value.isNotEmpty) {
       return value;
     }
-    return widget.useRoot ? '/' : '/storage/emulated/0';
+    return widget.browseMode == _AndroidDirectoryBrowseMode.root
+        ? '/'
+        : '/storage/emulated/0';
+  }
+
+  String _normalizePathInput(String path) {
+    final trimmed = path.trim();
+    if (trimmed.isEmpty) {
+      return _currentPath;
+    }
+    var normalized = trimmed.replaceAll('\\', '/');
+    if (!normalized.startsWith('/')) {
+      normalized = '/$normalized';
+    }
+    while (normalized.length > 1 && normalized.endsWith('/')) {
+      normalized = normalized.substring(0, normalized.length - 1);
+    }
+    return normalized.isEmpty ? '/' : normalized;
+  }
+
+  void _updatePathController() {
+    _pathController.value = TextEditingValue(
+      text: _currentPath,
+      selection: TextSelection.collapsed(offset: _currentPath.length),
+    );
   }
 
   Future<void> _loadCurrentPath() async {
+    final loadToken = ++_pathLoadToken;
+    final targetPath = _currentPath;
     if (mounted) {
       setState(() {
         _loading = true;
@@ -458,10 +630,15 @@ class _InternalDirectoryBrowserPageState
       });
     }
     try {
-      final children = widget.useRoot
-          ? await _listDirectoriesWithRoot(_currentPath)
-          : await _listDirectoriesWithDartIo(_currentPath);
-      if (!mounted) {
+      final children = switch (widget.browseMode) {
+        _AndroidDirectoryBrowseMode.root =>
+          await _listDirectoriesWithRoot(targetPath),
+        _AndroidDirectoryBrowseMode.shizuku =>
+          await _listDirectoriesWithShizuku(targetPath),
+        _AndroidDirectoryBrowseMode.manageAllFiles =>
+          await _listDirectoriesWithDartIo(targetPath),
+      };
+      if (!mounted || loadToken != _pathLoadToken || targetPath != _currentPath) {
         return;
       }
       setState(() {
@@ -469,7 +646,7 @@ class _InternalDirectoryBrowserPageState
         _loading = false;
       });
     } catch (e) {
-      if (!mounted) {
+      if (!mounted || loadToken != _pathLoadToken || targetPath != _currentPath) {
         return;
       }
       setState(() {
@@ -480,11 +657,26 @@ class _InternalDirectoryBrowserPageState
     }
   }
 
-  void _openChild(String name) {
+  void _setCurrentPath(String path) {
+    final nextPath = _normalizePathInput(path);
+    if (nextPath == _currentPath) {
+      _updatePathController();
+      _loadCurrentPath();
+      return;
+    }
     setState(() {
-      _currentPath = _joinDirectoryPath(_currentPath, name);
+      _currentPath = nextPath;
     });
+    _updatePathController();
     _loadCurrentPath();
+  }
+
+  void _jumpToTypedPath() {
+    _setCurrentPath(_pathController.text);
+  }
+
+  void _openChild(String name) {
+    _setCurrentPath(_joinDirectoryPath(_currentPath, name));
   }
 
   void _openParent() {
@@ -492,28 +684,129 @@ class _InternalDirectoryBrowserPageState
     if (parent == null) {
       return;
     }
-    setState(() {
-      _currentPath = parent;
-    });
-    _loadCurrentPath();
+    _setCurrentPath(parent);
+  }
+
+  Widget _buildPathJumpBar(BuildContext context) {
+    return Row(
+      children: [
+        Expanded(
+          child: TextField(
+            controller: _pathController,
+            onTap: () {
+              if (!_showPresetRoots) {
+                setState(() {
+                  _showPresetRoots = true;
+                });
+              }
+            },
+            onSubmitted: (_) => _jumpToTypedPath(),
+            decoration: InputDecoration(
+              prefixIcon: const Icon(Icons.route_outlined),
+              hintText: '输入路径后可直接跳转'.tl,
+              border: const OutlineInputBorder(),
+              suffixIcon: IconButton(
+                onPressed: () {
+                  setState(() {
+                    _showPresetRoots = !_showPresetRoots;
+                  });
+                },
+                icon: Icon(
+                  _showPresetRoots ? Icons.expand_less : Icons.expand_more,
+                ),
+                tooltip: _showPresetRoots ? '收起快捷路径'.tl : '展开快捷路径'.tl,
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(width: 8),
+        FilledButton(
+          onPressed: _jumpToTypedPath,
+          child: Text('跳转'.tl),
+        ),
+      ],
+    );
   }
 
   Widget _buildPresetRoots() {
-    return Wrap(
-      spacing: 8,
-      runSpacing: 8,
-      children: [
-        for (final path in _androidPresetRoots)
-          ActionChip(
-            label: Text(path),
-            onPressed: () {
-              setState(() {
-                _currentPath = path;
-              });
-              _loadCurrentPath();
-            },
+    return AnimatedCrossFade(
+      duration: const Duration(milliseconds: 180),
+      crossFadeState: _showPresetRoots
+          ? CrossFadeState.showFirst
+          : CrossFadeState.showSecond,
+      firstChild: Padding(
+        padding: const EdgeInsets.only(top: 12),
+        child: Align(
+          alignment: Alignment.centerLeft,
+          child: Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              for (final path in _androidPresetRoots)
+                ActionChip(
+                  label: Text(path),
+                  onPressed: () => _setCurrentPath(path),
+                ),
+            ],
           ),
-      ],
+        ),
+      ),
+      secondChild: const SizedBox.shrink(),
+    );
+  }
+
+  int get _listHeaderCount {
+    var count = 0;
+    if (_parentDirectoryPath(_currentPath) != null) {
+      count++;
+    }
+    if (_errorText != null) {
+      count++;
+    }
+    if (_children.isEmpty && _errorText == null) {
+      count++;
+    }
+    return count;
+  }
+
+  Widget _buildListItem(BuildContext context, int index) {
+    var cursor = 0;
+    if (_parentDirectoryPath(_currentPath) != null) {
+      if (index == cursor) {
+        return ListTile(
+          leading: const Icon(Icons.arrow_upward),
+          title: Text('上一级'.tl),
+          onTap: _openParent,
+        );
+      }
+      cursor++;
+    }
+    if (_errorText != null) {
+      if (index == cursor) {
+        return ListTile(
+          leading: const Icon(Icons.error_outline),
+          title: Text('目录读取失败'.tl),
+          subtitle: Text(_errorText!),
+        );
+      }
+      cursor++;
+    }
+    if (_children.isEmpty && _errorText == null) {
+      if (index == cursor) {
+        return ListTile(
+          leading: const Icon(Icons.folder_off_outlined),
+          title: Text('当前目录下没有可浏览的子文件夹'.tl),
+        );
+      }
+      cursor++;
+    }
+    final child = _children[index - cursor];
+    return ListTile(
+      leading: const Icon(Icons.folder_outlined),
+      title: Text(child),
+      subtitle: Text(_joinDirectoryPath(_currentPath, child)),
+      trailing: const Icon(Icons.chevron_right),
+      onTap: () => _openChild(child),
     );
   }
 
@@ -538,17 +831,16 @@ class _InternalDirectoryBrowserPageState
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  widget.useRoot
-                      ? '当前使用 Root 模式浏览目录'.tl
-                      : '当前使用安卓全部文件访问权限浏览目录'.tl,
+                  switch (widget.browseMode) {
+                    _AndroidDirectoryBrowseMode.root => '当前使用 Root 模式浏览目录'.tl,
+                    _AndroidDirectoryBrowseMode.shizuku => '当前使用 Shizuku 授权浏览目录'.tl,
+                    _AndroidDirectoryBrowseMode.manageAllFiles =>
+                      '当前使用安卓全部文件访问权限浏览目录'.tl,
+                  },
                   style: Theme.of(context).textTheme.labelLarge,
                 ),
                 const SizedBox(height: 8),
-                SelectableText(
-                  _currentPath,
-                  style: Theme.of(context).textTheme.bodyMedium,
-                ),
-                const SizedBox(height: 12),
+                _buildPathJumpBar(context),
                 _buildPresetRoots(),
                 const SizedBox(height: 12),
                 SizedBox(
@@ -566,34 +858,17 @@ class _InternalDirectoryBrowserPageState
           Expanded(
             child: _loading
                 ? const Center(child: CircularProgressIndicator())
-                : ListView(
-                    children: [
-                      if (_parentDirectoryPath(_currentPath) != null)
-                        ListTile(
-                          leading: const Icon(Icons.arrow_upward),
-                          title: Text('上一级'.tl),
-                          onTap: _openParent,
-                        ),
-                      if (_errorText != null)
-                        ListTile(
-                          leading: const Icon(Icons.error_outline),
-                          title: Text('目录读取失败'.tl),
-                          subtitle: Text(_errorText!),
-                        ),
-                      if (_children.isEmpty && _errorText == null)
-                        ListTile(
-                          leading: const Icon(Icons.folder_off_outlined),
-                          title: Text('当前目录下没有可浏览的子文件夹'.tl),
-                        ),
-                      for (final child in _children)
-                        ListTile(
-                          leading: const Icon(Icons.folder_outlined),
-                          title: Text(child),
-                          subtitle: Text(_joinDirectoryPath(_currentPath, child)),
-                          trailing: const Icon(Icons.chevron_right),
-                          onTap: () => _openChild(child),
-                        ),
-                    ],
+                : SmoothScrollProvider(
+                    builder: (context, controller, physics) => ListView.builder(
+                      controller: controller,
+                      keyboardDismissBehavior:
+                          ScrollViewKeyboardDismissBehavior.onDrag,
+                      physics: physics,
+                      cacheExtent: 480,
+                      itemCount: _listHeaderCount + _children.length,
+                      itemBuilder: (context, index) =>
+                          _buildListItem(context, index),
+                    ),
                   ),
           ),
         ],
@@ -611,13 +886,28 @@ class _AndroidManageAllFilesAccessTile extends StatefulWidget {
 }
 
 class _AndroidManageAllFilesAccessTileState
-    extends State<_AndroidManageAllFilesAccessTile> {
+    extends State<_AndroidManageAllFilesAccessTile>
+    with WidgetsBindingObserver {
   bool? _granted;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _load();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _load();
+    }
   }
 
   Future<void> _load() async {
@@ -634,7 +924,6 @@ class _AndroidManageAllFilesAccessTileState
   Future<void> _openSettings() async {
     await _AndroidStorageAccessController.instance
         .openManageAllFilesAccessSettings();
-    await Future<void>.delayed(const Duration(milliseconds: 300));
     await _load();
   }
 
@@ -659,15 +948,80 @@ class _AndroidManageAllFilesAccessTileState
   }
 }
 
-class _AndroidRootModeTile extends StatefulWidget {
-  const _AndroidRootModeTile();
+class _AndroidShizukuModeTile extends StatefulWidget {
+  const _AndroidShizukuModeTile();
 
   @override
-  State<_AndroidRootModeTile> createState() => _AndroidRootModeTileState();
+  State<_AndroidShizukuModeTile> createState() => _AndroidShizukuModeTileState();
 }
 
-class _AndroidRootModeTileState extends State<_AndroidRootModeTile> {
+class _AndroidShizukuModeTileState extends State<_AndroidShizukuModeTile>
+    with WidgetsBindingObserver {
   bool _busy = false;
+  bool? _installed;
+  bool? _running;
+  bool? _granted;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _load();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _load();
+    }
+  }
+
+  Future<void> _load() async {
+    final controller = _AndroidStorageAccessController.instance;
+    final status = await controller.getShizukuStatus();
+    final nextEnabled = status.running && status.permissionGranted;
+    if (_isAndroidShizukuModeEnabled() != nextEnabled) {
+      unawaited(_setAndroidShizukuModeEnabled(nextEnabled));
+    }
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _installed = status.installed;
+      _running = status.running;
+      _granted = status.permissionGranted;
+    });
+  }
+
+  Future<String?> _askEnableAction() {
+    return showDialog<String>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text('启用 Shizuku'.tl),
+        content: Text('是否先打开 Shizuku 检查服务和授权状态？也可以直接发起授权请求。'.tl),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: Text('取消'.tl),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop('open'),
+            child: Text('打开 Shizuku'.tl),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop('request'),
+            child: Text('直接授权'.tl),
+          ),
+        ],
+      ),
+    );
+  }
 
   Future<void> _setValue(bool value) async {
     if (_busy) {
@@ -677,22 +1031,45 @@ class _AndroidRootModeTileState extends State<_AndroidRootModeTile> {
       _busy = true;
     });
     try {
+      final controller = _AndroidStorageAccessController.instance;
       if (value) {
-        final granted = await _requestAndroidRootAccess();
-        if (!granted) {
+        final action = await _askEnableAction();
+        if (!mounted || action == null) {
+          await _load();
+          return;
+        }
+        if (action == 'open') {
+          await controller.openShizukuApp();
           if (mounted) {
-            _showSettingMessage(context, '未获取到 Root 授权，Root 模式未开启'.tl);
+            _showSettingMessage(context, '已打开 Shizuku；回到本应用后会自动重新检测服务和授权状态'.tl);
           }
           return;
         }
+
+        final running = _running ?? (await controller.getShizukuStatus()).running;
+        if (!running) {
+          await controller.openShizukuApp();
+          if (mounted) {
+            _showSettingMessage(context, '当前未连接到 Shizuku 服务，已为你打开 Shizuku；启动服务后再返回授权'.tl);
+          }
+          return;
+        }
+
+        final granted = await controller.requestShizukuPermission();
+        if (!granted) {
+          if (mounted) {
+            _showSettingMessage(context, '未获取到 Shizuku 授权'.tl);
+          }
+          await _setAndroidShizukuModeEnabled(false);
+          await _load();
+          return;
+        }
+      } else {
+        await _setAndroidShizukuModeEnabled(false);
       }
-      appdata.settings[androidRootModeSettingIndex] = value ? '1' : '0';
-      await appdata.updateSettings();
-      if (mounted) {
-        setState(() {});
-      }
+      await _load();
       if (mounted && value) {
-        _showSettingMessage(context, 'Root 模式已开启，可长按“浏览”进入内置文件夹浏览页'.tl);
+        _showSettingMessage(context, 'Shizuku 授权已开启，可用于长按“浏览”的受限目录访问'.tl);
       }
     } finally {
       if (mounted) {
@@ -705,14 +1082,92 @@ class _AndroidRootModeTileState extends State<_AndroidRootModeTile> {
 
   @override
   Widget build(BuildContext context) {
-    final enabled = _isAndroidRootModeEnabled();
+    final enabled = _granted ?? false;
+    final subtitle = switch ((_installed, _running, _granted)) {
+      (null, _, _) => '正在检测 Shizuku 状态'.tl,
+      (false, _, _) => '未安装 Shizuku；点击开关后会尝试打开 Shizuku'.tl,
+      (true, null, _) => '正在检测 Shizuku 状态'.tl,
+      (true, false, _) => '已安装但当前未连接到 Shizuku 服务；点击开关可直接打开 Shizuku'.tl,
+      (true, true, null) => '正在检测 Shizuku 状态'.tl,
+      (true, true, false) => '服务已连接但未授权；点击开关时可选择打开 Shizuku 或直接请求授权'.tl,
+      (true, true, true) => '已授权；返回本应用时会自动刷新状态，并用于长按“浏览”的受限目录访问'.tl,
+    };
+    return buildResponsiveSettingTile(
+      leading: const Icon(Icons.verified_user_outlined),
+      title: Text('Shizuku 授权'.tl),
+      subtitle: Text(subtitle),
+      trailingWidth: 60,
+      trailing: Switch(
+        value: enabled,
+        onChanged: _busy ? null : _setValue,
+      ),
+    );
+  }
+}
+
+class _AndroidRootModeTile extends StatefulWidget {
+  const _AndroidRootModeTile();
+
+  @override
+  State<_AndroidRootModeTile> createState() => _AndroidRootModeTileState();
+}
+
+class _AndroidRootModeTileState extends State<_AndroidRootModeTile> {
+  bool _busy = false;
+  bool _enabled = _isAndroidRootModeEnabled();
+
+  Future<void> _setValue(bool value) async {
+    if (_busy || value == _enabled) {
+      return;
+    }
+    setState(() {
+      _busy = true;
+    });
+    try {
+      if (value) {
+        final granted = await _requestAndroidRootAccess();
+        if (!granted) {
+          appdata.settings[androidRootModeSettingIndex] = '0';
+          await appdata.updateSettings();
+          if (mounted) {
+            setState(() {
+              _enabled = false;
+            });
+            _showSettingMessage(context, '未获取到 Root 授权，Root 模式未开启'.tl);
+          }
+          return;
+        }
+      }
+
+      appdata.settings[androidRootModeSettingIndex] = value ? '1' : '0';
+      await appdata.updateSettings();
+      if (mounted) {
+        setState(() {
+          _enabled = value;
+        });
+        if (value) {
+          _showSettingMessage(context, 'Root 模式已开启，可长按“浏览”进入内置文件夹浏览页'.tl);
+        }
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _busy = false;
+        });
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final enabled = _enabled;
     return buildResponsiveSettingTile(
       leading: const Icon(Icons.admin_panel_settings_outlined),
       title: Text('Root 模式'.tl),
       subtitle: Text(
         enabled
-            ? '已开启；启用后会优先用于长按“浏览”的受限目录访问'.tl
-            : '关闭状态；开启时会立即尝试申请 su 权限'.tl,
+            ? 'Root 模式已开启；仅在访问受限目录时使用已授权的 su 权限'.tl
+            : '关闭状态；只有手动开启这个开关时才会尝试申请 su 权限'.tl,
       ),
       trailingWidth: 60,
       trailing: Switch(
@@ -742,6 +1197,7 @@ Widget buildAppSettings(double width, BuildContext context) {
     const _OriginalDownloadDirTile(),
     const _LocalComicPathsTile(),
     if (App.isAndroid) const _AndroidManageAllFilesAccessTile(),
+    if (App.isAndroid) const _AndroidShizukuModeTile(),
     if (App.isAndroid) const _AndroidRootModeTile(),
     const _LocalAlbumImageSortTile(),
     const _LocalLibraryListSortTile(),
@@ -1135,14 +1591,23 @@ class _DownloadDirTileState extends State<_DownloadDirTile> {
                 const SizedBox(width: 8),
                 GestureDetector(
                   onLongPress: () async {
+                    Navigator.of(ctx).pop();
                     final browsed = await _openInternalDirectoryBrowser(
                       context,
                       title: '选择本应用下载目录'.tl,
                       initialPath: controller.text,
                     );
-                    if (browsed != null) {
-                      controller.text = browsed;
+                    if (!mounted || browsed == null) {
+                      return;
                     }
+                    controller.text = browsed;
+                    appdata.settings[22] = browsed;
+                    await appdata.updateSettings();
+                    if (!mounted) {
+                      return;
+                    }
+                    setState(() {});
+                    await _runRescanLocalComics(context);
                   },
                   child: OutlinedButton.icon(
                     style: OutlinedButton.styleFrom(
@@ -1164,7 +1629,7 @@ class _DownloadDirTileState extends State<_DownloadDirTile> {
             Align(
               alignment: Alignment.centerLeft,
               child: Text(
-                '提示：点按“浏览”调用系统目录选择；长按“浏览”打开内置文件夹浏览，仅在已授予安卓全部文件访问权限或开启 Root 模式后可用。'.tl,
+                '提示：点按“浏览”调用系统目录选择；长按“浏览”打开内置文件夹浏览，支持安卓全部文件访问权限、Shizuku 授权或 Root 模式。'.tl,
                 style: Theme.of(ctx).textTheme.bodySmall,
               ),
             ),
@@ -1302,14 +1767,23 @@ class _OriginalDownloadDirTileState extends State<_OriginalDownloadDirTile> {
                 const SizedBox(width: 8),
                 GestureDetector(
                   onLongPress: () async {
+                    Navigator.of(ctx).pop();
                     final browsed = await _openInternalDirectoryBrowser(
                       context,
                       title: '选择原应用下载目录'.tl,
                       initialPath: controller.text,
                     );
-                    if (browsed != null) {
-                      controller.text = browsed;
+                    if (!mounted || browsed == null) {
+                      return;
                     }
+                    controller.text = browsed;
+                    appdata.settings[originalDownloadDirSettingIndex] = browsed;
+                    await appdata.updateSettings();
+                    if (!mounted) {
+                      return;
+                    }
+                    setState(() {});
+                    await _runRescanLocalComics(context);
                   },
                   child: OutlinedButton.icon(
                     style: OutlinedButton.styleFrom(
@@ -1331,7 +1805,7 @@ class _OriginalDownloadDirTileState extends State<_OriginalDownloadDirTile> {
             Align(
               alignment: Alignment.centerLeft,
               child: Text(
-                '提示：点按“浏览”调用系统目录选择；长按“浏览”打开内置文件夹浏览，仅在已授予安卓全部文件访问权限或开启 Root 模式后可用。'.tl,
+                '提示：点按“浏览”调用系统目录选择；长按“浏览”打开内置文件夹浏览，支持安卓全部文件访问权限、Shizuku 授权或 Root 模式。'.tl,
                 style: Theme.of(ctx).textTheme.bodySmall,
               ),
             ),

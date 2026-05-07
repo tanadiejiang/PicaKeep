@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
@@ -9,6 +10,7 @@ import 'package:local_auth/local_auth.dart';
 import 'package:picakeep/base.dart';
 import 'package:picakeep/tools/translations.dart';
 import 'package:picakeep/components/select.dart' hide AnimatedContainer;
+import 'package:picakeep/components/scrollable.dart';
 import 'package:picakeep/foundation/app.dart';
 import 'package:picakeep/foundation/download.dart';
 import 'package:picakeep/foundation/history.dart';
@@ -131,52 +133,98 @@ class _SettingsPageState extends State<SettingsPage> {
   ];
 
   double offset = 0;
+  bool _isDraggingPage = false;
+  int _pageTransitionToken = 0;
 
   late final HorizontalDragGestureRecognizer gestureRecognizer;
+
+  void _openPage(int id) {
+    if (enableTwoViews) {
+      setState(() {
+        currentPage = id;
+        offset = 0;
+        _isDraggingPage = false;
+      });
+      return;
+    }
+    final width = MediaQuery.of(context).size.width;
+    final transitionToken = ++_pageTransitionToken;
+    setState(() {
+      currentPage = id;
+      offset = width;
+      _isDraggingPage = false;
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || transitionToken != _pageTransitionToken) {
+        return;
+      }
+      setState(() {
+        offset = 0;
+      });
+    });
+  }
+
+  void _closePage({bool animate = true}) {
+    if (currentPage == -1) {
+      return;
+    }
+    if (enableTwoViews || !animate) {
+      setState(() {
+        currentPage = -1;
+        offset = 0;
+        _isDraggingPage = false;
+      });
+      return;
+    }
+    final width = MediaQuery.of(context).size.width;
+    final transitionToken = ++_pageTransitionToken;
+    setState(() {
+      offset = width;
+      _isDraggingPage = false;
+    });
+    Future<void>.delayed(const Duration(milliseconds: 220), () {
+      if (!mounted || transitionToken != _pageTransitionToken) {
+        return;
+      }
+      setState(() {
+        currentPage = -1;
+        offset = 0;
+      });
+    });
+  }
 
   @override
   void initState() {
     currentPage = widget.initialPage;
     gestureRecognizer = HorizontalDragGestureRecognizer(debugOwner: this)
-      ..onUpdate = ((details) => setState(() => offset += details.delta.dx))
-      ..onEnd = (details) async {
-        if (details.velocity.pixelsPerSecond.dx.abs() > 1 &&
-            details.velocity.pixelsPerSecond.dx >= 0) {
-          setState(() {
-            Future.delayed(const Duration(milliseconds: 300), () => offset = 0);
-            currentPage = -1;
-          });
-        } else if (offset > MediaQuery.of(context).size.width / 2) {
-          setState(() {
-            Future.delayed(const Duration(milliseconds: 300), () => offset = 0);
-            currentPage = -1;
-          });
-        } else {
-          int i = 10;
-          while (offset != 0) {
-            setState(() {
-              offset -= i;
-              i *= 10;
-              if (offset < 0) {
-                offset = 0;
-              }
-            });
-            await Future.delayed(const Duration(milliseconds: 10));
-          }
-        }
+      ..onUpdate = (details) {
+        final width = MediaQuery.of(context).size.width;
+        setState(() {
+          _isDraggingPage = true;
+          offset = (offset + details.delta.dx).clamp(0.0, width);
+        });
       }
-      ..onCancel = () async {
-        int i = 10;
-        while (offset != 0) {
-          setState(() {
-            offset -= i;
-            i *= 10;
-            if (offset < 0) {
-              offset = 0;
-            }
-          });
-          await Future.delayed(const Duration(milliseconds: 10));
+      ..onEnd = (details) {
+        final width = MediaQuery.of(context).size.width;
+        final shouldClose =
+            details.velocity.pixelsPerSecond.dx >= 0 || offset > width / 2;
+        if (shouldClose) {
+          _closePage();
+          return;
         }
+        setState(() {
+          offset = 0;
+          _isDraggingPage = false;
+        });
+      }
+      ..onCancel = () {
+        if (offset == 0) {
+          return;
+        }
+        setState(() {
+          offset = 0;
+          _isDraggingPage = false;
+        });
       };
     super.initState();
   }
@@ -195,8 +243,12 @@ class _SettingsPageState extends State<SettingsPage> {
     } else {
       App.temporaryDisablePopGesture = false;
     }
-    return Material(
-      child: buildBody(),
+    return PopScope(
+      canPop: currentPage == -1 || enableTwoViews,
+      onPopInvokedWithResult: (didPop, _) => handlePopInvoked(didPop),
+      child: Material(
+        child: buildBody(),
+      ),
     );
   }
 
@@ -231,31 +283,20 @@ class _SettingsPageState extends State<SettingsPage> {
           return Stack(
             children: [
               Positioned.fill(child: buildLeft()),
-              Positioned(
-                left: offset,
-                width: pageWidth,
-                height: pageHeight,
-                child: Listener(
-                  onPointerDown: handlePointerDown,
-                  child: AnimatedSwitcher(
-                    duration: const Duration(milliseconds: 300),
-                    reverseDuration: const Duration(milliseconds: 300),
-                    switchInCurve: Curves.fastOutSlowIn,
-                    switchOutCurve: Curves.fastOutSlowIn,
-                    transitionBuilder: (child, animation) {
-                      var tween = Tween<Offset>(
-                          begin: const Offset(1, 0), end: const Offset(0, 0));
-                      return SlideTransition(
-                        position: tween.animate(animation),
-                        child: child,
-                      );
-                    },
-                    child: currentPage == -1
-                        ? const SizedBox(key: Key("1"))
-                        : buildRight(pageWidth),
+              if (currentPage != -1)
+                AnimatedPositioned(
+                  duration: _isDraggingPage
+                      ? Duration.zero
+                      : const Duration(milliseconds: 220),
+                  curve: Curves.easeOutCubic,
+                  left: offset,
+                  width: pageWidth,
+                  height: pageHeight,
+                  child: Listener(
+                    onPointerDown: handlePointerDown,
+                    child: buildRight(pageWidth),
                   ),
                 ),
-              )
             ],
           );
         },
@@ -264,7 +305,7 @@ class _SettingsPageState extends State<SettingsPage> {
   }
 
   void handlePointerDown(PointerDownEvent event) {
-    if (event.position.dx < 20) {
+    if (currentPage != -1 && event.position.dx < 20) {
       gestureRecognizer.addPointer(event);
     }
   }
@@ -328,17 +369,22 @@ class _SettingsPageState extends State<SettingsPage> {
             ? const EdgeInsets.fromLTRB(16, 0, 16, 0)
             : EdgeInsets.zero,
         child: InkWell(
-          onTap: () => setState(() => currentPage = id),
+          onTap: () => _openPage(id),
           borderRadius: BorderRadius.circular(16),
           child: content,
         ).paddingVertical(4),
       );
     }
 
-    return ListView.builder(
-      padding: EdgeInsets.zero,
-      itemCount: categories.length,
-      itemBuilder: (context, index) => buildItem(categories[index].tl, index),
+    return SmoothScrollProvider(
+      builder: (context, controller, physics) => ListView.builder(
+        controller: controller,
+        physics: physics,
+        padding: EdgeInsets.zero,
+        cacheExtent: 320,
+        itemCount: categories.length,
+        itemBuilder: (context, index) => buildItem(categories[index].tl, index),
+      ),
     );
   }
 
@@ -359,8 +405,8 @@ class _SettingsPageState extends State<SettingsPage> {
 
     if (currentPage != -1) {
       return Material(
-        child: CustomScrollView(
-          primary: false,
+        child: SmoothCustomScrollView(
+          cacheExtent: 640,
           slivers: [
             SliverAppBar(
                 title: Text(categories[currentPage].tl),
@@ -370,7 +416,7 @@ class _SettingsPageState extends State<SettingsPage> {
                     ? null
                     : IconButton(
                         icon: const Icon(Icons.arrow_back),
-                        onPressed: () => setState(() => currentPage = -1),
+                        onPressed: () => _closePage(),
                       )),
             SliverToBoxAdapter(
               child: buildContent(availableWidth),
@@ -532,10 +578,11 @@ class _SettingsPageState extends State<SettingsPage> {
       );
 
   void handlePopInvoked(bool didPop) {
+    if (didPop) {
+      return;
+    }
     if (currentPage != -1) {
-      setState(() {
-        currentPage = -1;
-      });
+      _closePage();
     }
   }
 }

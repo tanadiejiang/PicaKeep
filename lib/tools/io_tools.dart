@@ -3,6 +3,10 @@
 import 'dart:io';
 import 'dart:math';
 
+import 'package:flutter/painting.dart';
+import 'package:picakeep/foundation/app.dart';
+import 'package:picakeep/foundation/image_loader/base_image_provider.dart';
+
 String bytesLengthToReadableSize(int length, {bool useBase2 = false}) {
   const suffixes = ["B", "KB", "MB", "GB", "TB", "PB"];
   const suffixesBase2 = ["B", "KiB", "MiB", "GiB", "TiB", "PiB"];
@@ -35,4 +39,20 @@ Future<void> safeCreateDirectory(Directory dir) async {
   }
 }
 
-Future<void> eraseCache() async {}
+Future<void> eraseCache() async {
+  BaseImageProvider.clearCache();
+  final imageCache = PaintingBinding.instance.imageCache;
+  imageCache.clear();
+  imageCache.clearLiveImages();
+
+  final cacheDirectory = Directory(App.cachePath);
+  if (!await cacheDirectory.exists()) {
+    return;
+  }
+
+  await for (final entity in cacheDirectory.list(followLinks: false)) {
+    try {
+      await entity.delete(recursive: true);
+    } catch (_) {}
+  }
+}

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:picakeep/base.dart';
@@ -27,33 +28,80 @@ class MePage extends StatefulWidget {
   State<MePage> createState() => _MePageState();
 }
 
+class _MePageCachedState {
+  const _MePageCachedState({
+    required this.downloadCount,
+    required this.localLibraryCount,
+    required this.imageFavoriteCount,
+    required this.historyItems,
+    required this.historyLoaded,
+    required this.localLibraryCountLoaded,
+    required this.remoteSummaryResolved,
+    required this.remoteSnapshot,
+  });
+
+  final int? downloadCount;
+  final int? localLibraryCount;
+  final int? imageFavoriteCount;
+  final List<History> historyItems;
+  final bool historyLoaded;
+  final bool localLibraryCountLoaded;
+  final bool remoteSummaryResolved;
+  final ServiceInfoSnapshot? remoteSnapshot;
+}
+
 class _MePageState extends State<MePage> {
-  int _downloadCount = 0;
+  static const Duration _historyLoadDelay = Duration(milliseconds: 120);
+  static const Duration _downloadCountLoadDelay = Duration(milliseconds: 260);
+  static const Duration _localLibraryLoadDelay = Duration(milliseconds: 420);
+  static const Duration _imageFavoriteLoadDelay = Duration(milliseconds: 560);
+  static const Duration _remoteSummaryLoadDelay = Duration(milliseconds: 720);
+
+  static _MePageCachedState? _cachedState;
+
+  int? _downloadCount;
+  int? _localLibraryCount;
+  int? _imageFavoriteCount;
+  List<History> _historyItems = const <History>[];
+  bool _historyLoaded = false;
   bool _loadingDownloadCount = false;
+  bool _localLibraryCountLoaded = false;
   bool _loadingRemoteSummary = false;
+  bool _remoteSummaryResolved = false;
   ServiceInfoSnapshot? _remoteSnapshot;
+
+  Timer? _historyLoadTimer;
+  Timer? _downloadCountLoadTimer;
+  Timer? _localLibraryLoadTimer;
+  Timer? _imageFavoriteLoadTimer;
+  Timer? _remoteSummaryLoadTimer;
 
   @override
   void initState() {
     super.initState();
+    _restoreCachedState();
     StateController.putSimpleController(() {
-      if (mounted) {
-        setState(() {});
-        _loadDownloadCount();
-        _loadLocalLibraryCount();
-        _loadRemoteLibrarySummary();
+      if (!mounted) {
+        return;
       }
+      setState(() {});
+      _scheduleProgressiveLoads(forceRefresh: true);
     }, "me_page");
     App.localDataVersion.addListener(_handleLocalDataChanged);
     App.serviceConfigVersion.addListener(_handleServiceStateChanged);
     App.serviceRuntimeVersion.addListener(_handleServiceStateChanged);
-    _loadDownloadCount();
-    _loadLocalLibraryCount();
-    _loadRemoteLibrarySummary();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) {
+        return;
+      }
+      _scheduleProgressiveLoads();
+    });
   }
 
   @override
   void dispose() {
+    _cacheCurrentState();
+    _cancelScheduledLoads();
     App.localDataVersion.removeListener(_handleLocalDataChanged);
     App.serviceConfigVersion.removeListener(_handleServiceStateChanged);
     App.serviceRuntimeVersion.removeListener(_handleServiceStateChanged);
@@ -61,12 +109,109 @@ class _MePageState extends State<MePage> {
     super.dispose();
   }
 
+  void _restoreCachedState() {
+    final cached = _cachedState;
+    if (cached == null) {
+      return;
+    }
+    _downloadCount = cached.downloadCount;
+    _localLibraryCount = cached.localLibraryCount;
+    _imageFavoriteCount = cached.imageFavoriteCount;
+    _historyItems = List<History>.of(cached.historyItems);
+    _historyLoaded = cached.historyLoaded;
+    _localLibraryCountLoaded = cached.localLibraryCountLoaded;
+    _remoteSummaryResolved = cached.remoteSummaryResolved;
+    _remoteSnapshot = cached.remoteSnapshot;
+  }
+
+  void _cacheCurrentState() {
+    _cachedState = _MePageCachedState(
+      downloadCount: _downloadCount,
+      localLibraryCount: _localLibraryCount,
+      imageFavoriteCount: _imageFavoriteCount,
+      historyItems: List<History>.of(_historyItems),
+      historyLoaded: _historyLoaded,
+      localLibraryCountLoaded: _localLibraryCountLoaded,
+      remoteSummaryResolved: _remoteSummaryResolved,
+      remoteSnapshot: _remoteSnapshot,
+    );
+  }
+
+  void _cancelScheduledLoads() {
+    _historyLoadTimer?.cancel();
+    _downloadCountLoadTimer?.cancel();
+    _localLibraryLoadTimer?.cancel();
+    _imageFavoriteLoadTimer?.cancel();
+    _remoteSummaryLoadTimer?.cancel();
+  }
+
+  void _scheduleProgressiveLoads({bool forceRefresh = false}) {
+    _cancelScheduledLoads();
+    if (forceRefresh || !_historyLoaded) {
+      _historyLoadTimer = Timer(
+        _historyLoadDelay,
+        _loadHistoryPreview,
+      );
+    }
+    if (forceRefresh || _downloadCount == null) {
+      _downloadCountLoadTimer = Timer(
+        _downloadCountLoadDelay,
+        () => _loadDownloadCount(forceRefresh: forceRefresh),
+      );
+    }
+    if (forceRefresh || !_localLibraryCountLoaded) {
+      _localLibraryLoadTimer = Timer(
+        _localLibraryLoadDelay,
+        () => _loadLocalLibraryCount(forceRefresh: forceRefresh),
+      );
+    }
+    if (forceRefresh || _imageFavoriteCount == null) {
+      _imageFavoriteLoadTimer = Timer(
+        _imageFavoriteLoadDelay,
+        _loadImageFavoriteCount,
+      );
+    }
+    if (forceRefresh || !_remoteSummaryResolved) {
+      _remoteSummaryLoadTimer = Timer(
+        _remoteSummaryLoadDelay,
+        _loadRemoteLibrarySummary,
+      );
+    }
+  }
+
   void _handleLocalDataChanged() {
-    _reloadLocalCounts();
+    _scheduleProgressiveLoads(forceRefresh: true);
   }
 
   void _handleServiceStateChanged() {
-    _loadRemoteLibrarySummary();
+    _remoteSummaryLoadTimer?.cancel();
+    _remoteSummaryLoadTimer = Timer(
+      const Duration(milliseconds: 180),
+      _loadRemoteLibrarySummary,
+    );
+  }
+
+  Future<void> _loadHistoryPreview() async {
+    try {
+      final history = HistoryManager().getRecent();
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _historyItems = history;
+        _historyLoaded = true;
+      });
+      _cacheCurrentState();
+    } catch (e) {
+      print('[PicaKeep] MePage: load history preview failed: $e');
+      if (mounted && !_historyLoaded) {
+        setState(() {
+          _historyLoaded = true;
+          _historyItems = const <History>[];
+        });
+        _cacheCurrentState();
+      }
+    }
   }
 
   Future<int> _resolveDownloadCount({required bool forceRefresh}) async {
@@ -88,25 +233,6 @@ class _MePageState extends State<MePage> {
     return items.where((item) => !item.isAlbum).length;
   }
 
-  Future<void> _reloadLocalCounts() async {
-    if (_loadingDownloadCount) {
-      return;
-    }
-    _loadingDownloadCount = true;
-    try {
-      final total = await _resolveDownloadCount(forceRefresh: true);
-      if (mounted) {
-        setState(() {
-          _downloadCount = total;
-        });
-      }
-    } catch (e) {
-      print('[PicaKeep] MePage: reload download count failed: $e');
-    } finally {
-      _loadingDownloadCount = false;
-    }
-  }
-
   Future<void> _loadDownloadCount({bool forceRefresh = false}) async {
     if (_loadingDownloadCount) {
       return;
@@ -118,6 +244,7 @@ class _MePageState extends State<MePage> {
         setState(() {
           _downloadCount = total;
         });
+        _cacheCurrentState();
       }
     } catch (e) {
       print('[PicaKeep] MePage: load download count failed: $e');
@@ -129,14 +256,55 @@ class _MePageState extends State<MePage> {
   Future<void> _loadLocalLibraryCount({bool forceRefresh = false}) async {
     try {
       if (forceRefresh) {
-        await _reloadLocalCounts();
+        await LocalLibraryManager().refresh();
       } else {
         await LocalLibraryManager().ensureLoaded();
       }
       if (mounted) {
-        setState(() {});
+        setState(() {
+          _localLibraryCount = LocalLibraryManager().cachedAlbumCount;
+          _localLibraryCountLoaded = true;
+        });
+        _cacheCurrentState();
       }
-    } catch (_) {}
+    } catch (e) {
+      print('[PicaKeep] MePage: load local library count failed: $e');
+      if (mounted && !_localLibraryCountLoaded) {
+        setState(() {
+          _localLibraryCount = 0;
+          _localLibraryCountLoaded = true;
+        });
+        _cacheCurrentState();
+      }
+    }
+  }
+
+  Future<void> _loadImageFavoriteCount() async {
+    try {
+      final total = ImageFavoriteManager.length;
+      if (mounted) {
+        setState(() {
+          _imageFavoriteCount = total;
+        });
+        _cacheCurrentState();
+      }
+    } catch (e) {
+      if (e.toString().contains('LateInitializationError')) {
+        _imageFavoriteLoadTimer?.cancel();
+        _imageFavoriteLoadTimer = Timer(
+          const Duration(milliseconds: 420),
+          _loadImageFavoriteCount,
+        );
+        return;
+      }
+      print('[PicaKeep] MePage: load image favorite count failed: $e');
+      if (mounted && _imageFavoriteCount == null) {
+        setState(() {
+          _imageFavoriteCount = 0;
+        });
+        _cacheCurrentState();
+      }
+    }
   }
 
   Future<void> _loadRemoteLibrarySummary() async {
@@ -151,7 +319,9 @@ class _MePageState extends State<MePage> {
         if (mounted) {
           setState(() {
             _remoteSnapshot = null;
+            _remoteSummaryResolved = true;
           });
+          _cacheCurrentState();
         }
         return;
       }
@@ -165,12 +335,17 @@ class _MePageState extends State<MePage> {
                 snapshot.connectionState == ServiceConnectionState.online
             ? snapshot
             : null;
+        _remoteSummaryResolved = true;
       });
-    } catch (_) {
+      _cacheCurrentState();
+    } catch (e) {
+      print('[PicaKeep] MePage: load remote library summary failed: $e');
       if (mounted) {
         setState(() {
           _remoteSnapshot = null;
+          _remoteSummaryResolved = true;
         });
+        _cacheCurrentState();
       }
     } finally {
       _loadingRemoteSummary = false;
@@ -227,6 +402,9 @@ class _MePageState extends State<MePage> {
   }
 
   String _historyTitle(int recentCount) {
+    if (!_historyLoaded) {
+      return "历史记录".tl;
+    }
     try {
       return "${"历史记录".tl}(${HistoryManager().count()})";
     } catch (_) {
@@ -244,13 +422,78 @@ class _MePageState extends State<MePage> {
     );
   }
 
+  Widget _buildCardDescriptionText(String text) {
+    return Text(
+      text,
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+    );
+  }
+
+  Widget _buildCardLoadingIndicator(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        SizedBox(
+          width: 14,
+          height: 14,
+          child: CircularProgressIndicator(
+            strokeWidth: 2,
+            color: Theme.of(context).colorScheme.primary,
+          ),
+        ),
+        const SizedBox(width: 8),
+        Text('加载中'.tl),
+      ],
+    );
+  }
+
+  Widget _buildHistoryLoadingStrip(BuildContext context) {
+    final color = Theme.of(context).colorScheme.secondaryContainer;
+    return ListView.builder(
+      scrollDirection: Axis.horizontal,
+      physics: const NeverScrollableScrollPhysics(),
+      padding: const EdgeInsets.symmetric(horizontal: 8),
+      itemCount: 4,
+      itemBuilder: (context, index) {
+        return Container(
+          width: 96,
+          height: 128,
+          margin: const EdgeInsets.symmetric(horizontal: 8),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(8),
+            color: color,
+          ),
+          child: Center(
+            child: SizedBox(
+              width: 18,
+              height: 18,
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
+                color: Theme.of(context).colorScheme.onSecondaryContainer,
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildEmptyHistoryPreview(BuildContext context) {
+    return Center(
+      child: Text(
+        '暂无历史记录'.tl,
+        style: TextStyle(
+          color: Theme.of(context).colorScheme.onSurfaceVariant,
+        ),
+      ),
+    );
+  }
+
   File _coverFile(History item) {
     final cover = item.cover.trim();
     if (cover.isNotEmpty && (cover.startsWith('/') || cover.contains(':\\'))) {
-      final file = File(cover);
-      if (file.existsSync()) {
-        return file;
-      }
+      return File(cover);
     }
     try {
       final file =
@@ -262,12 +505,12 @@ class _MePageState extends State<MePage> {
     final localComic = LocalLibraryManager()
         .findCachedByCandidates(item.candidateDownloadIds());
     if (localComic != null) {
-      final file = resolveLocalComicCover(
+      final coverPath = resolveLocalComicCoverPath(
         localComic,
         legacyTargets: item.candidateDownloadIds(),
       );
-      if (file.existsSync()) {
-        return file;
+      if (coverPath.isNotEmpty) {
+        return File(coverPath);
       }
     }
     return File('');
@@ -277,6 +520,20 @@ class _MePageState extends State<MePage> {
     final cover = item.cover.trim();
     if (cover.startsWith('http://') || cover.startsWith('https://')) {
       return NetworkImage(cover);
+    }
+    if (cover.isNotEmpty && (cover.startsWith('/') || cover.contains(':\\'))) {
+      return LocalLibraryManager().imageProviderForLocalPath(cover);
+    }
+    final localComic = LocalLibraryManager()
+        .findCachedByCandidates(item.candidateDownloadIds());
+    if (localComic != null) {
+      final coverPath = resolveLocalComicCoverPath(
+        localComic,
+        legacyTargets: item.candidateDownloadIds(),
+      );
+      if (coverPath.isNotEmpty) {
+        return LocalLibraryManager().imageProviderForLocalPath(coverPath);
+      }
     }
     return null;
   }
@@ -346,12 +603,7 @@ class _MePageState extends State<MePage> {
   }
 
   Widget _buildHistoryCard(BuildContext context) {
-    List<History> history = [];
-    try {
-      history = HistoryManager().getRecent();
-    } catch (e) {
-      print('[PicaKeep] MePage: HistoryManager.getRecent() failed: $e');
-    }
+    final history = _historyItems;
     return InkWell(
       onTap: () => Navigator.of(context).push(
         MaterialPageRoute(builder: (_) => const HistoryPage()),
@@ -374,30 +626,37 @@ class _MePageState extends State<MePage> {
               ),
               SizedBox(
                 height: 128,
-                child: ListView.builder(
-                  scrollDirection: Axis.horizontal,
-                  padding: const EdgeInsets.symmetric(horizontal: 8),
-                  itemCount: history.length,
-                  itemBuilder: (context, index) {
-                    return InkWell(
-                      onTap: () =>
-                          _openComicFromHistory(context, history[index]),
-                      borderRadius: BorderRadius.circular(8),
-                      child: Container(
-                        width: 96,
-                        height: 128,
-                        margin: const EdgeInsets.symmetric(horizontal: 8),
-                        decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(8),
-                          color:
-                              Theme.of(context).colorScheme.secondaryContainer,
-                        ),
-                        clipBehavior: Clip.antiAlias,
-                        child: _buildCoverImage(context, history[index]),
-                      ),
-                    );
-                  },
-                ),
+                child: !_historyLoaded
+                    ? _buildHistoryLoadingStrip(context)
+                    : history.isEmpty
+                        ? _buildEmptyHistoryPreview(context)
+                        : ListView.builder(
+                            scrollDirection: Axis.horizontal,
+                            padding: const EdgeInsets.symmetric(horizontal: 8),
+                            itemCount: history.length,
+                            itemBuilder: (context, index) {
+                              final item = history[index];
+                              return InkWell(
+                                onTap: () =>
+                                    _openComicFromHistory(context, item),
+                                borderRadius: BorderRadius.circular(8),
+                                child: Container(
+                                  width: 96,
+                                  height: 128,
+                                  margin: const EdgeInsets.symmetric(
+                                      horizontal: 8),
+                                  decoration: BoxDecoration(
+                                    borderRadius: BorderRadius.circular(8),
+                                    color: Theme.of(context)
+                                        .colorScheme
+                                        .secondaryContainer,
+                                  ),
+                                  clipBehavior: Clip.antiAlias,
+                                  child: _buildCoverImage(context, item),
+                                ),
+                              );
+                            },
+                          ),
               ),
               const SizedBox(height: 12),
             ],
@@ -416,6 +675,12 @@ class _MePageState extends State<MePage> {
         height: 128,
         fit: BoxFit.cover,
         filterQuality: FilterQuality.medium,
+        frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
+          if (wasSynchronouslyLoaded || frame != null) {
+            return child;
+          }
+          return _historyPlaceholder(context);
+        },
         errorBuilder: (context, error, stackTrace) {
           return _historyPlaceholder(context);
         },
@@ -432,6 +697,12 @@ class _MePageState extends State<MePage> {
       height: 128,
       fit: BoxFit.cover,
       filterQuality: FilterQuality.medium,
+      frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
+        if (wasSynchronouslyLoaded || frame != null) {
+          return child;
+        }
+        return _historyPlaceholder(context);
+      },
       errorBuilder: (context, error, stackTrace) {
         return _historyPlaceholder(context);
       },
@@ -467,6 +738,7 @@ class _MePageState extends State<MePage> {
               history.cover = cover.path;
             }
           });
+          _cacheCurrentState();
         }
         if (!context.mounted) return;
         await App.openReader(
@@ -486,7 +758,11 @@ class _MePageState extends State<MePage> {
     return _MePageCard(
       icon: const Icon(Icons.download_for_offline),
       title: "已下载".tl,
-      description: "共 @a 部漫画".tlParams({"a": _downloadCount.toString()}),
+      description: _downloadCount == null
+          ? _buildCardLoadingIndicator(context)
+          : _buildCardDescriptionText(
+              "共 @a 部漫画".tlParams({"a": _downloadCount.toString()}),
+            ),
       onTap: () => Navigator.of(context).push(
         MaterialPageRoute(builder: (_) => const DownloadPage()),
       ),
@@ -494,26 +770,37 @@ class _MePageState extends State<MePage> {
   }
 
   Widget _buildLocalLibraryCard(BuildContext context) {
-    final total = LocalLibraryManager().cachedAlbumCount;
     return _MePageCard(
       icon: const Icon(Icons.photo_library),
       title: '图集'.tl,
-      description: '共 @a 个图集'.tlParams({'a': total.toString()}),
+      description: !_localLibraryCountLoaded
+          ? _buildCardLoadingIndicator(context)
+          : _buildCardDescriptionText(
+              '共 @a 个图集'.tlParams({'a': '${_localLibraryCount ?? 0}'}),
+            ),
       onTap: () => _openLocalLibraryPage(context),
     );
   }
 
   Widget _buildRemoteLibraryCard(BuildContext context) {
     final available = _showRemoteLibraryEntry;
+    final isLoading = !_remoteSummaryResolved;
     return _MePageCard(
       icon: Icon(
         available ? Icons.cloud_sync_outlined : Icons.cloud_off_outlined,
       ),
       title: '远程 · 资源库'.tl,
-      description: available
-          ? '共 @a 个远程项目'.tlParams({'a': _remoteComicCount.toString()})
-          : '未连接远程服务'.tl,
+      description: isLoading
+          ? _buildCardLoadingIndicator(context)
+          : _buildCardDescriptionText(
+              available
+                  ? '共 @a 个远程项目'.tlParams(
+                      {'a': _remoteComicCount.toString()},
+                    )
+                  : '未连接远程服务'.tl,
+            ),
       onTap: available ? () => _openRemoteLibraryPage(context) : null,
+      isLoading: isLoading,
     );
   }
 
@@ -535,16 +822,21 @@ class _MePageState extends State<MePage> {
     return _MePageCard(
       icon: const Icon(Icons.image),
       title: "图片收藏".tl,
-      description: "@a 条图片收藏".tlParams({"a": "${ImageFavoriteManager.length}"}),
+      description: _imageFavoriteCount == null
+          ? _buildCardLoadingIndicator(context)
+          : _buildCardDescriptionText(
+              "@a 条图片收藏".tlParams({"a": "$_imageFavoriteCount"}),
+            ),
       onTap: () => Navigator.of(context)
           .push(
         MaterialPageRoute(builder: (_) => const ImageFavoritesPage()),
       )
           .then((_) {
-        // Defer setState until after the route transition completes, so the
-        // widget tree is fully restored and the count reflects DB changes.
         WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (mounted) setState(() {});
+          if (!mounted) {
+            return;
+          }
+          _loadImageFavoriteCount();
         });
       }),
     );
@@ -669,18 +961,21 @@ class _MePageCard extends StatelessWidget {
     required this.title,
     required this.description,
     this.onTap,
+    this.isLoading = false,
   });
 
   final Widget icon;
   final String title;
-  final String description;
+  final Widget description;
   final VoidCallback? onTap;
+  final bool isLoading;
 
   @override
   Widget build(BuildContext context) {
     final enabled = onTap != null;
+    final visuallyEnabled = enabled || isLoading;
     return Opacity(
-      opacity: enabled ? 1 : 0.7,
+      opacity: visuallyEnabled ? 1 : 0.7,
       child: InkWell(
         onTap: onTap,
         borderRadius: BorderRadius.circular(12),
@@ -694,15 +989,25 @@ class _MePageCard extends StatelessWidget {
                 leading: icon,
                 title: Text(title),
                 trailing: Icon(
-                  enabled ? Icons.chevron_right : Icons.remove,
+                  enabled
+                      ? Icons.chevron_right
+                      : isLoading
+                          ? Icons.schedule
+                          : Icons.remove,
                 ),
                 mouseCursor: enabled
                     ? SystemMouseCursors.click
                     : SystemMouseCursors.basic,
               ),
               Padding(
-                padding: const EdgeInsets.only(left: 16, bottom: 16, top: 8),
-                child: Text(description),
+                padding: const EdgeInsets.only(left: 16, right: 16, bottom: 16, top: 8),
+                child: SizedBox(
+                  height: 20,
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: description,
+                  ),
+                ),
               ),
             ],
           ),

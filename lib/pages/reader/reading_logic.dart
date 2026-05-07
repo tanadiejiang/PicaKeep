@@ -42,6 +42,40 @@ class ComicReadingPageLogic extends StateController {
   ScrollManager? scrollManager;
 
   String? errorMessage;
+  bool isLoadingInfo = false;
+  int chapterLoadRequestId = 0;
+  int? loadingOrder;
+  int? previousImageCacheMaximumSizeBytes;
+  int? previousImageCacheMaximumSize;
+
+  void configureReaderCacheLimits() {
+    final imageCache = PaintingBinding.instance.imageCache;
+    previousImageCacheMaximumSizeBytes ??= imageCache.maximumSizeBytes;
+    previousImageCacheMaximumSize ??= imageCache.maximumSize;
+    if (imageCache.maximumSizeBytes < 320 * 1024 * 1024) {
+      imageCache.maximumSizeBytes = 320 * 1024 * 1024;
+    }
+    if (imageCache.maximumSize < 240) {
+      imageCache.maximumSize = 240;
+    }
+    BaseImageProvider.clearCache();
+    BaseImageProvider.setCacheSizeLimit(160 * 1024 * 1024);
+  }
+
+  void restoreReaderCacheLimits() {
+    BaseImageProvider.clearCache();
+    BaseImageProvider.setCacheSizeLimit(50 * 1024 * 1024);
+    final imageCache = PaintingBinding.instance.imageCache;
+    if (previousImageCacheMaximumSizeBytes != null) {
+      imageCache.maximumSizeBytes = previousImageCacheMaximumSizeBytes!;
+      previousImageCacheMaximumSizeBytes = null;
+    }
+    if (previousImageCacheMaximumSize != null) {
+      imageCache.maximumSize = previousImageCacheMaximumSize!;
+      previousImageCacheMaximumSize = null;
+    }
+    imageCache.clear();
+  }
 
   void clearPhotoViewControllers(){
     photoViewControllers.forEach((key, value) => value.dispose());
@@ -207,10 +241,10 @@ class ComicReadingPageLogic extends StateController {
     if (readingMethod == ReadingMethod.topToBottomContinuously) {
       itemScrollController.jumpTo(index: i - 1);
     } else if(!readingMethod.isTwoPage){
-      pageController.jumpToPage(i);
+      pageController.jumpByDeviceType(i);
     } else {
       var index = singlePageForFirstScreen ? i ~/ 2 + 1 : (i + 1) ~/ 2;
-      pageController.jumpToPage(index);
+      pageController.jumpByDeviceType(index);
     }
     if(index != i){
       index = i;

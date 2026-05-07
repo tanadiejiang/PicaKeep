@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:picakeep/pages/app_capabilities_page.dart';
 import 'package:picakeep/pages/local_library_page.dart';
 import 'package:picakeep/pages/service_info_page.dart';
+import 'package:picakeep/tools/io_tools.dart';
 import 'package:picakeep/tools/translations.dart';
 
 class ToolsPage extends StatelessWidget {
@@ -81,10 +82,23 @@ class ToolsPage extends StatelessWidget {
             icon: Icons.delete_sweep,
             title: '清理缓存'.tl,
             subtitle: '清理本地缓存数据'.tl,
-            onTap: () {
-              ScaffoldMessenger.of(context).showSnackBar(
+            onTap: () async {
+              final messenger = ScaffoldMessenger.of(context);
+              messenger.hideCurrentSnackBar();
+              messenger.showSnackBar(
                 SnackBar(
-                  content: Text('工具 "${"清理缓存".tl}" 待实现'.tl),
+                  content: Text('正在清理缓存'.tl),
+                  duration: const Duration(seconds: 10),
+                ),
+              );
+              await eraseCache();
+              if (!context.mounted) {
+                return;
+              }
+              messenger.hideCurrentSnackBar();
+              messenger.showSnackBar(
+                SnackBar(
+                  content: Text('缓存已清理'.tl),
                   duration: const Duration(seconds: 1),
                 ),
               );

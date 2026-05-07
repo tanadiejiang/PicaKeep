@@ -1,43 +1,286 @@
 import 'dart:async';
 
+import 'package:dynamic_color/dynamic_color.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:dynamic_color/dynamic_color.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
+
+import 'base.dart';
+import 'components/window_frame.dart';
 import 'foundation/app.dart';
 import 'foundation/history.dart';
 import 'foundation/local_favorites.dart';
-import 'tools/translations.dart';
-import 'base.dart';
 import 'pages/auth_page.dart';
 import 'pages/main_page.dart';
-import 'components/window_frame.dart';
 import 'server/local_server_runtime_sync.dart';
 import 'tools/block_screenshot.dart';
+import 'tools/translations.dart';
 
-void main() async {
+const _bootstrapShellBackground = Color(0xFF101418);
+const _bootstrapShellAccent = Color(0xFF5B8CFF);
+
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  _configureGlobalImageCache();
 
+  if (App.isDesktop) {
+    await _initializeApplication();
+    runApp(const PicaKeepApp());
+    unawaited(_showDesktopWindowWhenReady());
+    return;
+  }
+
+  runApp(const PicaKeepBootstrapApp());
+}
+
+Future<void> _initializeApplication() async {
   await App.init();
-  await appdata.readData();
-  await loadTranslations();
+  await Future.wait([
+    appdata.readData(),
+    loadTranslations(),
+  ]);
 
-  await HistoryManager().init();
-  await LocalFavoritesManager().init();
-  await downloadManager.init();
+  if (App.isDesktop) {
+    await initWindowManagerIfDesktop();
+  }
+}
+
+Future<void> _showDesktopWindowWhenReady() async {
+  if (!App.isDesktop) {
+    return;
+  }
+  await showWindowWhenReady();
+}
+
+Future<void> _runDeferredStartupWork() async {
+  await Future<void>.delayed(const Duration(milliseconds: 120));
   await App.applyDisplayModePreference();
+  await Future<void>.delayed(const Duration(milliseconds: 140));
+  await _warmStartupManagers();
+  await Future<void>.delayed(const Duration(milliseconds: 120));
+  await _syncStartupServerRuntime();
+}
 
-  await initWindowManagerIfDesktop();
+void _configureGlobalImageCache() {
+  final imageCache = PaintingBinding.instance.imageCache;
+  if (imageCache.maximumSizeBytes < 192 * 1024 * 1024) {
+    imageCache.maximumSizeBytes = 192 * 1024 * 1024;
+  }
+  if (imageCache.maximumSize < 180) {
+    imageCache.maximumSize = 180;
+  }
+}
 
+Future<void> _warmStartupManagers() async {
+  try {
+    await Future.wait([
+      LocalFavoritesManager().init(),
+      HistoryManager().init(),
+      downloadManager.init(),
+    ]);
+    App.notifyLocalDataChanged();
+  } catch (e, s) {
+    debugPrint('Failed to warm startup managers: $e\n$s');
+  }
+}
+
+Future<void> _syncStartupServerRuntime() async {
   try {
     await syncLocalServerRuntimeForCurrentMode();
   } catch (e, s) {
     debugPrint('Failed to sync local server runtime: $e\n$s');
   }
+}
 
-  runApp(const PicaKeepApp());
+class PicaKeepBootstrapApp extends StatefulWidget {
+  const PicaKeepBootstrapApp({super.key});
 
-  await showWindowWhenReady();
+  @override
+  State<PicaKeepBootstrapApp> createState() => _PicaKeepBootstrapAppState();
+}
+
+class _PicaKeepBootstrapAppState extends State<PicaKeepBootstrapApp> {
+  bool _isReady = false;
+  bool _isBootstrapping = false;
+  Object? _bootstrapError;
+
+  @override
+  void initState() {
+    super.initState();
+    _startBootstrap();
+  }
+
+  void _startBootstrap() {
+    if (_isReady || _isBootstrapping) {
+      return;
+    }
+    _isBootstrapping = true;
+    unawaited(_bootstrap());
+  }
+
+  Future<void> _bootstrap() async {
+    try {
+      await _initializeApplication();
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _bootstrapError = null;
+        _isReady = true;
+      });
+    } catch (e, s) {
+      debugPrint('Failed to bootstrap application: $e\n$s');
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _bootstrapError = e;
+      });
+    } finally {
+      _isBootstrapping = false;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_isReady) {
+      return const PicaKeepApp();
+    }
+
+    return MaterialApp(
+      title: 'PicaKeep',
+      debugShowCheckedModeBanner: false,
+      builder: (context, child) {
+        if (child == null) {
+          return const SizedBox.shrink();
+        }
+        return _MobileSystemUiFrame(child: child);
+      },
+      theme: ThemeData(
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: _bootstrapShellAccent,
+          brightness: Brightness.dark,
+        ),
+        scaffoldBackgroundColor: _bootstrapShellBackground,
+        useMaterial3: true,
+      ),
+      home: _StartupBootstrapShell(
+        error: _bootstrapError,
+        onRetry: () {
+          setState(() {
+            _bootstrapError = null;
+          });
+          _startBootstrap();
+        },
+      ),
+    );
+  }
+}
+
+class _StartupBootstrapShell extends StatelessWidget {
+  const _StartupBootstrapShell({
+    required this.error,
+    required this.onRetry,
+  });
+
+  final Object? error;
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    final isError = error != null;
+
+    if (!isError) {
+      return const Scaffold(
+        body: Center(
+          child: _StartupBootstrapLogo(),
+        ),
+      );
+    }
+
+    return Scaffold(
+      body: SafeArea(
+        child: Center(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 28),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 84,
+                  height: 84,
+                  decoration: BoxDecoration(
+                    color: colorScheme.primary.withValues(alpha: 0.16),
+                    borderRadius: BorderRadius.circular(24),
+                  ),
+                  child: Icon(
+                    Icons.error_outline,
+                    size: 42,
+                    color: colorScheme.primary,
+                  ),
+                ),
+                const SizedBox(height: 20),
+                Text(
+                  'PicaKeep',
+                  style: theme.textTheme.headlineSmall?.copyWith(
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 10),
+                Text(
+                  '启动失败',
+                  textAlign: TextAlign.center,
+                  style: theme.textTheme.bodyLarge?.copyWith(
+                    color: colorScheme.onSurfaceVariant,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  error.toString(),
+                  textAlign: TextAlign.center,
+                  maxLines: 3,
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: colorScheme.onSurfaceVariant,
+                  ),
+                ),
+                const SizedBox(height: 18),
+                FilledButton.icon(
+                  onPressed: onRetry,
+                  icon: const Icon(Icons.refresh),
+                  label: const Text('重试'),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _StartupBootstrapLogo extends StatelessWidget {
+  const _StartupBootstrapLogo();
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return Container(
+      width: 84,
+      height: 84,
+      decoration: BoxDecoration(
+        color: colorScheme.primary.withValues(alpha: 0.16),
+        borderRadius: BorderRadius.circular(24),
+      ),
+      child: Icon(
+        Icons.auto_stories_rounded,
+        size: 42,
+        color: colorScheme.primary,
+      ),
+    );
+  }
 }
 
 class PicaKeepApp extends StatefulWidget {
@@ -47,7 +290,8 @@ class PicaKeepApp extends StatefulWidget {
   State<PicaKeepApp> createState() => _PicaKeepAppState();
 }
 
-class _PicaKeepAppState extends State<PicaKeepApp> with WidgetsBindingObserver {
+class _PicaKeepAppState extends State<PicaKeepApp>
+    with WidgetsBindingObserver {
   static const List<Color> _seedColors = [
     Colors.blue,
     Colors.red,
@@ -65,6 +309,8 @@ class _PicaKeepAppState extends State<PicaKeepApp> with WidgetsBindingObserver {
   ];
 
   bool _requireAuthOnResume = false;
+  DateTime? _lastBackgroundedAt;
+  bool _deferredStartupQueued = false;
 
   @override
   void initState() {
@@ -77,6 +323,7 @@ class _PicaKeepAppState extends State<PicaKeepApp> with WidgetsBindingObserver {
     if (appdata.settings[12] == '1') {
       blockScreenshot();
     }
+    _scheduleDeferredStartupWork();
   }
 
   @override
@@ -90,6 +337,16 @@ class _PicaKeepAppState extends State<PicaKeepApp> with WidgetsBindingObserver {
     super.dispose();
   }
 
+  void _scheduleDeferredStartupWork() {
+    if (_deferredStartupQueued) {
+      return;
+    }
+    _deferredStartupQueued = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      unawaited(_runDeferredStartupWork());
+    });
+  }
+
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     super.didChangeAppLifecycleState(state);
@@ -97,11 +354,16 @@ class _PicaKeepAppState extends State<PicaKeepApp> with WidgetsBindingObserver {
         state == AppLifecycleState.inactive ||
         state == AppLifecycleState.paused) {
       _requireAuthOnResume = appdata.settings[13] == '1';
+      _lastBackgroundedAt = DateTime.now();
       return;
     }
 
     if (state == AppLifecycleState.resumed) {
+      final backgroundDuration = _lastBackgroundedAt == null
+          ? Duration.zero
+          : DateTime.now().difference(_lastBackgroundedAt!);
       if (_requireAuthOnResume &&
+          backgroundDuration >= const Duration(seconds: 2) &&
           appdata.settings[13] == '1' &&
           !AuthPage.lock &&
           App.globalContext != null) {
@@ -112,6 +374,7 @@ class _PicaKeepAppState extends State<PicaKeepApp> with WidgetsBindingObserver {
       } else {
         _requireAuthOnResume = false;
       }
+      _lastBackgroundedAt = null;
     }
   }
 
@@ -243,7 +506,6 @@ class _MobileSystemUiFrame extends StatelessWidget {
           isDark ? Brightness.light : Brightness.dark,
       systemNavigationBarDividerColor: Colors.transparent,
     );
-    SystemChrome.setSystemUIOverlayStyle(overlayStyle);
     return AnnotatedRegion<SystemUiOverlayStyle>(
       value: overlayStyle,
       child: ColoredBox(
