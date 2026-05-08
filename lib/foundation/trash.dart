@@ -3,11 +3,14 @@ import 'dart:io';
 
 import 'package:picakeep/base.dart';
 import 'package:picakeep/foundation/app.dart';
+import 'package:picakeep/foundation/app_runtime_mode.dart';
 import 'package:picakeep/foundation/download.dart';
 import 'package:picakeep/foundation/download_model.dart';
 import 'package:picakeep/foundation/local_library.dart';
 import 'package:picakeep/foundation/local_library_settings.dart';
 import 'package:picakeep/foundation/remote_library_data_source.dart';
+import 'package:picakeep/server/library_trash_store.dart';
+import 'package:picakeep/server/local_server_runtime.dart';
 
 const deleteBehaviorTrash = 'trash';
 const deleteBehaviorPermanent = 'permanent';
@@ -38,10 +41,57 @@ enum TrashItemScope {
   remote,
 }
 
+enum TrashItemKind {
+  comic,
+  album,
+}
+
+TrashItemKind _inferTrashItemKind(
+  Map<String, dynamic> json, {
+  required TrashItemScope scope,
+}) {
+  final rawKind = (json['itemKind'] as String? ?? '').trim();
+  if (rawKind == TrashItemKind.album.name) {
+    return TrashItemKind.album;
+  }
+  if (rawKind == TrashItemKind.comic.name) {
+    return TrashItemKind.comic;
+  }
+
+  final rootId = (json['rootId'] as String? ?? '').trim();
+  if (rootId.startsWith('custom_')) {
+    return TrashItemKind.album;
+  }
+
+  final snapshotJson = (json['snapshotJson'] as String? ?? '').trim();
+  final itemId = (json['itemId'] as String? ?? '').trim();
+  if (snapshotJson.isNotEmpty && itemId.isNotEmpty) {
+    final parsed = parseDownloadedItemRecordJson(itemId, snapshotJson);
+    if (parsed is LocalLibraryComicItem) {
+      return parsed.isAlbum ? TrashItemKind.album : TrashItemKind.comic;
+    }
+    if (parsed is RemoteLibraryComicItem) {
+      return parsed.isCustomLibraryRoot
+          ? TrashItemKind.album
+          : TrashItemKind.comic;
+    }
+  }
+
+  final sourceLabel = (json['sourceLabel'] as String? ?? '').trim();
+  if (sourceLabel == '图集') {
+    return TrashItemKind.album;
+  }
+
+  return scope == TrashItemScope.remote && rootId.startsWith('custom_')
+      ? TrashItemKind.album
+      : TrashItemKind.comic;
+}
+
 class TrashItemRecord {
   const TrashItemRecord({
     required this.id,
     required this.scope,
+    required this.itemKind,
     required this.itemId,
     required this.title,
     required this.subtitle,
@@ -59,6 +109,7 @@ class TrashItemRecord {
 
   final String id;
   final TrashItemScope scope;
+  final TrashItemKind itemKind;
   final String itemId;
   final String title;
   final String subtitle;
@@ -75,9 +126,12 @@ class TrashItemRecord {
 
   bool get isLocal => scope == TrashItemScope.local;
 
+  bool get isAlbum => itemKind == TrashItemKind.album;
+
   Map<String, dynamic> toJson() => {
         'id': id,
         'scope': scope.name,
+        'itemKind': itemKind.name,
         'itemId': itemId,
         'title': title,
         'subtitle': subtitle,
@@ -101,6 +155,7 @@ class TrashItemRecord {
     return TrashItemRecord(
       id: (json['id'] as String? ?? '').trim(),
       scope: scope,
+      itemKind: _inferTrashItemKind(json, scope: scope),
       itemId: (json['itemId'] as String? ?? '').trim(),
       title: (json['title'] as String? ?? '').trim(),
       subtitle: (json['subtitle'] as String? ?? '').trim(),
@@ -137,6 +192,45 @@ class DeleteItemResult {
       DeleteItemResult._(ok: false, error: error);
 }
 
+class DeleteActionTexts {
+  const DeleteActionTexts({
+    required this.title,
+    required this.content,
+    required this.confirmLabel,
+  });
+
+  final String title;
+  final String content;
+  final String confirmLabel;
+}
+
+DeleteActionTexts buildDeleteActionTexts({
+  String? itemName,
+  String itemLabel = '项目',
+  int? count,
+}) {
+  final useTrash = TrashManager.instance.useTrashByDefault;
+  final targetText = count != null
+      ? '已选择的 $count 个$itemLabel'
+      : itemName != null
+          ? '“$itemName”'
+          : itemLabel;
+  if (useTrash) {
+    return DeleteActionTexts(
+      title: '移入回收站',
+      content: '确定要将$targetText移入回收站吗？可在“我-工具-回收站”中恢复。',
+      confirmLabel: '移入回收站',
+    );
+  }
+  return DeleteActionTexts(
+    title: '确认删除',
+    content: count != null
+        ? '确定要直接删除$targetText吗？此操作无法撤销。'
+        : '确定要直接删除$targetText吗？此操作无法撤销。',
+    confirmLabel: '直接删除',
+  );
+}
+
 class TrashManager {
   TrashManager._();
 
@@ -147,6 +241,19 @@ class TrashManager {
 
   File get _indexFile => File(_joinTrashPath(App.dataPath, 'trash_index.json'));
 
+  File get _serverTrashIndexFile =>
+      File(_joinTrashPath(App.dataPath, 'library_trash.json'));
+
+  bool get _isServerMode =>
+      normalizeAppRuntimeMode(appdata.settings[appRuntimeModeSettingIndex]) ==
+      appRuntimeModeServer;
+
+  LibraryTrashStore get _serverTrashStore =>
+      LibraryTrashStore(_serverTrashIndexFile.path);
+
+  bool _isServerTrashRecordId(String recordId) =>
+      recordId.trim().startsWith('srvtrash_');
+
   Future<void> ensureLoaded() async {
     if (_loaded) {
       return;
@@ -156,16 +263,21 @@ class TrashManager {
 
   Future<List<TrashItemRecord>> listItems({TrashItemScope? scope}) async {
     await ensureLoaded();
-    final items = scope == null
-        ? _items
-        : _items.where((item) => item.scope == scope);
-    return items.toList()
-      ..sort((a, b) => b.deletedAt.compareTo(a.deletedAt));
+    final items = <TrashItemRecord>[
+      ...(scope == null
+          ? _items
+          : _items.where((item) => item.scope == scope)),
+    ];
+    if (scope != TrashItemScope.remote) {
+      items.addAll(await _listServerLocalItems());
+    }
+    items.sort((a, b) => b.deletedAt.compareTo(a.deletedAt));
+    return items;
   }
 
   Future<TrashItemRecord?> findById(String id) async {
-    await ensureLoaded();
-    for (final item in _items) {
+    final items = await listItems();
+    for (final item in items) {
       if (item.id == id) {
         return item;
       }
@@ -213,6 +325,10 @@ class TrashManager {
   }
 
   Future<void> restoreLocalItem(String recordId) async {
+    if (_isServerTrashRecordId(recordId)) {
+      await LocalServerRuntime.instance.restoreTrashItem(recordId);
+      return;
+    }
     await ensureLoaded();
     final record = _items.cast<TrashItemRecord?>().firstWhere(
           (item) => item?.id == recordId,
@@ -253,6 +369,10 @@ class TrashManager {
   }
 
   Future<void> permanentlyDeleteTrashItem(String recordId) async {
+    if (_isServerTrashRecordId(recordId)) {
+      await LocalServerRuntime.instance.purgeTrashItem(recordId);
+      return;
+    }
     await ensureLoaded();
     final record = _items.cast<TrashItemRecord?>().firstWhere(
           (item) => item?.id == recordId,
@@ -301,6 +421,9 @@ class TrashManager {
     final record = TrashItemRecord(
       id: recordId,
       scope: TrashItemScope.local,
+      itemKind: item is LocalLibraryComicItem && item.isAlbum
+          ? TrashItemKind.album
+          : TrashItemKind.comic,
       itemId: snapshot.itemId,
       title: item.name,
       subtitle: item.subTitle,
@@ -387,6 +510,35 @@ class TrashManager {
       downloadDbId: item.id,
       restoreItemId: item.id,
     );
+  }
+
+  Future<List<TrashItemRecord>> _listServerLocalItems() async {
+    if (!_isServerMode) {
+      return const <TrashItemRecord>[];
+    }
+    final entries = await _serverTrashStore.listEntries();
+    return entries
+        .map((entry) => TrashItemRecord(
+              id: entry.id,
+              scope: TrashItemScope.local,
+              itemKind: entry.itemKind == TrashItemKind.album.name
+                  ? TrashItemKind.album
+                  : TrashItemKind.comic,
+              itemId: entry.itemId,
+              title: entry.title,
+              subtitle: entry.subtitle,
+              cover: _serverTrashStore.coverFileFor(entry).path,
+              sourceLabel: entry.sourceDisplayName,
+              originalPath: entry.originalPath,
+              trashedPath: entry.trashedPath,
+              deletedAt: entry.deletedAt,
+              sizeBytes: entry.totalBytes,
+              snapshotJson: '{}',
+              rootId: entry.rootId,
+              remotePath: '',
+              detailUrl: '',
+            ))
+        .toList(growable: false);
   }
 
   Future<void> _load() async {

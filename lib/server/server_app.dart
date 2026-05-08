@@ -90,6 +90,23 @@ class PicaKeepAdminServer {
     return snapshot;
   }
 
+  Future<LibraryTrashEntry> restoreTrashItem(String trashId) async {
+    final restored = await _trashStore.restoreItem(trashId);
+    await rescanResources();
+    _state.addLog('trash', '已恢复 ${restored.title}');
+    return restored;
+  }
+
+  Future<LibraryTrashEntry?> purgeTrashItem(String trashId) async {
+    final deleted = await _trashStore.purgeItem(trashId);
+    if (deleted == null) {
+      return null;
+    }
+    await rescanResources();
+    _state.addLog('trash', '已彻底删除 ${deleted.title}');
+    return deleted;
+  }
+
   Middleware _requestMiddleware() {
     return (innerHandler) {
       return (request) async {
@@ -221,9 +238,7 @@ class PicaKeepAdminServer {
       if (request.method != 'POST') {
         return _jsonResponse({'error': 'method not allowed'}, statusCode: 405);
       }
-      final restored = await _trashStore.restoreItem(trashId);
-      await rescanResources();
-      _state.addLog('trash', '已恢复 ${restored.title}');
+      final restored = await restoreTrashItem(trashId);
       return _jsonResponse({
         'ok': true,
         'item': _buildTrashItemPayload(restored),
@@ -231,12 +246,10 @@ class PicaKeepAdminServer {
     }
 
     if (segments.length == 4 && request.method == 'DELETE') {
-      final deleted = await _trashStore.purgeItem(trashId);
+      final deleted = await purgeTrashItem(trashId);
       if (deleted == null) {
         return _jsonResponse({'error': 'trash item not found'}, statusCode: 404);
       }
-      await rescanResources();
-      _state.addLog('trash', '已彻底删除 ${deleted.title}');
       return _jsonResponse({'ok': true});
     }
 
@@ -265,6 +278,23 @@ class PicaKeepAdminServer {
             .map((root) => _buildLibraryRootPayload(root, snapshot.items))
             .toList(),
         'items': snapshot.items.map(_buildLibraryItemPayload).toList(),
+      });
+    }
+
+    if (segments.length == 4 && segments[3] == 'refresh') {
+      if (request.method != 'POST') {
+        return _jsonResponse({'error': 'method not allowed'}, statusCode: 405);
+      }
+      final refreshed = await rescanResources();
+      return _jsonResponse({
+        'ok': true,
+        'generatedAt': refreshed.generatedAt.toIso8601String(),
+        'totalComicCount': refreshed.totalComicCount,
+        'totalBytes': refreshed.totalBytes,
+        'roots': refreshed.roots
+            .map((root) => _buildLibraryRootPayload(root, refreshed.items))
+            .toList(),
+        'items': refreshed.items.map(_buildLibraryItemPayload).toList(),
       });
     }
 
@@ -395,6 +425,7 @@ class PicaKeepAdminServer {
       'id': entry.id,
       'itemId': entry.itemId,
       'rootId': entry.rootId,
+      'itemKind': entry.itemKind,
       'title': entry.title,
       'subtitle': entry.subtitle,
       'sourceDisplayName': entry.sourceDisplayName,
@@ -469,6 +500,7 @@ class PicaKeepAdminServer {
       'path': item.path,
       'imageCount': item.imageCount,
       'totalBytes': item.totalBytes,
+      'updatedAt': item.updatedAt.toIso8601String(),
       'coverUrl': '/api/library/items/$encodedId/cover',
       'detailUrl': '/api/library/items/$encodedId',
       'episodeCount': item.episodes.length,

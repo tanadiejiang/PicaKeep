@@ -8,6 +8,7 @@ import 'package:picakeep/foundation/local_data_source.dart';
 import 'package:picakeep/foundation/local_library_settings.dart';
 
 import 'local_resource_scanner.dart';
+import 'library_trash_store.dart';
 import 'server_app.dart';
 import 'server_config.dart';
 import 'server_runtime_state.dart';
@@ -81,25 +82,58 @@ class LocalServerRuntime {
       '${App.dataPath}${Platform.pathSeparator}${PicaKeepServerConfig.defaultFileName}';
 
   void markResourceStateDirty() {
-    _invalidateStandaloneSnapshot();
-    final server = _server;
-    if (server == null) {
-      _notify();
-      return;
-    }
-    unawaited(_runExclusive(() async {
-      if (!identical(_server, server) || !server.isRunning) {
-        _notify();
-        return;
-      }
-      try {
-        await server.rescanResources();
-      } catch (e, s) {
-        _state.addLog('scan', '重新扫描本地资源失败: $e');
-        _state.addLog('scan', s.toString());
+    unawaited(refreshResourceState());
+  }
+
+  Future<void> refreshResourceState() {
+    return _runExclusive(() async {
+      _invalidateStandaloneSnapshot();
+      final server = _server;
+      if (server != null && server.isRunning) {
+        try {
+          await server.rescanResources();
+        } catch (e, s) {
+          _state.addLog('scan', '重新扫描本地资源失败: $e');
+          _state.addLog('scan', s.toString());
+        }
       }
       _notify();
-    }));
+    });
+  }
+
+  String get _trashIndexPath =>
+      '${File(configPath).parent.path}${Platform.pathSeparator}library_trash.json';
+
+  Future<void> restoreTrashItem(String trashId) {
+    return _runExclusive(() async {
+      _invalidateStandaloneSnapshot();
+      final server = _server;
+      if (server != null && server.isRunning) {
+        await server.restoreTrashItem(trashId);
+      } else {
+        await LibraryTrashStore(_trashIndexPath).restoreItem(trashId);
+      }
+      _notify();
+    });
+  }
+
+  Future<void> purgeTrashItem(String trashId) {
+    return _runExclusive(() async {
+      _invalidateStandaloneSnapshot();
+      final server = _server;
+      if (server != null && server.isRunning) {
+        final deleted = await server.purgeTrashItem(trashId);
+        if (deleted == null) {
+          throw StateError('trash item not found');
+        }
+      } else {
+        final deleted = await LibraryTrashStore(_trashIndexPath).purgeItem(trashId);
+        if (deleted == null) {
+          throw StateError('trash item not found');
+        }
+      }
+      _notify();
+    });
   }
 
   Future<void> start() {

@@ -30,6 +30,7 @@ class LibraryTrashEntry {
     required this.id,
     required this.itemId,
     required this.rootId,
+    required this.itemKind,
     required this.title,
     required this.subtitle,
     required this.sourceDisplayName,
@@ -45,6 +46,7 @@ class LibraryTrashEntry {
   final String id;
   final String itemId;
   final String rootId;
+  final String itemKind;
   final String title;
   final String subtitle;
   final String sourceDisplayName;
@@ -60,6 +62,7 @@ class LibraryTrashEntry {
         'id': id,
         'itemId': itemId,
         'rootId': rootId,
+        'itemKind': itemKind,
         'title': title,
         'subtitle': subtitle,
         'sourceDisplayName': sourceDisplayName,
@@ -73,10 +76,14 @@ class LibraryTrashEntry {
       };
 
   factory LibraryTrashEntry.fromJson(Map<String, dynamic> json) {
+    final rootId = (json['rootId'] as String? ?? '').trim();
     return LibraryTrashEntry(
       id: (json['id'] as String? ?? '').trim(),
       itemId: (json['itemId'] as String? ?? '').trim(),
-      rootId: (json['rootId'] as String? ?? '').trim(),
+      rootId: rootId,
+      itemKind: (json['itemKind'] as String? ?? '').trim().isNotEmpty
+          ? (json['itemKind'] as String).trim()
+          : (rootId.startsWith('custom_') ? 'album' : 'comic'),
       title: (json['title'] as String? ?? '').trim(),
       subtitle: (json['subtitle'] as String? ?? '').trim(),
       sourceDisplayName: (json['sourceDisplayName'] as String? ?? '').trim(),
@@ -139,6 +146,7 @@ class LibraryTrashStore {
       id: entryId,
       itemId: item.id,
       rootId: item.rootId,
+      itemKind: item.rootId.startsWith('custom_') ? 'album' : 'comic',
       title: item.title,
       subtitle: item.subtitle,
       sourceDisplayName: item.sourceDisplayName,

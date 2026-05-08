@@ -629,6 +629,9 @@ class LocalLibraryManager {
   String get localLibraryListSort => normalizeLocalLibraryListSort(
       appdata.settings[localLibraryListSortSettingIndex]);
 
+  bool get showAllDatabaseRecords =>
+      appdata.settings[localLibraryShowAllDatabaseRecordsSettingIndex] == '1';
+
   Future<void> setConfiguredLocalComicPaths(List<String> paths) async {
     appdata.settings[localComicPathsSettingIndex] =
         encodeLocalComicPathList(paths);
@@ -1009,6 +1012,9 @@ class LocalLibraryManager {
           itemDirectory,
           sourceDirectoryNames,
         );
+        if (!localStorageExists && !showAllDatabaseRecords) {
+          continue;
+        }
         final item = LocalLibraryComicItem(
           itemId: 'local_download::${source.id}::$rawId',
           originalId: rawId,
@@ -1149,6 +1155,9 @@ class LocalLibraryManager {
           itemDirectory,
           sourceDirectoryNames,
         );
+        if (!localStorageExists && !showAllDatabaseRecords) {
+          continue;
+        }
         final item = LocalLibraryComicItem(
           itemId: 'local_download::${source.id}::$rawId',
           originalId: rawId,

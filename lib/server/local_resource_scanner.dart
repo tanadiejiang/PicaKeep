@@ -70,6 +70,7 @@ class _ServerResourceMetadata {
     required this.tags,
     required this.sourceDisplayName,
     required this.episodeTitles,
+    required this.updatedAt,
   });
 
   final String title;
@@ -78,6 +79,7 @@ class _ServerResourceMetadata {
   final List<String> tags;
   final String sourceDisplayName;
   final List<String> episodeTitles;
+  final DateTime? updatedAt;
 }
 
 class ServerResourceItemSummary {
@@ -95,6 +97,7 @@ class ServerResourceItemSummary {
     required this.totalBytes,
     required this.coverPath,
     required this.episodes,
+    required this.updatedAt,
   });
 
   final String id;
@@ -110,6 +113,7 @@ class ServerResourceItemSummary {
   final int totalBytes;
   final String? coverPath;
   final List<ServerResourceEpisodeSummary> episodes;
+  final DateTime updatedAt;
 
   bool get hasMultipleEpisodes => episodes.length > 1;
 
@@ -126,6 +130,7 @@ class ServerResourceItemSummary {
         'imageCount': imageCount,
         'totalBytes': totalBytes,
         'coverPath': coverPath,
+        'updatedAt': updatedAt.toIso8601String(),
         'episodeCount': episodes.length,
         'hasMultipleEpisodes': hasMultipleEpisodes,
         'episodes': episodes.map((e) => e.toJson()).toList(),
@@ -314,6 +319,7 @@ class LocalResourceScanner {
           totalBytes: episode.totalBytes,
           coverPath: episode.coverPath,
           episodes: [episode],
+          updatedAt: await _directoryUpdatedAt(directory),
         ),
       );
     }
@@ -404,6 +410,7 @@ class LocalResourceScanner {
       metadata?.displayId,
       _buildItemId(rootId, directory.path),
     ]);
+    final updatedAt = metadata?.updatedAt ?? await _directoryUpdatedAt(directory);
     return ServerResourceItemSummary(
       id: _buildItemId(rootId, directory.path),
       rootId: rootId,
@@ -418,6 +425,7 @@ class LocalResourceScanner {
       totalBytes: totalBytes,
       coverPath: titledEpisodes.first.coverPath,
       episodes: titledEpisodes,
+      updatedAt: updatedAt,
     );
   }
 
@@ -435,22 +443,28 @@ class LocalResourceScanner {
     try {
       db = sqlite3.open(dbFile.path);
       final rows = db.select(
-        'select id, title, subtitle, directory, json from download',
+        'select id, title, subtitle, time, directory, json from download',
       );
       for (final row in rows) {
         final rawId = row['id']?.toString() ?? '';
         final rawDirectory = row['directory']?.toString() ?? '';
         final rawJson = row['json']?.toString() ?? '';
+        final rawTime = (row['time'] as num?)?.toInt();
+        final itemTime = rawTime == null
+            ? null
+            : DateTime.fromMillisecondsSinceEpoch(rawTime);
         final data = _decodeJsonMap(rawJson);
         final parsedItem = parseDownloadedItemRecordJson(
           rawId,
           rawJson,
+          time: itemTime,
           directory: rawDirectory,
         );
         final metadata = _extractDownloadMetadata(
           id: rawId,
           title: row['title']?.toString() ?? '',
           subtitle: row['subtitle']?.toString() ?? '',
+          updatedAt: itemTime,
           data: data,
           parsedItem: parsedItem,
           fallbackSourceDisplayName: rootTitle,
@@ -483,6 +497,7 @@ class LocalResourceScanner {
     required String id,
     required String title,
     required String subtitle,
+    required DateTime? updatedAt,
     required Map<String, dynamic>? data,
     required DownloadedItem? parsedItem,
     required String fallbackSourceDisplayName,
@@ -538,6 +553,7 @@ class LocalResourceScanner {
       episodeTitles: parsedEpisodeTitles.isNotEmpty
           ? parsedEpisodeTitles
           : _extractEpisodeTitles(data, comicItemMap),
+      updatedAt: updatedAt,
     );
   }
 
@@ -956,6 +972,14 @@ class LocalResourceScanner {
     return totalBytes;
   }
 
+  Future<DateTime> _directoryUpdatedAt(Directory directory) async {
+    try {
+      return (await directory.stat()).modified;
+    } catch (_) {
+      return DateTime.fromMillisecondsSinceEpoch(0);
+    }
+  }
+
   Future<List<Directory>> _listDirectories(Directory directory) async {
     final results = <Directory>[];
     await for (final entity in directory.list(recursive: false, followLinks: false)) {
@@ -977,6 +1001,9 @@ class LocalResourceScanner {
       followLinks: false,
     )) {
       if (entity is! File) {
+        continue;
+      }
+      if (_isInServerTrash(entity.path)) {
         continue;
       }
       if (!_isImageFile(entity.path)) {
@@ -1041,8 +1068,16 @@ class LocalResourceScanner {
 
   bool _isVisibleImageFile(FileSystemEntity entity) {
     return entity is File &&
+        !_isInServerTrash(entity.path) &&
         _isImageFile(entity.path) &&
         !_basename(entity.path).startsWith('.');
+  }
+
+  bool _isInServerTrash(String path) {
+    final normalized = path.replaceAll('\\', '/');
+    return normalized
+        .split('/')
+        .any((segment) => segment == _serverTrashDirectoryName);
   }
 
   bool _isCoverLikeFile(String path) {

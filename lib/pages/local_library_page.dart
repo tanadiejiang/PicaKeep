@@ -15,6 +15,7 @@ import 'package:picakeep/foundation/local_library.dart';
 import 'package:picakeep/foundation/local_library_settings.dart';
 import 'package:picakeep/foundation/remote_library_data_source.dart';
 import 'package:picakeep/foundation/service_data_source.dart';
+import 'package:picakeep/foundation/trash.dart';
 import 'package:picakeep/tools/read_history_helper.dart';
 import 'package:picakeep/tools/translations.dart';
 
@@ -87,6 +88,7 @@ Future<void> _refreshLocalLibrary({bool rescan = false}) async {
 class _LocalLibraryComicTile extends DownloadedComicTile {
   const _LocalLibraryComicTile({
     required this.comicId,
+    required this.enableLongPress,
     required super.name,
     required super.author,
     required super.imagePath,
@@ -100,12 +102,13 @@ class _LocalLibraryComicTile extends DownloadedComicTile {
   });
 
   final String comicId;
+  final bool enableLongPress;
 
   @override
   String? get comicID => comicId;
 
   @override
-  bool get enableLongPressed => false;
+  bool get enableLongPressed => enableLongPress;
 }
 
 class _RemoteRootCollage extends StatelessWidget {
@@ -151,12 +154,14 @@ class _LocalLibraryRemoteRootCard extends StatelessWidget {
     required this.item,
     required this.sizeText,
     required this.onTap,
+    required this.onLongPress,
     required this.onSecondaryTap,
   });
 
   final RemoteLibraryRootItem item;
   final String sizeText;
   final VoidCallback onTap;
+  final VoidCallback? onLongPress;
   final void Function(TapDownDetails details) onSecondaryTap;
 
   @override
@@ -164,13 +169,16 @@ class _LocalLibraryRemoteRootCard extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
       child: Material(
-        color: Colors.transparent,
+        color: Theme.of(context).colorScheme.surface,
         borderRadius: BorderRadius.circular(8),
         elevation: 1,
         child: InkWell(
           onTap: onTap,
+          onLongPress: onLongPress,
           onSecondaryTapDown: onSecondaryTap,
           borderRadius: BorderRadius.circular(8),
+          splashColor: Colors.transparent,
+          highlightColor: Colors.transparent,
           child: Padding(
             padding: const EdgeInsets.fromLTRB(10, 10, 10, 10),
             child: Row(
@@ -311,9 +319,11 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
   final _manager = LocalLibraryManager();
   final _remoteDataSource = const RemoteLibraryDataSource();
   final _searchController = TextEditingController();
+  final Set<String> _selectedItemIds = <String>{};
   bool _loading = true;
   bool _searchMode = false;
   bool _remoteAvailable = false;
+  bool _selecting = false;
   String? _errorText;
   List<DownloadedItem> _items = const <DownloadedItem>[];
   late _LocalLibraryView _view = widget.preferRemoteView || _isRemoteRootPage
@@ -332,7 +342,55 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
 
   bool get _isRemoteRootPage => widget.remoteRootId?.trim().isNotEmpty == true;
 
+  bool get _shouldStrictlyUseRemoteData =>
+      _isRemoteRootPage || _view == _LocalLibraryView.remote;
+
   bool get _showSourceSelector => _remoteAvailable && !_isRemoteRootPage;
+
+  bool get _enableRemoteMultiSelectDelete =>
+      _isRemoteRootPage && _view == _LocalLibraryView.remote;
+
+  int get _selectedCount => _selectedItemIds.length;
+
+  List<RemoteLibraryComicItem> get _selectedRemoteItems => _items
+      .whereType<RemoteLibraryComicItem>()
+      .where((item) => _selectedItemIds.contains(item.id))
+      .toList(growable: false);
+
+  bool _canSelectItem(DownloadedItem item) {
+    return _enableRemoteMultiSelectDelete && item is RemoteLibraryComicItem;
+  }
+
+  bool _isItemSelected(DownloadedItem item) {
+    return _selectedItemIds.contains(item.id);
+  }
+
+  void _clearSelectionState() {
+    _selectedItemIds.clear();
+    _selecting = false;
+  }
+
+  void _exitSelectionMode() {
+    if (!_selecting && _selectedItemIds.isEmpty) {
+      return;
+    }
+    setState(_clearSelectionState);
+  }
+
+  void _toggleItemSelection(DownloadedItem item) {
+    if (!_canSelectItem(item)) {
+      return;
+    }
+    setState(() {
+      _selecting = true;
+      if (!_selectedItemIds.add(item.id)) {
+        _selectedItemIds.remove(item.id);
+      }
+      if (_selectedItemIds.isEmpty) {
+        _selecting = false;
+      }
+    });
+  }
 
   Future<void> _setView(_LocalLibraryView nextView) async {
     if (_view == nextView) {
@@ -340,6 +398,7 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
     }
     setState(() {
       _view = nextView;
+      _clearSelectionState();
     });
     appdata.settings[localLibraryViewSettingIndex] =
         _localLibraryViewToSetting(nextView);
@@ -433,7 +492,9 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
     }
     try {
       final remoteAvailable = await _checkRemoteAvailability();
-      if (!remoteAvailable && _view != _LocalLibraryView.local) {
+      if (!remoteAvailable &&
+          _view != _LocalLibraryView.local &&
+          !_shouldStrictlyUseRemoteData) {
         _view = _LocalLibraryView.local;
         appdata.settings[localLibraryViewSettingIndex] = 'local';
         await appdata.updateSettings();
@@ -457,7 +518,9 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
           }
           break;
         case _LocalLibraryView.remote:
-          items = remoteAvailable ? await _loadRemoteItems() : localItems;
+          items = remoteAvailable
+              ? await _loadRemoteItems()
+              : throw const RemoteLibraryDataSourceException('远程服务当前不可用');
           break;
       }
       if (!mounted) {
@@ -466,6 +529,7 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
       setState(() {
         _items = items;
         _remoteAvailable = remoteAvailable;
+        _clearSelectionState();
         _loading = false;
       });
     } catch (e) {
@@ -475,6 +539,7 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
       setState(() {
         _items = const <DownloadedItem>[];
         _remoteAvailable = false;
+        _clearSelectionState();
         _errorText = e.toString().trim();
         _loading = false;
       });
@@ -592,6 +657,7 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
     var albumOnly = appdata.settings[localLibraryAlbumOnlySettingIndex] != '0';
     await showDialog<void>(
       context: context,
+      barrierColor: Colors.transparent,
       builder: (dialogContext) {
         return StatefulBuilder(
           builder: (context, setDialogState) {
@@ -759,6 +825,123 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
     );
   }
 
+  void _handleItemTap(DownloadedItem item) {
+    if (_selecting && _canSelectItem(item)) {
+      _toggleItemSelection(item);
+      return;
+    }
+    _openItem(item);
+  }
+
+  void _handleItemLongPress(DownloadedItem item) {
+    if (_canSelectItem(item)) {
+      _toggleItemSelection(item);
+      return;
+    }
+    _showActions(item);
+  }
+
+  void _handleItemSecondaryTap(DownloadedItem item, TapDownDetails details) {
+    if (_selecting && _canSelectItem(item)) {
+      _toggleItemSelection(item);
+      return;
+    }
+    _showDesktopMenu(item, details);
+  }
+
+  Future<void> _deleteSelectedItems() async {
+    if (_selectedCount == 0) {
+      return;
+    }
+    final texts = buildDeleteActionTexts(
+      count: _selectedCount,
+      itemLabel: _isAlbumOnly ? '图集' : '项目',
+    );
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          title: Text(texts.title.tl),
+          content: Text(texts.content.tl),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: Text('取消'.tl),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              child: Text(texts.confirmLabel.tl),
+            ),
+          ],
+        );
+      },
+    );
+    if (confirmed != true) {
+      return;
+    }
+
+    for (final item in _selectedRemoteItems) {
+      final result = await TrashManager.instance.deleteItem(item);
+      if (!result.ok) {
+        if (!mounted) {
+          return;
+        }
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(result.error ?? '删除失败'.tl)),
+        );
+        return;
+      }
+    }
+    await _load();
+  }
+
+  Widget _buildSelectionFrame({
+    required DownloadedItem item,
+    required Widget child,
+  }) {
+    if (!_canSelectItem(item)) {
+      return child;
+    }
+    final showIndicator = _selecting || _isItemSelected(item);
+    if (!showIndicator) {
+      return child;
+    }
+    final selected = _isItemSelected(item);
+    final colorScheme = Theme.of(context).colorScheme;
+    return Stack(
+      children: [
+        child,
+        Positioned.fill(
+          child: IgnorePointer(
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 120),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                  color: selected ? colorScheme.primary : Colors.transparent,
+                  width: 1.5,
+                ),
+                color: selected
+                    ? colorScheme.primaryContainer.withValues(alpha: 0.28)
+                    : Colors.transparent,
+              ),
+            ),
+          ),
+        ),
+        Positioned(
+          top: 10,
+          right: 10,
+          child: IgnorePointer(
+            child: Icon(
+              selected ? Icons.check_circle : Icons.radio_button_unchecked,
+              color: selected ? colorScheme.primary : colorScheme.outline,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
   Widget _buildItem(DownloadedItem item) {
     if (item is RemoteLibraryRootItem) {
       return Padding(
@@ -768,15 +951,17 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
           sizeText: item.comicSize == null
               ? '未知大小'.tl
               : _formatLocalLibrarySize(item.comicSize!),
-          onTap: () => _openItem(item),
-          onSecondaryTap: (details) => _showDesktopMenu(item, details),
+          onTap: () => _handleItemTap(item),
+          onLongPress: () => _handleItemLongPress(item),
+          onSecondaryTap: (details) => _handleItemSecondaryTap(item, details),
         ),
       );
     }
-    return Padding(
+    final tile = Padding(
       padding: const EdgeInsets.all(2),
       child: _LocalLibraryComicTile(
         comicId: item.id,
+        enableLongPress: true,
         name: item.name,
         author: item.subTitle,
         imagePath: _coverFile(item),
@@ -786,11 +971,12 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
         size: item.comicSize == null
             ? '未知大小'.tl
             : _formatLocalLibrarySize(item.comicSize!),
-        onTap: () => _openItem(item),
-        onLongTap: () {},
-        onSecondaryTap: (details) => _showDesktopMenu(item, details),
+        onTap: () => _handleItemTap(item),
+        onLongTap: () => _handleItemLongPress(item),
+        onSecondaryTap: (details) => _handleItemSecondaryTap(item, details),
       ),
     );
+    return _buildSelectionFrame(item: item, child: tile);
   }
 
   Widget _buildEmptyState() {
@@ -863,6 +1049,9 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
         ),
       );
     }
+    if (_selecting) {
+      return Text('已选择 @num 个项目'.tlParams({'num': _selectedCount.toString()}));
+    }
     return Text((widget.title ?? (_isAlbumOnly ? '图集' : '资源库')).tl);
   }
 
@@ -910,43 +1099,62 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
               slivers: [
                 SliverAppbar(
                   title: _buildTitle(),
-                  actions: [
-                    IconButton(
-                      icon: const Icon(Icons.refresh),
-                      tooltip: refreshTooltip,
-                      onPressed: () async {
-                        await _refreshCurrentLibrary();
-                      },
-                    ),
-                    if (!widget.albumOnly)
-                      IconButton(
-                        icon: Icon(
-                          appdata.settings[localLibraryAlbumOnlySettingIndex] !=
-                                  '0'
-                              ? Icons.tune
-                              : Icons.tune_outlined,
-                        ),
-                        tooltip: '资源库显示设置'.tl,
-                        onPressed: _showFilterDialog,
-                      ),
-                    IconButton(
-                      icon: const Icon(Icons.sort),
-                      tooltip: '排序'.tl,
-                      onPressed: _showSortDialog,
-                    ),
-                    IconButton(
-                      icon: Icon(_searchMode ? Icons.close : Icons.search),
-                      tooltip: _searchMode ? '关闭搜索'.tl : '搜索'.tl,
-                      onPressed: () {
-                        setState(() {
-                          _searchMode = !_searchMode;
-                          if (!_searchMode) {
-                            _searchController.clear();
-                          }
-                        });
-                      },
-                    ),
-                  ],
+                  color: _selecting
+                      ? Theme.of(context).colorScheme.primaryContainer
+                      : null,
+                  leading: _selecting
+                      ? IconButton(
+                          onPressed: _exitSelectionMode,
+                          icon: const Icon(Icons.close),
+                        )
+                      : null,
+                  actions: _selecting
+                      ? [
+                          IconButton(
+                            icon: const Icon(Icons.delete_outline),
+                            tooltip: '删除'.tl,
+                            onPressed:
+                                _selectedCount == 0 ? null : _deleteSelectedItems,
+                          ),
+                        ]
+                      : [
+                          IconButton(
+                            icon: const Icon(Icons.refresh),
+                            tooltip: refreshTooltip,
+                            onPressed: () async {
+                              await _refreshCurrentLibrary();
+                            },
+                          ),
+                          if (!widget.albumOnly)
+                            IconButton(
+                              icon: Icon(
+                                appdata.settings[
+                                            localLibraryAlbumOnlySettingIndex] !=
+                                        '0'
+                                    ? Icons.tune
+                                    : Icons.tune_outlined,
+                              ),
+                              tooltip: '资源库显示设置'.tl,
+                              onPressed: _showFilterDialog,
+                            ),
+                          IconButton(
+                            icon: const Icon(Icons.sort),
+                            tooltip: '排序'.tl,
+                            onPressed: _showSortDialog,
+                          ),
+                          IconButton(
+                            icon: Icon(_searchMode ? Icons.close : Icons.search),
+                            tooltip: _searchMode ? '关闭搜索'.tl : '搜索'.tl,
+                            onPressed: () {
+                              setState(() {
+                                _searchMode = !_searchMode;
+                                if (!_searchMode) {
+                                  _searchController.clear();
+                                }
+                              });
+                            },
+                          ),
+                        ],
                 ),
                 if (_showSourceSelector) _buildSourceSelector(),
                 if (items.isEmpty)
@@ -956,10 +1164,7 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
                     delegate: SliverChildBuilderDelegate(
                       (context, index) {
                         final item = items[index];
-                        return GestureDetector(
-                          onLongPress: () => _showActions(item),
-                          child: _buildItem(item),
-                        );
+                        return _buildItem(item);
                       },
                       childCount: items.length,
                     ),
