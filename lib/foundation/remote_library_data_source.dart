@@ -221,6 +221,57 @@ class RemoteLibraryRootItem extends DownloadedItem {
   }
 }
 
+class RemoteLibraryTrashItem {
+  const RemoteLibraryTrashItem({
+    required this.id,
+    required this.itemId,
+    required this.rootId,
+    required this.title,
+    required this.subtitle,
+    required this.sourceDisplayName,
+    required this.tags,
+    required this.imageCount,
+    required this.totalBytes,
+    required this.originalPath,
+    required this.coverUrl,
+    required this.deletedAt,
+  });
+
+  final String id;
+  final String itemId;
+  final String rootId;
+  final String title;
+  final String subtitle;
+  final String sourceDisplayName;
+  final List<String> tags;
+  final int imageCount;
+  final int totalBytes;
+  final String originalPath;
+  final String coverUrl;
+  final DateTime deletedAt;
+
+  factory RemoteLibraryTrashItem.fromJson(
+    Map<String, dynamic> json,
+    RemoteLibraryClient client,
+  ) {
+    return RemoteLibraryTrashItem(
+      id: _readText(json['id']),
+      itemId: _readText(json['itemId']),
+      rootId: _readText(json['rootId']),
+      title: _readText(json['title'], fallback: '未命名项目'),
+      subtitle: _readText(json['subtitle']),
+      sourceDisplayName: _readText(json['sourceDisplayName']),
+      tags: _readStringList(json['tags']),
+      imageCount: _readInt(json['imageCount']) ?? 0,
+      totalBytes: _readInt(json['totalBytes']) ?? 0,
+      originalPath: _readText(json['originalPath']),
+      coverUrl: client.resolveUrlString(_readText(json['coverUrl'])),
+      deletedAt: DateTime.tryParse(_readText(json['deletedAt'])) ??
+          DateTime.fromMillisecondsSinceEpoch(0),
+    );
+  }
+}
+
 class RemoteLibraryComicItem extends DownloadedItem {
   RemoteLibraryComicItem({
     required this.client,
@@ -715,6 +766,10 @@ class RemoteLibraryClient {
     if (!shouldInvalidate) {
       return;
     }
+    _clearCaches();
+  }
+
+  void _clearCaches() {
     _snapshotCache = null;
     _pendingSnapshotRequest = null;
     _detailCache.clear();
@@ -769,6 +824,55 @@ class RemoteLibraryClient {
       managedDownloadOnly: managedDownloadOnly,
       customLibraryOnly: customLibraryOnly,
     );
+  }
+
+  Future<List<RemoteLibraryTrashItem>> fetchTrashItems() async {
+    final payload = await _getJsonMap('/api/library/trash');
+    final itemsValue = payload['items'];
+    if (itemsValue is! List) {
+      return const <RemoteLibraryTrashItem>[];
+    }
+    return itemsValue
+        .whereType<Map>()
+        .map(
+          (item) => RemoteLibraryTrashItem.fromJson(
+            item.map((key, value) => MapEntry(key.toString(), value)),
+            this,
+          ),
+        )
+        .toList(growable: false);
+  }
+
+  Future<void> trashItem(String itemId) async {
+    await _sendRequest(
+      'POST',
+      '/api/library/items/${Uri.encodeComponent(itemId)}/trash',
+    );
+    _clearCaches();
+  }
+
+  Future<void> deleteItemPermanently(String itemId) async {
+    await _sendRequest(
+      'DELETE',
+      '/api/library/items/${Uri.encodeComponent(itemId)}',
+    );
+    _clearCaches();
+  }
+
+  Future<void> restoreTrashItem(String trashId) async {
+    await _sendRequest(
+      'POST',
+      '/api/library/trash/${Uri.encodeComponent(trashId)}/restore',
+    );
+    _clearCaches();
+  }
+
+  Future<void> purgeTrashItem(String trashId) async {
+    await _sendRequest(
+      'DELETE',
+      '/api/library/trash/${Uri.encodeComponent(trashId)}',
+    );
+    _clearCaches();
   }
 
   Future<_RemoteLibrarySnapshot> _fetchSnapshot({
@@ -1027,15 +1131,28 @@ class RemoteLibraryClient {
   }
 
   Future<Map<String, dynamic>> _getJsonMap(String path) async {
+    return _sendRequest('GET', path);
+  }
+
+  Future<Map<String, dynamic>> _sendRequest(
+    String method,
+    String path, {
+    Object? body,
+  }) async {
     try {
-      final request = await _httpClient.getUrl(resolveUri(path)).timeout(
-            const Duration(seconds: 5),
-          );
+      final request = await _httpClient
+          .openUrl(method, resolveUri(path))
+          .timeout(const Duration(seconds: 5));
       request.headers.set(HttpHeaders.acceptHeader, 'application/json');
+      if (body != null) {
+        request.headers
+            .set(HttpHeaders.contentTypeHeader, 'application/json; charset=utf-8');
+        request.write(jsonEncode(body));
+      }
       final response = await request.close().timeout(
             const Duration(seconds: 8),
           );
-      final body = await utf8.decoder.bind(response).join().timeout(
+      final bodyText = await utf8.decoder.bind(response).join().timeout(
             const Duration(seconds: 8),
           );
       if (response.statusCode < 200 || response.statusCode >= 300) {
@@ -1043,7 +1160,10 @@ class RemoteLibraryClient {
           '远程资源请求失败：${response.statusCode}',
         );
       }
-      final decoded = jsonDecode(body);
+      if (bodyText.trim().isEmpty) {
+        return const <String, dynamic>{};
+      }
+      final decoded = jsonDecode(bodyText);
       if (decoded is Map<String, dynamic>) {
         return decoded;
       }

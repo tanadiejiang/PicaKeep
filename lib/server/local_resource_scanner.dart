@@ -4,6 +4,8 @@ import 'dart:io';
 import 'package:sqlite3/sqlite3.dart';
 import 'package:picakeep/foundation/download_model.dart';
 
+const _serverTrashDirectoryName = '.picakeep_trash';
+
 class ServerResourceRootSummary {
   const ServerResourceRootSummary({
     required this.id,
@@ -957,7 +959,7 @@ class LocalResourceScanner {
   Future<List<Directory>> _listDirectories(Directory directory) async {
     final results = <Directory>[];
     await for (final entity in directory.list(recursive: false, followLinks: false)) {
-      if (entity is Directory) {
+      if (entity is Directory && _basename(entity.path) != _serverTrashDirectoryName) {
         results.add(entity);
       }
     }
@@ -1010,6 +1012,9 @@ class LocalResourceScanner {
       final hasImages = children.any(_isVisibleImageFile);
       var hasAlbumDescendant = false;
       for (final child in children.whereType<Directory>()) {
+        if (_basename(child.path) == _serverTrashDirectoryName) {
+          continue;
+        }
         if (visit(child)) {
           hasAlbumDescendant = true;
         }

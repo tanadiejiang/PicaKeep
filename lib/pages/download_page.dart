@@ -18,6 +18,7 @@ import 'package:picakeep/foundation/local_library.dart';
 import 'package:picakeep/foundation/local_library_settings.dart';
 import 'package:picakeep/foundation/remote_library_data_source.dart';
 import 'package:picakeep/foundation/service_data_source.dart';
+import 'package:picakeep/foundation/trash.dart';
 import 'package:picakeep/foundation/ui_mode.dart';
 import 'package:picakeep/tools/translations.dart';
 import 'package:picakeep/components/comic_tile.dart';
@@ -768,10 +769,35 @@ class DownloadPageLogic extends StateController {
   }
 
   bool canDeleteItem(DownloadedItem item) {
-    return item.canDelete &&
-        !_usesManagedDownloadSources &&
-        item is! RemoteLibraryComicItem &&
-        item is! RemoteLibraryRootItem;
+    if (item is RemoteLibraryRootItem) {
+      return false;
+    }
+    if (item is RemoteLibraryComicItem) {
+      return true;
+    }
+    if (item is LocalLibraryComicItem) {
+      return (item.fileSystemPath?.trim().isNotEmpty ?? false);
+    }
+    return item.canDelete && !_usesManagedDownloadSources;
+  }
+
+  Future<String?> deleteItems(Iterable<DownloadedItem> items) async {
+    try {
+      for (final item in items) {
+        if (!canDeleteItem(item)) {
+          continue;
+        }
+        final result = await TrashManager.instance.deleteItem(item);
+        if (!result.ok) {
+          return result.error ?? 'delete_failed';
+        }
+      }
+      await reload();
+      update();
+      return null;
+    } catch (e) {
+      return e.toString();
+    }
   }
 
   Future<int> rescanDisk() async {
@@ -820,6 +846,8 @@ class DownloadPageLogic extends StateController {
 
   bool _useDirectMobileLocalCoverPath(DownloadedItem item) {
     return App.isMobile &&
+        !_usesManagedDownloadSources &&
+        item is! LocalLibraryComicItem &&
         item is! RemoteLibraryComicItem &&
         item is! RemoteLibraryRootItem;
   }
@@ -1024,50 +1052,106 @@ class DownloadPage extends StatelessWidget {
     final isRootItem = item is RemoteLibraryRootItem;
     final coverFile = logic.coverFor(item);
     final coverProvider = logic.coverImageProviderFor(item);
+    final colorScheme = Theme.of(context).colorScheme;
     return Padding(
       padding: const EdgeInsets.all(2),
-      child: Container(
-        decoration: BoxDecoration(
-          color: selected
-              ? Theme.of(context).colorScheme.surfaceContainerHighest
-              : Colors.transparent,
-          borderRadius: const BorderRadius.all(Radius.circular(16)),
-        ),
-        child: _DownloadedPageComicTile(
-          comicId: item.id,
-          name: item.name,
-          author: viewModel.author,
-          imagePath: coverFile,
-          imageProvider: coverProvider,
-          readingHistoryOverride: viewModel.readingHistoryOverride,
-          isFavoriteOverride: viewModel.isFavoriteOverride,
-          type: viewModel.type,
-          tag: viewModel.tags,
-          onTap: () async {
-            if (logic.selecting) {
-              logic.selected[index] = !logic.selected[index];
-              logic.selected[index] ? logic.selectedNum++ : logic.selectedNum--;
-              if (logic.selectedNum == 0) {
-                logic.selecting = false;
-              }
-              logic.update();
-            } else if (isRootItem) {
-              _toComicInfoPage(context, item);
-            } else {
-              _showInfo(index, logic, context);
-            }
-          },
-          size: viewModel.size,
-          onLongTap: () {
-            if (logic.selecting) return;
-            logic.selected[index] = true;
-            logic.selectedNum++;
-            logic.selecting = true;
-            logic.update();
-          },
-          onSecondaryTap: (details) {
-            _showDesktopMenu(context, logic, index, details);
-          },
+      child: ClipRRect(
+        borderRadius: const BorderRadius.all(Radius.circular(16)),
+        child: Stack(
+          children: [
+            Positioned.fill(
+              child: _DownloadedPageComicTile(
+                comicId: item.id,
+                name: item.name,
+                author: viewModel.author,
+                imagePath: coverFile,
+                imageProvider: coverProvider,
+                readingHistoryOverride: viewModel.readingHistoryOverride,
+                isFavoriteOverride: viewModel.isFavoriteOverride,
+                type: viewModel.type,
+                tag: viewModel.tags,
+                onTap: () async {
+                  if (logic.selecting) {
+                    logic.selected[index] = !logic.selected[index];
+                    logic.selected[index] ? logic.selectedNum++ : logic.selectedNum--;
+                    if (logic.selectedNum == 0) {
+                      logic.selecting = false;
+                    }
+                    logic.update();
+                  } else if (isRootItem) {
+                    _toComicInfoPage(context, item);
+                  } else {
+                    _showInfo(index, logic, context);
+                  }
+                },
+                size: viewModel.size,
+                onLongTap: () {
+                  if (logic.selecting) return;
+                  logic.selected[index] = true;
+                  logic.selectedNum++;
+                  logic.selecting = true;
+                  logic.update();
+                },
+                onSecondaryTap: (details) {
+                  _showDesktopMenu(context, logic, index, details);
+                },
+              ),
+            ),
+            if (selected)
+              Positioned.fill(
+                child: IgnorePointer(
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: colorScheme.primary.withValues(alpha: 0.22),
+                      border: Border.all(
+                        color: colorScheme.primary,
+                        width: 1.6,
+                      ),
+                      borderRadius: const BorderRadius.all(Radius.circular(16)),
+                    ),
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          begin: Alignment.topCenter,
+                          end: Alignment.bottomCenter,
+                          colors: [
+                            colorScheme.primary.withValues(alpha: 0.14),
+                            colorScheme.primary.withValues(alpha: 0.28),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            if (selected)
+              Positioned(
+                top: 10,
+                right: 10,
+                child: IgnorePointer(
+                  child: Container(
+                    width: 24,
+                    height: 24,
+                    decoration: BoxDecoration(
+                      color: colorScheme.primary,
+                      shape: BoxShape.circle,
+                      boxShadow: [
+                        BoxShadow(
+                          color: colorScheme.shadow.withValues(alpha: 0.18),
+                          blurRadius: 8,
+                          offset: const Offset(0, 2),
+                        ),
+                      ],
+                    ),
+                    child: Icon(
+                      Icons.check,
+                      size: 16,
+                      color: colorScheme.onPrimary,
+                    ),
+                  ),
+                ),
+              ),
+          ],
         ),
       ),
     );
@@ -1114,12 +1198,16 @@ class DownloadPage extends StatelessWidget {
                         child: Text("取消".tl),
                       ),
                       TextButton(
-                        onPressed: () {
+                        onPressed: () async {
                           Navigator.pop(ctx);
-                          DownloadManager().delete([item.id]);
-                          logic.comics.removeAt(index);
-                          logic.selected.removeAt(index);
-                          logic.update();
+                          final error = await logic.deleteItems([item]);
+                          if (error != null && App.globalContext != null) {
+                            ScaffoldMessenger.of(App.globalContext!).showSnackBar(
+                              SnackBar(content: Text(error)),
+                            );
+                            return;
+                          }
+                          logic.refresh();
                         },
                         child: Text("确认".tl),
                       ),
@@ -1213,17 +1301,23 @@ class DownloadPage extends StatelessWidget {
                     TextButton(
                       onPressed: () async {
                         App.globalBack();
-                        final comics = <String>[];
+                        final items = <DownloadedItem>[];
                         for (int i = 0; i < logic.selected.length; i++) {
                           if (logic.selected[i] &&
                               logic.canDeleteItem(logic.comics[i])) {
-                            comics.add(logic.comics[i].id);
+                            items.add(logic.comics[i]);
                           }
                         }
-                        if (comics.isEmpty) {
+                        if (items.isEmpty) {
                           return;
                         }
-                        await DownloadManager().delete(comics);
+                        final error = await logic.deleteItems(items);
+                        if (error != null && context.mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(content: Text(error)),
+                          );
+                          return;
+                        }
                         logic.refresh();
                       },
                       child: Text("确认".tl),
@@ -1586,6 +1680,7 @@ class _DownloadedComicInfoViewState extends State<DownloadedComicInfoView> {
   List<int> downloadedEps = [];
   late final ScrollController _scrollController;
   late DownloadedItem _comic;
+  String? _resolvedCoverPath;
   bool _loadingRemoteDetail = false;
 
   @override
@@ -1594,6 +1689,7 @@ class _DownloadedComicInfoViewState extends State<DownloadedComicInfoView> {
     _scrollController = ScrollController();
     _comic = widget.item;
     _syncInfo();
+    _resolveCoverIfNeeded();
     _loadRemoteDetailIfNeeded();
   }
 
@@ -1623,6 +1719,7 @@ class _DownloadedComicInfoViewState extends State<DownloadedComicInfoView> {
         _comic = detail;
         _syncInfo();
       });
+      _resolveCoverIfNeeded();
     } catch (_) {
       if (!mounted) {
         return;
@@ -1856,7 +1953,53 @@ class _DownloadedComicInfoViewState extends State<DownloadedComicInfoView> {
     );
   }
 
+  Future<void> _resolveCoverIfNeeded() async {
+    final comic = _comic;
+    if (comic is! LocalLibraryComicItem) {
+      return;
+    }
+    final cached = comic.localCoverPath?.trim();
+    if (cached != null && cached.isNotEmpty) {
+      if (_resolvedCoverPath != cached && mounted) {
+        setState(() {
+          _resolvedCoverPath = cached;
+        });
+      } else {
+        _resolvedCoverPath = cached;
+      }
+      return;
+    }
+    final path = await LocalLibraryManager().resolveCoverPathForItem(comic);
+    if (!mounted) {
+      return;
+    }
+    final resolved = path?.trim();
+    if (resolved == null || resolved.isEmpty || _resolvedCoverPath == resolved) {
+      return;
+    }
+    setState(() {
+      _resolvedCoverPath = resolved;
+    });
+  }
+
   Widget _buildCover(ThemeData theme) {
+    final resolvedCoverPath = _resolvedCoverPath?.trim();
+    if (resolvedCoverPath != null && resolvedCoverPath.isNotEmpty) {
+      return ClipRRect(
+        borderRadius: const BorderRadius.all(Radius.circular(16)),
+        child: Container(
+          width: 92,
+          height: 124,
+          color: theme.colorScheme.surfaceContainerHighest,
+          child: Image.file(
+            File(resolvedCoverPath),
+            fit: BoxFit.cover,
+            errorBuilder: (_, __, ___) => _buildCoverPlaceholder(theme),
+          ),
+        ),
+      );
+    }
+
     final imageProvider = widget.logic.coverImageProviderFor(_comic);
     final file = widget.logic.coverFor(_comic);
     final hasFile = file.path.trim().isNotEmpty;

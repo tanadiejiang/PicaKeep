@@ -132,6 +132,7 @@ class Appdata {
     "0", //102 安卓 Shizuku 浏览模式
     "local", //103 已下载页来源视图
     "local", //104 资源库页来源视图
+    "trash", //105 删除行为
   ];
 
   List<String> implicitData = [
@@ -236,6 +237,8 @@ class Appdata {
         normalizeAndroidRootMode(settings[androidRootModeSettingIndex]);
     settings[androidShizukuModeSettingIndex] =
         normalizeAndroidShizukuMode(settings[androidShizukuModeSettingIndex]);
+    settings[deleteBehaviorSettingIndex] =
+        normalizeDeleteBehavior(settings[deleteBehaviorSettingIndex]);
     setManagedDataSourceMode(settings[managedDataSourceModeSettingIndex]);
   }
 

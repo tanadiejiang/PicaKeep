@@ -5,6 +5,7 @@ import 'package:shelf/shelf.dart';
 import 'package:shelf/shelf_io.dart' as shelf_io;
 
 import 'admin_web.dart';
+import 'library_trash_store.dart';
 import 'local_resource_scanner.dart';
 import 'server_config.dart';
 import 'server_runtime_state.dart';
@@ -13,11 +14,15 @@ class PicaKeepAdminServer {
   PicaKeepAdminServer({
     required this.configPath,
     ServerRuntimeState? runtimeState,
-  }) : _state = runtimeState ?? ServerRuntimeState();
+  })  : _state = runtimeState ?? ServerRuntimeState(),
+        _trashStore = LibraryTrashStore(
+          '${File(configPath).parent.path}${Platform.pathSeparator}library_trash.json',
+        );
 
   final String configPath;
   final ServerRuntimeState _state;
   final LocalResourceScanner _scanner = LocalResourceScanner();
+  final LibraryTrashStore _trashStore;
 
   PicaKeepServerConfig? _config;
   ServerResourceSnapshot? _snapshot;
@@ -109,6 +114,11 @@ class PicaKeepAdminServer {
       return Response.movedPermanently('/admin');
     }
 
+    final trashResponse = await _handleTrashRequest(request);
+    if (trashResponse != null) {
+      return trashResponse;
+    }
+
     final libraryResponse = await _handleLibraryRequest(request);
     if (libraryResponse != null) {
       return libraryResponse;
@@ -171,6 +181,68 @@ class PicaKeepAdminServer {
     return _jsonResponse({'error': 'not found'}, statusCode: 404);
   }
 
+  Future<Response?> _handleTrashRequest(Request request) async {
+    final segments = request.url.pathSegments;
+    if (segments.length < 3 ||
+        segments[0] != 'api' ||
+        segments[1] != 'library' ||
+        segments[2] != 'trash') {
+      return null;
+    }
+
+    if (segments.length == 3) {
+      if (request.method != 'GET') {
+        return _jsonResponse({'error': 'method not allowed'}, statusCode: 405);
+      }
+      final entries = await _trashStore.listEntries();
+      return _jsonResponse({
+        'items': entries.map(_buildTrashItemPayload).toList(growable: false),
+      });
+    }
+
+    final trashId = Uri.decodeComponent(segments[3]);
+    final entry = await _trashStore.findById(trashId);
+    if (entry == null) {
+      return _jsonResponse({'error': 'trash item not found'}, statusCode: 404);
+    }
+
+    if (segments.length == 5 && segments[4] == 'cover') {
+      if (request.method != 'GET') {
+        return _jsonResponse({'error': 'method not allowed'}, statusCode: 405);
+      }
+      final coverFile = _trashStore.coverFileFor(entry);
+      if (coverFile.path.trim().isEmpty) {
+        return _jsonResponse({'error': 'cover not found'}, statusCode: 404);
+      }
+      return _fileResponse(request, coverFile);
+    }
+
+    if (segments.length == 5 && segments[4] == 'restore') {
+      if (request.method != 'POST') {
+        return _jsonResponse({'error': 'method not allowed'}, statusCode: 405);
+      }
+      final restored = await _trashStore.restoreItem(trashId);
+      await rescanResources();
+      _state.addLog('trash', '已恢复 ${restored.title}');
+      return _jsonResponse({
+        'ok': true,
+        'item': _buildTrashItemPayload(restored),
+      });
+    }
+
+    if (segments.length == 4 && request.method == 'DELETE') {
+      final deleted = await _trashStore.purgeItem(trashId);
+      if (deleted == null) {
+        return _jsonResponse({'error': 'trash item not found'}, statusCode: 404);
+      }
+      await rescanResources();
+      _state.addLog('trash', '已彻底删除 ${deleted.title}');
+      return _jsonResponse({'ok': true});
+    }
+
+    return _jsonResponse({'error': 'not found'}, statusCode: 404);
+  }
+
   Future<Response?> _handleLibraryRequest(Request request) async {
     final segments = request.url.pathSegments;
     if (segments.length < 3 ||
@@ -200,6 +272,33 @@ class PicaKeepAdminServer {
     final item = snapshot.findItemById(itemId);
     if (item == null) {
       return _jsonResponse({'error': 'item not found'}, statusCode: 404);
+    }
+
+    if (segments.length == 5 && segments[4] == 'trash') {
+      if (request.method != 'POST') {
+        return _jsonResponse({'error': 'method not allowed'}, statusCode: 405);
+      }
+      final rootPath = _rootPathForRootId(item.rootId);
+      if (rootPath == null || rootPath.trim().isEmpty) {
+        return _jsonResponse({'error': 'root path not found'}, statusCode: 404);
+      }
+      final entry = await _trashStore.moveItemToTrash(item: item, rootPath: rootPath);
+      await rescanResources();
+      _state.addLog('trash', '已移入回收站 ${item.title}');
+      return _jsonResponse({
+        'ok': true,
+        'item': _buildTrashItemPayload(entry),
+      });
+    }
+
+    if (segments.length == 4 && request.method == 'DELETE') {
+      final dir = Directory(item.path);
+      if (dir.existsSync()) {
+        await dir.delete(recursive: true);
+      }
+      await rescanResources();
+      _state.addLog('trash', '已直接删除 ${item.title}');
+      return _jsonResponse({'ok': true});
     }
 
     if (segments.length == 4) {
@@ -288,6 +387,42 @@ class PicaKeepAdminServer {
       return item.episodes.first;
     }
     return null;
+  }
+
+  Map<String, dynamic> _buildTrashItemPayload(LibraryTrashEntry entry) {
+    final encodedId = Uri.encodeComponent(entry.id);
+    return {
+      'id': entry.id,
+      'itemId': entry.itemId,
+      'rootId': entry.rootId,
+      'title': entry.title,
+      'subtitle': entry.subtitle,
+      'sourceDisplayName': entry.sourceDisplayName,
+      'tags': entry.tags,
+      'originalPath': entry.originalPath,
+      'imageCount': entry.imageCount,
+      'totalBytes': entry.totalBytes,
+      'deletedAt': entry.deletedAt.toIso8601String(),
+      'coverUrl': '/api/library/trash/$encodedId/cover',
+    };
+  }
+
+  String? _rootPathForRootId(String rootId) {
+    final config = _config ?? PicaKeepServerConfig.defaults();
+    return switch (rootId) {
+      'current_download' => config.currentDownloadRoot,
+      'original_download' => config.originalDownloadRoot,
+      _ when rootId.startsWith('custom_') => () {
+          final index = int.tryParse(rootId.substring('custom_'.length));
+          if (index == null ||
+              index < 0 ||
+              index >= config.customLibraryRoots.length) {
+            return null;
+          }
+          return config.customLibraryRoots[index];
+        }(),
+      _ => null,
+    };
   }
 
   Map<String, dynamic> _buildLibraryRootPayload(

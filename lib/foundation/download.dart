@@ -188,6 +188,10 @@ class DownloadManager with _DownloadDb {
   }
 
   Future<void> delete(List<String> ids) async {
+    await deletePermanentlyByIds(ids);
+  }
+
+  Future<void> deletePermanentlyByIds(List<String> ids) async {
     for (var id in ids) {
       _deleteFromDb(id);
       var comic = Directory("$path/${getDirectory(id)}");
@@ -199,6 +203,16 @@ class DownloadManager with _DownloadDb {
         }
       }
     }
+    _clearLookupCaches();
+  }
+
+  void deleteDbRecordOnly(String id) {
+    _deleteFromDb(id);
+    _clearLookupCaches();
+  }
+
+  void upsertDbRecordOnly(DownloadedItem item, String directory, [DateTime? time]) {
+    _addToDb(item, directory, time);
     _clearLookupCaches();
   }
 
