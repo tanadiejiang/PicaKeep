@@ -1213,6 +1213,7 @@ Widget buildAppSettings(double width, BuildContext context) {
       subtitle: Text('按当前设置重新扫描本应用下载目录、原应用下载目录与自定义本地漫画路径'.tl),
       onTap: () => _rescanLocalComics(context),
     ),
+    const _DeleteBehaviorTile(),
     SettingsTitle('隐私'.tl),
     if (App.isAndroid)
       SwitchSetting(
@@ -1230,6 +1231,83 @@ Widget buildAppSettings(double width, BuildContext context) {
     SettingsTitle('其它'.tl),
     const _LanguageSettingTile(),
   ]);
+}
+
+class _DeleteBehaviorTile extends StatefulWidget {
+  const _DeleteBehaviorTile();
+
+  @override
+  State<_DeleteBehaviorTile> createState() => _DeleteBehaviorTileState();
+}
+
+class _DeleteBehaviorTileState extends State<_DeleteBehaviorTile> {
+  bool _busy = false;
+
+  Future<void> _setValue(String value) async {
+    final normalized = normalizeDeleteBehavior(value);
+    if (_busy ||
+        normalized == appdata.settings[deleteBehaviorSettingIndex]) {
+      return;
+    }
+    setState(() {
+      _busy = true;
+    });
+    try {
+      appdata.settings[deleteBehaviorSettingIndex] = normalized;
+      await appdata.updateSettings();
+      if (mounted) {
+        _showSettingMessage(
+          context,
+          normalized == 'trash' ? '默认将删除项目放进回收站'.tl : '默认直接删除项目'.tl,
+        );
+      }
+    } catch (_) {
+      if (mounted) {
+        _showSettingMessage(context, '切换失败，已恢复原设置'.tl);
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _busy = false;
+        });
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final value = normalizeDeleteBehavior(
+      appdata.settings[deleteBehaviorSettingIndex],
+    );
+    return buildResponsiveSettingTile(
+      leading: const Icon(Icons.delete_outline),
+      title: Text('删除行为'.tl),
+      subtitle: Text('删除整部漫画时，默认放进回收站或直接删除'.tl),
+      trailingWidth: 320,
+      trailing: SegmentedButton<String>(
+        showSelectedIcon: false,
+        segments: [
+          ButtonSegment<String>(
+            value: 'trash',
+            label: Text('放进回收站'.tl),
+          ),
+          ButtonSegment<String>(
+            value: 'permanent',
+            label: Text('直接删除'.tl),
+          ),
+        ],
+        selected: {value},
+        onSelectionChanged: _busy
+            ? null
+            : (selection) {
+                if (selection.isEmpty) {
+                  return;
+                }
+                unawaited(_setValue(selection.first));
+              },
+      ),
+    );
+  }
 }
 
 class _LocalLibraryShowAllDatabaseRecordsTile extends StatefulWidget {

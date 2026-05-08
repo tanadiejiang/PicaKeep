@@ -11,6 +11,7 @@ import 'package:picakeep/foundation/download_model.dart';
 import 'package:picakeep/foundation/local_library.dart';
 import 'package:picakeep/foundation/local_library_settings.dart';
 import 'package:picakeep/foundation/remote_library_data_source.dart';
+import 'package:picakeep/foundation/trash.dart';
 import 'package:picakeep/tools/read_history_helper.dart';
 import 'package:picakeep/tools/tags_translation.dart';
 import 'package:picakeep/tools/translations.dart';
@@ -125,6 +126,20 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
     final comic = _comic;
     if (comic is LocalLibraryComicItem) return comic.isAlbum;
     return comic.sourceDisplayName == '图集';
+  }
+
+  bool get _canDeleteComic {
+    final comic = _comic;
+    if (comic is RemoteLibraryRootItem) {
+      return false;
+    }
+    if (comic is RemoteLibraryComicItem) {
+      return true;
+    }
+    if (comic is LocalLibraryComicItem) {
+      return comic.fileSystemPath?.trim().isNotEmpty == true;
+    }
+    return comic.canDelete;
   }
 
   String _formatSize(double? size) {
@@ -244,7 +259,7 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
   }
 
   Future<void> _onDelete() async {
-    if (!_comic.canDelete) {
+    if (!_canDeleteComic) {
       _showMessage('当前项目不支持在此删除'.tl);
       return;
     }
@@ -266,7 +281,11 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
       ),
     );
     if (confirmed == true) {
-      await DownloadManager().delete([_comic.id]);
+      final result = await TrashManager.instance.deleteItem(_comic);
+      if (!result.ok) {
+        _showMessage(result.error ?? '删除失败'.tl);
+        return;
+      }
       if (mounted) Navigator.of(context).pop();
     }
   }
@@ -1085,7 +1104,7 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
             () => _onRead(ep: comic.eps.length > 1 ? 1 : 0),
           ),
           _buildActionItem('分享', Icons.share, () => _copyText(comic.name)),
-          if (comic.canDelete)
+          if (_canDeleteComic)
             _buildActionItem('删除下载', Icons.delete_outline, _onDelete),
         ],
       );

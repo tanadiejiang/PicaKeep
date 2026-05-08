@@ -9,6 +9,7 @@ const localDetailRecommendationSettingIndex = 95;
 const localLibraryShowAllDatabaseRecordsSettingIndex = 96;
 const downloadedLibraryViewSettingIndex = 103;
 const localLibraryViewSettingIndex = 104;
+const deleteBehaviorSettingIndex = 105;
 const androidRootModeSettingIndex = 101;
 const androidShizukuModeSettingIndex = 102;
 
@@ -85,6 +86,10 @@ String normalizeAndroidRootMode(String? value) {
 
 String normalizeAndroidShizukuMode(String? value) {
   return value == '1' ? '1' : '0';
+}
+
+String normalizeDeleteBehavior(String? value) {
+  return value == 'permanent' ? 'permanent' : 'trash';
 }
 
 List<String> decodeLocalComicPathList(String? raw) {

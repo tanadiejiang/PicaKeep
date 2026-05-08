@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:picakeep/pages/app_capabilities_page.dart';
 import 'package:picakeep/pages/local_library_page.dart';
 import 'package:picakeep/pages/service_info_page.dart';
+import 'package:picakeep/pages/trash_page.dart';
 import 'package:picakeep/tools/io_tools.dart';
 import 'package:picakeep/tools/translations.dart';
 
@@ -75,6 +76,16 @@ class ToolsPage extends StatelessWidget {
             onTap: () {
               Navigator.of(context).push(
                 MaterialPageRoute(builder: (_) => const AppCapabilitiesPage()),
+              );
+            },
+          ),
+          _ToolCard(
+            icon: Icons.restore_from_trash_outlined,
+            title: '回收站'.tl,
+            subtitle: '恢复或彻底删除本地与远程已删除项目'.tl,
+            onTap: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const TrashPage()),
               );
             },
           ),
