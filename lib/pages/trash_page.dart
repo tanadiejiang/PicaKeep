@@ -1,13 +1,18 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
-import 'package:picakeep/foundation/trash.dart';
 import 'package:picakeep/foundation/remote_library_data_source.dart';
+import 'package:picakeep/foundation/trash.dart';
 import 'package:picakeep/tools/translations.dart';
 
 enum _TrashPageView {
   local,
   remote,
+}
+
+enum _TrashItemKindView {
+  comic,
+  album,
 }
 
 class TrashPage extends StatefulWidget {
@@ -17,19 +22,72 @@ class TrashPage extends StatefulWidget {
   State<TrashPage> createState() => _TrashPageState();
 }
 
-class _TrashPageState extends State<TrashPage> {
+class _TrashPageState extends State<TrashPage>
+    with WidgetsBindingObserver {
   _TrashPageView _view = _TrashPageView.local;
+  _TrashItemKindView _kindView = _TrashItemKindView.comic;
   late Future<void> _loadTask = _reload();
   List<TrashItemRecord> _localItems = const <TrashItemRecord>[];
-  List<RemoteLibraryTrashItem> _remoteItems = const <RemoteLibraryTrashItem>[];
+  List<RemoteLibraryTrashItem> _remoteItems =
+      const <RemoteLibraryTrashItem>[];
+  final Set<String> _selectedKeys = <String>{};
+  bool _selecting = false;
   String? _errorText;
+
+  List<TrashItemRecord> get _filteredLocalItems => _localItems
+      .where((item) => item.isAlbum == (_kindView == _TrashItemKindView.album))
+      .toList(growable: false);
+
+  List<RemoteLibraryTrashItem> get _filteredRemoteItems => _remoteItems
+      .where((item) => item.isAlbum == (_kindView == _TrashItemKindView.album))
+      .toList(growable: false);
+
+  String _selectionKeyForLocal(TrashItemRecord item) => 'local:${item.id}';
+
+  String _selectionKeyForRemote(RemoteLibraryTrashItem item) =>
+      'remote:${item.id}';
+
+  int get _selectedCount => _selectedKeys.length;
+
+  String get _currentItemLabel =>
+      _kindView == _TrashItemKindView.album ? '图集' : '漫画';
+
+  List<TrashItemRecord> get _selectedLocalItems => _filteredLocalItems
+      .where((item) => _selectedKeys.contains(_selectionKeyForLocal(item)))
+      .toList(growable: false);
+
+  List<RemoteLibraryTrashItem> get _selectedRemoteItems => _filteredRemoteItems
+      .where((item) => _selectedKeys.contains(_selectionKeyForRemote(item)))
+      .toList(growable: false);
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed && mounted) {
+      setState(() {
+        _loadTask = _reload();
+      });
+    }
+  }
 
   Future<void> _reload() async {
     try {
       final localItems = await TrashManager.instance.listItems(
         scope: TrashItemScope.local,
       );
-      List<RemoteLibraryTrashItem> remoteItems = const <RemoteLibraryTrashItem>[];
+      List<RemoteLibraryTrashItem> remoteItems =
+          const <RemoteLibraryTrashItem>[];
       try {
         remoteItems = await TrashManager.instance.listRemoteItems();
       } catch (_) {
@@ -42,6 +100,7 @@ class _TrashPageState extends State<TrashPage> {
         _localItems = localItems;
         _remoteItems = remoteItems;
         _errorText = null;
+        _clearSelectionState();
       });
     } catch (e) {
       if (!mounted) {
@@ -51,6 +110,49 @@ class _TrashPageState extends State<TrashPage> {
         _errorText = e.toString();
       });
     }
+  }
+
+  void _clearSelectionState() {
+    _selectedKeys.clear();
+    _selecting = false;
+  }
+
+  void _exitSelectionMode() {
+    setState(_clearSelectionState);
+  }
+
+  bool _isLocalSelected(TrashItemRecord item) {
+    return _selectedKeys.contains(_selectionKeyForLocal(item));
+  }
+
+  bool _isRemoteSelected(RemoteLibraryTrashItem item) {
+    return _selectedKeys.contains(_selectionKeyForRemote(item));
+  }
+
+  void _toggleLocalSelection(TrashItemRecord item) {
+    final key = _selectionKeyForLocal(item);
+    setState(() {
+      _selecting = true;
+      if (!_selectedKeys.add(key)) {
+        _selectedKeys.remove(key);
+      }
+      if (_selectedKeys.isEmpty) {
+        _selecting = false;
+      }
+    });
+  }
+
+  void _toggleRemoteSelection(RemoteLibraryTrashItem item) {
+    final key = _selectionKeyForRemote(item);
+    setState(() {
+      _selecting = true;
+      if (!_selectedKeys.add(key)) {
+        _selectedKeys.remove(key);
+      }
+      if (_selectedKeys.isEmpty) {
+        _selecting = false;
+      }
+    });
   }
 
   Future<void> _runAction(Future<void> Function() action) async {
@@ -100,21 +202,81 @@ class _TrashPageState extends State<TrashPage> {
     }
   }
 
+  Future<void> _restoreSelected() async {
+    if (_selectedCount == 0) {
+      return;
+    }
+    await _runAction(() async {
+      if (_view == _TrashPageView.local) {
+        for (final item in _selectedLocalItems) {
+          await TrashManager.instance.restoreLocalItem(item.id);
+        }
+      } else {
+        for (final item in _selectedRemoteItems) {
+          await TrashManager.instance.restoreRemoteItem(item.id);
+        }
+      }
+    });
+  }
+
+  Future<void> _deleteSelectedPermanently() async {
+    if (_selectedCount == 0) {
+      return;
+    }
+    await _confirmAndRun(
+      title: '彻底删除'.tl,
+      content: '确定要彻底删除已选择的$_selectedCount个$_currentItemLabel吗？'.tl,
+      action: () async {
+        if (_view == _TrashPageView.local) {
+          for (final item in _selectedLocalItems) {
+            await TrashManager.instance.permanentlyDeleteTrashItem(item.id);
+          }
+        } else {
+          for (final item in _selectedRemoteItems) {
+            await TrashManager.instance.permanentlyDeleteRemoteItem(item.id);
+          }
+        }
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text('回收站'.tl),
-        actions: [
-          IconButton(
-            onPressed: () {
-              setState(() {
-                _loadTask = _reload();
-              });
-            },
-            icon: const Icon(Icons.refresh),
-          ),
-        ],
+        title: _selecting
+            ? Text('已选择 @num 个项目'.tlParams({'num': _selectedCount.toString()}))
+            : Text('回收站'.tl),
+        leading: _selecting
+            ? IconButton(
+                onPressed: _exitSelectionMode,
+                icon: const Icon(Icons.close),
+              )
+            : null,
+        actions: _selecting
+            ? [
+                IconButton(
+                  tooltip: '恢复'.tl,
+                  onPressed: _selectedCount == 0 ? null : _restoreSelected,
+                  icon: const Icon(Icons.restore),
+                ),
+                IconButton(
+                  tooltip: '彻底删除'.tl,
+                  onPressed:
+                      _selectedCount == 0 ? null : _deleteSelectedPermanently,
+                  icon: const Icon(Icons.delete_forever_outlined),
+                ),
+              ]
+            : [
+                IconButton(
+                  onPressed: () {
+                    setState(() {
+                      _loadTask = _reload();
+                    });
+                  },
+                  icon: const Icon(Icons.refresh),
+                ),
+              ],
       ),
       body: FutureBuilder<void>(
         future: _loadTask,
@@ -131,27 +293,60 @@ class _TrashPageState extends State<TrashPage> {
                 padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
                 child: Align(
                   alignment: Alignment.centerLeft,
-                  child: SegmentedButton<_TrashPageView>(
-                    showSelectedIcon: false,
-                    segments: [
-                      ButtonSegment<_TrashPageView>(
-                        value: _TrashPageView.local,
-                        label: Text('本地'.tl),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      SegmentedButton<_TrashPageView>(
+                        showSelectedIcon: false,
+                        segments: [
+                          ButtonSegment<_TrashPageView>(
+                            value: _TrashPageView.local,
+                            label: Text('本地'.tl),
+                          ),
+                          ButtonSegment<_TrashPageView>(
+                            value: _TrashPageView.remote,
+                            label: Text('远程'.tl),
+                          ),
+                        ],
+                        selected: {_view},
+                        onSelectionChanged: (selection) {
+                          if (selection.isEmpty) {
+                            return;
+                          }
+                          final nextView = selection.first;
+                          setState(() {
+                            _view = nextView;
+                            _clearSelectionState();
+                            _loadTask = _reload();
+                          });
+                        },
                       ),
-                      ButtonSegment<_TrashPageView>(
-                        value: _TrashPageView.remote,
-                        label: Text('远程'.tl),
+                      const SizedBox(height: 8),
+                      SegmentedButton<_TrashItemKindView>(
+                        showSelectedIcon: false,
+                        segments: [
+                          ButtonSegment<_TrashItemKindView>(
+                            value: _TrashItemKindView.comic,
+                            label: Text('漫画'.tl),
+                          ),
+                          ButtonSegment<_TrashItemKindView>(
+                            value: _TrashItemKindView.album,
+                            label: Text('图集'.tl),
+                          ),
+                        ],
+                        selected: {_kindView},
+                        onSelectionChanged: (selection) {
+                          if (selection.isEmpty) {
+                            return;
+                          }
+                          setState(() {
+                            _kindView = selection.first;
+                            _clearSelectionState();
+                            _loadTask = _reload();
+                          });
+                        },
                       ),
                     ],
-                    selected: {_view},
-                    onSelectionChanged: (selection) {
-                      if (selection.isEmpty) {
-                        return;
-                      }
-                      setState(() {
-                        _view = selection.first;
-                      });
-                    },
                   ),
                 ),
               ),
@@ -170,54 +365,46 @@ class _TrashPageState extends State<TrashPage> {
   }
 
   Widget _buildLocalList() {
-    if (_localItems.isEmpty) {
-      return Center(child: Text('本地回收站为空'.tl));
+    final items = _filteredLocalItems;
+    if (items.isEmpty) {
+      return Center(child: Text('本地$_currentItemLabel回收站为空'.tl));
     }
     return ListView.builder(
       padding: const EdgeInsets.fromLTRB(12, 0, 12, 24),
-      itemCount: _localItems.length,
+      itemCount: items.length,
       itemBuilder: (context, index) {
-        final item = _localItems[index];
+        final item = items[index];
         return _buildTrashCard(
           title: item.title,
           subtitle: item.subtitle,
           path: item.originalPath,
           cover: _buildLocalCover(item.cover),
-          onRestore: () => _runAction(
-            () => TrashManager.instance.restoreLocalItem(item.id),
-          ),
-          onDelete: () => _confirmAndRun(
-            title: '彻底删除'.tl,
-            content: '确定要彻底删除“${item.title}”吗？'.tl,
-            action: () => TrashManager.instance.permanentlyDeleteTrashItem(item.id),
-          ),
+          selected: _isLocalSelected(item),
+          onTap: _selecting ? () => _toggleLocalSelection(item) : null,
+          onLongPress: () => _toggleLocalSelection(item),
         );
       },
     );
   }
 
   Widget _buildRemoteList() {
-    if (_remoteItems.isEmpty) {
-      return Center(child: Text('远程回收站为空'.tl));
+    final items = _filteredRemoteItems;
+    if (items.isEmpty) {
+      return Center(child: Text('远程$_currentItemLabel回收站为空'.tl));
     }
     return ListView.builder(
       padding: const EdgeInsets.fromLTRB(12, 0, 12, 24),
-      itemCount: _remoteItems.length,
+      itemCount: items.length,
       itemBuilder: (context, index) {
-        final item = _remoteItems[index];
+        final item = items[index];
         return _buildTrashCard(
           title: item.title,
           subtitle: item.subtitle,
           path: item.originalPath,
           cover: _buildRemoteCover(item.coverUrl),
-          onRestore: () => _runAction(
-            () => TrashManager.instance.restoreRemoteItem(item.id),
-          ),
-          onDelete: () => _confirmAndRun(
-            title: '彻底删除'.tl,
-            content: '确定要彻底删除“${item.title}”吗？'.tl,
-            action: () => TrashManager.instance.permanentlyDeleteRemoteItem(item.id),
-          ),
+          selected: _isRemoteSelected(item),
+          onTap: _selecting ? () => _toggleRemoteSelection(item) : null,
+          onLongPress: () => _toggleRemoteSelection(item),
         );
       },
     );
@@ -228,77 +415,118 @@ class _TrashPageState extends State<TrashPage> {
     required String subtitle,
     required String path,
     required Widget cover,
-    required VoidCallback onRestore,
-    required VoidCallback onDelete,
+    required bool selected,
+    required VoidCallback? onTap,
+    required VoidCallback onLongPress,
   }) {
-    return Card.outlined(
-      margin: const EdgeInsets.only(bottom: 10),
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(10, 10, 10, 10),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            SizedBox(
-              width: 44,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  IconButton(
-                    tooltip: '恢复'.tl,
-                    visualDensity: VisualDensity.compact,
-                    onPressed: onRestore,
-                    icon: const Icon(Icons.restore),
+    final colorScheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(16),
+        child: Material(
+          color: Theme.of(context).colorScheme.surface,
+          child: InkWell(
+            onTap: onTap,
+            onLongPress: onLongPress,
+            child: Stack(
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(10, 10, 10, 10),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      cover,
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              title,
+                              maxLines: 4,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                            if (subtitle.trim().isNotEmpty) ...[
+                              const SizedBox(height: 4),
+                              Text(
+                                subtitle,
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ],
+                            if (path.trim().isNotEmpty) ...[
+                              const SizedBox(height: 6),
+                              Text(
+                                path,
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: colorScheme.onSurfaceVariant,
+                                ),
+                              ),
+                            ],
+                          ],
+                        ),
+                      ),
+                    ],
                   ),
-                  const SizedBox(height: 4),
-                  IconButton(
-                    tooltip: '彻底删除'.tl,
-                    visualDensity: VisualDensity.compact,
-                    onPressed: onDelete,
-                    icon: const Icon(Icons.delete_forever_outlined),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(width: 8),
-            cover,
-            const SizedBox(width: 10),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    title,
-                    maxLines: 4,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
-                  if (subtitle.trim().isNotEmpty) ...[
-                    const SizedBox(height: 4),
-                    Text(
-                      subtitle,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ],
-                  if (path.trim().isNotEmpty) ...[
-                    const SizedBox(height: 6),
-                    Text(
-                      path,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
+                if (selected)
+                  Positioned.fill(
+                    child: IgnorePointer(
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          color: colorScheme.primary.withValues(alpha: 0.22),
+                          border: Border.all(
+                            color: colorScheme.primary,
+                            width: 1.6,
+                          ),
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                        child: DecoratedBox(
+                          decoration: BoxDecoration(
+                            gradient: LinearGradient(
+                              begin: Alignment.topCenter,
+                              end: Alignment.bottomCenter,
+                              colors: [
+                                colorScheme.primary.withValues(alpha: 0.14),
+                                colorScheme.primary.withValues(alpha: 0.28),
+                              ],
+                            ),
+                          ),
+                        ),
                       ),
                     ),
-                  ],
-                ],
-              ),
+                  ),
+                if (selected)
+                  Positioned(
+                    top: 10,
+                    right: 10,
+                    child: IgnorePointer(
+                      child: Container(
+                        width: 24,
+                        height: 24,
+                        decoration: BoxDecoration(
+                          color: colorScheme.primary,
+                          shape: BoxShape.circle,
+                        ),
+                        child: Icon(
+                          Icons.check,
+                          size: 16,
+                          color: colorScheme.onPrimary,
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
             ),
-          ],
+          ),
         ),
       ),
     );

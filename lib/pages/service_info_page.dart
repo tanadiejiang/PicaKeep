@@ -4,6 +4,7 @@ import 'package:picakeep/base.dart';
 import 'package:picakeep/components/components.dart';
 import 'package:picakeep/foundation/app.dart';
 import 'package:picakeep/foundation/app_runtime_mode.dart';
+import 'package:picakeep/foundation/remote_library_data_source.dart';
 import 'package:picakeep/foundation/service_data_source.dart';
 import 'package:picakeep/server/local_server_runtime.dart';
 import 'package:picakeep/tools/android_foreground_service.dart';
@@ -256,6 +257,46 @@ class _ServiceInfoPageState extends State<ServiceInfoPage> {
     );
   }
 
+  Future<void> _refreshServiceState() async {
+    try {
+      final mode =
+          normalizeAppRuntimeMode(appdata.settings[appRuntimeModeSettingIndex]);
+      if (mode == appRuntimeModeClient) {
+        final normalizedAddress = normalizeRemoteServerAddressValue(_serverAddress);
+        if (normalizedAddress.isNotEmpty) {
+          await RemoteLibraryClient.fromCurrentSettings().rescanLibrary();
+        }
+        App.notifyServiceRuntimeChanged();
+      } else {
+        await LocalServerRuntime.instance.refreshResourceState();
+      }
+      await _reloadSnapshot();
+    } catch (e) {
+      await _reloadSnapshot();
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('刷新失败：$e'.tl)),
+      );
+    }
+  }
+
+  Future<void> _disconnectRemoteServer() async {
+    if (_serverAddress.isEmpty) {
+      return;
+    }
+    appdata.settings[remoteServerAddressSettingIndex] = '';
+    await appdata.updateSettings();
+    App.notifyServiceConfigChanged();
+    if (!mounted) {
+      return;
+    }
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('已断开当前服务连接'.tl)),
+    );
+  }
+
   Future<void> _copyText(String text, String successMessage) async {
     await Clipboard.setData(ClipboardData(text: text));
     if (!mounted) {
@@ -420,8 +461,13 @@ class _ServiceInfoPageState extends State<ServiceInfoPage> {
                     child: Text(_discovering ? '扫描中...'.tl : '扫描局域网'.tl),
                   ),
                   FilledButton(
-                    onPressed: _loading ? null : _reloadSnapshot,
+                    onPressed: _loading ? null : _refreshServiceState,
                     child: Text('刷新状态'.tl),
+                  ),
+                  FilledButton.tonal(
+                    onPressed:
+                        snapshot.hasConfiguredAddress ? _disconnectRemoteServer : null,
+                    child: Text('断开连接'.tl),
                   ),
                 ],
               ),
@@ -622,7 +668,7 @@ class _ServiceInfoPageState extends State<ServiceInfoPage> {
                   child: Text('刷新保活状态'.tl),
                 ),
               FilledButton.tonal(
-                onPressed: _loading ? null : _reloadSnapshot,
+                onPressed: _loading ? null : _refreshServiceState,
                 child: Text('刷新状态'.tl),
               ),
               if (!capability.isFullServerTarget)
@@ -657,7 +703,7 @@ class _ServiceInfoPageState extends State<ServiceInfoPage> {
   Widget _buildEmbeddedPage(ServiceInfoSnapshot snapshot) {
     return SizedBox.expand(
       child: RefreshIndicator(
-        onRefresh: _reloadSnapshot,
+        onRefresh: _refreshServiceState,
         child: ListView(
           physics: const AlwaysScrollableScrollPhysics(),
           padding: const EdgeInsets.fromLTRB(12, 12, 12, 24),
@@ -670,7 +716,7 @@ class _ServiceInfoPageState extends State<ServiceInfoPage> {
   Widget _buildStandalonePage(ServiceInfoSnapshot snapshot) {
     return Scaffold(
       body: RefreshIndicator(
-        onRefresh: _reloadSnapshot,
+        onRefresh: _refreshServiceState,
         child: CustomScrollView(
           physics: const AlwaysScrollableScrollPhysics(),
           slivers: [

@@ -263,11 +263,15 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
       _showMessage('当前项目不支持在此删除'.tl);
       return;
     }
+    final texts = buildDeleteActionTexts(
+      itemName: _comic.name,
+      itemLabel: _comic.sourceDisplayName == '图集' ? '图集' : '漫画',
+    );
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: Text('确认删除'.tl),
-        content: Text('确定要删除"${_comic.name}"吗？'),
+        title: Text(texts.title.tl),
+        content: Text(texts.content.tl),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
@@ -275,7 +279,7 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
           ),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
-            child: Text('删除'.tl),
+            child: Text(texts.confirmLabel.tl),
           ),
         ],
       ),

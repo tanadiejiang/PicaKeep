@@ -373,6 +373,7 @@ class DownloadPageLogic extends StateController {
   bool _isRefreshingFromLocalData = false;
   _DownloadedLibraryView _view = _DownloadedLibraryView.local;
   bool remoteAvailable = false;
+  bool _forceRemoteRefreshOnNextReload = false;
 
   Future<void> _refreshFromNotifier() async {
     if (_isRefreshingFromLocalData) {
@@ -423,7 +424,18 @@ class DownloadPageLogic extends StateController {
 
   bool get _isRemoteRootPage => remoteRootId?.trim().isNotEmpty == true;
 
+  bool get _shouldStrictlyUseRemoteData =>
+      _isRemoteRootPage || _view == _DownloadedLibraryView.remote;
+
   bool get showSourceSelector => remoteAvailable && !_isRemoteRootPage;
+
+  bool get shouldAutoRefreshOnResume =>
+      _isRemoteRootPage || _view != _DownloadedLibraryView.local;
+
+  void forceRemoteRefresh() {
+    _forceRemoteRefreshOnNextReload = true;
+    refresh();
+  }
 
   Future<void> _setView(_DownloadedLibraryView nextView) async {
     if (_view == nextView) {
@@ -509,6 +521,8 @@ class DownloadPageLogic extends StateController {
   }
 
   Future<void> reload() async {
+    final forceRemoteRefresh = _forceRemoteRefreshOnNextReload;
+    _forceRemoteRefreshOnNextReload = false;
     var order = '', direction = 'desc';
     switch (appdata.settings[26][0]) {
       case "0":
@@ -526,11 +540,17 @@ class DownloadPageLogic extends StateController {
       direction = 'asc';
     }
     remoteAvailable = await _checkRemoteAvailability();
-    if (!remoteAvailable && _view != _DownloadedLibraryView.local) {
+    if (!remoteAvailable &&
+        _view != _DownloadedLibraryView.local &&
+        !_shouldStrictlyUseRemoteData) {
       _view = _DownloadedLibraryView.local;
     }
     final loadedComics =
-        List<DownloadedItem>.from(await _loadComics(order, direction));
+        List<DownloadedItem>.from(await _loadComics(
+      order,
+      direction,
+      forceRemoteRefresh: forceRemoteRefresh,
+    ));
     final visibleIds = loadedComics.map((item) => item.id).toSet();
     _coverImageProviders.removeWhere((key, _) => !visibleIds.contains(key));
     await _prepareTileViewModels(loadedComics);
@@ -698,9 +718,15 @@ class DownloadPageLogic extends StateController {
   }
 
   Future<List<DownloadedItem>> _loadComics(
-      String order, String direction) async {
+    String order,
+    String direction, {
+    bool forceRemoteRefresh = false,
+  }) async {
     final localItems = await _loadLocalComics(order, direction);
     if (!remoteAvailable) {
+      if (_shouldStrictlyUseRemoteData) {
+        throw const RemoteLibraryDataSourceException('远程服务当前不可用');
+      }
       return localItems;
     }
 
@@ -709,7 +735,11 @@ class DownloadPageLogic extends StateController {
         return localItems;
       case _DownloadedLibraryView.aggregate:
         try {
-          final remoteItems = await _loadRemoteComics(order, direction);
+          final remoteItems = await _loadRemoteComics(
+            order,
+            direction,
+            forceRemoteRefresh: forceRemoteRefresh,
+          );
           final merged = <DownloadedItem>[...localItems, ...remoteItems];
           _sortItems(merged, order, direction);
           return merged;
@@ -717,7 +747,11 @@ class DownloadPageLogic extends StateController {
           return localItems;
         }
       case _DownloadedLibraryView.remote:
-        return _loadRemoteComics(order, direction);
+        return _loadRemoteComics(
+          order,
+          direction,
+          forceRemoteRefresh: forceRemoteRefresh,
+        );
     }
   }
 
@@ -734,11 +768,19 @@ class DownloadPageLogic extends StateController {
   }
 
   Future<List<DownloadedItem>> _loadRemoteComics(
-      String order, String direction) async {
+    String order,
+    String direction, {
+    bool forceRemoteRefresh = false,
+  }) async {
     final rootId = remoteRootId?.trim() ?? '';
     final downloads = rootId.isNotEmpty
-        ? await _remoteDataSource.fetchItemsForRoot(rootId)
-        : (await _remoteDataSource.fetchItems())
+        ? await _remoteDataSource.fetchItemsForRoot(
+            rootId,
+            forceRefresh: forceRemoteRefresh,
+          )
+        : (await _remoteDataSource.fetchItems(
+            forceRefresh: forceRemoteRefresh,
+          ))
             .where((item) => item.isManagedDownloadRoot)
             .toList(growable: false);
     final items = downloads.cast<DownloadedItem>().toList();
@@ -972,7 +1014,7 @@ class DownloadPageLogic extends StateController {
   }
 }
 
-class DownloadPage extends StatelessWidget {
+class DownloadPage extends StatefulWidget {
   const DownloadPage({
     super.key,
     this.remoteRootId,
@@ -983,18 +1025,89 @@ class DownloadPage extends StatelessWidget {
   final String? title;
 
   @override
+  State<DownloadPage> createState() => _DownloadPageState();
+}
+
+class _DownloadPageState extends State<DownloadPage>
+    with WidgetsBindingObserver {
+  DownloadPageLogic? _logic;
+  bool _wasCurrentRoute = false;
+  bool _hasActivatedOnce = false;
+
+  void _refreshRemoteIfNeeded() {
+    final logic = _logic;
+    if (logic == null || !logic.shouldAutoRefreshOnResume) {
+      return;
+    }
+    logic.forceRemoteRefresh();
+  }
+
+  void _syncCurrentRouteState() {
+    final route = ModalRoute.of(context);
+    final isCurrent = route?.isCurrent ?? false;
+    if (!isCurrent) {
+      _wasCurrentRoute = false;
+      return;
+    }
+    if (_wasCurrentRoute) {
+      return;
+    }
+    _wasCurrentRoute = true;
+    if (_hasActivatedOnce) {
+      _refreshRemoteIfNeeded();
+      return;
+    }
+    _hasActivatedOnce = true;
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _refreshRemoteIfNeeded();
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        _syncCurrentRouteState();
+      }
+    });
     return StateBuilder<DownloadPageLogic>(
       init: DownloadPageLogic(
-        remoteRootId: remoteRootId,
-        pageTitle: title,
+        remoteRootId: widget.remoteRootId,
+        pageTitle: widget.title,
       ),
       initState: (logic) {
+        _logic = logic;
         logic.bindLocalDataRefresh();
-        logic.refresh();
+        if (logic.shouldAutoRefreshOnResume) {
+          logic.forceRemoteRefresh();
+        } else {
+          logic.refresh();
+        }
       },
-      dispose: (logic) => logic.unbindLocalDataRefresh(),
+      dispose: (logic) {
+        if (identical(_logic, logic)) {
+          _logic = null;
+        }
+        logic.unbindLocalDataRefresh();
+      },
       builder: (logic) {
+        _logic = logic;
         if (logic.loading) {
           return const Scaffold(
             body: Center(
@@ -1187,11 +1300,12 @@ class DownloadPage extends StatelessWidget {
             child: Text("删除".tl),
             onTap: () {
               Future.delayed(const Duration(milliseconds: 200), () {
+                final texts = buildDeleteActionTexts(itemName: item.name);
                 showDialog(
                   context: App.globalContext!,
                   builder: (ctx) => AlertDialog(
-                    title: Text("确认删除".tl),
-                    content: Text("此操作无法撤销, 是否继续?".tl),
+                    title: Text(texts.title.tl),
+                    content: Text(texts.content.tl),
                     actions: [
                       TextButton(
                         onPressed: () => Navigator.pop(ctx),
@@ -1209,7 +1323,7 @@ class DownloadPage extends StatelessWidget {
                           }
                           logic.refresh();
                         },
-                        child: Text("确认".tl),
+                        child: Text(texts.confirmLabel.tl),
                       ),
                     ],
                   ),
@@ -1291,8 +1405,8 @@ class DownloadPage extends StatelessWidget {
               context: context,
               builder: (dialogContext) {
                 return AlertDialog(
-                  title: Text("删除".tl),
-                  content: Text("要删除已选择的项目吗? 此操作无法撤销".tl),
+                  title: Text(buildDeleteActionTexts(count: logic.selectedNum).title.tl),
+                  content: Text(buildDeleteActionTexts(count: logic.selectedNum).content.tl),
                   actions: [
                     TextButton(
                       onPressed: () => App.globalBack(),
@@ -1320,7 +1434,7 @@ class DownloadPage extends StatelessWidget {
                         }
                         logic.refresh();
                       },
-                      child: Text("确认".tl),
+                      child: Text(buildDeleteActionTexts(count: logic.selectedNum).confirmLabel.tl),
                     ),
                   ],
                 );
@@ -1421,55 +1535,69 @@ class DownloadPage extends StatelessWidget {
             icon: const Icon(Icons.sort),
             onPressed: () async {
               bool changed = false;
+              var sortMode = int.parse(appdata.settings[26][0]);
+              var reverse = appdata.settings[26][1] == "1";
               await showDialog(
                 context: context,
-                builder: (context) => SimpleDialog(
-                  title: Text("漫画排序模式".tl),
-                  children: [
-                    SizedBox(
-                      width: 400,
-                      child: Column(
-                        children: [
-                          ListTile(
-                            title: Text("漫画排序模式".tl),
-                            trailing: DropdownButton<int>(
-                              value: int.parse(appdata.settings[26][0]),
-                              items: [
-                                DropdownMenuItem(
-                                    value: 0, child: Text("时间".tl)),
-                                DropdownMenuItem(
-                                    value: 1, child: Text("漫画名".tl)),
-                                DropdownMenuItem(
-                                    value: 2, child: Text("作者名".tl)),
-                                DropdownMenuItem(
-                                    value: 3, child: Text("大小".tl)),
-                              ],
-                              onChanged: (i) {
-                                if (i != null) {
+                builder: (context) => StatefulBuilder(
+                  builder: (context, setDialogState) => SimpleDialog(
+                    title: Text("漫画排序模式".tl),
+                    children: [
+                      SizedBox(
+                        width: 400,
+                        child: Column(
+                          children: [
+                            ListTile(
+                              title: Text("漫画排序模式".tl),
+                              trailing: DropdownButton<int>(
+                                value: sortMode,
+                                items: [
+                                  DropdownMenuItem(
+                                      value: 0, child: Text("时间".tl)),
+                                  DropdownMenuItem(
+                                      value: 1, child: Text("漫画名".tl)),
+                                  DropdownMenuItem(
+                                      value: 2, child: Text("作者名".tl)),
+                                  DropdownMenuItem(
+                                      value: 3, child: Text("大小".tl)),
+                                ],
+                                onChanged: (i) {
+                                  if (i == null || i == sortMode) {
+                                    return;
+                                  }
+                                  setDialogState(() {
+                                    sortMode = i;
+                                  });
                                   appdata.settings[26] = appdata.settings[26]
                                       .replaceRange(0, 1, i.toString());
                                   appdata.updateSettings();
                                   changed = true;
-                                }
-                              },
+                                },
+                              ),
                             ),
-                          ),
-                          ListTile(
-                            title: Text("倒序".tl),
-                            trailing: Switch(
-                              value: appdata.settings[26][1] == "1",
-                              onChanged: (b) {
-                                appdata.settings[26] = appdata.settings[26]
-                                    .replaceRange(1, 2, b ? "1" : "0");
-                                appdata.updateSettings();
-                                changed = true;
-                              },
+                            ListTile(
+                              title: Text("倒序".tl),
+                              trailing: Switch(
+                                value: reverse,
+                                onChanged: (b) {
+                                  if (b == reverse) {
+                                    return;
+                                  }
+                                  setDialogState(() {
+                                    reverse = b;
+                                  });
+                                  appdata.settings[26] = appdata.settings[26]
+                                      .replaceRange(1, 2, b ? "1" : "0");
+                                  appdata.updateSettings();
+                                  changed = true;
+                                },
+                              ),
                             ),
-                          ),
-                        ],
-                      ),
-                    )
-                  ],
+                          ],
+                        ),
+                      )
+                    ],
+                  ),
                 ),
               );
               if (changed) {

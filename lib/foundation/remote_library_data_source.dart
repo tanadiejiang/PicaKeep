@@ -235,6 +235,7 @@ class RemoteLibraryTrashItem {
     required this.originalPath,
     required this.coverUrl,
     required this.deletedAt,
+    required this.isAlbum,
   });
 
   final String id;
@@ -249,15 +250,18 @@ class RemoteLibraryTrashItem {
   final String originalPath;
   final String coverUrl;
   final DateTime deletedAt;
+  final bool isAlbum;
 
   factory RemoteLibraryTrashItem.fromJson(
     Map<String, dynamic> json,
     RemoteLibraryClient client,
   ) {
+    final rawItemKind = _readText(json['itemKind']);
+    final rootId = _readText(json['rootId']);
     return RemoteLibraryTrashItem(
       id: _readText(json['id']),
       itemId: _readText(json['itemId']),
-      rootId: _readText(json['rootId']),
+      rootId: rootId,
       title: _readText(json['title'], fallback: '未命名项目'),
       subtitle: _readText(json['subtitle']),
       sourceDisplayName: _readText(json['sourceDisplayName']),
@@ -268,6 +272,7 @@ class RemoteLibraryTrashItem {
       coverUrl: client.resolveUrlString(_readText(json['coverUrl'])),
       deletedAt: DateTime.tryParse(_readText(json['deletedAt'])) ??
           DateTime.fromMillisecondsSinceEpoch(0),
+      isAlbum: rawItemKind == 'album' || rootId.startsWith('custom_'),
     );
   }
 }
@@ -285,6 +290,7 @@ class RemoteLibraryComicItem extends DownloadedItem {
     required this.episodesData,
     required this.imageCount,
     required this.totalBytes,
+    DateTime? updatedAt,
     this.subtitle = '',
     this.displayId = '',
     this.metadataTags = const <String>[],
@@ -292,7 +298,7 @@ class RemoteLibraryComicItem extends DownloadedItem {
   }) {
     comicSize = totalBytes > 0 ? totalBytes / (1024 * 1024) : null;
     directory = null;
-    time = null;
+    time = updatedAt;
   }
 
   final RemoteLibraryClient client;
@@ -413,6 +419,7 @@ class RemoteLibraryComicItem extends DownloadedItem {
       episodesData: episodesData ?? this.episodesData,
       imageCount: imageCount,
       totalBytes: totalBytes,
+      updatedAt: time,
       subtitle: subtitle,
       displayId: displayId,
       metadataTags: metadataTags,
@@ -462,6 +469,8 @@ class RemoteLibraryComicItem extends DownloadedItem {
           episodes.fold<int>(0, (sum, episode) => sum + episode.imageCount),
       totalBytes: _readInt(json['totalBytes']) ??
           episodes.fold<int>(0, (sum, episode) => sum + episode.totalBytes),
+      updatedAt: DateTime.tryParse(_readText(json['updatedAt'])) ??
+          DateTime.tryParse(_readText(json['time'])),
       subtitle: _readText(
         json['subtitle'],
         fallback: _readText(
@@ -702,21 +711,33 @@ class _RemoteLibrarySnapshot {
 class RemoteLibraryDataSource {
   const RemoteLibraryDataSource();
 
-  Future<List<RemoteLibraryComicItem>> fetchItems() async {
-    return RemoteLibraryClient.fromCurrentSettings().fetchItems();
+  Future<List<RemoteLibraryComicItem>> fetchItems({
+    bool forceRefresh = false,
+  }) async {
+    return RemoteLibraryClient.fromCurrentSettings().fetchItems(
+      forceRefresh: forceRefresh,
+    );
   }
 
-  Future<List<RemoteLibraryComicItem>> fetchItemsForRoot(String rootId) async {
-    return RemoteLibraryClient.fromCurrentSettings().fetchItemsForRoot(rootId);
+  Future<List<RemoteLibraryComicItem>> fetchItemsForRoot(
+    String rootId, {
+    bool forceRefresh = false,
+  }) async {
+    return RemoteLibraryClient.fromCurrentSettings().fetchItemsForRoot(
+      rootId,
+      forceRefresh: forceRefresh,
+    );
   }
 
   Future<List<RemoteLibraryRootItem>> fetchRootItems({
     bool managedDownloadOnly = false,
     bool customLibraryOnly = false,
+    bool forceRefresh = false,
   }) async {
     return RemoteLibraryClient.fromCurrentSettings().fetchRootItems(
       managedDownloadOnly: managedDownloadOnly,
       customLibraryOnly: customLibraryOnly,
+      forceRefresh: forceRefresh,
     );
   }
 
@@ -841,6 +862,14 @@ class RemoteLibraryClient {
           ),
         )
         .toList(growable: false);
+  }
+
+  Future<void> rescanLibrary() async {
+    await _sendRequest(
+      'POST',
+      '/api/library/items/refresh',
+    );
+    _clearCaches();
   }
 
   Future<void> trashItem(String itemId) async {
