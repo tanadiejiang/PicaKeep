@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:picakeep/base.dart';
 import 'package:picakeep/foundation/app.dart';
@@ -52,6 +53,8 @@ class _MePageCachedState {
 
 class _MePageState extends State<MePage> {
   static const Duration _historyLoadDelay = Duration.zero;
+  static const Duration _historyCoverRevealDelay =
+      kDebugMode ? Duration(milliseconds: 420) : Duration.zero;
   static const Duration _downloadCountLoadDelay = Duration(milliseconds: 900);
   static const Duration _localLibraryLoadDelay = Duration(milliseconds: 1500);
   static const Duration _imageFavoriteLoadDelay = Duration(milliseconds: 2100);
@@ -68,9 +71,11 @@ class _MePageState extends State<MePage> {
   bool _localLibraryCountLoaded = false;
   bool _loadingRemoteSummary = false;
   bool _remoteSummaryResolved = false;
+  bool _historyCoversVisible = false;
   ServiceInfoSnapshot? _remoteSnapshot;
 
   Timer? _historyLoadTimer;
+  Timer? _historyCoverRevealTimer;
   Timer? _downloadCountLoadTimer;
   Timer? _localLibraryLoadTimer;
   Timer? _imageFavoriteLoadTimer;
@@ -79,6 +84,7 @@ class _MePageState extends State<MePage> {
   @override
   void initState() {
     super.initState();
+    AppStartupTrace.log('MePage.initState');
     _restoreCachedState();
     StateController.putSimpleController(() {
       if (!mounted) {
@@ -91,9 +97,11 @@ class _MePageState extends State<MePage> {
     App.serviceConfigVersion.addListener(_handleServiceStateChanged);
     App.serviceRuntimeVersion.addListener(_handleServiceStateChanged);
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      AppStartupTrace.log('MePage.firstPostFrame');
       if (!mounted) {
         return;
       }
+      _scheduleHistoryCoverReveal();
       _scheduleProgressiveLoads();
     });
   }
@@ -137,7 +145,7 @@ class _MePageState extends State<MePage> {
     );
   }
 
-  void _cancelScheduledLoads() {
+  void _cancelProgressiveLoadTimers() {
     _historyLoadTimer?.cancel();
     _downloadCountLoadTimer?.cancel();
     _localLibraryLoadTimer?.cancel();
@@ -145,8 +153,28 @@ class _MePageState extends State<MePage> {
     _remoteSummaryLoadTimer?.cancel();
   }
 
+  void _cancelScheduledLoads() {
+    _cancelProgressiveLoadTimers();
+    _historyCoverRevealTimer?.cancel();
+  }
+
+  void _scheduleHistoryCoverReveal() {
+    if (_historyCoversVisible) {
+      return;
+    }
+    _historyCoverRevealTimer?.cancel();
+    _historyCoverRevealTimer = Timer(_historyCoverRevealDelay, () {
+      if (!mounted || _historyCoversVisible) {
+        return;
+      }
+      setState(() {
+        _historyCoversVisible = true;
+      });
+    });
+  }
+
   void _scheduleProgressiveLoads({bool forceRefresh = false}) {
-    _cancelScheduledLoads();
+    _cancelProgressiveLoadTimers();
     if (forceRefresh || !_historyLoaded) {
       _historyLoadTimer = Timer(
         _historyLoadDelay,
@@ -431,19 +459,37 @@ class _MePageState extends State<MePage> {
   }
 
   Widget _buildCardLoadingIndicator(BuildContext context) {
+    if (!kDebugMode) {
+      return Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          SizedBox(
+            width: 14,
+            height: 14,
+            child: CircularProgressIndicator(
+              strokeWidth: 2,
+              color: Theme.of(context).colorScheme.primary,
+            ),
+          ),
+          const SizedBox(width: 8),
+          Text('加载中'.tl),
+        ],
+      );
+    }
+    final color = Theme.of(context).colorScheme.onSurfaceVariant;
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        SizedBox(
-          width: 14,
-          height: 14,
-          child: CircularProgressIndicator(
-            strokeWidth: 2,
-            color: Theme.of(context).colorScheme.primary,
-          ),
+        Icon(
+          Icons.schedule_outlined,
+          size: 16,
+          color: color,
         ),
-        const SizedBox(width: 8),
-        Text('加载中'.tl),
+        const SizedBox(width: 6),
+        Text(
+          '稍后加载'.tl,
+          style: TextStyle(color: color),
+        ),
       ],
     );
   }
@@ -456,6 +502,27 @@ class _MePageState extends State<MePage> {
       padding: const EdgeInsets.symmetric(horizontal: 8),
       itemCount: 4,
       itemBuilder: (context, index) {
+        if (!kDebugMode) {
+          return Container(
+            width: 96,
+            height: 128,
+            margin: const EdgeInsets.symmetric(horizontal: 8),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(8),
+              color: color,
+            ),
+            child: Center(
+              child: SizedBox(
+                width: 18,
+                height: 18,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: Theme.of(context).colorScheme.onSecondaryContainer,
+                ),
+              ),
+            ),
+          );
+        }
         return Container(
           width: 96,
           height: 128,
@@ -464,15 +531,10 @@ class _MePageState extends State<MePage> {
             borderRadius: BorderRadius.circular(8),
             color: color,
           ),
-          child: Center(
-            child: SizedBox(
-              width: 18,
-              height: 18,
-              child: CircularProgressIndicator(
-                strokeWidth: 2,
-                color: Theme.of(context).colorScheme.onSecondaryContainer,
-              ),
-            ),
+          child: Icon(
+            Icons.auto_stories,
+            size: 22,
+            color: Theme.of(context).colorScheme.onSecondaryContainer,
           ),
         );
       },
@@ -652,7 +714,9 @@ class _MePageState extends State<MePage> {
                                         .secondaryContainer,
                                   ),
                                   clipBehavior: Clip.antiAlias,
-                                  child: _buildCoverImage(context, item),
+                                  child: kDebugMode && !_historyCoversVisible
+                                      ? _historyPlaceholder(context)
+                                      : _buildCoverImage(context, item),
                                 ),
                               );
                             },
