@@ -10,7 +10,9 @@ import android.os.Environment
 import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
+import android.os.SystemClock
 import android.provider.Settings
+import android.util.Log
 import androidx.core.app.ActivityCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
@@ -18,6 +20,7 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
+import io.flutter.embedding.engine.renderer.FlutterUiDisplayListener
 import io.flutter.plugin.common.MethodChannel
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
@@ -33,6 +36,8 @@ class MainActivity : FlutterActivity() {
     private var cachedShizukuPermissionAt: Long = 0L
     private val mainHandler = Handler(Looper.getMainLooper())
     private val storageExecutor = Executors.newCachedThreadPool()
+    private val launchStartElapsedMs = SystemClock.elapsedRealtime()
+    private var firstWindowFocusLogged = false
 
     private val shizukuPermissionListener =
         Shizuku.OnRequestPermissionResultListener { requestCode, grantResult ->
@@ -47,12 +52,21 @@ class MainActivity : FlutterActivity() {
         }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        Log.i(TAG, "startup onCreate +${SystemClock.elapsedRealtime() - launchStartElapsedMs}ms")
         super.onCreate(savedInstanceState)
         WindowCompat.setDecorFitsSystemWindows(window, false)
         window.statusBarColor = android.graphics.Color.TRANSPARENT
         window.navigationBarColor = android.graphics.Color.TRANSPARENT
         WindowCompat.getInsetsController(window, window.decorView)?.systemBarsBehavior =
             WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus && !firstWindowFocusLogged) {
+            firstWindowFocusLogged = true
+            Log.i(TAG, "startup firstWindowFocus +${SystemClock.elapsedRealtime() - launchStartElapsedMs}ms")
+        }
     }
 
     override fun onDestroy() {
@@ -66,6 +80,20 @@ class MainActivity : FlutterActivity() {
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        Log.i(TAG, "startup configureFlutterEngine +${SystemClock.elapsedRealtime() - launchStartElapsedMs}ms")
+        flutterEngine.renderer.addIsDisplayingFlutterUiListener(
+            object : FlutterUiDisplayListener {
+                override fun onFlutterUiDisplayed() {
+                    Log.i(
+                        TAG,
+                        "startup flutterUiDisplayed +${SystemClock.elapsedRealtime() - launchStartElapsedMs}ms",
+                    )
+                    flutterEngine.renderer.removeIsDisplayingFlutterUiListener(this)
+                }
+
+                override fun onFlutterUiNoLongerDisplayed() = Unit
+            },
+        )
         runCatching {
             Shizuku.addRequestPermissionResultListener(shizukuPermissionListener)
         }
@@ -742,6 +770,7 @@ class MainActivity : FlutterActivity() {
         "'" + value.replace("'", "'\"'\"'") + "'"
 
     companion object {
+        private const val TAG = "PicaKeepStartup"
         private const val FOREGROUND_SERVICE_CHANNEL =
             "com.example.picakeep/foreground_service"
         private const val STORAGE_ACCESS_CHANNEL =

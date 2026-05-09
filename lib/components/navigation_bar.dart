@@ -652,9 +652,7 @@ class _NaviPopScope extends StatelessWidget {
 }
 
 class NaviPaddingWidgetController extends StateController {
-  NaviPaddingWidgetController() {
-    print("init");
-  }
+  NaviPaddingWidgetController();
 
   bool _withPadding = false;
 
