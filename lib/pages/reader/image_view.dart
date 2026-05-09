@@ -27,17 +27,22 @@ class _ReaderImageRequest {
   final ImageProvider provider;
 }
 
-
 extension ImageExt on ComicReadingPage {
+  bool _shouldUseOriginalLocalImageStrategy(ComicReadingPageLogic logic) {
+    return logic.data.supportsLocalImageSort;
+  }
+
   _ReaderImageRequest _createReaderImageRequest(
     BuildContext context,
     ComicReadingPageLogic logic,
     int index,
     String target, {
     double? layoutWidth,
-    double? layoutHeight,
   }) {
     final provider = createImageProvider(type, logic, index, target);
+    if (_shouldUseOriginalLocalImageStrategy(logic)) {
+      return _ReaderImageRequest(provider: provider);
+    }
     final mediaQuery = MediaQuery.of(context);
     final devicePixelRatio =
         mediaQuery.devicePixelRatio.clamp(1.0, 2.5).toDouble();
@@ -123,13 +128,21 @@ extension ImageExt on ComicReadingPage {
 
             precacheComicImage(logic, context, index + 1, target);
 
+            if (_shouldUseOriginalLocalImageStrategy(logic)) {
+              return ComicImage(
+                filterQuality: FilterQuality.medium,
+                image: createImageProvider(type, logic, index, target),
+                width: imageWidth,
+                fit: BoxFit.contain,
+              );
+            }
+
             final imageRequest = _createReaderImageRequest(
               context,
               logic,
               index,
               target,
               layoutWidth: imageWidth,
-              layoutHeight: imageWidth * 1.2,
             );
             return ComicImage(
               filterQuality: FilterQuality.low,
@@ -160,12 +173,16 @@ extension ImageExt on ComicReadingPage {
         builder: (BuildContext context, int index) {
           ImageProvider? imageProvider;
           if (index != 0 && index != logic.urls.length + 1) {
-            imageProvider = _createReaderImageRequest(
-              context,
-              logic,
-              index - 1,
-              target,
-            ).provider;
+            if (_shouldUseOriginalLocalImageStrategy(logic)) {
+              imageProvider = createImageProvider(type, logic, index - 1, target);
+            } else {
+              imageProvider = _createReaderImageRequest(
+                context,
+                logic,
+                index - 1,
+                target,
+              ).provider;
+            }
           } else {
             return PhotoViewGalleryPageOptions.customChild(
                 scaleStateController: PhotoViewScaleStateController(),

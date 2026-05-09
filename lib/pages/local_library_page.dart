@@ -697,20 +697,166 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
 
   void _openItem(DownloadedItem item) {
     if (item is RemoteLibraryRootItem) {
-      Navigator.of(context).push(
-        MaterialPageRoute(
-          builder: (_) => LocalLibraryPage(
-            albumOnly: widget.albumOnly,
-            preferRemoteView: true,
-            title: item.name,
-            remoteRootId: item.root.id,
-          ),
+      App.pushInner(
+        () => LocalLibraryPage(
+          albumOnly: widget.albumOnly,
+          preferRemoteView: true,
+          title: item.name,
+          remoteRootId: item.root.id,
         ),
       );
       return;
     }
-    Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => LocalComicDetailPage(comic: item)),
+    App.pushInner(() => LocalComicDetailPage(comic: item));
+  }
+
+  bool _shouldUseAlbumQuickActions(DownloadedItem item) {
+    return App.uiMode(context) == UiModes.m1 &&
+        _isAlbumOnly &&
+        item is! RemoteLibraryRootItem;
+  }
+
+  Future<void> _showAlbumQuickActions(DownloadedItem item) async {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    final author = item.subTitle.trim();
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (sheetContext) {
+        Widget buildActionTile({
+          required IconData icon,
+          required String title,
+          required String subtitle,
+          required VoidCallback onTap,
+        }) {
+          return Material(
+            color: colorScheme.surfaceContainerLow,
+            borderRadius: BorderRadius.circular(18),
+            child: InkWell(
+              borderRadius: BorderRadius.circular(18),
+              onTap: onTap,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 14,
+                ),
+                child: Row(
+                  children: [
+                    Container(
+                      width: 40,
+                      height: 40,
+                      decoration: BoxDecoration(
+                        color: colorScheme.primaryContainer,
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Icon(icon, color: colorScheme.primary),
+                    ),
+                    const SizedBox(width: 14),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(title, style: theme.textTheme.titleMedium),
+                          const SizedBox(height: 4),
+                          Text(
+                            subtitle,
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: colorScheme.onSurfaceVariant,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Icon(
+                      Icons.chevron_right_rounded,
+                      color: colorScheme.outline,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          );
+        }
+
+        return SafeArea(
+          top: false,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+            child: Material(
+              color: colorScheme.surface,
+              borderRadius: const BorderRadius.vertical(
+                top: Radius.circular(28),
+                bottom: Radius.circular(28),
+              ),
+              clipBehavior: Clip.antiAlias,
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(18, 12, 18, 18),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Center(
+                      child: Container(
+                        width: 40,
+                        height: 4,
+                        decoration: BoxDecoration(
+                          color: colorScheme.outlineVariant,
+                          borderRadius: BorderRadius.circular(999),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    Text(
+                      item.name,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.titleLarge,
+                    ),
+                    if (author.isNotEmpty) ...[
+                      const SizedBox(height: 6),
+                      Text(
+                        author,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: theme.textTheme.bodyMedium?.copyWith(
+                          color: colorScheme.onSurfaceVariant,
+                        ),
+                      ),
+                    ],
+                    const SizedBox(height: 18),
+                    buildActionTile(
+                      icon: Icons.menu_book_rounded,
+                      title: '阅读'.tl,
+                      subtitle: '直接进入阅读器，并保留当前图集列表'.tl,
+                      onTap: () async {
+                        Navigator.of(sheetContext).pop();
+                        await ensureHistoryBeforeRead(item);
+                        await App.pushInner(
+                          () => item.createReadingPage(),
+                        );
+                      },
+                    ),
+                    const SizedBox(height: 12),
+                    buildActionTile(
+                      icon: Icons.info_outline_rounded,
+                      title: '详情页'.tl,
+                      subtitle: '查看章节、标签和相关推荐'.tl,
+                      onTap: () {
+                        Navigator.of(sheetContext).pop();
+                        _openItem(item);
+                      },
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        );
+      },
     );
   }
 
@@ -828,6 +974,10 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
   void _handleItemTap(DownloadedItem item) {
     if (_selecting && _canSelectItem(item)) {
       _toggleItemSelection(item);
+      return;
+    }
+    if (_shouldUseAlbumQuickActions(item)) {
+      _showAlbumQuickActions(item);
       return;
     }
     _openItem(item);
