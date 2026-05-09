@@ -45,14 +45,22 @@ Future<void> eraseCache() async {
   imageCache.clear();
   imageCache.clearLiveImages();
 
-  final cacheDirectory = Directory(App.cachePath);
-  if (!await cacheDirectory.exists()) {
-    return;
-  }
+  final cacheDirectories = <Directory>[
+    Directory(App.cachePath),
+    Directory(
+      '${App.dataPath}${Platform.pathSeparator}cache',
+    ),
+  ];
 
-  await for (final entity in cacheDirectory.list(followLinks: false)) {
-    try {
-      await entity.delete(recursive: true);
-    } catch (_) {}
+  for (final cacheDirectory in cacheDirectories) {
+    if (!await cacheDirectory.exists()) {
+      continue;
+    }
+
+    await for (final entity in cacheDirectory.list(followLinks: false)) {
+      try {
+        await entity.delete(recursive: true);
+      } catch (_) {}
+    }
   }
 }

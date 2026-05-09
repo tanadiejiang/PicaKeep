@@ -3,22 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:picakeep/base.dart';
 import 'package:picakeep/foundation/app.dart';
 import 'package:picakeep/foundation/history.dart';
-import 'package:picakeep/tools/tags_translation.dart';
 import 'package:picakeep/foundation/local_favorites.dart';
-
-String _translateTag(String tag) {
-  if (App.locale.languageCode != 'zh') return tag;
-  try {
-    for (final map in tagTranslations.values) {
-      for (final entry in map.entries) {
-        if (entry.key.toLowerCase() == tag.toLowerCase()) {
-          return entry.value.isNotEmpty ? entry.value.first : tag;
-        }
-      }
-    }
-  } catch (_) {}
-  return tag;
-}
 
 class DownloadedComicTile extends StatelessWidget {
   const DownloadedComicTile({
@@ -50,7 +35,7 @@ class DownloadedComicTile extends StatelessWidget {
   final String? type;
   final List<String> tag;
 
-  List<String>? get tags => tag.map((e) => _translateTag(e)).toList();
+  List<String>? get tags => tag;
 
   String get description => size;
 
@@ -289,41 +274,20 @@ class DownloadedComicTile extends StatelessWidget {
   }
 
   Widget _buildImage() {
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final maxDevicePixelRatio = App.isMobile ? 2.0 : 3.0;
-        final devicePixelRatio = MediaQuery.of(context)
-            .devicePixelRatio
-            .clamp(1.0, maxDevicePixelRatio)
-            .toDouble();
-        final cacheWidth = constraints.maxWidth.isFinite
-            ? (constraints.maxWidth * devicePixelRatio).round()
-            : null;
-
-        final provider = imageProvider;
-        final resolvedProvider = provider != null
-            ? ResizeImage.resizeIfNeeded(cacheWidth, null, provider)
-            : imagePath.path.isEmpty
-                ? null
-                : ResizeImage.resizeIfNeeded(
-                    cacheWidth,
-                    null,
-                    FileImage(imagePath),
-                  );
-        if (resolvedProvider == null) {
-          return const Center(child: Icon(Icons.image_not_supported));
-        }
-        return Image(
-          image: resolvedProvider,
-          fit: BoxFit.cover,
-          height: double.infinity,
-          gaplessPlayback: false,
-          filterQuality: FilterQuality.low,
-          isAntiAlias: false,
-          errorBuilder: (_, __, ___) =>
-              const Center(child: Icon(Icons.image_not_supported)),
-        );
-      },
+    final provider = imageProvider;
+    final resolvedProvider = provider ??
+        (imagePath.path.isEmpty ? null : FileImage(imagePath) as ImageProvider<Object>);
+    if (resolvedProvider == null) {
+      return const Center(child: Icon(Icons.image_not_supported));
+    }
+    return Image(
+      image: resolvedProvider,
+      fit: BoxFit.cover,
+      height: double.infinity,
+      gaplessPlayback: false,
+      filterQuality: FilterQuality.medium,
+      errorBuilder: (_, __, ___) =>
+          const Center(child: Icon(Icons.image_not_supported)),
     );
   }
 }
@@ -349,9 +313,10 @@ class _ComicDescription extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (tags != null) {
-      tags!.removeWhere((element) => element.trim().isEmpty);
-    }
+    final visibleTags = tags
+        ?.map((element) => element.trim())
+        .where((element) => element.isNotEmpty)
+        .toList(growable: false);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: <Widget>[
@@ -364,7 +329,7 @@ class _ComicDescription extends StatelessWidget {
         if (user.isNotEmpty)
           Text(user, style: const TextStyle(fontSize: 10.0), maxLines: 1),
         const SizedBox(height: 4),
-        if (tags != null)
+        if (visibleTags != null)
           Expanded(
             child: LayoutBuilder(
               builder: (context, constraints) => Padding(
@@ -374,7 +339,7 @@ class _ComicDescription extends StatelessWidget {
                   clipBehavior: Clip.antiAlias,
                   crossAxisAlignment: WrapCrossAlignment.end,
                   children: [
-                    for (var s in tags!)
+                    for (var s in visibleTags)
                       Padding(
                         padding: const EdgeInsets.fromLTRB(0, 0, 4, 3),
                         child: Container(

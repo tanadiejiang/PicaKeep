@@ -133,7 +133,7 @@ class _HistoryPageState extends State<HistoryPage> {
       return NetworkImage(cover);
     }
     if (cover.isNotEmpty && (cover.startsWith('/') || cover.contains(':\\'))) {
-      return LocalLibraryManager().imageProviderForLocalPath(cover);
+      return FileImage(File(cover));
     }
     final localComic =
         LocalLibraryManager().findCachedByCandidates(item.candidateDownloadIds());
@@ -143,7 +143,7 @@ class _HistoryPageState extends State<HistoryPage> {
         legacyTargets: item.candidateDownloadIds(),
       );
       if (coverPath.isNotEmpty) {
-        return LocalLibraryManager().imageProviderForLocalPath(coverPath);
+        return FileImage(File(coverPath));
       }
     }
     return null;
