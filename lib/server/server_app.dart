@@ -468,7 +468,7 @@ class PicaKeepAdminServer {
       previewCoverUrls.add(
         '/api/library/items/${Uri.encodeComponent(item.id)}/cover',
       );
-      if (previewCoverUrls.length >= 4) {
+      if (previewCoverUrls.length >= 6) {
         break;
       }
     }

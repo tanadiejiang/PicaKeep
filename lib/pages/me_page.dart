@@ -789,7 +789,7 @@ class _MePageState extends State<MePage> {
       icon: Icon(
         available ? Icons.cloud_sync_outlined : Icons.cloud_off_outlined,
       ),
-      title: '远程 · 资源库'.tl,
+      title: '资源库'.tl,
       description: isLoading
           ? _buildCardLoadingIndicator(context)
           : _buildCardDescriptionText(

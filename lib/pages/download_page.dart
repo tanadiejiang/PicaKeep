@@ -424,8 +424,7 @@ class DownloadPageLogic extends StateController {
 
   bool get _isRemoteRootPage => remoteRootId?.trim().isNotEmpty == true;
 
-  bool get _shouldStrictlyUseRemoteData =>
-      _isRemoteRootPage || _view == _DownloadedLibraryView.remote;
+  bool get _shouldStrictlyUseRemoteData => _isRemoteRootPage;
 
   bool get showSourceSelector => remoteAvailable && !_isRemoteRootPage;
 
@@ -544,6 +543,8 @@ class DownloadPageLogic extends StateController {
         _view != _DownloadedLibraryView.local &&
         !_shouldStrictlyUseRemoteData) {
       _view = _DownloadedLibraryView.local;
+      appdata.settings[downloadedLibraryViewSettingIndex] = 'local';
+      await appdata.updateSettings();
     }
     final loadedComics =
         List<DownloadedItem>.from(await _loadComics(

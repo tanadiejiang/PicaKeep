@@ -121,7 +121,7 @@ class _RemoteRootCollage extends StatelessWidget {
     final visibleUrls = urls
         .map((entry) => entry.trim())
         .where((entry) => entry.isNotEmpty)
-        .take(4)
+        .take(6)
         .toList(growable: false);
     if (visibleUrls.isEmpty) {
       return const Center(child: Icon(Icons.image_not_supported));
@@ -133,6 +133,7 @@ class _RemoteRootCollage extends StatelessWidget {
         crossAxisCount: 2,
         mainAxisSpacing: 1.5,
         crossAxisSpacing: 1.5,
+        childAspectRatio: 1.12,
       ),
       itemCount: visibleUrls.length,
       itemBuilder: (context, index) {
@@ -342,8 +343,7 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
 
   bool get _isRemoteRootPage => widget.remoteRootId?.trim().isNotEmpty == true;
 
-  bool get _shouldStrictlyUseRemoteData =>
-      _isRemoteRootPage || _view == _LocalLibraryView.remote;
+  bool get _shouldStrictlyUseRemoteData => _isRemoteRootPage;
 
   bool get _showSourceSelector => _remoteAvailable && !_isRemoteRootPage;
 
