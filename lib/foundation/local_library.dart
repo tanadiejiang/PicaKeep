@@ -6,7 +6,6 @@ import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart' hide Row;
 import 'package:path_provider/path_provider.dart';
 import 'package:sqlite3/sqlite3.dart';
-import 'package:picakeep/foundation/cover_thumbnail_cache.dart';
 import 'package:picakeep/foundation/image_loader/stream_image_provider.dart';
 import 'package:picakeep/pages/reader/comic_reading_page.dart';
 
@@ -160,10 +159,14 @@ class _LocalLibrarySourceCache {
 
   static String _cacheItemKey(String rawId, String directoryPath) {
     final id = rawId.trim();
+    final path = directoryPath.trim();
+    if (id.isNotEmpty && path.isNotEmpty) {
+      return 'id::$id::path::$path';
+    }
     if (id.isNotEmpty) {
       return 'id::$id';
     }
-    return 'path::$directoryPath';
+    return 'path::$path';
   }
 }
 
@@ -520,7 +523,7 @@ class LocalLibraryManager {
           continue;
         }
         final existing = cache.itemFor(rawId, dirPath);
-        if (existing?.coverPath?.trim().isNotEmpty == true) {
+        if (await _hasUsableManagedCoverCache(item, existing?.coverPath?.trim())) {
           continue;
         }
         await Future<void>.delayed(
@@ -592,6 +595,9 @@ class LocalLibraryManager {
     LocalLibraryComicItem item,
     _LocalLibraryCachedItem? existing,
   ) async {
+    if (item.isManagedDownloadItem) {
+      return _ensureManagedDownloadCoverCache(item, existing?.coverPath?.trim());
+    }
     final dirPath = item.fileSystemPath?.trim() ?? '';
     if (dirPath.isEmpty || !item.localStorageExists) {
       return null;
@@ -613,6 +619,168 @@ class LocalLibraryManager {
       return null;
     }
     return files.first;
+  }
+
+  Future<String?> _ensureManagedDownloadCoverCache(
+    LocalLibraryComicItem item,
+    String? existingCachePath,
+  ) async {
+    final normalizedExisting = existingCachePath?.trim() ?? '';
+    if (await _hasUsableManagedCoverCache(item, normalizedExisting)) {
+      return normalizedExisting;
+    }
+    final sourcePath = await _resolveManagedDownloadSourceCoverPath(item);
+    if (sourcePath == null || sourcePath.isEmpty) {
+      return null;
+    }
+    final bytes = await _readFileBytes(sourcePath);
+    if (bytes == null || bytes.isEmpty) {
+      return null;
+    }
+    final target = await _managedDownloadCoverCacheFile(item, sourcePath);
+    try {
+      await target.parent.create(recursive: true);
+      final temp = File('${target.path}.part');
+      await temp.writeAsBytes(bytes, flush: true);
+      if (await target.exists()) {
+        await target.delete();
+      }
+      await temp.rename(target.path);
+      await _persistManagedDownloadCoverCachePath(item, target.path);
+      return target.path;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<bool> _hasUsableManagedCoverCache(
+    LocalLibraryComicItem item,
+    String? coverPath,
+  ) async {
+    final normalized = coverPath?.trim() ?? '';
+    if (normalized.isEmpty || !await _fileExists(normalized)) {
+      return false;
+    }
+    return _isManagedDownloadCoverCachePath(normalized);
+  }
+
+  Future<bool> _isManagedDownloadCoverCachePath(String path) async {
+    final root = await _localCacheRoot();
+    final managedCoverRoot = _joinPath(root.path, 'managed_download_covers')
+        .replaceAll('\\', '/')
+        .toLowerCase();
+    final normalizedPath = path.replaceAll('\\', '/').toLowerCase();
+    return normalizedPath.startsWith(managedCoverRoot);
+  }
+
+  Future<void> _persistManagedDownloadCoverCachePath(
+    LocalLibraryComicItem item,
+    String coverPath,
+  ) async {
+    final sourceId = _managedDownloadSourceIdForItem(item);
+    if (sourceId == null) {
+      return;
+    }
+    final cache = await _loadSourceCache(
+      LocalLibrarySource(
+        id: sourceId,
+        title: '',
+        path: '',
+        kind: sourceId == 'original_download'
+            ? LocalLibrarySourceKind.originalDownload
+            : LocalLibrarySourceKind.currentDownload,
+      ),
+    );
+    final dirPath = item.fileSystemPath?.trim() ?? '';
+    if (dirPath.isEmpty) {
+      return;
+    }
+    final existing = cache.itemFor(item.originalId, dirPath);
+    cache.setItem(
+      item.originalId,
+      dirPath,
+      _LocalLibraryCachedItem(
+        coverPath: coverPath,
+        episodeFiles: existing?.episodeFiles ?? item.episodeFiles,
+      ),
+    );
+    await cache.save();
+  }
+
+  String? _managedDownloadSourceIdForItem(LocalLibraryComicItem item) {
+    const prefix = 'local_download::';
+    final id = item.id;
+    if (!id.startsWith(prefix)) {
+      return null;
+    }
+    final remaining = id.substring(prefix.length);
+    final separatorIndex = remaining.indexOf('::');
+    if (separatorIndex <= 0) {
+      return null;
+    }
+    return remaining.substring(0, separatorIndex);
+  }
+
+  Future<String?> _resolveManagedDownloadSourceCoverPath(
+    LocalLibraryComicItem item,
+  ) async {
+    final dirPath = item.fileSystemPath?.trim() ?? '';
+    if (dirPath.isEmpty || !item.localStorageExists) {
+      return null;
+    }
+    for (final candidate in const [
+      'cover.jpg',
+      'cover.jpeg',
+      'cover.png',
+      'cover.webp',
+    ]) {
+      final path = _joinPath(dirPath, candidate);
+      if (await _fileExists(path)) {
+        return path;
+      }
+    }
+    final ep = item.hasMultipleEpisodes ? 1 : 0;
+    final files = await _buildDownloadedEpisodeFilesForEp(dirPath, ep);
+    if (files.isEmpty) {
+      return null;
+    }
+    return files.first;
+  }
+
+  Future<File> _managedDownloadCoverCacheFile(
+    LocalLibraryComicItem item,
+    String sourcePath,
+  ) async {
+    final root = await _localCacheRoot();
+    final coverDir = Directory(_joinPath(root.path, 'managed_download_covers'));
+    final extension = _coverCacheExtensionForPath(sourcePath);
+    final dirPath = item.fileSystemPath?.trim() ?? '';
+    final key = _managedDownloadCoverCacheKey(item.originalId, dirPath);
+    return File(_joinPath(coverDir.path, '$key$extension'));
+  }
+
+  String _managedDownloadCoverCacheKey(String rawId, String directoryPath) {
+    final composite = _LocalLibrarySourceCache._cacheItemKey(rawId, directoryPath);
+    return _stableHash(composite);
+  }
+
+  String _stableHash(String input) {
+    var hash = 1469598103934665603;
+    for (final unit in utf8.encode(input)) {
+      hash ^= unit;
+      hash = (hash * 1099511628211) & 0x7fffffffffffffff;
+    }
+    return hash.toRadixString(16);
+  }
+
+  String _coverCacheExtensionForPath(String path) {
+    final lower = _basename(path).toLowerCase();
+    for (final ext in const ['.jpg', '.jpeg', '.png', '.webp']) {
+      if (lower.endsWith(ext)) {
+        return ext;
+      }
+    }
+    return '.img';
   }
 
   String? get configuredOriginalDownloadPath {
@@ -742,23 +910,22 @@ class LocalLibraryManager {
   }
 
   String coverPathForDisplay(String path) {
-    return CoverThumbnailCache.displayPathForCover(path);
+    return path;
   }
 
   ImageProvider<Object> imageProviderForLocalPath(String path) {
-    final displayPath = coverPathForDisplay(path);
     try {
-      final file = File(displayPath);
+      final file = File(path);
       if (file.existsSync()) {
         return FileImage(file);
       }
     } catch (_) {}
     return StreamImageProvider(
       () async {
-        final bytes = await _readFileBytes(displayPath) ?? await _readFileBytes(path);
+        final bytes = await _readFileBytes(path);
         return Stream<List<int>>.value(bytes ?? const <int>[]);
       },
-      'local_file::$displayPath',
+      'local_file::$path',
     );
   }
 
@@ -767,14 +934,35 @@ class LocalLibraryManager {
       return null;
     }
     final cached = item.localCoverPath?.trim();
-    if (cached != null && cached.isNotEmpty) {
+    if (item.isManagedDownloadItem) {
+      final managedCached = await _ensureManagedDownloadCoverCache(item, cached);
+      if (managedCached != null && managedCached.isNotEmpty) {
+        return managedCached;
+      }
+    } else if (cached != null && cached.isNotEmpty) {
       return cached;
     }
     final dirPath = item.fileSystemPath?.trim();
     if (dirPath == null || dirPath.isEmpty) {
       return null;
     }
-    return _resolveNamedCoverPath(dirPath);
+    final namedCover = await _resolveNamedCoverPath(dirPath);
+    if (namedCover != null && namedCover.isNotEmpty) {
+      return namedCover;
+    }
+    for (final files in item.episodeFiles.values) {
+      if (files.isNotEmpty) {
+        return files.first;
+      }
+    }
+    final flatImages = await _sortedImageFilesForPath(
+      dirPath,
+      sortMode: localAlbumImageSortNameAsc,
+    );
+    if (flatImages.isNotEmpty) {
+      return flatImages.first;
+    }
+    return null;
   }
 
   Future<int> get downloadCount async {
@@ -1040,7 +1228,7 @@ class LocalLibraryManager {
     } finally {
       db.dispose();
     }
-    _warmManagedDownloadCache(source, cache, items, eagerCount: 0);
+    _warmManagedDownloadCache(source, cache, items, eagerCount: 24);
     return items;
   }
 
@@ -1208,7 +1396,7 @@ class LocalLibraryManager {
     } finally {
       db.dispose();
     }
-    _warmManagedDownloadCache(source, cache, sourceItems, eagerCount: 0);
+    _warmManagedDownloadCache(source, cache, sourceItems, eagerCount: 24);
   }
 
   Future<void> _scanDirectoryOnlyDownloadSource(

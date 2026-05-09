@@ -237,12 +237,7 @@ class DownloadManager with _DownloadDb {
   }
 
   File getCoverForDisplay(String id) {
-    final coverFile = getCover(id);
-    final coverPath = coverFile.path.trim();
-    if (coverPath.isEmpty) {
-      return coverFile;
-    }
-    return File(CoverThumbnailCache.displayPathForCover(coverPath));
+    return getCover(id);
   }
 
   File getCover(String id) {

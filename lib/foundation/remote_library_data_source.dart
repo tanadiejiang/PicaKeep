@@ -7,6 +7,7 @@ import 'package:picakeep/base.dart';
 import 'package:picakeep/foundation/app.dart';
 import 'package:picakeep/foundation/app_runtime_mode.dart';
 import 'package:picakeep/foundation/download_model.dart';
+import 'package:picakeep/foundation/image_loader/stream_image_provider.dart';
 import 'package:picakeep/foundation/local_favorites.dart';
 import 'package:picakeep/pages/reader/comic_reading_page.dart';
 
@@ -141,12 +142,14 @@ class RemoteLibraryRootSummary {
 
 class RemoteLibraryRootItem extends DownloadedItem {
   RemoteLibraryRootItem({
+    required this.client,
     required this.root,
     this.coverUrl,
   }) {
     comicSize = root.totalBytes > 0 ? root.totalBytes / (1024 * 1024) : null;
   }
 
+  final RemoteLibraryClient client;
   final RemoteLibraryRootSummary root;
   final String? coverUrl;
 
@@ -200,7 +203,7 @@ class RemoteLibraryRootItem extends DownloadedItem {
     if (trimmed.isEmpty) {
       return null;
     }
-    return NetworkImage(trimmed);
+    return client.coverImageProviderForUrl(trimmed);
   }
 
   @override
@@ -356,7 +359,7 @@ class RemoteLibraryComicItem extends DownloadedItem {
     if (coverUrl.trim().isEmpty) {
       return null;
     }
-    return NetworkImage(coverUrl.trim());
+    return client.coverImageProviderForUrl(coverUrl.trim());
   }
 
   List<String> get pageUrls => [
@@ -708,6 +711,115 @@ class _RemoteLibrarySnapshot {
   final List<RemoteLibraryComicItem> items;
 }
 
+class _RemoteLibraryCoverDiskCache {
+  static final Map<String, Future<File>> _pending = <String, Future<File>>{};
+
+  static Directory get _cacheDirectory => Directory(
+        '${App.dataPath}${Platform.pathSeparator}cache'
+        '${Platform.pathSeparator}remote_library_covers',
+      );
+
+  static File cachedFileFor(String url) {
+    final uri = Uri.tryParse(url);
+    final extension = _normalizedExtension(uri?.path ?? '');
+    final hash = _stableHash(url);
+    return File(
+      '${_cacheDirectory.path}${Platform.pathSeparator}$hash$extension',
+    );
+  }
+
+  static Future<Stream<List<int>>> loadOrDownload(
+    RemoteLibraryClient client,
+    String url,
+  ) async {
+    final file = await ensureDownloaded(client, url);
+    return file.openRead();
+  }
+
+  static Future<File> ensureDownloaded(
+    RemoteLibraryClient client,
+    String url,
+  ) async {
+    final target = cachedFileFor(url);
+    if (await _isUsable(target)) {
+      return target;
+    }
+
+    final key = target.path;
+    final pending = _pending[key];
+    if (pending != null) {
+      return pending;
+    }
+
+    final future = _download(client, url, target).whenComplete(() {
+      _pending.remove(key);
+    });
+    _pending[key] = future;
+    return future;
+  }
+
+  static Future<File> _download(
+    RemoteLibraryClient client,
+    String url,
+    File target,
+  ) async {
+    await target.parent.create(recursive: true);
+    final temp = File('${target.path}.part');
+    IOSink? sink;
+    try {
+      sink = temp.openWrite();
+      await for (final chunk in client.loadImage(url)) {
+        sink.add(chunk);
+      }
+      await sink.flush();
+      await sink.close();
+      sink = null;
+      if (await target.exists()) {
+        await target.delete();
+      }
+      await temp.rename(target.path);
+      return target;
+    } catch (_) {
+      try {
+        await sink?.close();
+      } catch (_) {}
+      try {
+        if (await temp.exists()) {
+          await temp.delete();
+        }
+      } catch (_) {}
+      rethrow;
+    }
+  }
+
+  static Future<bool> _isUsable(File file) async {
+    try {
+      return await file.exists() && await file.length() > 0;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  static String _normalizedExtension(String path) {
+    final lower = path.toLowerCase();
+    for (final ext in const ['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp']) {
+      if (lower.endsWith(ext)) {
+        return ext;
+      }
+    }
+    return '.img';
+  }
+
+  static String _stableHash(String input) {
+    var hash = 1469598103934665603;
+    for (final unit in utf8.encode(input)) {
+      hash ^= unit;
+      hash = (hash * 1099511628211) & 0x7fffffffffffffff;
+    }
+    return hash.toRadixString(16);
+  }
+}
+
 class RemoteLibraryDataSource {
   const RemoteLibraryDataSource();
 
@@ -813,6 +925,23 @@ class RemoteLibraryClient {
         baseUrl: normalizedAddress,
         baseUri: baseUri,
       ),
+    );
+  }
+
+  ImageProvider<Object>? coverImageProviderForUrl(String url) {
+    final resolved = resolveUrlString(url);
+    if (resolved.isEmpty) {
+      return null;
+    }
+    final cachedFile = _RemoteLibraryCoverDiskCache.cachedFileFor(resolved);
+    try {
+      if (cachedFile.existsSync() && cachedFile.lengthSync() > 0) {
+        return FileImage(cachedFile);
+      }
+    } catch (_) {}
+    return StreamImageProvider(
+      () => _RemoteLibraryCoverDiskCache.loadOrDownload(this, resolved),
+      'remote_cover::$resolved',
     );
   }
 
@@ -992,6 +1121,7 @@ class RemoteLibraryClient {
         }
       }
       return RemoteLibraryRootItem(
+        client: this,
         root: RemoteLibraryRootSummary(
           id: root.id,
           title: root.title,

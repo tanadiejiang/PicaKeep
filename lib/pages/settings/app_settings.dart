@@ -693,13 +693,6 @@ class _InternalDirectoryBrowserPageState
         Expanded(
           child: TextField(
             controller: _pathController,
-            onTap: () {
-              if (!_showPresetRoots) {
-                setState(() {
-                  _showPresetRoots = true;
-                });
-              }
-            },
             onSubmitted: (_) => _jumpToTypedPath(),
             decoration: InputDecoration(
               prefixIcon: const Icon(Icons.route_outlined),
@@ -810,8 +803,42 @@ class _InternalDirectoryBrowserPageState
     );
   }
 
+  Widget _buildPageHeader(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            switch (widget.browseMode) {
+              _AndroidDirectoryBrowseMode.root => '当前使用 Root 模式浏览目录'.tl,
+              _AndroidDirectoryBrowseMode.shizuku => '当前使用 Shizuku 授权浏览目录'.tl,
+              _AndroidDirectoryBrowseMode.manageAllFiles =>
+                '当前使用安卓全部文件访问权限浏览目录'.tl,
+            },
+            style: Theme.of(context).textTheme.labelLarge,
+          ),
+          const SizedBox(height: 8),
+          _buildPathJumpBar(context),
+          _buildPresetRoots(),
+          const SizedBox(height: 12),
+          SizedBox(
+            width: double.infinity,
+            child: FilledButton.icon(
+              onPressed: () => Navigator.of(context).pop(_currentPath),
+              icon: const Icon(Icons.check),
+              label: Text('选择当前文件夹'.tl),
+            ),
+          ),
+          const SizedBox(height: 8),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    final bottomPadding = MediaQuery.of(context).padding.bottom;
     return Scaffold(
       appBar: AppBar(
         title: Text(widget.title),
@@ -823,55 +850,27 @@ class _InternalDirectoryBrowserPageState
           ),
         ],
       ),
-      body: Column(
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  switch (widget.browseMode) {
-                    _AndroidDirectoryBrowseMode.root => '当前使用 Root 模式浏览目录'.tl,
-                    _AndroidDirectoryBrowseMode.shizuku => '当前使用 Shizuku 授权浏览目录'.tl,
-                    _AndroidDirectoryBrowseMode.manageAllFiles =>
-                      '当前使用安卓全部文件访问权限浏览目录'.tl,
-                  },
-                  style: Theme.of(context).textTheme.labelLarge,
-                ),
-                const SizedBox(height: 8),
-                _buildPathJumpBar(context),
-                _buildPresetRoots(),
-                const SizedBox(height: 12),
-                SizedBox(
-                  width: double.infinity,
-                  child: FilledButton.icon(
-                    onPressed: () => Navigator.of(context).pop(_currentPath),
-                    icon: const Icon(Icons.check),
-                    label: Text('选择当前文件夹'.tl),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 8),
-          Expanded(
-            child: _loading
-                ? const Center(child: CircularProgressIndicator())
-                : SmoothScrollProvider(
-                    builder: (context, controller, physics) => ListView.builder(
-                      controller: controller,
-                      keyboardDismissBehavior:
-                          ScrollViewKeyboardDismissBehavior.onDrag,
-                      physics: physics,
-                      cacheExtent: 480,
-                      itemCount: _listHeaderCount + _children.length,
-                      itemBuilder: (context, index) =>
-                          _buildListItem(context, index),
-                    ),
-                  ),
-          ),
-        ],
+      body: SmoothScrollProvider(
+        builder: (context, controller, physics) => ListView.builder(
+          controller: controller,
+          keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+          physics: physics,
+          cacheExtent: 480,
+          padding: EdgeInsets.only(bottom: bottomPadding + 12),
+          itemCount: 1 + (_loading ? 1 : _listHeaderCount + _children.length),
+          itemBuilder: (context, index) {
+            if (index == 0) {
+              return _buildPageHeader(context);
+            }
+            if (_loading) {
+              return const Padding(
+                padding: EdgeInsets.symmetric(vertical: 48),
+                child: Center(child: CircularProgressIndicator()),
+              );
+            }
+            return _buildListItem(context, index - 1);
+          },
+        ),
       ),
     );
   }
@@ -894,7 +893,12 @@ class _AndroidManageAllFilesAccessTileState
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _load();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) {
+        return;
+      }
+      unawaited(_load());
+    });
   }
 
   @override
@@ -966,7 +970,12 @@ class _AndroidShizukuModeTileState extends State<_AndroidShizukuModeTile>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _load();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) {
+        return;
+      }
+      unawaited(_load());
+    });
   }
 
   @override
@@ -1618,6 +1627,146 @@ class _ManagedDataSourceModeTileState
   }
 }
 
+class _DirectoryPathDialog extends StatelessWidget {
+  const _DirectoryPathDialog({
+    required this.title,
+    required this.hintText,
+    required this.helperText,
+    required this.controller,
+    required this.onBrowse,
+    required this.onLongPressBrowse,
+    required this.onConfirm,
+    required this.onCancel,
+    required this.onOpenCurrentDirectory,
+  });
+
+  final String title;
+  final String hintText;
+  final String helperText;
+  final TextEditingController controller;
+  final Future<void> Function() onBrowse;
+  final Future<void> Function() onLongPressBrowse;
+  final Future<void> Function() onConfirm;
+  final VoidCallback onCancel;
+  final VoidCallback onOpenCurrentDirectory;
+
+  bool get _isDesktop =>
+      Platform.isWindows || Platform.isMacOS || Platform.isLinux;
+
+  @override
+  Widget build(BuildContext context) {
+    final screenWidth = MediaQuery.sizeOf(context).width;
+    final stackedActions = screenWidth < 560;
+    return Dialog(
+      insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 520),
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.fromLTRB(24, 20, 24, 16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(title, style: Theme.of(context).textTheme.headlineSmall),
+              const SizedBox(height: 20),
+              if (stackedActions) ...[
+                TextField(
+                  controller: controller,
+                  textInputAction: TextInputAction.done,
+                  decoration: InputDecoration(
+                    hintText: hintText,
+                    border: const OutlineInputBorder(),
+                  ),
+                  onSubmitted: (_) => onConfirm(),
+                ),
+                const SizedBox(height: 12),
+                GestureDetector(
+                  onLongPress: onLongPressBrowse,
+                  child: OutlinedButton.icon(
+                    style: OutlinedButton.styleFrom(
+                      minimumSize: const Size(double.infinity, 48),
+                    ),
+                    onPressed: onBrowse,
+                    icon: const Icon(Icons.folder_open, size: 18),
+                    label: Text('浏览'.tl),
+                  ),
+                ),
+              ] else ...[
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: controller,
+                        textInputAction: TextInputAction.done,
+                        decoration: InputDecoration(
+                          hintText: hintText,
+                          border: const OutlineInputBorder(),
+                        ),
+                        onSubmitted: (_) => onConfirm(),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    GestureDetector(
+                      onLongPress: onLongPressBrowse,
+                      child: OutlinedButton.icon(
+                        style: OutlinedButton.styleFrom(
+                          minimumSize: const Size(0, 48),
+                        ),
+                        onPressed: onBrowse,
+                        icon: const Icon(Icons.folder_open, size: 18),
+                        label: Text('浏览'.tl),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+              const SizedBox(height: 10),
+              Text(
+                helperText,
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+              if (_isDesktop) ...[
+                const SizedBox(height: 12),
+                ValueListenableBuilder<TextEditingValue>(
+                  valueListenable: controller,
+                  builder: (context, value, _) {
+                    final currentPath = value.text.trim();
+                    return OutlinedButton.icon(
+                      style: OutlinedButton.styleFrom(
+                        minimumSize: const Size(double.infinity, 48),
+                      ),
+                      onPressed: currentPath.isEmpty ? null : onOpenCurrentDirectory,
+                      icon: const Icon(Icons.launch, size: 18),
+                      label: Text('打开当前目录'.tl),
+                    );
+                  },
+                ),
+              ],
+              const SizedBox(height: 20),
+              OverflowBar(
+                alignment: MainAxisAlignment.end,
+                spacing: 8,
+                overflowSpacing: 8,
+                children: [
+                  TextButton(
+                    onPressed: onCancel,
+                    child: Text('取消'.tl),
+                  ),
+                  TextButton(
+                    onPressed: onConfirm,
+                    child: Text('确定'.tl),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _DownloadDirTile extends StatefulWidget {
   const _DownloadDirTile();
 
@@ -1646,134 +1795,76 @@ class _DownloadDirTileState extends State<_DownloadDirTile> {
 
   void _showBrowseDialog() {
     final controller = TextEditingController(text: appdata.settings[22]);
-    final isDesktop =
-        Platform.isWindows || Platform.isMacOS || Platform.isLinux;
-    showDialog(
+    showDialog<void>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text('设置本应用下载目录'.tl),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: controller,
-                    decoration: InputDecoration(
-                      hintText: '请输入下载目录路径'.tl,
-                      border: const OutlineInputBorder(),
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                GestureDetector(
-                  onLongPress: () async {
-                    Navigator.of(ctx).pop();
-                    final browsed = await _openInternalDirectoryBrowser(
-                      context,
-                      title: '选择本应用下载目录'.tl,
-                      initialPath: controller.text,
-                    );
-                    if (!mounted || browsed == null) {
-                      return;
-                    }
-                    controller.text = browsed;
-                    appdata.settings[22] = browsed;
-                    await appdata.updateSettings();
-                    if (!mounted) {
-                      return;
-                    }
-                    setState(() {});
-                    await _runRescanLocalComics(context);
-                  },
-                  child: OutlinedButton.icon(
-                    style: OutlinedButton.styleFrom(
-                      minimumSize: const Size(0, 48),
-                    ),
-                    onPressed: () async {
-                      final picked = await _pickFolder();
-                      if (picked != null) {
-                        controller.text = picked;
-                      }
-                    },
-                    icon: const Icon(Icons.folder_open, size: 18),
-                    label: Text('浏览'.tl),
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 10),
-            Align(
-              alignment: Alignment.centerLeft,
-              child: Text(
-                '提示：点按“浏览”调用系统目录选择；长按“浏览”打开内置文件夹浏览，支持安卓全部文件访问权限、Shizuku 授权或 Root 模式。'.tl,
-                style: Theme.of(ctx).textTheme.bodySmall,
-              ),
-            ),
-            if (isDesktop && controller.text.isNotEmpty) ...[
-              const SizedBox(height: 12),
-              SizedBox(
-                width: double.infinity,
-                child: OutlinedButton.icon(
-                  style: OutlinedButton.styleFrom(
-                    minimumSize: const Size(0, 48),
-                  ),
-                  onPressed: () {
-                    _openCurrentDirectory(controller.text.trim());
-                  },
-                  icon: const Icon(Icons.launch, size: 18),
-                  label: Text('打开当前目录'.tl),
-                ),
-              ),
-            ],
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(),
-            child: Text('取消'.tl),
-          ),
-          TextButton(
-            onPressed: () async {
-              final newPath = controller.text.trim();
-              final changed = newPath != appdata.settings[22];
-              appdata.settings[22] = newPath;
-              await appdata.updateSettings();
-              if (!ctx.mounted || !mounted) {
-                return;
-              }
-              Navigator.of(ctx).pop();
-              setState(() {});
-              if (changed) {
-                await _runRescanLocalComics(context);
-              }
-            },
-            child: Text('确定'.tl),
-          ),
-        ],
+      builder: (ctx) => _DirectoryPathDialog(
+        title: '设置本应用下载目录'.tl,
+        hintText: '请输入下载目录路径'.tl,
+        helperText:
+            '提示：点按“浏览”调用系统目录选择；长按“浏览”打开内置文件夹浏览，支持安卓全部文件访问权限、Shizuku 授权或 Root 模式。'.tl,
+        controller: controller,
+        onBrowse: () async {
+          final picked = await _pickFolder();
+          if (picked != null) {
+            controller.text = picked;
+          }
+        },
+        onLongPressBrowse: () async {
+          Navigator.of(ctx).pop();
+          final browsed = await _openInternalDirectoryBrowser(
+            context,
+            title: '选择本应用下载目录'.tl,
+            initialPath: controller.text,
+          );
+          if (!mounted || browsed == null) {
+            return;
+          }
+          controller.text = browsed;
+          appdata.settings[22] = browsed;
+          await appdata.updateSettings();
+          if (!mounted) {
+            return;
+          }
+          setState(() {});
+          await _runRescanLocalComics(context);
+        },
+        onOpenCurrentDirectory: () {
+          _openCurrentDirectory(controller.text.trim());
+        },
+        onCancel: () => Navigator.of(ctx).pop(),
+        onConfirm: () async {
+          final newPath = controller.text.trim();
+          final changed = newPath != appdata.settings[22];
+          appdata.settings[22] = newPath;
+          await appdata.updateSettings();
+          if (!ctx.mounted || !mounted) {
+            return;
+          }
+          Navigator.of(ctx).pop();
+          setState(() {});
+          if (changed) {
+            await _runRescanLocalComics(context);
+          }
+        },
       ),
     );
   }
 
   Widget _buildPathDisplay(BuildContext context, String display) {
-    return GestureDetector(
-      onTap: _showBrowseDialog,
-      child: Container(
-        width: double.infinity,
-        height: 40,
-        alignment: Alignment.center,
-        padding: const EdgeInsets.symmetric(horizontal: 12),
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(6),
-          border: Border.all(color: Theme.of(context).colorScheme.outline),
-        ),
-        child: Text(
-          display,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: const TextStyle(fontSize: 14),
-        ),
+    return Container(
+      width: double.infinity,
+      height: 40,
+      alignment: Alignment.center,
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: Theme.of(context).colorScheme.outline),
+      ),
+      child: Text(
+        display,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: const TextStyle(fontSize: 14),
       ),
     );
   }
@@ -1822,135 +1913,77 @@ class _OriginalDownloadDirTileState extends State<_OriginalDownloadDirTile> {
   void _showBrowseDialog() {
     final controller = TextEditingController(
         text: appdata.settings[originalDownloadDirSettingIndex]);
-    final isDesktop =
-        Platform.isWindows || Platform.isMacOS || Platform.isLinux;
-    showDialog(
+    showDialog<void>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text('设置原应用下载目录'.tl),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: controller,
-                    decoration: InputDecoration(
-                      hintText: '请输入原应用下载目录路径'.tl,
-                      border: const OutlineInputBorder(),
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                GestureDetector(
-                  onLongPress: () async {
-                    Navigator.of(ctx).pop();
-                    final browsed = await _openInternalDirectoryBrowser(
-                      context,
-                      title: '选择原应用下载目录'.tl,
-                      initialPath: controller.text,
-                    );
-                    if (!mounted || browsed == null) {
-                      return;
-                    }
-                    controller.text = browsed;
-                    appdata.settings[originalDownloadDirSettingIndex] = browsed;
-                    await appdata.updateSettings();
-                    if (!mounted) {
-                      return;
-                    }
-                    setState(() {});
-                    await _runRescanLocalComics(context);
-                  },
-                  child: OutlinedButton.icon(
-                    style: OutlinedButton.styleFrom(
-                      minimumSize: const Size(0, 48),
-                    ),
-                    onPressed: () async {
-                      final picked = await _pickFolder();
-                      if (picked != null) {
-                        controller.text = picked;
-                      }
-                    },
-                    icon: const Icon(Icons.folder_open, size: 18),
-                    label: Text('浏览'.tl),
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 10),
-            Align(
-              alignment: Alignment.centerLeft,
-              child: Text(
-                '提示：点按“浏览”调用系统目录选择；长按“浏览”打开内置文件夹浏览，支持安卓全部文件访问权限、Shizuku 授权或 Root 模式。'.tl,
-                style: Theme.of(ctx).textTheme.bodySmall,
-              ),
-            ),
-            if (isDesktop && controller.text.isNotEmpty) ...[
-              const SizedBox(height: 12),
-              SizedBox(
-                width: double.infinity,
-                child: OutlinedButton.icon(
-                  style: OutlinedButton.styleFrom(
-                    minimumSize: const Size(0, 48),
-                  ),
-                  onPressed: () {
-                    _openCurrentDirectory(controller.text.trim());
-                  },
-                  icon: const Icon(Icons.launch, size: 18),
-                  label: Text('打开当前目录'.tl),
-                ),
-              ),
-            ],
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(),
-            child: Text('取消'.tl),
-          ),
-          TextButton(
-            onPressed: () async {
-              final newPath = controller.text.trim();
-              final changed =
-                  newPath != appdata.settings[originalDownloadDirSettingIndex];
-              appdata.settings[originalDownloadDirSettingIndex] = newPath;
-              await appdata.updateSettings();
-              if (!ctx.mounted || !mounted) {
-                return;
-              }
-              Navigator.of(ctx).pop();
-              setState(() {});
-              if (changed) {
-                await _runRescanLocalComics(context);
-              }
-            },
-            child: Text('确定'.tl),
-          ),
-        ],
+      builder: (ctx) => _DirectoryPathDialog(
+        title: '设置原应用下载目录'.tl,
+        hintText: '请输入原应用下载目录路径'.tl,
+        helperText:
+            '提示：点按“浏览”调用系统目录选择；长按“浏览”打开内置文件夹浏览，支持安卓全部文件访问权限、Shizuku 授权或 Root 模式。'.tl,
+        controller: controller,
+        onBrowse: () async {
+          final picked = await _pickFolder();
+          if (picked != null) {
+            controller.text = picked;
+          }
+        },
+        onLongPressBrowse: () async {
+          Navigator.of(ctx).pop();
+          final browsed = await _openInternalDirectoryBrowser(
+            context,
+            title: '选择原应用下载目录'.tl,
+            initialPath: controller.text,
+          );
+          if (!mounted || browsed == null) {
+            return;
+          }
+          controller.text = browsed;
+          appdata.settings[originalDownloadDirSettingIndex] = browsed;
+          await appdata.updateSettings();
+          if (!mounted) {
+            return;
+          }
+          setState(() {});
+          await _runRescanLocalComics(context);
+        },
+        onOpenCurrentDirectory: () {
+          _openCurrentDirectory(controller.text.trim());
+        },
+        onCancel: () => Navigator.of(ctx).pop(),
+        onConfirm: () async {
+          final newPath = controller.text.trim();
+          final changed =
+              newPath != appdata.settings[originalDownloadDirSettingIndex];
+          appdata.settings[originalDownloadDirSettingIndex] = newPath;
+          await appdata.updateSettings();
+          if (!ctx.mounted || !mounted) {
+            return;
+          }
+          Navigator.of(ctx).pop();
+          setState(() {});
+          if (changed) {
+            await _runRescanLocalComics(context);
+          }
+        },
       ),
     );
   }
 
   Widget _buildPathDisplay(BuildContext context, String display) {
-    return GestureDetector(
-      onTap: _showBrowseDialog,
-      child: Container(
-        width: double.infinity,
-        height: 40,
-        alignment: Alignment.center,
-        padding: const EdgeInsets.symmetric(horizontal: 12),
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(6),
-          border: Border.all(color: Theme.of(context).colorScheme.outline),
-        ),
-        child: Text(
-          display,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: const TextStyle(fontSize: 14),
-        ),
+    return Container(
+      width: double.infinity,
+      height: 40,
+      alignment: Alignment.center,
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: Theme.of(context).colorScheme.outline),
+      ),
+      child: Text(
+        display,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: const TextStyle(fontSize: 14),
       ),
     );
   }

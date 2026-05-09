@@ -3,12 +3,12 @@ import 'dart:collection';
 import 'dart:math' as math;
 import 'dart:io' show File, Platform, Process;
 
+import 'package:flutter/rendering.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:picakeep/base.dart';
 import 'package:picakeep/foundation/app.dart';
 import 'package:picakeep/foundation/app_runtime_mode.dart';
-import 'package:picakeep/foundation/cover_thumbnail_cache.dart';
 import 'package:picakeep/foundation/download.dart';
 import 'package:picakeep/foundation/download_model.dart';
 import 'package:picakeep/foundation/history.dart';
@@ -216,6 +216,14 @@ List<String> _downloadedItemTags(DownloadedItem item) {
   return const <String>[];
 }
 
+List<String> _downloadedItemDisplayTags(DownloadedItem item) {
+  final values = _downloadedItemTags(item)
+      .map((tag) => _translateDownloadedTag(tag).trim())
+      .where((tag) => tag.isNotEmpty)
+      .toList(growable: false);
+  return values;
+}
+
 String _downloadedItemSource(DownloadedItem item) {
   final direct = item.sourceDisplayName.trim();
   if (direct.isNotEmpty) {
@@ -236,16 +244,6 @@ String _downloadedItemSource(DownloadedItem item) {
 String _downloadedItemSizeText(DownloadedItem item) {
   final size = item.comicSize;
   return size != null ? '${size.toStringAsFixed(2)}MB' : '未知大小'.tl;
-}
-
-class _DownloadedCoverThumbnailTask {
-  const _DownloadedCoverThumbnailTask({
-    required this.itemId,
-    required this.coverPath,
-  });
-
-  final String itemId;
-  final String coverPath;
 }
 
 class _DownloadedTileViewModel {
@@ -350,13 +348,11 @@ class DownloadPageLogic extends StateController {
   final Map<String, ImageProvider<Object>> _coverImageProviders = {};
   final Map<String, _DownloadedTileViewModel> _tileViewModels = {};
   final Set<String> _queuedCoverIds = <String>{};
-  final Set<String> _queuedCoverThumbnailIds = <String>{};
-  final Queue<_DownloadedCoverThumbnailTask> _coverThumbnailQueue =
-      Queue<_DownloadedCoverThumbnailTask>();
   final Queue<LocalLibraryComicItem> _coverResolveQueue = Queue<LocalLibraryComicItem>();
   bool _coverResolveQueueRunning = false;
-  bool _coverThumbnailQueueRunning = false;
   bool _coverRefreshScheduled = false;
+  bool _isScrollInteracting = false;
+  bool _pendingCoverRefresh = false;
 
   bool loading = true;
   bool selecting = false;
@@ -429,7 +425,7 @@ class DownloadPageLogic extends StateController {
   bool get showSourceSelector => remoteAvailable && !_isRemoteRootPage;
 
   bool get shouldAutoRefreshOnResume =>
-      _isRemoteRootPage || _view != _DownloadedLibraryView.local;
+      _view != _DownloadedLibraryView.local;
 
   void forceRemoteRefresh() {
     _forceRemoteRefreshOnNextReload = true;
@@ -494,14 +490,10 @@ class DownloadPageLogic extends StateController {
     selected = <bool>[];
     comics = <DownloadedItem>[];
     baseComics = <DownloadedItem>[];
-    _coverImageProviders.clear();
     _tileViewModels.clear();
     _queuedCoverIds.clear();
-    _queuedCoverThumbnailIds.clear();
     _coverResolveQueue.clear();
-    _coverThumbnailQueue.clear();
     _coverResolveQueueRunning = false;
-    _coverThumbnailQueueRunning = false;
     _coverRefreshScheduled = false;
     loading = true;
     update();
@@ -583,7 +575,7 @@ class DownloadPageLogic extends StateController {
           _DownloadedTileViewModel(
             author: _downloadedItemAuthor(item),
             type: _downloadedItemSource(item),
-            tags: _downloadedItemTags(item),
+            tags: _downloadedItemDisplayTags(item),
             size: _downloadedItemSizeText(item),
             readingHistoryOverride:
                 showReadingPosition ? readingHistoryById[item.id] : null,
@@ -629,93 +621,39 @@ class DownloadPageLogic extends StateController {
         _DownloadedTileViewModel(
           author: _downloadedItemAuthor(item),
           type: _downloadedItemSource(item),
-          tags: _downloadedItemTags(item),
+          tags: _downloadedItemDisplayTags(item),
           size: _downloadedItemSizeText(item),
         );
   }
 
-  void _prefetchCoverThumbnails(List<DownloadedItem> items) {
-    if (App.isMobile) {
-      return;
-    }
-    for (final item in items) {
-      _queueCoverThumbnailForItem(item);
-    }
-  }
-
-  void _queueCoverThumbnailForItem(
-    DownloadedItem item, [
-    String? explicitCoverPath,
-  ]) {
-    if (App.isMobile ||
-        item is RemoteLibraryComicItem ||
-        item is RemoteLibraryRootItem) {
-      return;
-    }
-
-    final coverPath = (explicitCoverPath ?? _coverPathForItem(item)).trim();
-    if (coverPath.isEmpty || CoverThumbnailCache.hasFreshThumbnail(coverPath)) {
-      return;
-    }
-    if (!_queuedCoverThumbnailIds.add(item.id)) {
-      return;
-    }
-    _coverThumbnailQueue.add(
-      _DownloadedCoverThumbnailTask(itemId: item.id, coverPath: coverPath),
-    );
-    if (!_coverThumbnailQueueRunning) {
-      unawaited(_drainCoverThumbnailQueue());
-    }
-  }
-
-  String _coverPathForItem(DownloadedItem item) {
-    if (item is LocalLibraryComicItem) {
-      return item.localCoverPath?.trim() ?? '';
-    }
-    return DownloadManager().getCover(item.id).path.trim();
-  }
-
-  Future<void> _drainCoverThumbnailQueue() async {
-    if (_coverThumbnailQueueRunning) {
-      return;
-    }
-    _coverThumbnailQueueRunning = true;
-    try {
-      while (_coverThumbnailQueue.isNotEmpty) {
-        final task = _coverThumbnailQueue.removeFirst();
-        try {
-          if (!baseComics.any((comic) => comic.id == task.itemId)) {
-            continue;
-          }
-          final result = await CoverThumbnailCache.ensureForCoverPath(task.coverPath);
-          if (result != null &&
-              result.isNotEmpty &&
-              result != task.coverPath &&
-              baseComics.any((comic) => comic.id == task.itemId)) {
-            _coverImageProviders.remove(task.itemId);
-            _scheduleCoverRefresh();
-          }
-        } finally {
-          _queuedCoverThumbnailIds.remove(task.itemId);
-        }
-        await Future<void>.delayed(const Duration(milliseconds: 40));
-      }
-    } finally {
-      _coverThumbnailQueueRunning = false;
-    }
-  }
+  void _prefetchCoverThumbnails(List<DownloadedItem> items) {}
 
   void _scheduleCoverRefresh() {
+    if (_isScrollInteracting) {
+      _pendingCoverRefresh = true;
+      return;
+    }
     if (_coverRefreshScheduled) {
       return;
     }
     _coverRefreshScheduled = true;
-    Future<void>.delayed(const Duration(milliseconds: 180), () {
+    Future<void>.delayed(const Duration(milliseconds: 320), () {
       _coverRefreshScheduled = false;
       if (!loading) {
         update();
       }
     });
+  }
+
+  void setScrollInteracting(bool interacting) {
+    if (_isScrollInteracting == interacting) {
+      return;
+    }
+    _isScrollInteracting = interacting;
+    if (!interacting && _pendingCoverRefresh) {
+      _pendingCoverRefresh = false;
+      _scheduleCoverRefresh();
+    }
   }
 
   Future<List<DownloadedItem>> _loadComics(
@@ -902,20 +840,11 @@ class DownloadPageLogic extends StateController {
     if (item is LocalLibraryComicItem) {
       final path = item.localCoverPath?.trim();
       if (path != null && path.isNotEmpty) {
-        if (_useDirectMobileLocalCoverPath(item)) {
-          return File(path);
-        }
-        _queueCoverThumbnailForItem(item, path);
-        return File(LocalLibraryManager().coverPathForDisplay(path));
+        return File(path);
       }
       return File('');
     }
-    final coverFile = DownloadManager().getCover(item.id);
-    if (_useDirectMobileLocalCoverPath(item)) {
-      return coverFile;
-    }
-    _queueCoverThumbnailForItem(item, coverFile.path);
-    return DownloadManager().getCoverForDisplay(item.id);
+    return DownloadManager().getCover(item.id);
   }
 
   ImageProvider<Object>? coverImageProviderFor(DownloadedItem item) {
@@ -936,11 +865,12 @@ class DownloadPageLogic extends StateController {
     } else if (item is LocalLibraryComicItem) {
       final coverPath = item.localCoverPath?.trim();
       if (coverPath != null && coverPath.isNotEmpty) {
-        if (_useDirectMobileLocalCoverPath(item)) {
-          return null;
+        if (item.isManagedDownloadItem) {
+          provider = LocalLibraryManager().imageProviderForLocalPath(coverPath);
+          _queueLocalCoverResolve(item);
+        } else {
+          provider = FileImage(File(coverPath));
         }
-        _queueCoverThumbnailForItem(item, coverPath);
-        provider = LocalLibraryManager().imageProviderForLocalPath(coverPath);
       } else {
         _queueLocalCoverResolve(item);
       }
@@ -982,9 +912,9 @@ class DownloadPageLogic extends StateController {
         }
         final path = await LocalLibraryManager().resolveCoverPathForItem(item);
         if (path != null && path.trim().isNotEmpty) {
-          _queueCoverThumbnailForItem(item, path);
-          _coverImageProviders[item.id] =
-              LocalLibraryManager().imageProviderForLocalPath(path);
+          _coverImageProviders[item.id] = item.isManagedDownloadItem
+              ? LocalLibraryManager().imageProviderForLocalPath(path)
+              : FileImage(File(path));
           _scheduleCoverRefresh();
         }
         _queuedCoverIds.remove(item.id);
@@ -1055,7 +985,6 @@ class _DownloadPageState extends State<DownloadPage>
     }
     _wasCurrentRoute = true;
     if (_hasActivatedOnce) {
-      _refreshRemoteIfNeeded();
       return;
     }
     _hasActivatedOnce = true;
@@ -1095,11 +1024,7 @@ class _DownloadPageState extends State<DownloadPage>
       initState: (logic) {
         _logic = logic;
         logic.bindLocalDataRefresh();
-        if (logic.shouldAutoRefreshOnResume) {
-          logic.forceRemoteRefresh();
-        } else {
-          logic.refresh();
-        }
+        logic.refresh();
       },
       dispose: (logic) {
         if (identical(_logic, logic)) {
@@ -1118,16 +1043,31 @@ class _DownloadPageState extends State<DownloadPage>
         }
         return Scaffold(
           floatingActionButton: _buildFAB(context, logic),
-          body: SmoothCustomScrollView(
-            cacheExtent: App.isMobile
-                ? MediaQuery.of(context).size.height * 0.6
-                : MediaQuery.of(context).size.height,
-            slivers: [
-              _buildAppbar(context, logic),
-              if (logic.showSourceSelector)
-                _buildSourceSelector(context, logic),
-              _buildComics(context, logic)
-            ],
+          body: NotificationListener<ScrollNotification>(
+            onNotification: (notification) {
+              if (notification is ScrollStartNotification ||
+                  (notification is UserScrollNotification &&
+                      notification.direction != ScrollDirection.idle) ||
+                  notification is ScrollUpdateNotification) {
+                logic.setScrollInteracting(true);
+              } else if (notification is ScrollEndNotification ||
+                  (notification is UserScrollNotification &&
+                      notification.direction == ScrollDirection.idle)) {
+                logic.setScrollInteracting(false);
+              }
+              return false;
+            },
+            child: SmoothCustomScrollView(
+              cacheExtent: App.isMobile
+                  ? MediaQuery.of(context).size.height * 0.25
+                  : MediaQuery.of(context).size.height,
+              slivers: [
+                _buildAppbar(context, logic),
+                if (logic.showSourceSelector)
+                  _buildSourceSelector(context, logic),
+                _buildComics(context, logic)
+              ],
+            ),
           ),
         );
       },
@@ -1164,8 +1104,8 @@ class _DownloadPageState extends State<DownloadPage>
     final viewModel = logic._viewModelFor(item);
     final selected = logic.selected[index];
     final isRootItem = item is RemoteLibraryRootItem;
-    final coverFile = logic.coverFor(item);
     final coverProvider = logic.coverImageProviderFor(item);
+    final coverFile = coverProvider == null ? logic.coverFor(item) : File('');
     final colorScheme = Theme.of(context).colorScheme;
     return Padding(
       padding: const EdgeInsets.all(2),
