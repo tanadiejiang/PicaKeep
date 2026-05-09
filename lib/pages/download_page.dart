@@ -415,15 +415,17 @@ class DownloadPageLogic extends StateController {
           appdata.settings[managedDataSourceModeSettingIndex]) !=
       managedDataSourceModeCurrentOnly;
 
-  bool get _isClientMode =>
-      normalizeAppRuntimeMode(appdata.settings[appRuntimeModeSettingIndex]) ==
-      appRuntimeModeClient;
+  bool get _hasConfiguredRemoteServer =>
+      normalizeRemoteServerAddressValue(
+        appdata.settings[remoteServerAddressSettingIndex],
+      ).isNotEmpty;
 
   bool get _isRemoteRootPage => remoteRootId?.trim().isNotEmpty == true;
 
   bool get _shouldStrictlyUseRemoteData => _isRemoteRootPage;
 
-  bool get showSourceSelector => remoteAvailable && !_isRemoteRootPage;
+  bool get showSourceSelector =>
+      !_isRemoteRootPage && (remoteAvailable || _hasConfiguredRemoteServer);
 
   bool get shouldAutoRefreshOnResume =>
       _view != _DownloadedLibraryView.local;
@@ -445,12 +447,14 @@ class DownloadPageLogic extends StateController {
   }
 
   Future<bool> _checkRemoteAvailability() async {
-    if (!_isClientMode) {
+    final normalizedAddress = normalizeRemoteServerAddressValue(
+      appdata.settings[remoteServerAddressSettingIndex],
+    );
+    if (normalizedAddress.isEmpty) {
       return false;
     }
     try {
-      final snapshot =
-          await RuntimeServiceDataSourceResolver.current().fetchSnapshot();
+      final snapshot = await RemoteRuntimeServiceDataSource().fetchSnapshot();
       return snapshot.connectionState == ServiceConnectionState.online;
     } catch (_) {
       return false;
@@ -533,7 +537,7 @@ class DownloadPageLogic extends StateController {
     }
     remoteAvailable = await _checkRemoteAvailability();
     if (!remoteAvailable &&
-        _view != _DownloadedLibraryView.local &&
+        _view == _DownloadedLibraryView.aggregate &&
         !_shouldStrictlyUseRemoteData) {
       _view = _DownloadedLibraryView.local;
       appdata.settings[downloadedLibraryViewSettingIndex] = 'local';
@@ -679,6 +683,9 @@ class DownloadPageLogic extends StateController {
       if (_shouldStrictlyUseRemoteData) {
         throw const RemoteLibraryDataSourceException('远程服务当前不可用');
       }
+      if (_view == _DownloadedLibraryView.remote && _hasConfiguredRemoteServer) {
+        return const <DownloadedItem>[];
+      }
       return localItems;
     }
 
@@ -809,6 +816,15 @@ class DownloadPageLogic extends StateController {
     await reload();
     return count;
   }
+
+  bool get showRemoteDisconnectedHint =>
+      _view == _DownloadedLibraryView.remote &&
+      _hasConfiguredRemoteServer &&
+      !remoteAvailable;
+
+  String get remoteServerAddressText => normalizeRemoteServerAddressValue(
+        appdata.settings[remoteServerAddressSettingIndex],
+      );
 
   String emptyStatePathText() {
     if (_view == _DownloadedLibraryView.remote) {
@@ -1702,18 +1718,37 @@ class _DownloadPageState extends State<DownloadPage>
 
   Widget _buildEmptyState(BuildContext context, DownloadPageLogic logic) {
     final path = logic.emptyStatePathText();
+    final showRemoteDisconnectedHint = logic.showRemoteDisconnectedHint;
+    final remoteAddress = logic.remoteServerAddressText;
     return Center(
       child: Padding(
         padding: const EdgeInsets.all(24),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(Icons.download_done, size: 64, color: Colors.grey),
+            Icon(
+              showRemoteDisconnectedHint
+                  ? Icons.cloud_off_outlined
+                  : Icons.download_done,
+              size: 64,
+              color: Colors.grey,
+            ),
             const SizedBox(height: 16),
-            Text('暂无已下载的漫画'.tl,
-                style: const TextStyle(fontSize: 18, color: Colors.grey)),
+            Text(
+              showRemoteDisconnectedHint ? '远程服务当前未连接'.tl : '暂无已下载的漫画'.tl,
+              style: const TextStyle(fontSize: 18, color: Colors.grey),
+              textAlign: TextAlign.center,
+            ),
             const SizedBox(height: 8),
-            if (path.isNotEmpty)
+            if (showRemoteDisconnectedHint)
+              Text(
+                remoteAddress.isEmpty
+                    ? '已配置远程服务，但当前无法连接，请检查服务状态或地址配置。'.tl
+                    : '当前无法连接到 $remoteAddress，请检查服务是否在线。'.tl,
+                style: const TextStyle(fontSize: 12, color: Colors.grey),
+                textAlign: TextAlign.center,
+              )
+            else if (path.isNotEmpty)
               Text('下载目录: $path',
                   style: const TextStyle(fontSize: 12, color: Colors.grey),
                   textAlign: TextAlign.center),
@@ -1721,20 +1756,34 @@ class _DownloadPageState extends State<DownloadPage>
             FilledButton.icon(
               onPressed: () async {
                 final count = await logic.rescanDisk();
-                if (context.mounted) {
+                if (!context.mounted) {
+                  return;
+                }
+                if (showRemoteDisconnectedHint) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('已刷新远程连接状态'.tl)),
+                  );
+                } else {
                   ScaffoldMessenger.of(context).showSnackBar(
                     SnackBar(content: Text('扫描完成，共发现 $count 个漫画')),
                   );
                 }
               },
               icon: const Icon(Icons.refresh),
-              label: Text('重新扫描磁盘'.tl),
+              label:
+                  Text(showRemoteDisconnectedHint ? '刷新连接状态'.tl : '重新扫描磁盘'.tl),
             ),
             const SizedBox(height: 8),
-            Text('请确保下载目录中存在 download.db 数据库文件',
-                style: TextStyle(
-                    fontSize: 12,
-                    color: Theme.of(context).colorScheme.outline)),
+            Text(
+              showRemoteDisconnectedHint
+                  ? '如地址无误，请确认远程服务已启动且当前网络可达。'.tl
+                  : '请确保下载目录中存在 download.db 数据库文件'.tl,
+              style: TextStyle(
+                fontSize: 12,
+                color: Theme.of(context).colorScheme.outline,
+              ),
+              textAlign: TextAlign.center,
+            ),
           ],
         ),
       ),
