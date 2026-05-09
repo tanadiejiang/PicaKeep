@@ -16,21 +16,16 @@ import 'server/local_server_runtime_sync.dart';
 import 'tools/block_screenshot.dart';
 import 'tools/translations.dart';
 
-const _bootstrapShellBackground = Color(0xFF101418);
-const _bootstrapShellAccent = Color(0xFF5B8CFF);
-
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   _configureGlobalImageCache();
 
-  if (App.isDesktop) {
-    await _initializeApplication();
-    runApp(const PicaKeepApp());
-    unawaited(_showDesktopWindowWhenReady());
-    return;
-  }
+  await _initializeApplication();
+  runApp(const PicaKeepApp());
 
-  runApp(const PicaKeepBootstrapApp());
+  if (App.isDesktop) {
+    unawaited(_showDesktopWindowWhenReady());
+  }
 }
 
 Future<void> _initializeApplication() async {
@@ -93,197 +88,6 @@ Future<void> _syncStartupServerRuntime() async {
     await syncLocalServerRuntimeForCurrentMode();
   } catch (e, s) {
     debugPrint('Failed to sync local server runtime: $e\n$s');
-  }
-}
-
-class PicaKeepBootstrapApp extends StatefulWidget {
-  const PicaKeepBootstrapApp({super.key});
-
-  @override
-  State<PicaKeepBootstrapApp> createState() => _PicaKeepBootstrapAppState();
-}
-
-class _PicaKeepBootstrapAppState extends State<PicaKeepBootstrapApp> {
-  bool _isReady = false;
-  bool _isBootstrapping = false;
-  Object? _bootstrapError;
-
-  @override
-  void initState() {
-    super.initState();
-    _startBootstrap();
-  }
-
-  void _startBootstrap() {
-    if (_isReady || _isBootstrapping) {
-      return;
-    }
-    _isBootstrapping = true;
-    unawaited(_bootstrap());
-  }
-
-  Future<void> _bootstrap() async {
-    try {
-      await _initializeApplication();
-      if (!mounted) {
-        return;
-      }
-      setState(() {
-        _bootstrapError = null;
-        _isReady = true;
-      });
-    } catch (e, s) {
-      debugPrint('Failed to bootstrap application: $e\n$s');
-      if (!mounted) {
-        return;
-      }
-      setState(() {
-        _bootstrapError = e;
-      });
-    } finally {
-      _isBootstrapping = false;
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    if (_isReady) {
-      return const PicaKeepApp();
-    }
-
-    return MaterialApp(
-      title: 'PicaKeep',
-      debugShowCheckedModeBanner: false,
-      builder: (context, child) {
-        if (child == null) {
-          return const SizedBox.shrink();
-        }
-        return _MobileSystemUiFrame(child: child);
-      },
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: _bootstrapShellAccent,
-          brightness: Brightness.dark,
-        ),
-        scaffoldBackgroundColor: _bootstrapShellBackground,
-        useMaterial3: true,
-      ),
-      home: _StartupBootstrapShell(
-        error: _bootstrapError,
-        onRetry: () {
-          setState(() {
-            _bootstrapError = null;
-          });
-          _startBootstrap();
-        },
-      ),
-    );
-  }
-}
-
-class _StartupBootstrapShell extends StatelessWidget {
-  const _StartupBootstrapShell({
-    required this.error,
-    required this.onRetry,
-  });
-
-  final Object? error;
-  final VoidCallback onRetry;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final colorScheme = theme.colorScheme;
-    final isError = error != null;
-
-    if (!isError) {
-      return const Scaffold(
-        body: Center(
-          child: _StartupBootstrapLogo(),
-        ),
-      );
-    }
-
-    return Scaffold(
-      body: SafeArea(
-        child: Center(
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 28),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Container(
-                  width: 84,
-                  height: 84,
-                  decoration: BoxDecoration(
-                    color: colorScheme.primary.withValues(alpha: 0.16),
-                    borderRadius: BorderRadius.circular(24),
-                  ),
-                  child: Icon(
-                    Icons.error_outline,
-                    size: 42,
-                    color: colorScheme.primary,
-                  ),
-                ),
-                const SizedBox(height: 20),
-                Text(
-                  'PicaKeep',
-                  style: theme.textTheme.headlineSmall?.copyWith(
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-                const SizedBox(height: 10),
-                Text(
-                  '启动失败',
-                  textAlign: TextAlign.center,
-                  style: theme.textTheme.bodyLarge?.copyWith(
-                    color: colorScheme.onSurfaceVariant,
-                  ),
-                ),
-                const SizedBox(height: 12),
-                Text(
-                  error.toString(),
-                  textAlign: TextAlign.center,
-                  maxLines: 3,
-                  overflow: TextOverflow.ellipsis,
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    color: colorScheme.onSurfaceVariant,
-                  ),
-                ),
-                const SizedBox(height: 18),
-                FilledButton.icon(
-                  onPressed: onRetry,
-                  icon: const Icon(Icons.refresh),
-                  label: const Text('重试'),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _StartupBootstrapLogo extends StatelessWidget {
-  const _StartupBootstrapLogo();
-
-  @override
-  Widget build(BuildContext context) {
-    final colorScheme = Theme.of(context).colorScheme;
-    return Container(
-      width: 84,
-      height: 84,
-      decoration: BoxDecoration(
-        color: colorScheme.primary.withValues(alpha: 0.16),
-        borderRadius: BorderRadius.circular(24),
-      ),
-      child: Icon(
-        Icons.auto_stories_rounded,
-        size: 42,
-        color: colorScheme.primary,
-      ),
-    );
   }
 }
 
