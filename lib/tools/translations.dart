@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:picakeep/base.dart';
+import 'package:picakeep/foundation/app.dart';
 
 Map<String, Map<String, String>> translations = {};
 bool _loaded = false;
@@ -9,14 +10,17 @@ bool _loaded = false;
 Future<void> loadTranslations() async {
   if (_loaded) return;
   _loaded = true;
+  AppStartupTrace.log('loadTranslations.start');
   try {
     final jsonStr = await rootBundle.loadString('assets/translation.json');
     final data = json.decode(jsonStr) as Map<String, dynamic>;
     for (var entry in data.entries) {
       translations[entry.key] = Map<String, String>.from(entry.value);
     }
-  } catch (_) {
+    AppStartupTrace.log('loadTranslations.done');
+  } catch (e) {
     translations['en_US'] = {};
+    AppStartupTrace.log('loadTranslations.failed: $e');
   }
 }
 

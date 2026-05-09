@@ -11,6 +11,16 @@ import '../base.dart';
 export 'state_controller.dart';
 export 'widget_utils.dart';
 
+class AppStartupTrace {
+  static final Stopwatch _stopwatch = Stopwatch()..start();
+
+  static int get elapsedMs => _stopwatch.elapsedMilliseconds;
+
+  static void log(String stage) {
+    debugPrint('[PicaKeep][startup][${_stopwatch.elapsedMilliseconds}ms] $stage');
+  }
+}
+
 class App {
   static bool get isAndroid => Platform.isAndroid;
   static bool get isIOS => Platform.isIOS;

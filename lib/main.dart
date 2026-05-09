@@ -17,11 +17,16 @@ import 'tools/block_screenshot.dart';
 import 'tools/translations.dart';
 
 Future<void> main() async {
+  AppStartupTrace.log('main.start');
   WidgetsFlutterBinding.ensureInitialized();
+  AppStartupTrace.log('widgetsBinding.ready');
   _configureGlobalImageCache();
+  AppStartupTrace.log('imageCache.configured');
 
   await _initializeApplication();
+  AppStartupTrace.log('initializeApplication.done');
   runApp(const PicaKeepApp());
+  AppStartupTrace.log('runApp.called');
 
   if (App.isDesktop) {
     unawaited(_showDesktopWindowWhenReady());
@@ -29,11 +34,17 @@ Future<void> main() async {
 }
 
 Future<void> _initializeApplication() async {
+  AppStartupTrace.log('initializeApplication.start');
+  AppStartupTrace.log('App.init.start');
   await App.init();
-  await Future.wait([
-    appdata.readData(),
-    loadTranslations(),
-  ]);
+  AppStartupTrace.log('App.init.done');
+
+  await appdata.readEssentialData();
+  if (_shouldLoadTranslationsBeforeRunApp()) {
+    await loadTranslations();
+  } else {
+    AppStartupTrace.log('loadTranslations.deferred');
+  }
 
   if (App.isDesktop) {
     await initWindowManagerIfDesktop();
@@ -47,7 +58,20 @@ Future<void> _showDesktopWindowWhenReady() async {
   await showWindowWhenReady();
 }
 
+bool _shouldLoadTranslationsBeforeRunApp() {
+  final language = appdata.settings[50];
+  return language == 'en' || language == 'tw';
+}
+
+Future<void> _runDeferredStartupLoads() async {
+  await appdata.readDeferredData();
+  if (!_shouldLoadTranslationsBeforeRunApp()) {
+    await loadTranslations();
+  }
+}
+
 Future<void> _runDeferredStartupWork() async {
+  unawaited(_runDeferredStartupLoads());
   Future<void>.delayed(
     const Duration(milliseconds: 800),
     () => App.applyDisplayModePreference(),
@@ -119,10 +143,14 @@ class _PicaKeepAppState extends State<PicaKeepApp>
   bool _requireAuthOnResume = false;
   DateTime? _lastBackgroundedAt;
   bool _deferredStartupQueued = false;
+  bool _dynamicColorsQueued = false;
+  ColorScheme? _lightDynamicScheme;
+  ColorScheme? _darkDynamicScheme;
 
   @override
   void initState() {
     super.initState();
+    AppStartupTrace.log('PicaKeepApp.initState');
     WidgetsBinding.instance.addObserver(this);
     App.updater = _refreshApp;
     App.serviceConfigVersion.addListener(_handleServiceStateSyncRequest);
@@ -131,6 +159,10 @@ class _PicaKeepAppState extends State<PicaKeepApp>
     if (appdata.settings[12] == '1') {
       blockScreenshot();
     }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      AppStartupTrace.log('PicaKeepApp.firstPostFrame');
+    });
+    _scheduleDynamicColorsLoad();
     _scheduleDeferredStartupWork();
   }
 
@@ -153,6 +185,39 @@ class _PicaKeepAppState extends State<PicaKeepApp>
     WidgetsBinding.instance.addPostFrameCallback((_) {
       unawaited(_runDeferredStartupWork());
     });
+  }
+
+  void _scheduleDynamicColorsLoad() {
+    if (_dynamicColorsQueued || !App.isAndroid || appdata.settings[27] != '0') {
+      return;
+    }
+    _dynamicColorsQueued = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      unawaited(_loadDynamicColors());
+    });
+  }
+
+  Future<void> _loadDynamicColors() async {
+    AppStartupTrace.log('dynamicColors.start');
+    try {
+      final corePalette = await DynamicColorPlugin.getCorePalette();
+      if (!mounted || corePalette == null) {
+        AppStartupTrace.log('dynamicColors.unavailable');
+        return;
+      }
+      final lightScheme = corePalette.toColorScheme();
+      final darkScheme = corePalette.toColorScheme(brightness: Brightness.dark);
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _lightDynamicScheme = lightScheme;
+        _darkDynamicScheme = darkScheme;
+      });
+      AppStartupTrace.log('dynamicColors.done');
+    } catch (e) {
+      AppStartupTrace.log('dynamicColors.failed: $e');
+    }
   }
 
   @override
@@ -248,49 +313,44 @@ class _PicaKeepAppState extends State<PicaKeepApp>
 
   @override
   Widget build(BuildContext context) {
-    return DynamicColorBuilder(
-      builder: (ColorScheme? lightDynamic, ColorScheme? darkDynamic) {
-        return MaterialApp(
-          title: 'PicaKeep',
-          navigatorKey: App.navigatorKey,
-          debugShowCheckedModeBanner: false,
-          locale: App.locale,
-          supportedLocales: const [
-            Locale('zh', 'CN'),
-            Locale('zh', 'TW'),
-            Locale('en', 'US'),
-          ],
-          localizationsDelegates: const [
-            GlobalMaterialLocalizations.delegate,
-            GlobalWidgetsLocalizations.delegate,
-            GlobalCupertinoLocalizations.delegate,
-          ],
-          builder: (context, child) {
-            if (child == null) {
-              return const SizedBox.shrink();
-            }
-            if (App.isDesktop) {
-              return WindowFrame(child: child);
-            }
-            return _MobileSystemUiFrame(child: child);
-          },
-          theme: ThemeData(
-            colorScheme: _buildLightScheme(lightDynamic),
-            useMaterial3: true,
-          ),
-          darkTheme: ThemeData(
-            colorScheme: _getPureBlack(_buildDarkScheme(darkDynamic)),
-            scaffoldBackgroundColor:
-                appdata.settings[84] == '1' && _getThemeMode() == ThemeMode.dark
-                    ? Colors.black
-                    : null,
-            useMaterial3: true,
-          ),
-          themeMode: _getThemeMode(),
-          home:
-              appdata.settings[13] == '1' ? const AuthPage() : const MainPage(),
-        );
+    return MaterialApp(
+      title: 'PicaKeep',
+      navigatorKey: App.navigatorKey,
+      debugShowCheckedModeBanner: false,
+      locale: App.locale,
+      supportedLocales: const [
+        Locale('zh', 'CN'),
+        Locale('zh', 'TW'),
+        Locale('en', 'US'),
+      ],
+      localizationsDelegates: const [
+        GlobalMaterialLocalizations.delegate,
+        GlobalWidgetsLocalizations.delegate,
+        GlobalCupertinoLocalizations.delegate,
+      ],
+      builder: (context, child) {
+        if (child == null) {
+          return const SizedBox.shrink();
+        }
+        if (App.isDesktop) {
+          return WindowFrame(child: child);
+        }
+        return _MobileSystemUiFrame(child: child);
       },
+      theme: ThemeData(
+        colorScheme: _buildLightScheme(_lightDynamicScheme),
+        useMaterial3: true,
+      ),
+      darkTheme: ThemeData(
+        colorScheme: _getPureBlack(_buildDarkScheme(_darkDynamicScheme)),
+        scaffoldBackgroundColor:
+            appdata.settings[84] == '1' && _getThemeMode() == ThemeMode.dark
+                ? Colors.black
+                : null,
+        useMaterial3: true,
+      ),
+      themeMode: _getThemeMode(),
+      home: appdata.settings[13] == '1' ? const AuthPage() : const MainPage(),
     );
   }
 }

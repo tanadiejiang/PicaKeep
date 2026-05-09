@@ -265,21 +265,44 @@ class Appdata {
     await updateSettings();
   }
 
-  Future<bool> readData() async {
+  Future<bool> readEssentialData() async {
     var s = await SharedPreferences.getInstance();
     try {
+      AppStartupTrace.log('appdata.readEssentialData.start');
       await readSettings(s);
-      searchHistory = s.getStringList("search") ?? [];
-      favoriteTags = (s.getStringList("favoriteTags") ?? []).toSet();
-      blockingKeyword = s.getStringList("blockingKeyword") ?? [];
       if (s.getStringList("firstUse") != null) {
         var st = s.getStringList("firstUse")!;
         for (int i = 0; i < st.length; i++) {
           firstUse[i] = st[i];
         }
       }
-      readImplicitData();
+      AppStartupTrace.log('appdata.readEssentialData.done');
       return firstUse[3] == "1";
+    } catch (e) {
+      AppStartupTrace.log('appdata.readEssentialData.failed: $e');
+      return false;
+    }
+  }
+
+  Future<void> readDeferredData() async {
+    var s = await SharedPreferences.getInstance();
+    try {
+      AppStartupTrace.log('appdata.readDeferredData.start');
+      searchHistory = s.getStringList("search") ?? [];
+      favoriteTags = (s.getStringList("favoriteTags") ?? []).toSet();
+      blockingKeyword = s.getStringList("blockingKeyword") ?? [];
+      readImplicitData();
+      AppStartupTrace.log('appdata.readDeferredData.done');
+    } catch (e) {
+      AppStartupTrace.log('appdata.readDeferredData.failed: $e');
+    }
+  }
+
+  Future<bool> readData() async {
+    try {
+      final result = await readEssentialData();
+      await readDeferredData();
+      return result;
     } catch (e) {
       return false;
     }

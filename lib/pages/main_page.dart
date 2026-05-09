@@ -137,10 +137,12 @@ class _MainPageState extends State<MainPage> {
   @override
   void initState() {
     super.initState();
+    AppStartupTrace.log('MainPage.initState');
     App.mainNavigatorKey = _navigatorKey;
     App.serviceConfigVersion.addListener(_handleServiceConfigChanged);
     StateController.putIfNotExists(MainPageHub());
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      AppStartupTrace.log('MainPage.firstPostFrame');
       if (!mounted) return;
       StateController.find<MainPageHub>().pushPage = _openHubPage;
       _scheduleClipboardCheck();
