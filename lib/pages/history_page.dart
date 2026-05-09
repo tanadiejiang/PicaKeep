@@ -58,12 +58,27 @@ class _HistoryPageState extends State<HistoryPage> {
   @override
   void initState() {
     super.initState();
-    comics.addAll(HistoryManager().getAll());
+    _loadHistoryItems();
     DownloadManager().init();
     LocalLibraryManager().ensureLoaded().then((_) {
       if (mounted) {
         setState(() {});
       }
+    });
+  }
+
+  Future<void> _loadHistoryItems() async {
+    final manager = HistoryManager();
+    if (!manager.isInitialized) {
+      await manager.init();
+    }
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      comics
+        ..clear()
+        ..addAll(manager.getAll());
     });
   }
 

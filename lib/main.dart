@@ -53,12 +53,18 @@ Future<void> _showDesktopWindowWhenReady() async {
 }
 
 Future<void> _runDeferredStartupWork() async {
-  await Future<void>.delayed(const Duration(milliseconds: 120));
-  await App.applyDisplayModePreference();
-  await Future<void>.delayed(const Duration(milliseconds: 140));
-  await _warmStartupManagers();
-  await Future<void>.delayed(const Duration(milliseconds: 120));
-  await _syncStartupServerRuntime();
+  Future<void>.delayed(
+    const Duration(milliseconds: 800),
+    () => App.applyDisplayModePreference(),
+  );
+  Future<void>.delayed(
+    const Duration(milliseconds: 1800),
+    _warmStartupManagers,
+  );
+  Future<void>.delayed(
+    const Duration(milliseconds: 2800),
+    _syncStartupServerRuntime,
+  );
 }
 
 void _configureGlobalImageCache() {
@@ -76,9 +82,7 @@ Future<void> _warmStartupManagers() async {
     await Future.wait([
       LocalFavoritesManager().init(),
       HistoryManager().init(),
-      downloadManager.init(),
     ]);
-    App.notifyLocalDataChanged();
   } catch (e, s) {
     debugPrint('Failed to warm startup managers: $e\n$s');
   }

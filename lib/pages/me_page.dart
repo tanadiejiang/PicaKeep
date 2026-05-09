@@ -51,11 +51,11 @@ class _MePageCachedState {
 }
 
 class _MePageState extends State<MePage> {
-  static const Duration _historyLoadDelay = Duration(milliseconds: 120);
-  static const Duration _downloadCountLoadDelay = Duration(milliseconds: 260);
-  static const Duration _localLibraryLoadDelay = Duration(milliseconds: 420);
-  static const Duration _imageFavoriteLoadDelay = Duration(milliseconds: 560);
-  static const Duration _remoteSummaryLoadDelay = Duration(milliseconds: 720);
+  static const Duration _historyLoadDelay = Duration.zero;
+  static const Duration _downloadCountLoadDelay = Duration(milliseconds: 900);
+  static const Duration _localLibraryLoadDelay = Duration(milliseconds: 1500);
+  static const Duration _imageFavoriteLoadDelay = Duration(milliseconds: 2100);
+  static const Duration _remoteSummaryLoadDelay = Duration(milliseconds: 3200);
 
   static _MePageCachedState? _cachedState;
 
@@ -186,14 +186,18 @@ class _MePageState extends State<MePage> {
   void _handleServiceStateChanged() {
     _remoteSummaryLoadTimer?.cancel();
     _remoteSummaryLoadTimer = Timer(
-      const Duration(milliseconds: 180),
+      const Duration(milliseconds: 900),
       _loadRemoteLibrarySummary,
     );
   }
 
   Future<void> _loadHistoryPreview() async {
     try {
-      final history = HistoryManager().getRecent();
+      final manager = HistoryManager();
+      if (!manager.isInitialized) {
+        await manager.init();
+      }
+      final history = manager.getRecent();
       if (!mounted) {
         return;
       }
@@ -405,11 +409,7 @@ class _MePageState extends State<MePage> {
     if (!_historyLoaded) {
       return "历史记录".tl;
     }
-    try {
-      return "${"历史记录".tl}(${HistoryManager().count()})";
-    } catch (_) {
-      return "${"历史记录".tl}($recentCount)";
-    }
+    return "${"历史记录".tl}($recentCount)";
   }
 
   Widget _historyPlaceholder(BuildContext context) {

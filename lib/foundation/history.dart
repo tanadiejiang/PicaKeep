@@ -269,6 +269,8 @@ class HistoryManager {
   Database? _secondaryDb;
   bool _initialized = false;
 
+  bool get isInitialized => _initialized;
+
   int get length => count();
 
   /// Primary writable DB handle.
