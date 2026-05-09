@@ -126,7 +126,7 @@ class _MainPageState extends State<MainPage> {
 
   void _scheduleClipboardCheck() {
     _clipboardCheckTimer?.cancel();
-    _clipboardCheckTimer = Timer(const Duration(milliseconds: 900), () {
+    _clipboardCheckTimer = Timer(const Duration(milliseconds: 2800), () {
       if (!mounted) {
         return;
       }

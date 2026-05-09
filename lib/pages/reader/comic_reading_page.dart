@@ -27,9 +27,9 @@ import 'package:picakeep/foundation/history.dart';
 import 'package:picakeep/foundation/local_library_settings.dart';
 import 'package:picakeep/tools/save_image.dart';
 import 'package:picakeep/tools/time.dart';
-import '../../foundation/app.dart';
-import '../../foundation/ui_mode.dart';
-import '../../tools/key_down_event.dart';
+import 'package:picakeep/foundation/app.dart';
+import 'package:picakeep/foundation/ui_mode.dart';
+import 'package:picakeep/tools/key_down_event.dart';
 import 'package:picakeep/tools/translations.dart';
 import 'package:window_manager/window_manager.dart';
 

@@ -4,9 +4,9 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
-import '../pages/reader/comic_reading_page.dart';
-import 'def.dart';
-import 'local_favorites.dart';
+import 'package:picakeep/pages/reader/comic_reading_page.dart';
+import 'package:picakeep/foundation/def.dart';
+import 'package:picakeep/foundation/local_favorites.dart';
 
 ComicType comicTypeForDownloadType(DownloadType type) {
   switch (type) {
