@@ -353,6 +353,7 @@ class DownloadPageLogic extends StateController {
   bool _coverRefreshScheduled = false;
   bool _isScrollInteracting = false;
   bool _pendingCoverRefresh = false;
+  Timer? _scrollIdleTimer;
 
   bool loading = true;
   bool selecting = false;
@@ -646,14 +647,26 @@ class DownloadPageLogic extends StateController {
   }
 
   void setScrollInteracting(bool interacting) {
-    if (_isScrollInteracting == interacting) {
+    if (interacting) {
+      _scrollIdleTimer?.cancel();
+      if (_isScrollInteracting) {
+        return;
+      }
+      _isScrollInteracting = true;
       return;
     }
-    _isScrollInteracting = interacting;
-    if (!interacting && _pendingCoverRefresh) {
-      _pendingCoverRefresh = false;
-      _scheduleCoverRefresh();
-    }
+
+    _scrollIdleTimer?.cancel();
+    _scrollIdleTimer = Timer(const Duration(milliseconds: 140), () {
+      if (!_isScrollInteracting) {
+        return;
+      }
+      _isScrollInteracting = false;
+      if (_pendingCoverRefresh) {
+        _pendingCoverRefresh = false;
+        _scheduleCoverRefresh();
+      }
+    });
   }
 
   Future<List<DownloadedItem>> _loadComics(
@@ -1047,8 +1060,7 @@ class _DownloadPageState extends State<DownloadPage>
             onNotification: (notification) {
               if (notification is ScrollStartNotification ||
                   (notification is UserScrollNotification &&
-                      notification.direction != ScrollDirection.idle) ||
-                  notification is ScrollUpdateNotification) {
+                      notification.direction != ScrollDirection.idle)) {
                 logic.setScrollInteracting(true);
               } else if (notification is ScrollEndNotification ||
                   (notification is UserScrollNotification &&

@@ -38,16 +38,19 @@ class SmoothCustomScrollView extends StatelessWidget {
     required this.slivers,
     this.controller,
     this.cacheExtent,
+    this.enableDesktopWheelSmoothing = true,
   });
 
   final ScrollController? controller;
   final List<Widget> slivers;
   final double? cacheExtent;
+  final bool enableDesktopWheelSmoothing;
 
   @override
   Widget build(BuildContext context) {
     return SmoothScrollProvider(
       controller: controller,
+      enableDesktopWheelSmoothing: enableDesktopWheelSmoothing,
       builder: (context, controller, physics) {
         return CustomScrollView(
           controller: controller,
@@ -64,10 +67,12 @@ class SmoothScrollProvider extends StatefulWidget {
   const SmoothScrollProvider({
     super.key,
     this.controller,
+    this.enableDesktopWheelSmoothing = true,
     required this.builder,
   });
 
   final ScrollController? controller;
+  final bool enableDesktopWheelSmoothing;
   final Widget Function(BuildContext, ScrollController, ScrollPhysics) builder;
 
   static bool get isMouseScroll => _SmoothScrollProviderState._isMouseScroll;
@@ -81,7 +86,6 @@ class _SmoothScrollProviderState extends State<SmoothScrollProvider> {
   late final bool _ownsController;
 
   double? _futurePosition;
-  bool _animateToScheduled = false;
 
   static bool _isMouseScroll = App.isDesktop;
 
@@ -102,7 +106,7 @@ class _SmoothScrollProviderState extends State<SmoothScrollProvider> {
 
   @override
   Widget build(BuildContext context) {
-    if (App.isMacOS) {
+    if (App.isMacOS || !App.isDesktop || !widget.enableDesktopWheelSmoothing) {
       return widget.builder(
         context,
         _controller,
@@ -142,7 +146,11 @@ class _SmoothScrollProviderState extends State<SmoothScrollProvider> {
           position.minScrollExtent,
           position.maxScrollExtent,
         );
-        _scheduleAnimateTo();
+        _controller.animateTo(
+          _futurePosition!,
+          duration: _fastAnimationDuration,
+          curve: Curves.linear,
+        );
       },
       child: widget.builder(
         context,
@@ -152,27 +160,5 @@ class _SmoothScrollProviderState extends State<SmoothScrollProvider> {
             : const ClampingScrollPhysics(),
       ),
     );
-  }
-
-  void _scheduleAnimateTo() {
-    if (_animateToScheduled) {
-      return;
-    }
-    _animateToScheduled = true;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _animateToScheduled = false;
-      if (!mounted || !_controller.hasClients) {
-        return;
-      }
-      final target = _futurePosition;
-      if (target == null) {
-        return;
-      }
-      _controller.animateTo(
-        target,
-        duration: _fastAnimationDuration,
-        curve: Curves.linear,
-      );
-    });
   }
 }
