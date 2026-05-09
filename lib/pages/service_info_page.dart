@@ -46,6 +46,7 @@ class _ServiceInfoPageState extends State<ServiceInfoPage> {
   bool _loading = true;
   bool _discovering = false;
   bool _loadingAndroidSupportState = false;
+  bool _refreshingServiceState = false;
 
   String get _serverAddress =>
       appdata.settings[remoteServerAddressSettingIndex].trim();
@@ -258,6 +259,12 @@ class _ServiceInfoPageState extends State<ServiceInfoPage> {
   }
 
   Future<void> _refreshServiceState() async {
+    if (_refreshingServiceState) {
+      return;
+    }
+    setState(() {
+      _refreshingServiceState = true;
+    });
     try {
       final mode =
           normalizeAppRuntimeMode(appdata.settings[appRuntimeModeSettingIndex]);
@@ -279,6 +286,12 @@ class _ServiceInfoPageState extends State<ServiceInfoPage> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('刷新失败：$e'.tl)),
       );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _refreshingServiceState = false;
+        });
+      }
     }
   }
 
@@ -383,6 +396,23 @@ class _ServiceInfoPageState extends State<ServiceInfoPage> {
         _InfoCard(
           icon: Icons.link,
           title: '客户端连接'.tl,
+          titleTrailing: Align(
+            alignment: Alignment.centerRight,
+            child: SizedBox(
+              width: 108,
+              child: FilledButton.tonal(
+                onPressed: snapshot.hasConfiguredAddress
+                    ? _disconnectRemoteServer
+                    : null,
+                style: FilledButton.styleFrom(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  visualDensity: VisualDensity.compact,
+                ),
+                child: Text('断开连接'.tl),
+              ),
+            ),
+          ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -451,6 +481,7 @@ class _ServiceInfoPageState extends State<ServiceInfoPage> {
               Wrap(
                 spacing: 8,
                 runSpacing: 8,
+                crossAxisAlignment: WrapCrossAlignment.center,
                 children: [
                   FilledButton.tonal(
                     onPressed: _editServerAddress,
@@ -458,16 +489,20 @@ class _ServiceInfoPageState extends State<ServiceInfoPage> {
                   ),
                   FilledButton.tonal(
                     onPressed: _discovering ? null : _scanLocalNetwork,
-                    child: Text(_discovering ? '扫描中...'.tl : '扫描局域网'.tl),
+                    child: _ActionButtonLabel(
+                      label: '扫描局域网'.tl,
+                      loading: _discovering,
+                    ),
                   ),
                   FilledButton(
-                    onPressed: _loading ? null : _refreshServiceState,
-                    child: Text('刷新状态'.tl),
-                  ),
-                  FilledButton.tonal(
-                    onPressed:
-                        snapshot.hasConfiguredAddress ? _disconnectRemoteServer : null,
-                    child: Text('断开连接'.tl),
+                    onPressed: (_loading || _refreshingServiceState)
+                        ? null
+                        : _refreshServiceState,
+                    child: _ActionButtonLabel(
+                      label: '刷新状态'.tl,
+                      loading: _refreshingServiceState,
+                      indicatorColor: Colors.white,
+                    ),
                   ),
                 ],
               ),
@@ -999,11 +1034,13 @@ class _InfoCard extends StatelessWidget {
     required this.icon,
     required this.title,
     required this.child,
+    this.titleTrailing,
   });
 
   final IconData icon;
   final String title;
   final Widget child;
+  final Widget? titleTrailing;
 
   @override
   Widget build(BuildContext context) {
@@ -1018,10 +1055,16 @@ class _InfoCard extends StatelessWidget {
               children: [
                 Icon(icon),
                 const SizedBox(width: 8),
-                Text(
-                  title,
-                  style: Theme.of(context).textTheme.titleMedium,
+                Expanded(
+                  child: Text(
+                    title,
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
                 ),
+                if (titleTrailing != null) ...[
+                  const SizedBox(width: 12),
+                  Flexible(child: titleTrailing!),
+                ],
               ],
             ),
             const SizedBox(height: 12),
@@ -1029,6 +1072,48 @@ class _InfoCard extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+}
+
+class _ActionButtonLabel extends StatelessWidget {
+  const _ActionButtonLabel({
+    required this.label,
+    required this.loading,
+    this.indicatorColor,
+  });
+
+  final String label;
+  final bool loading;
+  final Color? indicatorColor;
+
+  @override
+  Widget build(BuildContext context) {
+    final baseStyle = DefaultTextStyle.of(context).style;
+    final textColor = baseStyle.color ?? Theme.of(context).colorScheme.onSurface;
+    return Stack(
+      alignment: Alignment.center,
+      children: [
+        AnimatedOpacity(
+          duration: const Duration(milliseconds: 160),
+          opacity: loading ? 0.45 : 1,
+          child: Text(label),
+        ),
+        IgnorePointer(
+          child: AnimatedOpacity(
+            duration: const Duration(milliseconds: 160),
+            opacity: loading ? 1 : 0,
+            child: SizedBox(
+              width: 16,
+              height: 16,
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
+                color: indicatorColor ?? textColor,
+              ),
+            ),
+          ),
+        ),
+      ],
     );
   }
 }
