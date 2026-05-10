@@ -7,6 +7,7 @@ import 'package:picakeep/components/layout.dart';
 import 'package:picakeep/components/scrollable.dart';
 import 'package:picakeep/foundation/app.dart';
 import 'package:picakeep/foundation/download.dart';
+import 'package:picakeep/foundation/download_model.dart';
 import 'package:picakeep/foundation/history.dart';
 import 'package:picakeep/foundation/local_library.dart';
 import 'package:picakeep/foundation/remote_library_data_source.dart';
@@ -59,12 +60,16 @@ class _HistoryPageState extends State<HistoryPage> {
   void initState() {
     super.initState();
     _loadHistoryItems();
-    DownloadManager().init();
-    LocalLibraryManager().ensureLoaded().then((_) {
+    final localLibraryManager = LocalLibraryManager();
+    () async {
+      if (await localLibraryManager.shouldUseDirectCurrentDownloadManager()) {
+        await DownloadManager().init();
+      }
+      await localLibraryManager.ensureLoaded();
       if (mounted) {
         setState(() {});
       }
-    });
+    }();
   }
 
   Future<void> _loadHistoryItems() async {
@@ -226,12 +231,15 @@ class _HistoryPageState extends State<HistoryPage> {
   }
 
   Future<void> _openComic(History item) async {
-    final dm = DownloadManager();
-    await dm.init();
-    var comic =
-        await dm.getComicOrNullFromCandidates(item.candidateDownloadIds());
-    comic ??= await LocalLibraryManager()
-        .findByCandidates(item.candidateDownloadIds());
+    final localLibraryManager = LocalLibraryManager();
+    DownloadedItem? comic =
+        await localLibraryManager.findByCandidates(item.candidateDownloadIds());
+    if (comic == null &&
+        await localLibraryManager.shouldUseDirectCurrentDownloadManager()) {
+      final dm = DownloadManager();
+      await dm.init();
+      comic = await dm.getComicOrNullFromCandidates(item.candidateDownloadIds());
+    }
     comic ??= await const RemoteLibraryDataSource()
         .findByCandidates(item.candidateDownloadIds());
     if (comic != null) {

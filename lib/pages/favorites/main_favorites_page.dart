@@ -5,6 +5,7 @@ import 'package:flutter_reorderable_grid_view/widgets/reorderable_builder.dart';
 import 'package:picakeep/foundation/app.dart';
 import 'package:picakeep/foundation/download.dart';
 import 'package:picakeep/foundation/local_favorites.dart';
+import 'package:picakeep/foundation/local_library.dart';
 import 'package:picakeep/tools/translations.dart';
 
 import '../../components/scrollable.dart';
@@ -89,7 +90,9 @@ class _MainFavoritesPageState extends State<MainFavoritesPage> {
     bool collapseDrawer = false,
   }) async {
     await _favoritesManager.init();
-    await DownloadManager().init();
+    if (await LocalLibraryManager().shouldUseDirectCurrentDownloadManager()) {
+      await DownloadManager().init();
+    }
     if (!mounted) {
       return;
     }

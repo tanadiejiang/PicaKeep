@@ -5,7 +5,6 @@ import 'package:path_provider/path_provider.dart';
 import 'package:sqlite3/sqlite3.dart';
 import '../base.dart';
 import '../tools/extensions.dart';
-import 'cover_thumbnail_cache.dart';
 import 'download_model.dart';
 
 class DownloadManager with _DownloadDb {

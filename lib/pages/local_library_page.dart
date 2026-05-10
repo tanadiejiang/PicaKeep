@@ -77,10 +77,19 @@ Future<void> _copyPath(BuildContext context, String path) async {
 }
 
 Future<void> _refreshLocalLibrary({bool rescan = false}) async {
+  final localLibraryManager = LocalLibraryManager();
   if (rescan) {
-    await LocalLibraryManager().rescan();
+    if (await localLibraryManager
+        .shouldBypassDirectDownloadManagerForCurrentDownloads()) {
+      await localLibraryManager.refresh();
+    } else if (await localLibraryManager
+        .shouldUsePrivilegedManagedDownloadHandling()) {
+      await localLibraryManager.refresh();
+    } else {
+      await localLibraryManager.rescan();
+    }
   } else {
-    await LocalLibraryManager().refresh();
+    await localLibraryManager.refresh();
   }
   App.notifyLocalDataChanged();
 }
