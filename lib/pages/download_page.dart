@@ -754,8 +754,18 @@ class DownloadPageLogic extends StateController {
     String direction,
   ) async {
     try {
+      var timeout = _localLoadTimeout;
+      final localLibraryManager = LocalLibraryManager();
+      if ((!_usesManagedDownloadSources &&
+              await localLibraryManager
+                  .shouldBypassDirectDownloadManagerForCurrentDownloads()) ||
+          (_usesManagedDownloadSources &&
+              await localLibraryManager
+                  .shouldUsePrivilegedManagedDownloadHandling())) {
+        timeout = const Duration(seconds: 20);
+      }
       final items = await _loadLocalComics(order, direction).timeout(
-        _localLoadTimeout,
+        timeout,
       );
       return _DownloadedLoadResult(items: items);
     } on TimeoutException {
@@ -838,6 +848,15 @@ class DownloadPageLogic extends StateController {
   Future<List<DownloadedItem>> _loadLocalComics(
       String order, String direction) async {
     if (!_usesManagedDownloadSources) {
+      final localLibraryManager = LocalLibraryManager();
+      if (await localLibraryManager
+          .shouldBypassDirectDownloadManagerForCurrentDownloads()) {
+        final items =
+            await localLibraryManager.getCurrentDownloadsWithShizukuFallback();
+        final downloads = items.cast<DownloadedItem>().toList();
+        _sortItems(downloads, order, direction);
+        return downloads;
+      }
       await DownloadManager().init();
       return DownloadManager().getAll(order, direction);
     }
@@ -928,12 +947,27 @@ class DownloadPageLogic extends StateController {
       return 0;
     }
     if (!_usesManagedDownloadSources) {
+      final localLibraryManager = LocalLibraryManager();
+      if (await localLibraryManager
+          .shouldBypassDirectDownloadManagerForCurrentDownloads()) {
+        final count =
+            await localLibraryManager.refreshCurrentDownloadsWithShizukuFallback();
+        await reload();
+        return count;
+      }
       await DownloadManager().init();
       final count = DownloadManager().scanDirectoryForComics();
       await reload();
       return count;
     }
-    final count = await LocalLibraryManager().rescan();
+    final localLibraryManager = LocalLibraryManager();
+    final count = await (() async {
+      if (await localLibraryManager.shouldUsePrivilegedManagedDownloadHandling()) {
+        await localLibraryManager.refresh();
+        return (await localLibraryManager.getManagedDownloads()).length;
+      }
+      return localLibraryManager.rescan();
+    })();
     await reload();
     return count;
   }

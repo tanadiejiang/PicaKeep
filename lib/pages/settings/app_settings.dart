@@ -3,6 +3,10 @@
 part of 'settings_page.dart';
 
 void _showSettingMessage(BuildContext context, String message) {
+  if (_suppressNextManagedDataSourceBusyMessage) {
+    _suppressNextManagedDataSourceBusyMessage = false;
+    return;
+  }
   LogManager.addLog(LogLevel.info, 'SettingsMessage', message);
 
   if (Scaffold.maybeOf(context) == null) {
@@ -29,6 +33,84 @@ void _showSettingMessage(BuildContext context, String message) {
       'Failed to show snack bar for "$message": $e\n$s',
     );
   }
+}
+
+OverlayEntry? _managedDataModeHintEntry;
+Timer? _managedDataModeHintTimer;
+bool _suppressNextManagedDataSourceBusyMessage = false;
+
+void _showManagedDataModeHint(BuildContext context, String message) {
+  print('[PicaKeep][ManagedDataSourceMode] show hint: $message');
+  final contexts = <BuildContext>[
+    context,
+    if (App.globalContext != null) App.globalContext!,
+  ];
+  OverlayState? overlay;
+  for (final candidate in contexts) {
+    overlay = Overlay.maybeOf(candidate, rootOverlay: true);
+    if (overlay != null) {
+      break;
+    }
+  }
+  if (overlay == null) {
+    LogManager.addLog(
+      LogLevel.warning,
+      'ManagedDataSourceMode',
+      'Failed to show hint because no Overlay was found: $message',
+    );
+    return;
+  }
+
+  _managedDataModeHintTimer?.cancel();
+  _managedDataModeHintEntry?.remove();
+
+  final theme = Theme.of(context);
+  _managedDataModeHintEntry = OverlayEntry(
+    builder: (overlayContext) {
+      final media = MediaQuery.maybeOf(overlayContext) ?? MediaQuery.of(context);
+      final bottom = media.viewPadding.bottom + 16;
+      return Positioned(
+        left: 12,
+        right: 12,
+        bottom: bottom,
+        child: IgnorePointer(
+          child: Material(
+            color: Colors.transparent,
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                color: theme.colorScheme.inverseSurface,
+                borderRadius: BorderRadius.circular(4),
+                boxShadow: const [
+                  BoxShadow(
+                    blurRadius: 10,
+                    color: Color(0x33000000),
+                    offset: Offset(0, 4),
+                  ),
+                ],
+              ),
+              child: Padding(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                child: Text(
+                  message,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    color: theme.colorScheme.onInverseSurface,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+    },
+  );
+  overlay.insert(_managedDataModeHintEntry!);
+  _managedDataModeHintTimer = Timer(const Duration(seconds: 5), () {
+    _managedDataModeHintEntry?.remove();
+    _managedDataModeHintEntry = null;
+  });
 }
 
 void _notifyManagedDataViews() {
@@ -90,32 +172,89 @@ Future<int?> _reloadManagedDataManagers(
   LogManager.addLog(
     LogLevel.info,
     'ManagedDataReload',
-    'DownloadManager.init:start',
+    'prepare current download access:start',
   );
-  await DownloadManager().init().timeout(const Duration(seconds: 10));
-  LogManager.addLog(
-      LogLevel.info, 'ManagedDataReload', 'DownloadManager.init:ok');
+  final localLibraryManager = LocalLibraryManager();
+  final mode = normalizeManagedDataSourceMode(
+    appdata.settings[managedDataSourceModeSettingIndex],
+  );
+  final currentDownloadParticipates = mode != managedDataSourceModeOriginalOnly;
+  final bypassDirectDownloadManager = await localLibraryManager
+      .shouldBypassDirectDownloadManagerForCurrentDownloads();
+  if (!currentDownloadParticipates) {
+    DownloadManager().dispose();
+    LogManager.addLog(
+      LogLevel.info,
+      'ManagedDataReload',
+      'prepare current download access:skip DownloadManager because mode=original_only',
+    );
+  } else if (bypassDirectDownloadManager) {
+    DownloadManager().dispose();
+    LogManager.addLog(
+      LogLevel.info,
+      'ManagedDataReload',
+      'prepare current download access:skip DownloadManager for privileged fallback',
+    );
+  } else {
+    await DownloadManager().init().timeout(const Duration(seconds: 10));
+    LogManager.addLog(
+      LogLevel.info,
+      'ManagedDataReload',
+      'prepare current download access:DownloadManager.init:ok',
+    );
+  }
 
   int? scanCount;
+  final privilegedManagedHandling =
+      await localLibraryManager.shouldUsePrivilegedManagedDownloadHandling();
   if (rescanLocalComics) {
-    LogManager.addLog(
-      LogLevel.info,
-      'ManagedDataReload',
-      'LocalLibraryManager.rescan:start',
-    );
-    scanCount = await LocalLibraryManager().rescan();
-    LogManager.addLog(
-      LogLevel.info,
-      'ManagedDataReload',
-      'LocalLibraryManager.rescan:ok count=$scanCount',
-    );
+    if (currentDownloadParticipates && bypassDirectDownloadManager) {
+      LogManager.addLog(
+        LogLevel.info,
+        'ManagedDataReload',
+        'LocalLibraryManager.refresh:start (privileged fallback rescan)',
+      );
+      await localLibraryManager.refresh();
+      scanCount = await localLibraryManager
+          .refreshCurrentDownloadsWithShizukuFallback();
+      LogManager.addLog(
+        LogLevel.info,
+        'ManagedDataReload',
+        'LocalLibraryManager.refresh:ok count=$scanCount (privileged fallback)',
+      );
+    } else if (privilegedManagedHandling) {
+      LogManager.addLog(
+        LogLevel.info,
+        'ManagedDataReload',
+        'LocalLibraryManager.refresh:start (managed privileged refresh)',
+      );
+      await localLibraryManager.refresh();
+      scanCount = (await localLibraryManager.getManagedDownloads()).length;
+      LogManager.addLog(
+        LogLevel.info,
+        'ManagedDataReload',
+        'LocalLibraryManager.refresh:ok count=$scanCount (managed privileged refresh)',
+      );
+    } else {
+      LogManager.addLog(
+        LogLevel.info,
+        'ManagedDataReload',
+        'LocalLibraryManager.rescan:start',
+      );
+      scanCount = await localLibraryManager.rescan();
+      LogManager.addLog(
+        LogLevel.info,
+        'ManagedDataReload',
+        'LocalLibraryManager.rescan:ok count=$scanCount',
+      );
+    }
   } else {
     LogManager.addLog(
       LogLevel.info,
       'ManagedDataReload',
       'LocalLibraryManager.refresh:start',
     );
-    await LocalLibraryManager().refresh();
+    await localLibraryManager.refresh();
     LogManager.addLog(
       LogLevel.info,
       'ManagedDataReload',
@@ -182,18 +321,6 @@ Future<void> _changeManagedDataSourceMode(
       'ManagedDataSourceMode',
       'Failed to switch managed data source mode from $previousValue to $nextValue: $e\n$s',
     );
-    appdata.settings[managedDataSourceModeSettingIndex] = previousValue;
-    setManagedDataSourceMode(previousValue);
-    await appdata.updateSettings().timeout(const Duration(seconds: 5));
-    try {
-      await _reloadManagedDataManagers().timeout(const Duration(seconds: 20));
-    } catch (rollbackError, rollbackStack) {
-      LogManager.addLog(
-        LogLevel.error,
-        'ManagedDataSourceMode',
-        'Rollback failed for managed data source mode $nextValue -> $previousValue: $rollbackError\n$rollbackStack',
-      );
-    }
     if (context.mounted) {
       _showSettingMessage(context, '切换失败，已恢复原设置'.tl);
     }
@@ -392,7 +519,8 @@ class _AndroidStorageAccessController {
 }
 
 bool _isAndroidRootModeEnabled() {
-  return normalizeAndroidRootMode(appdata.settings[androidRootModeSettingIndex]) ==
+  return normalizeAndroidRootMode(
+          appdata.settings[androidRootModeSettingIndex]) ==
       '1';
 }
 
@@ -489,8 +617,18 @@ Future<List<String>> _listDirectoriesWithRoot(String path) async {
 }
 
 Future<List<String>> _listDirectoriesWithShizuku(String path) {
+  final rawPath = path.trim().replaceAll('\\', '/');
+  final normalizedPath = rawPath.isEmpty
+      ? '/'
+      : (() {
+          var value = rawPath.startsWith('/') ? rawPath : '/$rawPath';
+          while (value.length > 1 && value.endsWith('/')) {
+            value = value.substring(0, value.length - 1);
+          }
+          return value.isEmpty ? '/' : value;
+        })();
   return _AndroidStorageAccessController.instance.listDirectoriesWithShizuku(
-    path,
+    normalizedPath,
   );
 }
 
@@ -504,8 +642,8 @@ Future<String?> _openInternalDirectoryBrowser(
   }
   final controller = _AndroidStorageAccessController.instance;
   final hasAllFilesAccess = await controller.hasManageAllFilesAccess();
-  final hasShizukuAccess = _isAndroidShizukuModeEnabled() &&
-      await controller.hasShizukuPermission();
+  final hasShizukuAccess =
+      _isAndroidShizukuModeEnabled() && await controller.hasShizukuPermission();
   final hasRootAccess =
       _isAndroidRootModeEnabled() && await _requestAndroidRootAccess();
   if (!hasAllFilesAccess && !hasShizukuAccess && !hasRootAccess) {
@@ -556,8 +694,6 @@ class _InternalDirectoryBrowserPageState
     extends State<_InternalDirectoryBrowserPage> {
   static const _androidPresetRoots = <String>[
     '/',
-    '/storage',
-    '/storage/emulated',
     '/storage/emulated/0',
     '/data/user/0/com.github.pacalini.pica_comic',
     '/data/data/com.github.pacalini.pica_comic',
@@ -638,7 +774,9 @@ class _InternalDirectoryBrowserPageState
         _AndroidDirectoryBrowseMode.manageAllFiles =>
           await _listDirectoriesWithDartIo(targetPath),
       };
-      if (!mounted || loadToken != _pathLoadToken || targetPath != _currentPath) {
+      if (!mounted ||
+          loadToken != _pathLoadToken ||
+          targetPath != _currentPath) {
         return;
       }
       setState(() {
@@ -646,7 +784,9 @@ class _InternalDirectoryBrowserPageState
         _loading = false;
       });
     } catch (e) {
-      if (!mounted || loadToken != _pathLoadToken || targetPath != _currentPath) {
+      if (!mounted ||
+          loadToken != _pathLoadToken ||
+          targetPath != _currentPath) {
         return;
       }
       setState(() {
@@ -915,8 +1055,8 @@ class _AndroidManageAllFilesAccessTileState
   }
 
   Future<void> _load() async {
-    final granted =
-        await _AndroidStorageAccessController.instance.hasManageAllFilesAccess();
+    final granted = await _AndroidStorageAccessController.instance
+        .hasManageAllFilesAccess();
     if (!mounted) {
       return;
     }
@@ -956,12 +1096,14 @@ class _AndroidShizukuModeTile extends StatefulWidget {
   const _AndroidShizukuModeTile();
 
   @override
-  State<_AndroidShizukuModeTile> createState() => _AndroidShizukuModeTileState();
+  State<_AndroidShizukuModeTile> createState() =>
+      _AndroidShizukuModeTileState();
 }
 
 class _AndroidShizukuModeTileState extends State<_AndroidShizukuModeTile>
     with WidgetsBindingObserver {
   bool _busy = false;
+  bool _enabled = _isAndroidShizukuModeEnabled();
   bool? _installed;
   bool? _running;
   bool? _granted;
@@ -994,14 +1136,16 @@ class _AndroidShizukuModeTileState extends State<_AndroidShizukuModeTile>
   Future<void> _load() async {
     final controller = _AndroidStorageAccessController.instance;
     final status = await controller.getShizukuStatus();
-    final nextEnabled = status.running && status.permissionGranted;
-    if (_isAndroidShizukuModeEnabled() != nextEnabled) {
-      unawaited(_setAndroidShizukuModeEnabled(nextEnabled));
+    var nextEnabled = _isAndroidShizukuModeEnabled();
+    if (nextEnabled && !(status.running && status.permissionGranted)) {
+      await _setAndroidShizukuModeEnabled(false);
+      nextEnabled = false;
     }
     if (!mounted) {
       return;
     }
     setState(() {
+      _enabled = nextEnabled;
       _installed = status.installed;
       _running = status.running;
       _granted = status.permissionGranted;
@@ -1033,21 +1177,28 @@ class _AndroidShizukuModeTileState extends State<_AndroidShizukuModeTile>
   }
 
   Future<void> _setValue(bool value) async {
-    if (_busy) {
+    if (_busy || value == _enabled) {
       return;
     }
     setState(() {
       _busy = true;
+      _enabled = value;
     });
     try {
       final controller = _AndroidStorageAccessController.instance;
       if (value) {
         final action = await _askEnableAction();
         if (!mounted || action == null) {
+          setState(() {
+            _enabled = _isAndroidShizukuModeEnabled();
+          });
           await _load();
           return;
         }
         if (action == 'open') {
+          setState(() {
+            _enabled = _isAndroidShizukuModeEnabled();
+          });
           await controller.openShizukuApp();
           if (mounted) {
             _showSettingMessage(context, '已打开 Shizuku；回到本应用后会自动重新检测服务和授权状态'.tl);
@@ -1055,11 +1206,13 @@ class _AndroidShizukuModeTileState extends State<_AndroidShizukuModeTile>
           return;
         }
 
-        final running = _running ?? (await controller.getShizukuStatus()).running;
+        final running =
+            _running ?? (await controller.getShizukuStatus()).running;
         if (!running) {
           await controller.openShizukuApp();
           if (mounted) {
-            _showSettingMessage(context, '当前未连接到 Shizuku 服务，已为你打开 Shizuku；启动服务后再返回授权'.tl);
+            _showSettingMessage(
+                context, '当前未连接到 Shizuku 服务，已为你打开 Shizuku；启动服务后再返回授权'.tl);
           }
           return;
         }
@@ -1070,9 +1223,15 @@ class _AndroidShizukuModeTileState extends State<_AndroidShizukuModeTile>
             _showSettingMessage(context, '未获取到 Shizuku 授权'.tl);
           }
           await _setAndroidShizukuModeEnabled(false);
+          if (mounted) {
+            setState(() {
+              _enabled = false;
+            });
+          }
           await _load();
           return;
         }
+        await _setAndroidShizukuModeEnabled(true);
       } else {
         await _setAndroidShizukuModeEnabled(false);
       }
@@ -1091,7 +1250,7 @@ class _AndroidShizukuModeTileState extends State<_AndroidShizukuModeTile>
 
   @override
   Widget build(BuildContext context) {
-    final enabled = _granted ?? false;
+    final enabled = _enabled;
     final subtitle = switch ((_installed, _running, _granted)) {
       (null, _, _) => '正在检测 Shizuku 状态'.tl,
       (false, _, _) => '未安装 Shizuku；点击开关后会尝试打开 Shizuku'.tl,
@@ -1121,9 +1280,50 @@ class _AndroidRootModeTile extends StatefulWidget {
   State<_AndroidRootModeTile> createState() => _AndroidRootModeTileState();
 }
 
-class _AndroidRootModeTileState extends State<_AndroidRootModeTile> {
+class _AndroidRootModeTileState extends State<_AndroidRootModeTile>
+    with WidgetsBindingObserver {
   bool _busy = false;
   bool _enabled = _isAndroidRootModeEnabled();
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) {
+        return;
+      }
+      unawaited(_load());
+    });
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _load();
+    }
+  }
+
+  Future<void> _load() async {
+    var nextEnabled = _isAndroidRootModeEnabled();
+    if (nextEnabled && !await _requestAndroidRootAccess()) {
+      appdata.settings[androidRootModeSettingIndex] = '0';
+      await appdata.updateSettings();
+      nextEnabled = false;
+    }
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _enabled = nextEnabled;
+    });
+  }
 
   Future<void> _setValue(bool value) async {
     if (_busy || value == _enabled) {
@@ -1254,8 +1454,7 @@ class _DeleteBehaviorTileState extends State<_DeleteBehaviorTile> {
 
   Future<void> _setValue(String value) async {
     final normalized = normalizeDeleteBehavior(value);
-    if (_busy ||
-        normalized == appdata.settings[deleteBehaviorSettingIndex]) {
+    if (_busy || normalized == appdata.settings[deleteBehaviorSettingIndex]) {
       return;
     }
     setState(() {
@@ -1415,15 +1614,54 @@ class _ManagedDataSourceModeTileState
       'ManagedDataSourceMode',
       'tap current=$_currentValue target=$value busy=$_busy pending=${_pendingValue ?? ''}',
     );
-    if (_busy || value == _currentValue) {
+    if (_busy) {
       return;
     }
+    final accessRequirement = await LocalLibraryManager()
+        .getManagedSourceAccessRequirement(value);
+    if (!mounted) {
+      return;
+    }
+    LogManager.addLog(
+      LogLevel.info,
+      'ManagedDataSourceMode',
+      'access requirement current=$_currentValue target=$value result=$accessRequirement',
+    );
+    print(
+      '[PicaKeep][ManagedDataSourceMode] access current=$_currentValue target=$value result=$accessRequirement',
+    );
+    String? hintMessage;
+    switch (accessRequirement) {
+      case ManagedSourceAccessRequirement.rootRequired:
+        hintMessage = '该档位的路径需要root权限才能访问'.tl;
+        break;
+      case ManagedSourceAccessRequirement.shizukuPermissionMissing:
+        hintMessage = '权限不足请检查shizuku授权情况'.tl;
+        break;
+      case ManagedSourceAccessRequirement.ok:
+        break;
+    }
+    if (hintMessage != null) {
+      _showManagedDataModeHint(context, hintMessage);
+    }
+    if (value == _currentValue) {
+      return;
+    }
+    _suppressNextManagedDataSourceBusyMessage =
+        accessRequirement != ManagedSourceAccessRequirement.ok;
     setState(() {
       _busy = true;
       _pendingValue = value;
     });
     try {
       await widget.onChanged(value).timeout(const Duration(seconds: 20));
+      if (mounted && hintMessage != null) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) {
+            _showManagedDataModeHint(context, hintMessage!);
+          }
+        });
+      }
     } catch (e, s) {
       LogManager.addLog(
         LogLevel.error,
@@ -1736,7 +1974,8 @@ class _DirectoryPathDialog extends StatelessWidget {
                       style: OutlinedButton.styleFrom(
                         minimumSize: const Size(double.infinity, 48),
                       ),
-                      onPressed: currentPath.isEmpty ? null : onOpenCurrentDirectory,
+                      onPressed:
+                          currentPath.isEmpty ? null : onOpenCurrentDirectory,
                       icon: const Icon(Icons.launch, size: 18),
                       label: Text('打开当前目录'.tl),
                     );
@@ -1801,7 +2040,8 @@ class _DownloadDirTileState extends State<_DownloadDirTile> {
         title: '设置本应用下载目录'.tl,
         hintText: '请输入下载目录路径'.tl,
         helperText:
-            '提示：点按“浏览”调用系统目录选择；长按“浏览”打开内置文件夹浏览，支持安卓全部文件访问权限、Shizuku 授权或 Root 模式。'.tl,
+            '提示：点按“浏览”调用系统目录选择；长按“浏览”打开内置文件夹浏览，支持安卓全部文件访问权限、Shizuku 授权或 Root 模式。'
+                .tl,
         controller: controller,
         onBrowse: () async {
           final picked = await _pickFolder();
@@ -1919,7 +2159,8 @@ class _OriginalDownloadDirTileState extends State<_OriginalDownloadDirTile> {
         title: '设置原应用下载目录'.tl,
         hintText: '请输入原应用下载目录路径'.tl,
         helperText:
-            '提示：点按“浏览”调用系统目录选择；长按“浏览”打开内置文件夹浏览，支持安卓全部文件访问权限、Shizuku 授权或 Root 模式。'.tl,
+            '提示：点按“浏览”调用系统目录选择；长按“浏览”打开内置文件夹浏览，支持安卓全部文件访问权限、Shizuku 授权或 Root 模式。'
+                .tl,
         controller: controller,
         onBrowse: () async {
           final picked = await _pickFolder();

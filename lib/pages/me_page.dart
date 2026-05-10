@@ -7,6 +7,7 @@ import 'package:picakeep/foundation/app.dart';
 import 'package:picakeep/foundation/app_runtime_mode.dart';
 import 'package:picakeep/foundation/history.dart';
 import 'package:picakeep/foundation/download.dart';
+import 'package:picakeep/foundation/download_model.dart';
 import 'package:picakeep/foundation/local_data_source.dart';
 import 'package:picakeep/foundation/local_library.dart';
 import 'package:picakeep/foundation/remote_library_data_source.dart';
@@ -251,6 +252,13 @@ class _MePageState extends State<MePage> {
       appdata.settings[managedDataSourceModeSettingIndex],
     );
     if (mode == managedDataSourceModeCurrentOnly) {
+      final localLibraryManager = LocalLibraryManager();
+      if (await localLibraryManager
+          .shouldBypassDirectDownloadManagerForCurrentDownloads()) {
+        return (await localLibraryManager
+                .getCurrentDownloadsWithShizukuFallback())
+            .length;
+      }
       final manager = DownloadManager();
       await manager.init();
       return manager.getAll().length;
@@ -775,12 +783,16 @@ class _MePageState extends State<MePage> {
 
   void _openComicFromHistory(BuildContext context, History history) async {
     try {
-      final dm = DownloadManager();
-      await dm.init();
-      var comic =
-          await dm.getComicOrNullFromCandidates(history.candidateDownloadIds());
-      comic ??= await LocalLibraryManager()
+      final localLibraryManager = LocalLibraryManager();
+      DownloadedItem? comic = await localLibraryManager
           .findByCandidates(history.candidateDownloadIds());
+      if (comic == null &&
+          await localLibraryManager.shouldUseDirectCurrentDownloadManager()) {
+        final dm = DownloadManager();
+        await dm.init();
+        comic =
+            await dm.getComicOrNullFromCandidates(history.candidateDownloadIds());
+      }
       comic ??= await const RemoteLibraryDataSource()
           .findByCandidates(history.candidateDownloadIds());
       if (comic != null) {

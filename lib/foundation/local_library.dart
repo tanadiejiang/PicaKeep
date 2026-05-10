@@ -21,6 +21,12 @@ enum LocalLibrarySourceKind {
   customPath,
 }
 
+enum ManagedSourceAccessRequirement {
+  ok,
+  shizukuPermissionMissing,
+  rootRequired,
+}
+
 class LocalLibrarySource {
   const LocalLibrarySource({
     required this.id,
@@ -457,9 +463,144 @@ class LocalLibraryManager {
     return _joinPath(support.path, 'download');
   }
 
+  Future<bool> shouldUseShizukuFallbackForCurrentDownloads() async {
+    final currentPath = await resolveCurrentDownloadPath();
+    final enabled = await _shouldUsePrivilegedFallbackForDirectory(currentPath);
+    print(
+      '[PicaKeep][Privileged] current downloads path=$currentPath fallback=$enabled',
+    );
+    return enabled;
+  }
+
+  Future<bool> shouldBypassDirectDownloadManagerForCurrentDownloads() async {
+    final mode = normalizeManagedDataSourceMode(
+      appdata.settings[managedDataSourceModeSettingIndex],
+    );
+    if (mode == managedDataSourceModeOriginalOnly) {
+      return false;
+    }
+    return shouldUseShizukuFallbackForCurrentDownloads();
+  }
+
+  Future<bool> shouldUseDirectCurrentDownloadManager() async {
+    final mode = normalizeManagedDataSourceMode(
+      appdata.settings[managedDataSourceModeSettingIndex],
+    );
+    if (mode == managedDataSourceModeOriginalOnly) {
+      return false;
+    }
+    return !await shouldUseShizukuFallbackForCurrentDownloads();
+  }
+
+  Future<bool> shouldUsePrivilegedManagedDownloadHandling() async {
+    final sources = await _buildSources();
+    for (final source in sources) {
+      if (!source.isManagedDownload) {
+        continue;
+      }
+      if (await _shouldUsePrivilegedFallbackForDirectory(source.path)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  Future<ManagedSourceAccessRequirement> getManagedSourceAccessRequirement(
+    String mode,
+  ) async {
+    final normalizedMode = normalizeManagedDataSourceMode(mode);
+    final currentPath = await resolveCurrentDownloadPath();
+    final originalPath = configuredOriginalDownloadPath;
+    final paths = <String>[
+      switch (normalizedMode) {
+        managedDataSourceModeCurrentOnly => currentPath,
+        managedDataSourceModeOriginalOnly => originalPath ?? '',
+        managedDataSourceModeCurrentAndOriginal => currentPath,
+        _ => currentPath,
+      },
+      if (normalizedMode == managedDataSourceModeCurrentAndOriginal &&
+          originalPath != null &&
+          originalPath.isNotEmpty &&
+          originalPath != currentPath)
+        originalPath,
+    ].map((e) => e.trim()).where((e) => e.isNotEmpty).toSet().toList();
+
+    if (paths.isEmpty) {
+      return ManagedSourceAccessRequirement.ok;
+    }
+
+    final rootEnabled =
+        normalizeAndroidRootMode(appdata.settings[androidRootModeSettingIndex]) ==
+            '1';
+    final shizukuEnabled = normalizeAndroidShizukuMode(
+          appdata.settings[androidShizukuModeSettingIndex],
+        ) ==
+        '1';
+    final rootGranted = rootEnabled ? await _hasRootAccess() : false;
+    final shizukuGranted =
+        shizukuEnabled ? await _hasShizukuPermission() : false;
+
+    for (final path in paths) {
+      if (_canAccessDirectoryWithDartIo(path)) {
+        continue;
+      }
+      if (!Platform.isAndroid) {
+        continue;
+      }
+      if (rootGranted) {
+        continue;
+      }
+      if (!shizukuEnabled || !shizukuGranted) {
+        return ManagedSourceAccessRequirement.shizukuPermissionMissing;
+      }
+      if (await _existsWithShizukuAccess(path)) {
+        continue;
+      }
+      if (_looksLikeRootOnlyPath(path)) {
+        return ManagedSourceAccessRequirement.rootRequired;
+      }
+      return ManagedSourceAccessRequirement.shizukuPermissionMissing;
+    }
+
+    return ManagedSourceAccessRequirement.ok;
+  }
+
+  Future<List<LocalLibraryComicItem>>
+      getCurrentDownloadsWithShizukuFallback() async {
+    final source = await _currentDownloadSource();
+    if (!await _directoryExists(source.path)) {
+      print(
+        '[PicaKeep][Privileged] current downloads source missing: ${source.path}',
+      );
+      return const <LocalLibraryComicItem>[];
+    }
+    final items = await _loadManagedDownloadSourceMetadata(
+      source,
+      trustStorageFromDatabase: true,
+    );
+    print(
+      '[PicaKeep][Privileged] current downloads loaded ${items.length} items from ${source.path}',
+    );
+    _sortItems(items, localLibraryListSort);
+    return items;
+  }
+
+  Future<int> refreshCurrentDownloadsWithShizukuFallback() async {
+    return (await getCurrentDownloadsWithShizukuFallback()).length;
+  }
+
   Future<Directory> _localCacheRoot() async {
     final support = await getApplicationSupportDirectory();
     return Directory(_joinPath(support.path, 'local_library_cache'));
+  }
+
+  Future<LocalLibrarySource> _currentDownloadSource() async {
+    return LocalLibrarySource(
+      id: 'current_download',
+      title: '本应用下载目录',
+      path: await resolveCurrentDownloadPath(),
+      kind: LocalLibrarySourceKind.currentDownload,
+    );
   }
 
   Future<_LocalLibrarySourceCache> _loadSourceCache(
@@ -903,7 +1044,12 @@ class LocalLibraryManager {
       if (!await _directoryExists(source.path)) {
         continue;
       }
-      items.addAll(await _loadManagedDownloadSourceMetadata(source));
+      final trustStorageFromDatabase =
+          await _shouldUsePrivilegedFallbackForDirectory(source.path);
+      items.addAll(await _loadManagedDownloadSourceMetadata(
+        source,
+        trustStorageFromDatabase: trustStorageFromDatabase,
+      ));
     }
     _sortItems(items, localLibraryListSort);
     return items;
@@ -1120,8 +1266,9 @@ class LocalLibraryManager {
   }
 
   Future<List<LocalLibraryComicItem>> _loadManagedDownloadSourceMetadata(
-    LocalLibrarySource source,
-  ) async {
+    LocalLibrarySource source, {
+    bool trustStorageFromDatabase = false,
+  }) async {
     final dbPath = _joinPath(source.path, 'download.db');
     final dbBytes = await _readFileBytes(dbPath);
     if (dbBytes == null || dbBytes.isEmpty) {
@@ -1136,97 +1283,112 @@ class LocalLibraryManager {
     final openDbPath = (await _writeDatabaseSnapshot(source, dbBytes)).path;
 
     final items = <LocalLibraryComicItem>[];
-    final db = sqlite3.open(openDbPath);
     try {
-      final rows = db
-          .select('select * from download order by time desc')
-          .toList()
-        ..sort((a, b) {
-          final score = _downloadRowPriority(
-            (b['id'] as String? ?? '').trim(),
-            (b['directory'] as String? ?? '').trim(),
-          ).compareTo(_downloadRowPriority(
-            (a['id'] as String? ?? '').trim(),
-            (a['directory'] as String? ?? '').trim(),
-          ));
-          if (score != 0) {
-            return score;
-          }
-          return ((b['time'] as int?) ?? 0).compareTo((a['time'] as int?) ?? 0);
-        });
-      final seenDirectories = <String>{};
+      final db = sqlite3.open(openDbPath);
+      try {
+        final rows = db
+            .select('select * from download order by time desc')
+            .toList()
+          ..sort((a, b) {
+            final score = _downloadRowPriority(
+              (b['id'] as String? ?? '').trim(),
+              (b['directory'] as String? ?? '').trim(),
+            ).compareTo(_downloadRowPriority(
+              (a['id'] as String? ?? '').trim(),
+              (a['directory'] as String? ?? '').trim(),
+            ));
+            if (score != 0) {
+              return score;
+            }
+            return ((b['time'] as int?) ?? 0)
+                .compareTo((a['time'] as int?) ?? 0);
+          });
+        final seenDirectories = <String>{};
 
-      for (final row in rows) {
-        final rawId = (row['id'] as String? ?? '').trim();
-        final jsonText = row['json'] as String? ?? '{}';
-        final timeValue = row['time'] as int? ?? 0;
-        final rawDirectory = (row['directory'] as String? ?? '').trim();
-        final baseItem = _parseDownloadedItem(
+        for (final row in rows) {
+          try {
+            final rawId = (row['id'] as String? ?? '').trim();
+            final jsonText = row['json'] as String? ?? '{}';
+            final timeValue = row['time'] as int? ?? 0;
+            final rawDirectory = (row['directory'] as String? ?? '').trim();
+            final baseItem = _parseDownloadedItem(
+                  rawId,
+                  jsonText,
+                  DateTime.fromMillisecondsSinceEpoch(timeValue),
+                  rawDirectory,
+                ) ??
+                _downloadedItemFromDbRow(
+                  row,
+                  DateTime.fromMillisecondsSinceEpoch(timeValue),
+                  rawDirectory,
+                );
+            if (baseItem == null) {
+              continue;
+            }
+
+            final itemDirectory = _resolveDownloadItemDirectoryFromMetadata(
+              source.path,
               rawId,
-              jsonText,
-              DateTime.fromMillisecondsSinceEpoch(timeValue),
               rawDirectory,
-            ) ??
-            _downloadedItemFromDbRow(
-              row,
-              DateTime.fromMillisecondsSinceEpoch(timeValue),
-              rawDirectory,
+              baseItem,
             );
-        if (baseItem == null) {
-          continue;
-        }
+            final dedupeKey = itemDirectory.toLowerCase();
+            if (!seenDirectories.add(dedupeKey)) {
+              continue;
+            }
 
-        final itemDirectory = _resolveDownloadItemDirectoryFromMetadata(
-          source.path,
-          rawId,
-          rawDirectory,
-          baseItem,
-        );
-        final dedupeKey = itemDirectory.toLowerCase();
-        if (!seenDirectories.add(dedupeKey)) {
-          continue;
+            final localType = _effectiveDownloadTypeForLocalItem(baseItem, rawId);
+            final eps = baseItem.eps.isNotEmpty
+                ? List<String>.from(baseItem.eps)
+                : _buildLocalEpisodeNames(baseItem.downloadedEps.length);
+            final downloadedEps = baseItem.downloadedEps.isNotEmpty
+                ? List<int>.from(baseItem.downloadedEps)
+                : List<int>.generate(eps.length, (index) => index);
+            final cachedItem = cache.itemFor(rawId, itemDirectory);
+            final localStorageExists = trustStorageFromDatabase
+                ? true
+                : await _managedDownloadDirectoryExists(
+                    source.path,
+                    itemDirectory,
+                    sourceDirectoryNames,
+                  );
+            if (!localStorageExists && !showAllDatabaseRecords) {
+              continue;
+            }
+            final item = LocalLibraryComicItem(
+              itemId: 'local_download::${source.id}::$rawId',
+              originalId: rawId,
+              type: localType,
+              name: _metadataTitleForDownloadedRow(row, baseItem),
+              subTitle: _metadataAuthorForDownloadedRow(row, jsonText, baseItem),
+              tags: _metadataTagsForDownloadedRow(row, jsonText, baseItem),
+              sourceDisplayName:
+                  _displayNameForDownloaded(baseItem, rawId, localType),
+              fileSystemPath: itemDirectory,
+              episodeFiles: cachedItem?.episodeFiles ?? const <int, List<String>>{},
+              downloadedEps: downloadedEps,
+              eps: eps,
+              localCoverPath: localStorageExists ? cachedItem?.coverPath : null,
+              localStorageExists: localStorageExists,
+              canDelete: false,
+              aliases: [rawId, itemDirectory],
+              favoriteTarget: _favoriteTargetForDownloaded(baseItem, rawId),
+              comicSize: baseItem.comicSize,
+            )..time = baseItem.time;
+            items.add(item);
+          } catch (e) {
+            print('[PicaKeep] Skip invalid download row for ${source.path}: $e');
+          }
         }
-
-        final localType = _effectiveDownloadTypeForLocalItem(baseItem, rawId);
-        final eps = baseItem.eps.isNotEmpty
-            ? List<String>.from(baseItem.eps)
-            : _buildLocalEpisodeNames(baseItem.downloadedEps.length);
-        final downloadedEps = baseItem.downloadedEps.isNotEmpty
-            ? List<int>.from(baseItem.downloadedEps)
-            : List<int>.generate(eps.length, (index) => index);
-        final cachedItem = cache.itemFor(rawId, itemDirectory);
-        final localStorageExists = _managedDownloadDirectoryExistsInIndex(
-          source.path,
-          itemDirectory,
-          sourceDirectoryNames,
-        );
-        if (!localStorageExists && !showAllDatabaseRecords) {
-          continue;
-        }
-        final item = LocalLibraryComicItem(
-          itemId: 'local_download::${source.id}::$rawId',
-          originalId: rawId,
-          type: localType,
-          name: _metadataTitleForDownloadedRow(row, baseItem),
-          subTitle: _metadataAuthorForDownloadedRow(row, jsonText, baseItem),
-          tags: _metadataTagsForDownloadedRow(row, jsonText, baseItem),
-          sourceDisplayName:
-              _displayNameForDownloaded(baseItem, rawId, localType),
-          fileSystemPath: itemDirectory,
-          episodeFiles: cachedItem?.episodeFiles ?? const <int, List<String>>{},
-          downloadedEps: downloadedEps,
-          eps: eps,
-          localCoverPath: localStorageExists ? cachedItem?.coverPath : null,
-          localStorageExists: localStorageExists,
-          canDelete: false,
-          aliases: [rawId, itemDirectory],
-          favoriteTarget: _favoriteTargetForDownloaded(baseItem, rawId),
-          comicSize: baseItem.comicSize,
-        )..time = baseItem.time;
-        items.add(item);
+      } finally {
+        db.dispose();
       }
-    } finally {
-      db.dispose();
+    } catch (e) {
+      print('[PicaKeep] Failed to load download.db for ${source.path}: $e');
+      return _loadDirectoryOnlyDownloadSourceMetadata(source);
+    }
+    if (items.isEmpty && trustStorageFromDatabase) {
+      return _loadDirectoryOnlyDownloadSourceMetadata(source);
     }
     _warmManagedDownloadCache(source, cache, items, eagerCount: 24);
     return items;
@@ -1238,6 +1400,17 @@ class LocalLibraryManager {
     final entries = await _listDirectoryEntries(source.path);
     final items = <LocalLibraryComicItem>[];
     for (final entry in entries.where((entry) => entry.isDirectory)) {
+      final episodeFiles = await _buildDownloadedEpisodeFiles(entry.path, null);
+      if (episodeFiles.isEmpty) {
+        continue;
+      }
+      final orderedEpisodes = episodeFiles.entries.toList()
+        ..sort((a, b) => a.key.compareTo(b.key));
+      final coverPath = await _pickCoverPath(
+        entry.path,
+        orderedEpisodes.isEmpty ? const <String>[] : orderedEpisodes.first.value,
+      );
+      final sizeMb = await _computeDirectorySizeMbForPath(entry.path);
       final item = LocalLibraryComicItem(
         itemId: 'local_download::${source.id}::${entry.name}',
         originalId: entry.name,
@@ -1247,13 +1420,14 @@ class LocalLibraryManager {
         tags: const <String>[],
         sourceDisplayName: '本地扫描',
         fileSystemPath: entry.path,
-        episodeFiles: const <int, List<String>>{},
-        downloadedEps: const <int>[0],
-        eps: const <String>['全部'],
-        localCoverPath: null,
+        episodeFiles: episodeFiles,
+        downloadedEps: List<int>.from(orderedEpisodes.map((entry) => entry.key)),
+        eps: _buildLocalEpisodeNames(episodeFiles.length),
+        localCoverPath: coverPath,
         localStorageExists: true,
         canDelete: false,
         aliases: [entry.name, entry.path],
+        comicSize: sizeMb,
       )..time = DateTime.now();
       items.add(item);
     }
@@ -1268,6 +1442,8 @@ class LocalLibraryManager {
       return;
     }
 
+    final trustStorageFromDatabase =
+        await _shouldUsePrivilegedFallbackForDirectory(source.path);
     final cache = await _loadSourceCache(source);
     final sourceDirectoryNames = (await _listDirectoryEntries(source.path))
         .where((entry) => entry.isDirectory)
@@ -1338,11 +1514,13 @@ class LocalLibraryManager {
             ? List<int>.from(baseItem.downloadedEps)
             : const <int>[0];
         final cachedItem = cache.itemFor(rawId, itemDirectory);
-        final localStorageExists = _managedDownloadDirectoryExistsInIndex(
-          source.path,
-          itemDirectory,
-          sourceDirectoryNames,
-        );
+        final localStorageExists = trustStorageFromDatabase
+            ? true
+            : await _managedDownloadDirectoryExists(
+                source.path,
+                itemDirectory,
+                sourceDirectoryNames,
+              );
         if (!localStorageExists && !showAllDatabaseRecords) {
           continue;
         }
@@ -1963,6 +2141,21 @@ class LocalLibraryManager {
     return sourceDirectoryNames.contains(candidateName.toLowerCase());
   }
 
+  static Future<bool> _managedDownloadDirectoryExists(
+    String rootPath,
+    String itemDirectory,
+    Set<String> sourceDirectoryNames,
+  ) async {
+    if (_managedDownloadDirectoryExistsInIndex(
+      rootPath,
+      itemDirectory,
+      sourceDirectoryNames,
+    )) {
+      return true;
+    }
+    return _directoryExists(itemDirectory);
+  }
+
   static Future<bool> _directoryExists(String path) async {
     try {
       if (Directory(path).existsSync()) {
@@ -2138,6 +2331,98 @@ class LocalLibraryManager {
       }
     }
     return null;
+  }
+
+  static Future<bool> _shouldUsePrivilegedFallbackForDirectory(
+    String path,
+  ) async {
+    if (!Platform.isAndroid) {
+      return false;
+    }
+    if (!_isAndroidPrivilegedAccessEnabled()) {
+      return false;
+    }
+    if (_canAccessDirectoryWithDartIo(path)) {
+      return false;
+    }
+    return true;
+  }
+
+  static bool _looksLikeRootOnlyPath(String path) {
+    final normalized = path.trim().replaceAll('\\', '/').toLowerCase();
+    return normalized == '/data' ||
+        normalized.startsWith('/data/') ||
+        normalized.startsWith('/apex/') ||
+        normalized.startsWith('/system/');
+  }
+
+  static Future<bool> _existsWithShizukuAccess(String path) async {
+    if (!Platform.isAndroid) {
+      return false;
+    }
+    try {
+      return await _storageAccessChannel.invokeMethod<bool>(
+            'existsWithShizuku',
+            {'path': path},
+          ) ??
+          false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  static Future<bool> _hasShizukuPermission() async {
+    if (!Platform.isAndroid) {
+      return false;
+    }
+    try {
+      return await _storageAccessChannel.invokeMethod<bool>(
+            'hasShizukuPermission',
+          ) ??
+          false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  static Future<bool> _hasRootAccess() async {
+    if (!Platform.isAndroid) {
+      return false;
+    }
+    try {
+      return await _storageAccessChannel.invokeMethod<bool>(
+            'hasRootAccess',
+          ) ??
+          false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  static bool _isAndroidPrivilegedAccessEnabled() {
+    final rootEnabled =
+        normalizeAndroidRootMode(appdata.settings[androidRootModeSettingIndex]) ==
+            '1';
+    if (rootEnabled) {
+      return true;
+    }
+    return normalizeAndroidShizukuMode(
+          appdata.settings[androidShizukuModeSettingIndex],
+        ) ==
+        '1';
+  }
+
+  static bool _canAccessDirectoryWithDartIo(String path) {
+    try {
+      final directory = Directory(path);
+      if (!directory.existsSync()) {
+        return false;
+      }
+      directory.listSync(followLinks: false);
+      return true;
+    } catch (_) {
+      return false;
+    }
   }
 
   static List<FileSystemEntity> _safeList(Directory dir) {

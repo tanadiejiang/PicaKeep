@@ -35,6 +35,15 @@ class OpenFavoriteComicHelper {
       }
     } catch (_) {}
 
+    if (!await LocalLibraryManager().shouldUseDirectCurrentDownloadManager()) {
+      if (App.globalContext?.mounted ?? false) {
+        ScaffoldMessenger.of(App.globalContext!).showSnackBar(
+          const SnackBar(content: Text('当前下载目录正在使用 Shizuku 本地读取链路')),
+        );
+      }
+      return null;
+    }
+
     final dm = DownloadManager();
     await dm.init();
     final resolvedId = dm.resolveExistingId(candidates);
@@ -843,8 +852,11 @@ class _LocalFavoritesFolderState extends State<LocalFavoritesFolder> {
 
   Future<void> _loadComics() async {
     await _favManager.init();
-    await DownloadManager().init();
-    await LocalLibraryManager().ensureLoaded();
+    final localLibraryManager = LocalLibraryManager();
+    if (await localLibraryManager.shouldUseDirectCurrentDownloadManager()) {
+      await DownloadManager().init();
+    }
+    await localLibraryManager.ensureLoaded();
     final comics = _favManager.getAllComics(widget.folderName);
     _applySort(comics);
     LocalFavoriteTile.clearCoverCache();

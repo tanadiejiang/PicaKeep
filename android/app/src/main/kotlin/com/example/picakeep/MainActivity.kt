@@ -336,17 +336,19 @@ class MainActivity : FlutterActivity() {
         val stderr = storageExecutor.submit<String> {
             process.errorStream.bufferedReader().use { it.readText().trim() }
         }
+        val waitResult = storageExecutor.submit<Int> {
+            process.waitFor()
+        }
         try {
-            if (!process.waitFor(timeoutMs, TimeUnit.MILLISECONDS)) {
-                throw TimeoutException("privileged command timed out")
-            }
+            val exitCode = waitResult.get(timeoutMs, TimeUnit.MILLISECONDS)
             return ProcessTextResult(
-                process.exitValue(),
+                exitCode,
                 stdout.get(1, TimeUnit.SECONDS),
                 stderr.get(1, TimeUnit.SECONDS),
             )
         } catch (error: Throwable) {
             process.destroyForcibly()
+            waitResult.cancel(true)
             stdout.cancel(true)
             stderr.cancel(true)
             throw error
@@ -363,17 +365,19 @@ class MainActivity : FlutterActivity() {
         val stderr = storageExecutor.submit<String> {
             process.errorStream.bufferedReader().use { it.readText().trim() }
         }
+        val waitResult = storageExecutor.submit<Int> {
+            process.waitFor()
+        }
         try {
-            if (!process.waitFor(timeoutMs, TimeUnit.MILLISECONDS)) {
-                throw TimeoutException("privileged command timed out")
-            }
+            val exitCode = waitResult.get(timeoutMs, TimeUnit.MILLISECONDS)
             return ProcessBytesResult(
-                process.exitValue(),
+                exitCode,
                 stdout.get(1, TimeUnit.SECONDS),
                 stderr.get(1, TimeUnit.SECONDS),
             )
         } catch (error: Throwable) {
             process.destroyForcibly()
+            waitResult.cancel(true)
             stdout.cancel(true)
             stderr.cancel(true)
             throw error
@@ -479,7 +483,7 @@ class MainActivity : FlutterActivity() {
     private fun hasShizukuPermission(): Boolean {
         val now = System.currentTimeMillis()
         cachedShizukuPermission?.let { cached ->
-            if (now - cachedShizukuPermissionAt < 30_000L) {
+            if (now - cachedShizukuPermissionAt < ACCESS_CACHE_MS) {
                 return cached
             }
         }
@@ -495,7 +499,7 @@ class MainActivity : FlutterActivity() {
     private fun hasRootAccess(): Boolean {
         val now = System.currentTimeMillis()
         cachedRootAccess?.let { cached ->
-            if (now - cachedRootAccessAt < 30_000L) {
+            if (now - cachedRootAccessAt < ACCESS_CACHE_MS) {
                 return cached
             }
         }
@@ -779,5 +783,6 @@ class MainActivity : FlutterActivity() {
         private const val REQUEST_CODE_SHIZUKU = 1002
         private const val PRIVILEGED_PROCESS_TIMEOUT_MS = 5_000L
         private const val PRIVILEGED_READ_TIMEOUT_MS = 15_000L
+        private const val ACCESS_CACHE_MS = 1_500L
     }
 }
