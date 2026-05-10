@@ -231,7 +231,11 @@ String _downloadedItemSource(DownloadedItem item) {
   }
   try {
     final json = item.toJson();
-    for (final key in const ['sourceDisplayName', 'metadataSourceDisplayName', 'sourceTitle']) {
+    for (final key in const [
+      'sourceDisplayName',
+      'metadataSourceDisplayName',
+      'sourceTitle'
+    ]) {
       final value = json[key]?.toString().trim();
       if (value != null && value.isNotEmpty) {
         return value;
@@ -327,7 +331,32 @@ class _DownloadedPageComicTile extends DownloadedComicTile {
   String? get comicID => comicId;
 }
 
+class _DownloadedLoadIssue {
+  const _DownloadedLoadIssue({
+    required this.title,
+    required this.detail,
+    this.timedOut = false,
+  });
+
+  final String title;
+  final String detail;
+  final bool timedOut;
+}
+
+class _DownloadedLoadResult {
+  const _DownloadedLoadResult({
+    this.items = const <DownloadedItem>[],
+    this.issue,
+  });
+
+  final List<DownloadedItem> items;
+  final _DownloadedLoadIssue? issue;
+}
+
 class DownloadPageLogic extends StateController {
+  static const Duration _localLoadTimeout = Duration(seconds: 8);
+  static const Duration _remoteLoadTimeout = Duration(seconds: 10);
+
   DownloadPageLogic({
     this.remoteRootId,
     this.pageTitle,
@@ -348,7 +377,8 @@ class DownloadPageLogic extends StateController {
   final Map<String, ImageProvider<Object>> _coverImageProviders = {};
   final Map<String, _DownloadedTileViewModel> _tileViewModels = {};
   final Set<String> _queuedCoverIds = <String>{};
-  final Queue<LocalLibraryComicItem> _coverResolveQueue = Queue<LocalLibraryComicItem>();
+  final Queue<LocalLibraryComicItem> _coverResolveQueue =
+      Queue<LocalLibraryComicItem>();
   bool _coverResolveQueueRunning = false;
   bool _coverRefreshScheduled = false;
   bool _isScrollInteracting = false;
@@ -371,6 +401,7 @@ class DownloadPageLogic extends StateController {
   _DownloadedLibraryView _view = _DownloadedLibraryView.local;
   bool remoteAvailable = false;
   bool _forceRemoteRefreshOnNextReload = false;
+  _DownloadedLoadIssue? _loadIssue;
 
   Future<void> _refreshFromNotifier() async {
     if (_isRefreshingFromLocalData) {
@@ -380,7 +411,6 @@ class DownloadPageLogic extends StateController {
     try {
       loading = true;
       update();
-      await DownloadManager().init();
       await reload();
     } finally {
       _isRefreshingFromLocalData = false;
@@ -415,8 +445,7 @@ class DownloadPageLogic extends StateController {
           appdata.settings[managedDataSourceModeSettingIndex]) !=
       managedDataSourceModeCurrentOnly;
 
-  bool get _hasConfiguredRemoteServer =>
-      normalizeRemoteServerAddressValue(
+  bool get _hasConfiguredRemoteServer => normalizeRemoteServerAddressValue(
         appdata.settings[remoteServerAddressSettingIndex],
       ).isNotEmpty;
 
@@ -427,8 +456,7 @@ class DownloadPageLogic extends StateController {
   bool get showSourceSelector =>
       !_isRemoteRootPage && (remoteAvailable || _hasConfiguredRemoteServer);
 
-  bool get shouldAutoRefreshOnResume =>
-      _view != _DownloadedLibraryView.local;
+  bool get shouldAutoRefreshOnResume => _view != _DownloadedLibraryView.local;
 
   void forceRemoteRefresh() {
     _forceRemoteRefreshOnNextReload = true;
@@ -481,7 +509,8 @@ class DownloadPageLogic extends StateController {
       comics = List<DownloadedItem>.from(baseComics);
     } else {
       comics = baseComics
-          .where((element) => _matchesDownloadedKeyword(element, normalizedKeyword))
+          .where((element) =>
+              _matchesDownloadedKeyword(element, normalizedKeyword))
           .toList(growable: false);
     }
     resetSelected(comics.length);
@@ -500,6 +529,7 @@ class DownloadPageLogic extends StateController {
     _coverResolveQueue.clear();
     _coverResolveQueueRunning = false;
     _coverRefreshScheduled = false;
+    _loadIssue = null;
     loading = true;
     update();
     unawaited(_reloadVisibleComics());
@@ -507,9 +537,9 @@ class DownloadPageLogic extends StateController {
 
   Future<void> _reloadVisibleComics() async {
     try {
-      await DownloadManager().init();
       await reload();
     } catch (e) {
+      _loadIssue = _unexpectedLoadIssue();
       loading = false;
       update();
       print('[PicaKeep] DownloadPage reload failed: $e');
@@ -535,20 +565,15 @@ class DownloadPageLogic extends StateController {
     if (appdata.settings[26][1] == "1") {
       direction = 'asc';
     }
+    _loadIssue = null;
     remoteAvailable = await _checkRemoteAvailability();
-    if (!remoteAvailable &&
-        _view == _DownloadedLibraryView.aggregate &&
-        !_shouldStrictlyUseRemoteData) {
-      _view = _DownloadedLibraryView.local;
-      appdata.settings[downloadedLibraryViewSettingIndex] = 'local';
-      await appdata.updateSettings();
-    }
-    final loadedComics =
-        List<DownloadedItem>.from(await _loadComics(
+    final loadResult = await _loadComics(
       order,
       direction,
       forceRemoteRefresh: forceRemoteRefresh,
-    ));
+    );
+    final loadedComics = List<DownloadedItem>.from(loadResult.items);
+    _loadIssue = loadedComics.isEmpty ? loadResult.issue : null;
     final visibleIds = loadedComics.map((item) => item.id).toSet();
     _coverImageProviders.removeWhere((key, _) => !visibleIds.contains(key));
     await _prepareTileViewModels(loadedComics);
@@ -567,10 +592,12 @@ class DownloadPageLogic extends StateController {
   Future<void> _prepareTileViewModels(List<DownloadedItem> items) async {
     final showFavoriteBadge = _showFavoriteBadge;
     final showReadingPosition = _showReadingPosition;
-    final readingHistoryById =
-        showReadingPosition ? await _buildReadingHistoryById(items) : const <String, History>{};
-    final favoriteById =
-        showFavoriteBadge ? await _buildFavoriteById(items) : const <String, bool>{};
+    final readingHistoryById = showReadingPosition
+        ? await _buildReadingHistoryById(items)
+        : const <String, History>{};
+    final favoriteById = showFavoriteBadge
+        ? await _buildFavoriteById(items)
+        : const <String, bool>{};
 
     _tileViewModels
       ..clear()
@@ -673,7 +700,100 @@ class DownloadPageLogic extends StateController {
     });
   }
 
-  Future<List<DownloadedItem>> _loadComics(
+  Future<_DownloadedLoadResult> _loadComics(
+    String order,
+    String direction, {
+    bool forceRemoteRefresh = false,
+  }) async {
+    switch (_view) {
+      case _DownloadedLibraryView.local:
+        return _loadLocalBranch(order, direction);
+      case _DownloadedLibraryView.aggregate:
+        final results = await Future.wait<_DownloadedLoadResult>([
+          _loadLocalBranch(order, direction),
+          if (remoteAvailable)
+            _loadRemoteBranch(
+              order,
+              direction,
+              forceRemoteRefresh: forceRemoteRefresh,
+            ),
+        ]);
+        final merged = <DownloadedItem>[
+          for (final result in results) ...result.items,
+        ];
+        if (merged.isNotEmpty) {
+          _sortItems(merged, order, direction);
+          return _DownloadedLoadResult(items: merged);
+        }
+        for (final result in results) {
+          if (result.issue != null) {
+            return _DownloadedLoadResult(issue: result.issue);
+          }
+        }
+        if (_hasConfiguredRemoteServer && !remoteAvailable) {
+          return _DownloadedLoadResult(issue: _remoteUnavailableIssue());
+        }
+        return const _DownloadedLoadResult();
+      case _DownloadedLibraryView.remote:
+        if (!remoteAvailable) {
+          if (_hasConfiguredRemoteServer || _shouldStrictlyUseRemoteData) {
+            return _DownloadedLoadResult(issue: _remoteUnavailableIssue());
+          }
+          return const _DownloadedLoadResult();
+        }
+        return _loadRemoteBranch(
+          order,
+          direction,
+          forceRemoteRefresh: forceRemoteRefresh,
+        );
+    }
+  }
+
+  Future<_DownloadedLoadResult> _loadLocalBranch(
+    String order,
+    String direction,
+  ) async {
+    try {
+      final items = await _loadLocalComics(order, direction).timeout(
+        _localLoadTimeout,
+      );
+      return _DownloadedLoadResult(items: items);
+    } on TimeoutException {
+      return _DownloadedLoadResult(issue: _localTimeoutIssue());
+    } catch (e) {
+      print('[PicaKeep] Local downloads load failed: $e');
+      return _DownloadedLoadResult(issue: _localFailureIssue());
+    }
+  }
+
+  Future<_DownloadedLoadResult> _loadRemoteBranch(
+    String order,
+    String direction, {
+    bool forceRemoteRefresh = false,
+  }) async {
+    try {
+      final items = await _loadRemoteComics(
+        order,
+        direction,
+        forceRemoteRefresh: forceRemoteRefresh,
+      ).timeout(_remoteLoadTimeout);
+      return _DownloadedLoadResult(items: items);
+    } on TimeoutException {
+      return _DownloadedLoadResult(issue: _remoteTimeoutIssue());
+    } on RemoteLibraryDataSourceException catch (e) {
+      print('[PicaKeep] Remote downloads load failed: ${e.message}');
+      if (e.message.contains('超时')) {
+        return _DownloadedLoadResult(issue: _remoteTimeoutIssue());
+      }
+      return _DownloadedLoadResult(issue: _remoteFailureIssue(e.message));
+    } catch (e) {
+      print('[PicaKeep] Remote downloads load failed: $e');
+      return _DownloadedLoadResult(issue: _remoteFailureIssue());
+    }
+  }
+
+  // ignore: unused_element
+  Future<List<DownloadedItem>> _loadComicsLegacy(
     String order,
     String direction, {
     bool forceRemoteRefresh = false,
@@ -683,7 +803,8 @@ class DownloadPageLogic extends StateController {
       if (_shouldStrictlyUseRemoteData) {
         throw const RemoteLibraryDataSourceException('远程服务当前不可用');
       }
-      if (_view == _DownloadedLibraryView.remote && _hasConfiguredRemoteServer) {
+      if (_view == _DownloadedLibraryView.remote &&
+          _hasConfiguredRemoteServer) {
         return const <DownloadedItem>[];
       }
       return localItems;
@@ -822,6 +943,14 @@ class DownloadPageLogic extends StateController {
       _hasConfiguredRemoteServer &&
       !remoteAvailable;
 
+  bool get hasLoadIssue => _loadIssue != null;
+
+  String? get loadIssueTitle => _loadIssue?.title;
+
+  String? get loadIssueDetail => _loadIssue?.detail;
+
+  bool get loadIssueTimedOut => _loadIssue?.timedOut ?? false;
+
   String get remoteServerAddressText => normalizeRemoteServerAddressValue(
         appdata.settings[remoteServerAddressSettingIndex],
       );
@@ -854,6 +983,54 @@ class DownloadPageLogic extends StateController {
     return localText;
   }
 
+  _DownloadedLoadIssue _localTimeoutIssue() {
+    return const _DownloadedLoadIssue(
+      title: '本地已下载加载超时',
+      detail: '本地已下载在 8 秒内没有完成读取，请检查下载目录、Root 或 Shizuku 访问状态后重新加载。',
+      timedOut: true,
+    );
+  }
+
+  _DownloadedLoadIssue _localFailureIssue() {
+    return const _DownloadedLoadIssue(
+      title: '本地已下载加载失败',
+      detail: '读取本地已下载时出现错误，请检查下载目录和权限状态后重新加载。',
+    );
+  }
+
+  _DownloadedLoadIssue _remoteTimeoutIssue() {
+    return const _DownloadedLoadIssue(
+      title: '远程已下载加载超时',
+      detail: '远程已下载在 10 秒内没有完成读取，请确认服务在线、网络可达后重新加载。',
+      timedOut: true,
+    );
+  }
+
+  _DownloadedLoadIssue _remoteFailureIssue([String? message]) {
+    final normalized = message?.trim() ?? '';
+    return _DownloadedLoadIssue(
+      title: '远程已下载加载失败',
+      detail: normalized.isNotEmpty ? normalized : '读取远程已下载时出现错误，请检查服务状态后重新加载。',
+    );
+  }
+
+  _DownloadedLoadIssue _remoteUnavailableIssue() {
+    final address = remoteServerAddressText.trim();
+    return _DownloadedLoadIssue(
+      title: '远程服务当前未连接',
+      detail: address.isEmpty
+          ? '已配置远程服务，但当前无法连接，请检查服务状态或地址配置。'
+          : '当前无法连接到 $address，请检查服务是否在线。',
+    );
+  }
+
+  _DownloadedLoadIssue _unexpectedLoadIssue() {
+    return const _DownloadedLoadIssue(
+      title: '加载失败',
+      detail: '已下载列表加载过程中出现异常，请重新加载后再试。',
+    );
+  }
+
   bool _useDirectMobileLocalCoverPath(DownloadedItem item) {
     return App.isMobile &&
         !_usesManagedDownloadSources &&
@@ -877,7 +1054,8 @@ class DownloadPageLogic extends StateController {
   }
 
   ImageProvider<Object>? coverImageProviderFor(DownloadedItem item) {
-    if (_useDirectMobileLocalCoverPath(item) && item is! LocalLibraryComicItem) {
+    if (_useDirectMobileLocalCoverPath(item) &&
+        item is! LocalLibraryComicItem) {
       return null;
     }
 
@@ -1155,7 +1333,9 @@ class _DownloadPageState extends State<DownloadPage>
                 onTap: () async {
                   if (logic.selecting) {
                     logic.selected[index] = !logic.selected[index];
-                    logic.selected[index] ? logic.selectedNum++ : logic.selectedNum--;
+                    logic.selected[index]
+                        ? logic.selectedNum++
+                        : logic.selectedNum--;
                     if (logic.selectedNum == 0) {
                       logic.selecting = false;
                     }
@@ -1285,7 +1465,8 @@ class _DownloadPageState extends State<DownloadPage>
                           Navigator.pop(ctx);
                           final error = await logic.deleteItems([item]);
                           if (error != null && App.globalContext != null) {
-                            ScaffoldMessenger.of(App.globalContext!).showSnackBar(
+                            ScaffoldMessenger.of(App.globalContext!)
+                                .showSnackBar(
                               SnackBar(content: Text(error)),
                             );
                             return;
@@ -1374,8 +1555,12 @@ class _DownloadPageState extends State<DownloadPage>
               context: context,
               builder: (dialogContext) {
                 return AlertDialog(
-                  title: Text(buildDeleteActionTexts(count: logic.selectedNum).title.tl),
-                  content: Text(buildDeleteActionTexts(count: logic.selectedNum).content.tl),
+                  title: Text(buildDeleteActionTexts(count: logic.selectedNum)
+                      .title
+                      .tl),
+                  content: Text(buildDeleteActionTexts(count: logic.selectedNum)
+                      .content
+                      .tl),
                   actions: [
                     TextButton(
                       onPressed: () => App.globalBack(),
@@ -1403,7 +1588,10 @@ class _DownloadPageState extends State<DownloadPage>
                         }
                         logic.refresh();
                       },
-                      child: Text(buildDeleteActionTexts(count: logic.selectedNum).confirmLabel.tl),
+                      child: Text(
+                          buildDeleteActionTexts(count: logic.selectedNum)
+                              .confirmLabel
+                              .tl),
                     ),
                   ],
                 );
@@ -1720,6 +1908,106 @@ class _DownloadPageState extends State<DownloadPage>
     final path = logic.emptyStatePathText();
     final showRemoteDisconnectedHint = logic.showRemoteDisconnectedHint;
     final remoteAddress = logic.remoteServerAddressText;
+    final hasLoadIssue = logic.hasLoadIssue;
+    final title = showRemoteDisconnectedHint
+        ? '远程服务当前未连接'.tl
+        : (logic.loadIssueTitle ?? '暂无已下载的漫画'.tl);
+    final detail = showRemoteDisconnectedHint
+        ? (remoteAddress.isEmpty
+            ? '已配置远程服务，但当前无法连接，请检查服务状态或地址配置。'.tl
+            : '当前无法连接到 $remoteAddress，请检查服务是否在线。'.tl)
+        : logic.loadIssueDetail;
+    final actionLabel = showRemoteDisconnectedHint
+        ? '刷新连接状态'.tl
+        : hasLoadIssue
+            ? '重新加载'.tl
+            : '重新扫描磁盘'.tl;
+    final hintText = showRemoteDisconnectedHint
+        ? '如地址无误，请确认远程服务已启动且当前网络可达。'.tl
+        : hasLoadIssue
+            ? '可以点击重新加载再次尝试。'.tl
+            : '请确保下载目录中存在 download.db 数据库文件。'.tl;
+
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              showRemoteDisconnectedHint
+                  ? Icons.cloud_off_outlined
+                  : hasLoadIssue
+                      ? (logic.loadIssueTimedOut
+                          ? Icons.hourglass_disabled_outlined
+                          : Icons.error_outline)
+                      : Icons.download_done,
+              size: 64,
+              color: Colors.grey,
+            ),
+            const SizedBox(height: 16),
+            Text(
+              title,
+              style: const TextStyle(fontSize: 18, color: Colors.grey),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 8),
+            if (detail != null && detail.isNotEmpty)
+              Text(
+                detail,
+                style: const TextStyle(fontSize: 12, color: Colors.grey),
+                textAlign: TextAlign.center,
+              )
+            else if (path.isNotEmpty)
+              Text(
+                '下载目录: $path',
+                style: const TextStyle(fontSize: 12, color: Colors.grey),
+                textAlign: TextAlign.center,
+              ),
+            const SizedBox(height: 24),
+            FilledButton.icon(
+              onPressed: () async {
+                if (showRemoteDisconnectedHint || hasLoadIssue) {
+                  logic.refresh();
+                  if (!context.mounted) {
+                    return;
+                  }
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('已重新开始加载'.tl)),
+                  );
+                  return;
+                }
+                final count = await logic.rescanDisk();
+                if (!context.mounted) {
+                  return;
+                }
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('扫描完成，共发现 $count 个漫画'.tl)),
+                );
+              },
+              icon: const Icon(Icons.refresh),
+              label: Text(actionLabel),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              hintText,
+              style: TextStyle(
+                fontSize: 12,
+                color: Theme.of(context).colorScheme.outline,
+              ),
+              textAlign: TextAlign.center,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ignore: unused_element
+  Widget _buildEmptyStateLegacy(BuildContext context, DownloadPageLogic logic) {
+    final path = logic.emptyStatePathText();
+    final showRemoteDisconnectedHint = logic.showRemoteDisconnectedHint;
+    final remoteAddress = logic.remoteServerAddressText;
     return Center(
       child: Padding(
         padding: const EdgeInsets.all(24),
@@ -1961,8 +2249,10 @@ class _DownloadedComicInfoViewState extends State<DownloadedComicInfoView> {
                                         vertical: 4,
                                       ),
                                       decoration: BoxDecoration(
-                                        color: theme.colorScheme.secondaryContainer,
-                                        borderRadius: BorderRadius.circular(999),
+                                        color: theme
+                                            .colorScheme.secondaryContainer,
+                                        borderRadius:
+                                            BorderRadius.circular(999),
                                       ),
                                       child: Text(
                                         _translateDownloadedTag(tag),
@@ -1979,107 +2269,108 @@ class _DownloadedComicInfoViewState extends State<DownloadedComicInfoView> {
                   ),
                 ),
               ),
-            if (_loadingRemoteDetail)
-              const Padding(
-                padding: EdgeInsets.only(top: 10),
-                child: LinearProgressIndicator(minHeight: 2),
-              ),
-            const SizedBox(height: 12),
-            Align(
-              alignment: Alignment.centerLeft,
-              child: Text(
-                '章节'.tl,
-                style: theme.textTheme.titleMedium,
-              ),
-            ),
-            const SizedBox(height: 8),
-            Flexible(
-              child: Scrollbar(
-                controller: _scrollController,
-                thumbVisibility: true,
-                child: GridView.builder(
-                  controller: _scrollController,
-                  padding: const EdgeInsets.only(bottom: 12),
-                  gridDelegate:
-                      const SliverGridDelegateWithMaxCrossAxisExtent(
-                    maxCrossAxisExtent: 300,
-                    childAspectRatio: 4,
-                  ),
-                  itemBuilder: (BuildContext context, int i) {
-                    final isDownloaded = downloadedEps.contains(i);
-                    return Padding(
-                      padding: const EdgeInsets.all(4),
-                      child: InkWell(
-                        borderRadius: const BorderRadius.all(Radius.circular(16)),
-                        child: Material(
-                          color: isDownloaded
-                              ? theme.colorScheme.primaryContainer
-                              : theme.colorScheme.surfaceContainerHighest,
-                          surfaceTintColor: theme.colorScheme.surfaceTint,
-                          borderRadius:
-                              const BorderRadius.all(Radius.circular(16)),
-                          child: Row(
-                            children: [
-                              const SizedBox(width: 16),
-                              Expanded(
-                                child: Text(
-                                  eps[i],
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                              ),
-                              const SizedBox(width: 4),
-                              if (isDownloaded)
-                                const Icon(Icons.download_done_outlined),
-                              const SizedBox(width: 16),
-                            ],
-                          ),
-                        ),
-                        onTap: () => readSpecifiedEps(i),
-                        onLongPress: () => deleteEpisode(i),
-                        onSecondaryTapDown: (_) => deleteEpisode(i),
-                      ),
-                    );
-                  },
-                  itemCount: eps.length,
+              if (_loadingRemoteDetail)
+                const Padding(
+                  padding: EdgeInsets.only(top: 10),
+                  child: LinearProgressIndicator(minHeight: 2),
+                ),
+              const SizedBox(height: 12),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  '章节'.tl,
+                  style: theme.textTheme.titleMedium,
                 ),
               ),
-            ),
-            const SizedBox(height: 12),
-            SizedBox(
-              height: 56,
-              child: Row(
-                children: [
-                  Expanded(
-                    child: FilledButton.tonal(
-                      style: FilledButton.styleFrom(
-                        minimumSize: const Size.fromHeight(56),
-                      ),
-                      onPressed: () {
-                        App.globalBack();
-                        _toComicInfoPage(context, _comic);
-                      },
-                      child: Text("查看详情".tl),
+              const SizedBox(height: 8),
+              Flexible(
+                child: Scrollbar(
+                  controller: _scrollController,
+                  thumbVisibility: true,
+                  child: GridView.builder(
+                    controller: _scrollController,
+                    padding: const EdgeInsets.only(bottom: 12),
+                    gridDelegate:
+                        const SliverGridDelegateWithMaxCrossAxisExtent(
+                      maxCrossAxisExtent: 300,
+                      childAspectRatio: 4,
                     ),
+                    itemBuilder: (BuildContext context, int i) {
+                      final isDownloaded = downloadedEps.contains(i);
+                      return Padding(
+                        padding: const EdgeInsets.all(4),
+                        child: InkWell(
+                          borderRadius:
+                              const BorderRadius.all(Radius.circular(16)),
+                          child: Material(
+                            color: isDownloaded
+                                ? theme.colorScheme.primaryContainer
+                                : theme.colorScheme.surfaceContainerHighest,
+                            surfaceTintColor: theme.colorScheme.surfaceTint,
+                            borderRadius:
+                                const BorderRadius.all(Radius.circular(16)),
+                            child: Row(
+                              children: [
+                                const SizedBox(width: 16),
+                                Expanded(
+                                  child: Text(
+                                    eps[i],
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                                const SizedBox(width: 4),
+                                if (isDownloaded)
+                                  const Icon(Icons.download_done_outlined),
+                                const SizedBox(width: 16),
+                              ],
+                            ),
+                          ),
+                          onTap: () => readSpecifiedEps(i),
+                          onLongPress: () => deleteEpisode(i),
+                          onSecondaryTapDown: (_) => deleteEpisode(i),
+                        ),
+                      );
+                    },
+                    itemCount: eps.length,
                   ),
-                  const SizedBox(width: 16),
-                  Expanded(
-                    child: FilledButton(
-                      style: FilledButton.styleFrom(
-                        minimumSize: const Size.fromHeight(56),
-                      ),
-                      onPressed: read,
-                      child: Text("阅读".tl),
-                    ),
-                  ),
-                ],
+                ),
               ),
-            ),
-            SizedBox(height: math.max(mediaQuery.padding.bottom, 12)),
-          ],
+              const SizedBox(height: 12),
+              SizedBox(
+                height: 56,
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: FilledButton.tonal(
+                        style: FilledButton.styleFrom(
+                          minimumSize: const Size.fromHeight(56),
+                        ),
+                        onPressed: () {
+                          App.globalBack();
+                          _toComicInfoPage(context, _comic);
+                        },
+                        child: Text("查看详情".tl),
+                      ),
+                    ),
+                    const SizedBox(width: 16),
+                    Expanded(
+                      child: FilledButton(
+                        style: FilledButton.styleFrom(
+                          minimumSize: const Size.fromHeight(56),
+                        ),
+                        onPressed: read,
+                        child: Text("阅读".tl),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              SizedBox(height: math.max(mediaQuery.padding.bottom, 12)),
+            ],
+          ),
         ),
       ),
-    ),
     );
   }
 
@@ -2104,7 +2395,9 @@ class _DownloadedComicInfoViewState extends State<DownloadedComicInfoView> {
       return;
     }
     final resolved = path?.trim();
-    if (resolved == null || resolved.isEmpty || _resolvedCoverPath == resolved) {
+    if (resolved == null ||
+        resolved.isEmpty ||
+        _resolvedCoverPath == resolved) {
       return;
     }
     setState(() {
@@ -2173,8 +2466,11 @@ class _DownloadedComicInfoViewState extends State<DownloadedComicInfoView> {
     tags = _downloadedItemTags(_comic);
     eps = _comic.eps;
     downloadedEps = _comic.downloadedEps;
-    if (_comic is RemoteLibraryComicItem && downloadedEps.isEmpty && eps.isNotEmpty) {
-      downloadedEps = List<int>.generate(eps.length, (index) => index, growable: false);
+    if (_comic is RemoteLibraryComicItem &&
+        downloadedEps.isEmpty &&
+        eps.isNotEmpty) {
+      downloadedEps =
+          List<int>.generate(eps.length, (index) => index, growable: false);
     }
   }
 
