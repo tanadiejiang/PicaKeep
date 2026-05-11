@@ -1,15 +1,23 @@
-﻿import 'package:flutter/services.dart';
+import 'package:flutter/services.dart';
 import 'package:picakeep/foundation/app.dart';
 
+const MethodChannel _keepScreenOnChannel =
+    MethodChannel('com.github.pacalini.pica_comic/keepScreenOn');
 
-void setKeepScreenOn() async{
-  if(!App.isMobile)  return;
-  var channel = const MethodChannel("com.github.pacalini.pica_comic/keepScreenOn");
-  await channel.invokeMethod("set");
+void setKeepScreenOn() async {
+  if (!App.isMobile) {
+    return;
+  }
+  try {
+    await _keepScreenOnChannel.invokeMethod('set');
+  } catch (_) {}
 }
 
-void cancelKeepScreenOn() async{
-  if(!App.isMobile)  return;
-  var channel = const MethodChannel("com.github.pacalini.pica_comic/keepScreenOn");
-  await channel.invokeMethod("cancel");
+void cancelKeepScreenOn() async {
+  if (!App.isMobile) {
+    return;
+  }
+  try {
+    await _keepScreenOnChannel.invokeMethod('cancel');
+  } catch (_) {}
 }

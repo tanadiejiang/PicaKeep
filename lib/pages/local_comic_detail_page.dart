@@ -287,7 +287,7 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
     if (confirmed == true) {
       final result = await TrashManager.instance.deleteItem(_comic);
       if (!result.ok) {
-        _showMessage(result.error ?? '删除失败'.tl);
+        _showMessage(deleteFailureMessage(result.error).tl);
         return;
       }
       if (mounted) Navigator.of(context).pop();

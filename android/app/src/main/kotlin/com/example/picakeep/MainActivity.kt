@@ -13,6 +13,7 @@ import android.os.PowerManager
 import android.os.SystemClock
 import android.provider.Settings
 import android.util.Log
+import android.view.WindowManager
 import androidx.core.app.ActivityCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
@@ -137,6 +138,22 @@ class MainActivity : FlutterActivity() {
         }
         MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
+            KEEP_SCREEN_ON_CHANNEL,
+        ).setMethodCallHandler { call, result ->
+            when (call.method) {
+                "set" -> {
+                    window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                    result.success(null)
+                }
+                "cancel" -> {
+                    window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                    result.success(null)
+                }
+                else -> result.notImplemented()
+            }
+        }
+        MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
             STORAGE_ACCESS_CHANNEL,
         ).setMethodCallHandler { call, result ->
             when (call.method) {
@@ -146,13 +163,17 @@ class MainActivity : FlutterActivity() {
                     result.success(null)
                 }
                 "isShizukuAvailable" -> result.success(isShizukuAvailable())
-                "hasShizukuPermission" -> result.success(hasShizukuPermission())
+                "hasShizukuPermission" -> {
+                    val forceRefresh = call.argument<Boolean>("forceRefresh") == true
+                    result.success(hasShizukuPermission(forceRefresh))
+                }
                 "getShizukuStatus" -> {
+                    val forceRefresh = call.argument<Boolean>("forceRefresh") == true
                     result.success(
                         mapOf(
                             "installed" to isShizukuInstalled(),
                             "running" to isShizukuAvailable(),
-                            "permissionGranted" to hasShizukuPermission(),
+                            "permissionGranted" to hasShizukuPermission(forceRefresh),
                         ),
                     )
                 }
@@ -166,7 +187,8 @@ class MainActivity : FlutterActivity() {
                     "root_check_failed",
                     "Root 检测失败",
                 ) {
-                    hasRootAccess()
+                    val forceRefresh = call.argument<Boolean>("forceRefresh") == true
+                    hasRootAccess(forceRefresh)
                 }
                 "listDirectoriesWithRoot" -> {
                     val path = call.argument<String>("path")
@@ -213,6 +235,23 @@ class MainActivity : FlutterActivity() {
                         readFileWithRoot(targetPath)
                     }
                 }
+                "writeFileWithRoot" -> {
+                    val path = call.argument<String>("path")
+                    val bytes = call.argument<ByteArray>("bytes")
+                    if (path.isNullOrBlank() || bytes == null) {
+                        result.error("invalid_path", "path and bytes are required", null)
+                        return@setMethodCallHandler
+                    }
+                    val targetPath = path.trim()
+                    runStorageTask(
+                        result,
+                        "root_write_failed",
+                        "Root file write failed",
+                    ) {
+                        writeFileWithRoot(targetPath, bytes)
+                        null
+                    }
+                }
                 "existsWithRoot" -> {
                     val path = call.argument<String>("path")
                     if (path.isNullOrBlank()) {
@@ -226,6 +265,37 @@ class MainActivity : FlutterActivity() {
                         "Root 模式文件检测失败",
                     ) {
                         existsWithRoot(targetPath)
+                    }
+                }
+                "movePathWithRoot" -> {
+                    val sourcePath = call.argument<String>("sourcePath")
+                    val targetPath = call.argument<String>("targetPath")
+                    if (sourcePath.isNullOrBlank() || targetPath.isNullOrBlank()) {
+                        result.error("invalid_path", "sourcePath and targetPath are required", null)
+                        return@setMethodCallHandler
+                    }
+                    runStorageTask(
+                        result,
+                        "root_move_failed",
+                        "Root 模式文件移动失败",
+                    ) {
+                        movePathWithRoot(sourcePath.trim(), targetPath.trim())
+                        null
+                    }
+                }
+                "deletePathWithRoot" -> {
+                    val path = call.argument<String>("path")
+                    if (path.isNullOrBlank()) {
+                        result.error("invalid_path", "path is required", null)
+                        return@setMethodCallHandler
+                    }
+                    runStorageTask(
+                        result,
+                        "root_delete_failed",
+                        "Root 模式文件删除失败",
+                    ) {
+                        deletePathWithRoot(path.trim())
+                        null
                     }
                 }
                 "listDirectoriesWithShizuku" -> {
@@ -273,6 +343,23 @@ class MainActivity : FlutterActivity() {
                         readFileWithShizuku(targetPath)
                     }
                 }
+                "writeFileWithShizuku" -> {
+                    val path = call.argument<String>("path")
+                    val bytes = call.argument<ByteArray>("bytes")
+                    if (path.isNullOrBlank() || bytes == null) {
+                        result.error("invalid_path", "path and bytes are required", null)
+                        return@setMethodCallHandler
+                    }
+                    val targetPath = path.trim()
+                    runStorageTask(
+                        result,
+                        "shizuku_write_failed",
+                        "Shizuku file write failed",
+                    ) {
+                        writeFileWithShizuku(targetPath, bytes)
+                        null
+                    }
+                }
                 "existsWithShizuku" -> {
                     val path = call.argument<String>("path")
                     if (path.isNullOrBlank()) {
@@ -286,6 +373,37 @@ class MainActivity : FlutterActivity() {
                         "Shizuku 模式文件检测失败",
                     ) {
                         existsWithShizuku(targetPath)
+                    }
+                }
+                "movePathWithShizuku" -> {
+                    val sourcePath = call.argument<String>("sourcePath")
+                    val targetPath = call.argument<String>("targetPath")
+                    if (sourcePath.isNullOrBlank() || targetPath.isNullOrBlank()) {
+                        result.error("invalid_path", "sourcePath and targetPath are required", null)
+                        return@setMethodCallHandler
+                    }
+                    runStorageTask(
+                        result,
+                        "shizuku_move_failed",
+                        "Shizuku 模式文件移动失败",
+                    ) {
+                        movePathWithShizuku(sourcePath.trim(), targetPath.trim())
+                        null
+                    }
+                }
+                "deletePathWithShizuku" -> {
+                    val path = call.argument<String>("path")
+                    if (path.isNullOrBlank()) {
+                        result.error("invalid_path", "path is required", null)
+                        return@setMethodCallHandler
+                    }
+                    runStorageTask(
+                        result,
+                        "shizuku_delete_failed",
+                        "Shizuku 模式文件删除失败",
+                    ) {
+                        deletePathWithShizuku(path.trim())
+                        null
                     }
                 }
                 else -> result.notImplemented()
@@ -377,6 +495,44 @@ class MainActivity : FlutterActivity() {
             )
         } catch (error: Throwable) {
             process.destroyForcibly()
+            waitResult.cancel(true)
+            stdout.cancel(true)
+            stderr.cancel(true)
+            throw error
+        }
+    }
+
+    private fun executeBinaryWriteProcess(
+        process: Process,
+        bytes: ByteArray,
+        timeoutMs: Long = PRIVILEGED_READ_TIMEOUT_MS,
+    ): ProcessTextResult {
+        val writer = storageExecutor.submit<Unit> {
+            process.outputStream.use { output ->
+                output.write(bytes)
+                output.flush()
+            }
+        }
+        val stdout = storageExecutor.submit<String> {
+            process.inputStream.bufferedReader().use { it.readText() }
+        }
+        val stderr = storageExecutor.submit<String> {
+            process.errorStream.bufferedReader().use { it.readText().trim() }
+        }
+        val waitResult = storageExecutor.submit<Int> {
+            process.waitFor()
+        }
+        try {
+            writer.get(timeoutMs, TimeUnit.MILLISECONDS)
+            val exitCode = waitResult.get(timeoutMs, TimeUnit.MILLISECONDS)
+            return ProcessTextResult(
+                exitCode,
+                stdout.get(1, TimeUnit.SECONDS),
+                stderr.get(1, TimeUnit.SECONDS),
+            )
+        } catch (error: Throwable) {
+            process.destroyForcibly()
+            writer.cancel(true)
             waitResult.cancel(true)
             stdout.cancel(true)
             stderr.cancel(true)
@@ -480,11 +636,13 @@ class MainActivity : FlutterActivity() {
         }.getOrDefault(false)
     }
 
-    private fun hasShizukuPermission(): Boolean {
+    private fun hasShizukuPermission(forceRefresh: Boolean = false): Boolean {
         val now = System.currentTimeMillis()
-        cachedShizukuPermission?.let { cached ->
-            if (now - cachedShizukuPermissionAt < ACCESS_CACHE_MS) {
-                return cached
+        if (!forceRefresh) {
+            cachedShizukuPermission?.let { cached ->
+                if (now - cachedShizukuPermissionAt < SHIZUKU_ACCESS_CACHE_MS) {
+                    return cached
+                }
             }
         }
         val granted = isShizukuAvailable() &&
@@ -496,11 +654,13 @@ class MainActivity : FlutterActivity() {
         return granted
     }
 
-    private fun hasRootAccess(): Boolean {
+    private fun hasRootAccess(forceRefresh: Boolean = false): Boolean {
         val now = System.currentTimeMillis()
-        cachedRootAccess?.let { cached ->
-            if (now - cachedRootAccessAt < ACCESS_CACHE_MS) {
-                return cached
+        if (!forceRefresh) {
+            cachedRootAccess?.let { cached ->
+                if (now - cachedRootAccessAt < ROOT_ACCESS_CACHE_MS) {
+                    return cached
+                }
             }
         }
         val granted = runCatching {
@@ -525,7 +685,7 @@ class MainActivity : FlutterActivity() {
     }
 
     private fun listDirectoryEntriesWithRoot(path: String): List<Map<String, String>> {
-        if (!hasRootAccess()) {
+        if (false) {
             throw IllegalStateException("Root 未授权")
         }
         return listDirectoryEntriesWithCandidates(path) { command ->
@@ -534,7 +694,7 @@ class MainActivity : FlutterActivity() {
     }
 
     private fun readFileWithRoot(path: String): ByteArray {
-        if (!hasRootAccess()) {
+        if (false) {
             throw IllegalStateException("Root 未授权")
         }
         return readFileWithCandidates(path) { command ->
@@ -542,8 +702,14 @@ class MainActivity : FlutterActivity() {
         }
     }
 
+    private fun writeFileWithRoot(path: String, bytes: ByteArray) {
+        writeFileWithCandidates(path, bytes) { command ->
+            Runtime.getRuntime().exec(arrayOf("su", "-c", command))
+        }
+    }
+
     private fun existsWithRoot(path: String): Boolean {
-        if (!hasRootAccess()) {
+        if (false) {
             return false
         }
         return existsWithCandidates(path) { command ->
@@ -577,11 +743,50 @@ class MainActivity : FlutterActivity() {
         }
     }
 
+    private fun writeFileWithShizuku(path: String, bytes: ByteArray) {
+        if (!hasShizukuPermission()) {
+            throw IllegalStateException("Shizuku permission not granted")
+        }
+        writeFileWithCandidates(path, bytes) { command ->
+            newShizukuProcess(arrayOf("sh", "-c", command), null, null)
+        }
+    }
+
     private fun existsWithShizuku(path: String): Boolean {
         if (!hasShizukuPermission()) {
             return false
         }
         return existsWithCandidates(path) { command ->
+            newShizukuProcess(arrayOf("sh", "-c", command), null, null)
+        }
+    }
+
+    private fun deletePathWithRoot(path: String) {
+        deletePathWithCandidates(path) { command ->
+            Runtime.getRuntime().exec(arrayOf("su", "-c", command))
+        }
+    }
+
+    private fun deletePathWithShizuku(path: String) {
+        if (!hasShizukuPermission()) {
+            throw IllegalStateException("Shizuku 未授权")
+        }
+        deletePathWithCandidates(path) { command ->
+            newShizukuProcess(arrayOf("sh", "-c", command), null, null)
+        }
+    }
+
+    private fun movePathWithRoot(sourcePath: String, targetPath: String) {
+        movePathWithCandidates(sourcePath, targetPath) { command ->
+            Runtime.getRuntime().exec(arrayOf("su", "-c", command))
+        }
+    }
+
+    private fun movePathWithShizuku(sourcePath: String, targetPath: String) {
+        if (!hasShizukuPermission()) {
+            throw IllegalStateException("Shizuku 未授权")
+        }
+        movePathWithCandidates(sourcePath, targetPath) { command ->
             newShizukuProcess(arrayOf("sh", "-c", command), null, null)
         }
     }
@@ -658,6 +863,72 @@ class MainActivity : FlutterActivity() {
         return false
     }
 
+    private fun deletePathWithCandidates(
+        path: String,
+        startProcess: (String) -> Process,
+    ) {
+        var lastError: String? = null
+        for (candidate in candidatePaths(path)) {
+            val command =
+                "if [ -e ${shellEscape(candidate)} ] || [ -L ${shellEscape(candidate)} ]; then rm -rf ${shellEscape(candidate)}; else echo __PICAKKEEP_NO_PATH__ 1>&2; exit 2; fi"
+            val completed = executeTextProcess(startProcess(command))
+            if (completed.exitCode == 0) {
+                return
+            }
+            lastError = buildPrivilegedError(
+                completed.stderr,
+                "路径不存在或当前应用不可访问",
+                "文件删除失败",
+            )
+        }
+        throw IllegalStateException(lastError ?: "文件删除失败")
+    }
+
+    private fun writeFileWithCandidates(
+        path: String,
+        bytes: ByteArray,
+        startProcess: (String) -> Process,
+    ) {
+        var lastError: String? = null
+        for (candidate in candidatePaths(path)) {
+            val targetParent = parentPath(candidate)
+            val tempPath = "$candidate.__picakeep_tmp__"
+            val command =
+                "mkdir -p ${shellEscape(targetParent)} && tmp=${shellEscape(tempPath)} && cat > \"\$tmp\" && mv \"\$tmp\" ${shellEscape(candidate)}"
+            val completed = executeBinaryWriteProcess(startProcess(command), bytes)
+            if (completed.exitCode == 0) {
+                return
+            }
+            lastError = if (completed.stderr.isNotBlank()) completed.stderr else "File write failed"
+        }
+        throw IllegalStateException(lastError ?: "File write failed")
+    }
+
+    private fun movePathWithCandidates(
+        sourcePath: String,
+        targetPath: String,
+        startProcess: (String) -> Process,
+    ) {
+        var lastError: String? = null
+        for (sourceCandidate in candidatePaths(sourcePath)) {
+            for (targetCandidate in candidatePaths(targetPath)) {
+                val targetParent = parentPath(targetCandidate)
+                val command =
+                    "if [ -e ${shellEscape(sourceCandidate)} ] || [ -L ${shellEscape(sourceCandidate)} ]; then mkdir -p ${shellEscape(targetParent)} && mv ${shellEscape(sourceCandidate)} ${shellEscape(targetCandidate)}; else echo __PICAKKEEP_NO_PATH__ 1>&2; exit 2; fi"
+                val completed = executeTextProcess(startProcess(command))
+                if (completed.exitCode == 0) {
+                    return
+                }
+                lastError = buildPrivilegedError(
+                    completed.stderr,
+                    "路径不存在或当前应用不可访问",
+                    "文件移动失败",
+                )
+            }
+        }
+        throw IllegalStateException(lastError ?: "文件移动失败")
+    }
+
     private fun candidatePaths(path: String): LinkedHashSet<String> {
         val normalized = path.trim().ifEmpty { "/" }
         val candidatePaths = linkedSetOf(normalized)
@@ -676,8 +947,20 @@ class MainActivity : FlutterActivity() {
         return candidatePaths
     }
 
+    private fun parentPath(path: String): String {
+        val normalized = path.trim().ifEmpty { "/" }
+        val index = normalized.replace('\\', '/').lastIndexOf('/')
+        return when {
+            index <= 0 -> "/"
+            else -> normalized.substring(0, index)
+        }
+    }
+
     private fun buildPrivilegedError(stderr: String, notFoundMessage: String, fallback: String): String {
-        return if (stderr.contains("__PICAKKEEP_NO_DIR__") || stderr.contains("__PICAKKEEP_NO_FILE__")) {
+        return if (stderr.contains("__PICAKKEEP_NO_DIR__") ||
+            stderr.contains("__PICAKKEEP_NO_FILE__") ||
+            stderr.contains("__PICAKKEEP_NO_PATH__")
+        ) {
             notFoundMessage
         } else if (stderr.isNotBlank()) {
             stderr
@@ -777,12 +1060,15 @@ class MainActivity : FlutterActivity() {
         private const val TAG = "PicaKeepStartup"
         private const val FOREGROUND_SERVICE_CHANNEL =
             "com.example.picakeep/foreground_service"
+        private const val KEEP_SCREEN_ON_CHANNEL =
+            "com.github.pacalini.pica_comic/keepScreenOn"
         private const val STORAGE_ACCESS_CHANNEL =
             "com.example.picakeep/storage_access"
         private const val REQUEST_CODE_POST_NOTIFICATIONS = 1001
         private const val REQUEST_CODE_SHIZUKU = 1002
         private const val PRIVILEGED_PROCESS_TIMEOUT_MS = 5_000L
         private const val PRIVILEGED_READ_TIMEOUT_MS = 15_000L
-        private const val ACCESS_CACHE_MS = 1_500L
+        private const val SHIZUKU_ACCESS_CACHE_MS = 1_500L
+        private const val ROOT_ACCESS_CACHE_MS = 30 * 60 * 1000L
     }
 }

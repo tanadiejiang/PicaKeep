@@ -922,6 +922,10 @@ class DownloadPageLogic extends StateController {
     return item.canDelete && !_usesManagedDownloadSources;
   }
 
+  String _deleteErrorText(String error) {
+    return deleteFailureMessage(error).tl;
+  }
+
   Future<String?> deleteItems(Iterable<DownloadedItem> items) async {
     try {
       for (final item in items) {
@@ -930,14 +934,19 @@ class DownloadPageLogic extends StateController {
         }
         final result = await TrashManager.instance.deleteItem(item);
         if (!result.ok) {
-          return result.error ?? 'delete_failed';
+          return _deleteErrorText(result.error ?? 'delete_failed');
         }
       }
       await reload();
       update();
       return null;
     } catch (e) {
-      return e.toString();
+      final message = e.toString();
+      if (message.contains(deleteFailurePermissionDenied) ||
+          message.toLowerCase().contains('permission denied')) {
+        return _deleteErrorText(deleteFailurePermissionDenied);
+      }
+      return message;
     }
   }
 
@@ -950,8 +959,8 @@ class DownloadPageLogic extends StateController {
       final localLibraryManager = LocalLibraryManager();
       if (await localLibraryManager
           .shouldBypassDirectDownloadManagerForCurrentDownloads()) {
-        final count =
-            await localLibraryManager.refreshCurrentDownloadsWithShizukuFallback();
+        final count = await localLibraryManager
+            .refreshCurrentDownloadsWithShizukuFallback();
         await reload();
         return count;
       }
@@ -962,7 +971,8 @@ class DownloadPageLogic extends StateController {
     }
     final localLibraryManager = LocalLibraryManager();
     final count = await (() async {
-      if (await localLibraryManager.shouldUsePrivilegedManagedDownloadHandling()) {
+      if (await localLibraryManager
+          .shouldUsePrivilegedManagedDownloadHandling()) {
         await localLibraryManager.refresh();
         return (await localLibraryManager.getManagedDownloads()).length;
       }
@@ -2205,6 +2215,10 @@ class _DownloadedComicInfoViewState extends State<DownloadedComicInfoView> {
               final message = await DownloadManager().deleteEpisode(_comic, i);
               if (message == null && mounted) {
                 setState(_syncInfo);
+              } else if (message != null && mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text(message)),
+                );
               }
             },
             child: Text("确认".tl),
@@ -2224,105 +2238,111 @@ class _DownloadedComicInfoViewState extends State<DownloadedComicInfoView> {
         padding: const EdgeInsets.fromLTRB(16, 0, 16, 0),
         child: ConstrainedBox(
           constraints: BoxConstraints(
-            maxHeight: mediaQuery.size.height * 0.54,
+            maxHeight:
+                mediaQuery.size.height - mediaQuery.padding.vertical - 24,
           ),
-          child: Column(
-            children: [
-              const SizedBox(height: 4),
-              Material(
-                color: theme.colorScheme.surfaceContainerLow,
-                surfaceTintColor: theme.colorScheme.surfaceTint,
-                borderRadius: const BorderRadius.all(Radius.circular(20)),
-                child: Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      _buildCover(theme),
-                      const SizedBox(width: 14),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              name,
-                              style: theme.textTheme.titleLarge,
-                              maxLines: 2,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                            if (author.isNotEmpty) ...[
-                              const SizedBox(height: 8),
-                              Text(author, style: theme.textTheme.bodyMedium),
-                            ],
-                            if (source.isNotEmpty) ...[
-                              const SizedBox(height: 6),
-                              Text(
-                                source,
-                                style: theme.textTheme.bodySmall?.copyWith(
-                                  color: theme.colorScheme.outline,
+          child: Scrollbar(
+            controller: _scrollController,
+            thumbVisibility: true,
+            child: SingleChildScrollView(
+              controller: _scrollController,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const SizedBox(height: 4),
+                  Material(
+                    color: theme.colorScheme.surfaceContainerLow,
+                    surfaceTintColor: theme.colorScheme.surfaceTint,
+                    borderRadius: const BorderRadius.all(Radius.circular(20)),
+                    child: Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          _buildCover(theme),
+                          const SizedBox(width: 14),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  name,
+                                  style: theme.textTheme.titleLarge,
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
                                 ),
-                              ),
-                            ],
-                            const SizedBox(height: 8),
-                            Text(
-                              '${eps.length} ${eps.length == 1 ? '章' : '章节'}',
-                              style: theme.textTheme.bodySmall?.copyWith(
-                                color: theme.colorScheme.outline,
-                              ),
-                            ),
-                            if (tags.isNotEmpty) ...[
-                              const SizedBox(height: 12),
-                              Wrap(
-                                spacing: 6,
-                                runSpacing: 6,
-                                children: [
-                                  for (final tag in tags)
-                                    Container(
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: 8,
-                                        vertical: 4,
-                                      ),
-                                      decoration: BoxDecoration(
-                                        color: theme
-                                            .colorScheme.secondaryContainer,
-                                        borderRadius:
-                                            BorderRadius.circular(999),
-                                      ),
-                                      child: Text(
-                                        _translateDownloadedTag(tag),
-                                        style: const TextStyle(fontSize: 12),
-                                      ),
-                                    ),
+                                if (author.isNotEmpty) ...[
+                                  const SizedBox(height: 8),
+                                  Text(author,
+                                      style: theme.textTheme.bodyMedium),
                                 ],
-                              ),
-                            ],
-                          ],
-                        ),
+                                if (source.isNotEmpty) ...[
+                                  const SizedBox(height: 6),
+                                  Text(
+                                    source,
+                                    style: theme.textTheme.bodySmall?.copyWith(
+                                      color: theme.colorScheme.outline,
+                                    ),
+                                  ),
+                                ],
+                                const SizedBox(height: 8),
+                                Text(
+                                  '${eps.length} ${eps.length == 1 ? '章' : '章节'}',
+                                  style: theme.textTheme.bodySmall?.copyWith(
+                                    color: theme.colorScheme.outline,
+                                  ),
+                                ),
+                                if (tags.isNotEmpty) ...[
+                                  const SizedBox(height: 12),
+                                  Wrap(
+                                    spacing: 6,
+                                    runSpacing: 6,
+                                    children: [
+                                      for (final tag in tags)
+                                        Container(
+                                          padding: const EdgeInsets.symmetric(
+                                            horizontal: 8,
+                                            vertical: 4,
+                                          ),
+                                          decoration: BoxDecoration(
+                                            color: theme
+                                                .colorScheme.secondaryContainer,
+                                            borderRadius:
+                                                BorderRadius.circular(999),
+                                          ),
+                                          child: Text(
+                                            _translateDownloadedTag(tag),
+                                            style:
+                                                const TextStyle(fontSize: 12),
+                                          ),
+                                        ),
+                                    ],
+                                  ),
+                                ],
+                              ],
+                            ),
+                          ),
+                        ],
                       ),
-                    ],
+                    ),
                   ),
-                ),
-              ),
-              if (_loadingRemoteDetail)
-                const Padding(
-                  padding: EdgeInsets.only(top: 10),
-                  child: LinearProgressIndicator(minHeight: 2),
-                ),
-              const SizedBox(height: 12),
-              Align(
-                alignment: Alignment.centerLeft,
-                child: Text(
-                  '章节'.tl,
-                  style: theme.textTheme.titleMedium,
-                ),
-              ),
-              const SizedBox(height: 8),
-              Flexible(
-                child: Scrollbar(
-                  controller: _scrollController,
-                  thumbVisibility: true,
-                  child: GridView.builder(
-                    controller: _scrollController,
+                  if (_loadingRemoteDetail)
+                    const Padding(
+                      padding: EdgeInsets.only(top: 10),
+                      child: LinearProgressIndicator(minHeight: 2),
+                    ),
+                  const SizedBox(height: 12),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      '章节'.tl,
+                      style: theme.textTheme.titleMedium,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  GridView.builder(
+                    shrinkWrap: true,
+                    physics: const NeverScrollableScrollPhysics(),
                     padding: const EdgeInsets.only(bottom: 12),
                     gridDelegate:
                         const SliverGridDelegateWithMaxCrossAxisExtent(
@@ -2368,40 +2388,40 @@ class _DownloadedComicInfoViewState extends State<DownloadedComicInfoView> {
                     },
                     itemCount: eps.length,
                   ),
-                ),
-              ),
-              const SizedBox(height: 12),
-              SizedBox(
-                height: 56,
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: FilledButton.tonal(
-                        style: FilledButton.styleFrom(
-                          minimumSize: const Size.fromHeight(56),
+                  const SizedBox(height: 12),
+                  SizedBox(
+                    height: 56,
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: FilledButton.tonal(
+                            style: FilledButton.styleFrom(
+                              minimumSize: const Size.fromHeight(56),
+                            ),
+                            onPressed: () {
+                              App.globalBack();
+                              _toComicInfoPage(context, _comic);
+                            },
+                            child: Text("查看详情".tl),
+                          ),
                         ),
-                        onPressed: () {
-                          App.globalBack();
-                          _toComicInfoPage(context, _comic);
-                        },
-                        child: Text("查看详情".tl),
-                      ),
-                    ),
-                    const SizedBox(width: 16),
-                    Expanded(
-                      child: FilledButton(
-                        style: FilledButton.styleFrom(
-                          minimumSize: const Size.fromHeight(56),
+                        const SizedBox(width: 16),
+                        Expanded(
+                          child: FilledButton(
+                            style: FilledButton.styleFrom(
+                              minimumSize: const Size.fromHeight(56),
+                            ),
+                            onPressed: read,
+                            child: Text("阅读".tl),
+                          ),
                         ),
-                        onPressed: read,
-                        child: Text("阅读".tl),
-                      ),
+                      ],
                     ),
-                  ],
-                ),
+                  ),
+                  SizedBox(height: math.max(mediaQuery.padding.bottom, 12)),
+                ],
               ),
-              SizedBox(height: math.max(mediaQuery.padding.bottom, 12)),
-            ],
+            ),
           ),
         ),
       ),
