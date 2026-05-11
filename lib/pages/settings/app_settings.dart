@@ -402,7 +402,9 @@ class _AndroidStorageAccessController {
     } catch (_) {}
   }
 
-  Future<_AndroidShizukuStatus> getShizukuStatus() async {
+  Future<_AndroidShizukuStatus> getShizukuStatus({
+    bool forceRefresh = false,
+  }) async {
     if (!App.isAndroid) {
       return const _AndroidShizukuStatus(
         installed: false,
@@ -411,7 +413,10 @@ class _AndroidStorageAccessController {
       );
     }
     try {
-      final result = await _channel.invokeMethod<Object>('getShizukuStatus');
+      final result = await _channel.invokeMethod<Object>(
+        'getShizukuStatus',
+        {'forceRefresh': forceRefresh},
+      );
       final map = (result as Map?)?.cast<Object?, Object?>() ?? const {};
       return _AndroidShizukuStatus(
         installed: map['installed'] == true,
@@ -438,12 +443,16 @@ class _AndroidStorageAccessController {
     }
   }
 
-  Future<bool> hasShizukuPermission() async {
+  Future<bool> hasShizukuPermission({bool forceRefresh = false}) async {
     if (!App.isAndroid) {
       return false;
     }
     try {
-      return await _channel.invokeMethod<bool>('hasShizukuPermission') ?? false;
+      return await _channel.invokeMethod<bool>(
+            'hasShizukuPermission',
+            {'forceRefresh': forceRefresh},
+          ) ??
+          false;
     } catch (_) {
       return false;
     }
@@ -470,12 +479,16 @@ class _AndroidStorageAccessController {
     } catch (_) {}
   }
 
-  Future<bool> hasRootAccess() async {
+  Future<bool> hasRootAccess({bool forceRefresh = false}) async {
     if (!App.isAndroid) {
       return false;
     }
     try {
-      return await _channel.invokeMethod<bool>('hasRootAccess') ?? false;
+      return await _channel.invokeMethod<bool>(
+            'hasRootAccess',
+            {'forceRefresh': forceRefresh},
+          ) ??
+          false;
     } catch (_) {
       return false;
     }
@@ -542,11 +555,13 @@ enum _AndroidDirectoryBrowseMode {
   root,
 }
 
-Future<bool> _requestAndroidRootAccess() async {
+Future<bool> _requestAndroidRootAccess({bool forceRefresh = false}) async {
   if (!App.isAndroid) {
     return false;
   }
-  return _AndroidStorageAccessController.instance.hasRootAccess();
+  return _AndroidStorageAccessController.instance.hasRootAccess(
+    forceRefresh: forceRefresh,
+  );
 }
 
 String _joinDirectoryPath(String parent, String child) {
@@ -1107,6 +1122,7 @@ class _AndroidShizukuModeTileState extends State<_AndroidShizukuModeTile>
   bool? _installed;
   bool? _running;
   bool? _granted;
+  bool _wasBackgrounded = false;
 
   @override
   void initState() {
@@ -1116,7 +1132,7 @@ class _AndroidShizukuModeTileState extends State<_AndroidShizukuModeTile>
       if (!mounted) {
         return;
       }
-      unawaited(_load());
+      unawaited(_load(forceRefresh: true));
     });
   }
 
@@ -1128,14 +1144,26 @@ class _AndroidShizukuModeTileState extends State<_AndroidShizukuModeTile>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.hidden ||
+        state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.paused) {
+      _wasBackgrounded = true;
+      return;
+    }
     if (state == AppLifecycleState.resumed) {
-      _load();
+      if (!_wasBackgrounded || !(ModalRoute.of(context)?.isCurrent ?? false)) {
+        return;
+      }
+      _wasBackgrounded = false;
+      unawaited(_load(forceRefresh: true));
     }
   }
 
-  Future<void> _load() async {
+  Future<void> _load({bool forceRefresh = false}) async {
     final controller = _AndroidStorageAccessController.instance;
-    final status = await controller.getShizukuStatus();
+    final status = await controller.getShizukuStatus(
+      forceRefresh: forceRefresh,
+    );
     var nextEnabled = _isAndroidShizukuModeEnabled();
     if (nextEnabled && !(status.running && status.permissionGranted)) {
       await _setAndroidShizukuModeEnabled(false);
@@ -1192,7 +1220,7 @@ class _AndroidShizukuModeTileState extends State<_AndroidShizukuModeTile>
           setState(() {
             _enabled = _isAndroidShizukuModeEnabled();
           });
-          await _load();
+          await _load(forceRefresh: true);
           return;
         }
         if (action == 'open') {
@@ -1207,7 +1235,8 @@ class _AndroidShizukuModeTileState extends State<_AndroidShizukuModeTile>
         }
 
         final running =
-            _running ?? (await controller.getShizukuStatus()).running;
+            _running ??
+            (await controller.getShizukuStatus(forceRefresh: true)).running;
         if (!running) {
           await controller.openShizukuApp();
           if (mounted) {
@@ -1228,14 +1257,14 @@ class _AndroidShizukuModeTileState extends State<_AndroidShizukuModeTile>
               _enabled = false;
             });
           }
-          await _load();
+          await _load(forceRefresh: true);
           return;
         }
         await _setAndroidShizukuModeEnabled(true);
       } else {
         await _setAndroidShizukuModeEnabled(false);
       }
-      await _load();
+      await _load(forceRefresh: true);
       if (mounted && value) {
         _showSettingMessage(context, 'Shizuku 授权已开启，可用于长按“浏览”的受限目录访问'.tl);
       }
@@ -1284,6 +1313,7 @@ class _AndroidRootModeTileState extends State<_AndroidRootModeTile>
     with WidgetsBindingObserver {
   bool _busy = false;
   bool _enabled = _isAndroidRootModeEnabled();
+  bool _wasBackgrounded = false;
 
   @override
   void initState() {
@@ -1293,7 +1323,7 @@ class _AndroidRootModeTileState extends State<_AndroidRootModeTile>
       if (!mounted) {
         return;
       }
-      unawaited(_load());
+      unawaited(_load(forceRefresh: true));
     });
   }
 
@@ -1305,14 +1335,25 @@ class _AndroidRootModeTileState extends State<_AndroidRootModeTile>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.hidden ||
+        state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.paused) {
+      _wasBackgrounded = true;
+      return;
+    }
     if (state == AppLifecycleState.resumed) {
-      _load();
+      if (!_wasBackgrounded || !(ModalRoute.of(context)?.isCurrent ?? false)) {
+        return;
+      }
+      _wasBackgrounded = false;
+      unawaited(_load(forceRefresh: true));
     }
   }
 
-  Future<void> _load() async {
+  Future<void> _load({bool forceRefresh = false}) async {
     var nextEnabled = _isAndroidRootModeEnabled();
-    if (nextEnabled && !await _requestAndroidRootAccess()) {
+    if (nextEnabled &&
+        !await _requestAndroidRootAccess(forceRefresh: forceRefresh)) {
       appdata.settings[androidRootModeSettingIndex] = '0';
       await appdata.updateSettings();
       nextEnabled = false;
@@ -1334,7 +1375,7 @@ class _AndroidRootModeTileState extends State<_AndroidRootModeTile>
     });
     try {
       if (value) {
-        final granted = await _requestAndroidRootAccess();
+        final granted = await _requestAndroidRootAccess(forceRefresh: true);
         if (!granted) {
           appdata.settings[androidRootModeSettingIndex] = '0';
           await appdata.updateSettings();
@@ -1618,7 +1659,10 @@ class _ManagedDataSourceModeTileState
       return;
     }
     final accessRequirement = await LocalLibraryManager()
-        .getManagedSourceAccessRequirement(value);
+        .getManagedSourceAccessRequirement(
+      value,
+      refreshAccess: true,
+    );
     if (!mounted) {
       return;
     }

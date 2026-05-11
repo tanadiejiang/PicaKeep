@@ -14,6 +14,9 @@ import 'download_model.dart';
 import 'local_data_source.dart';
 import 'local_favorites.dart';
 import 'local_library_settings.dart';
+import 'local_trash_store.dart';
+
+const _localTrashDirectoryName = '.picakeep_trash';
 
 enum LocalLibrarySourceKind {
   currentDownload,
@@ -195,6 +198,11 @@ class LocalLibraryComicItem extends DownloadedItem {
     required this.aliases,
     this.favoriteTarget,
     this.comicSize,
+    this.sourceDbPath,
+    this.sourceDbId,
+    this.sourceDirectory,
+    this.sourceRowJson,
+    this.sourceRowTimeMillis,
   })  : _type = type,
         _name = name,
         _subTitle = subTitle,
@@ -223,6 +231,11 @@ class LocalLibraryComicItem extends DownloadedItem {
   final bool _canDelete;
   final List<String> aliases;
   final String? favoriteTarget;
+  final String? sourceDbPath;
+  final String? sourceDbId;
+  final String? sourceDirectory;
+  final String? sourceRowJson;
+  final int? sourceRowTimeMillis;
 
   @override
   double? comicSize;
@@ -294,6 +307,11 @@ class LocalLibraryComicItem extends DownloadedItem {
         'localCoverPath': localCoverPath,
         'localStorageExists': localStorageExists,
         'favoriteTarget': favoriteTarget,
+        'sourceDbPath': sourceDbPath,
+        'sourceDbId': sourceDbId,
+        'sourceDirectory': sourceDirectory,
+        'sourceRowJson': sourceRowJson,
+        'sourceRowTimeMillis': sourceRowTimeMillis,
         'comicSize': comicSize,
       };
 
@@ -396,7 +414,8 @@ class LocalPathReadingData extends ReadingData {
   Future<List<String>> loadEp(int ep) async {
     final key = hasEp ? ep : 0;
     if (!_episodeFiles.containsKey(key) && directoryPath.isNotEmpty) {
-      _episodeFiles[key] = await LocalLibraryManager._buildDownloadedEpisodeFilesForEp(
+      _episodeFiles[key] =
+          await LocalLibraryManager._buildDownloadedEpisodeFilesForEp(
         directoryPath,
         key,
       );
@@ -507,6 +526,7 @@ class LocalLibraryManager {
 
   Future<ManagedSourceAccessRequirement> getManagedSourceAccessRequirement(
     String mode,
+    {bool refreshAccess = false}
   ) async {
     final normalizedMode = normalizeManagedDataSourceMode(mode);
     final currentPath = await resolveCurrentDownloadPath();
@@ -529,16 +549,19 @@ class LocalLibraryManager {
       return ManagedSourceAccessRequirement.ok;
     }
 
-    final rootEnabled =
-        normalizeAndroidRootMode(appdata.settings[androidRootModeSettingIndex]) ==
-            '1';
+    final rootEnabled = normalizeAndroidRootMode(
+            appdata.settings[androidRootModeSettingIndex]) ==
+        '1';
     final shizukuEnabled = normalizeAndroidShizukuMode(
           appdata.settings[androidShizukuModeSettingIndex],
         ) ==
         '1';
-    final rootGranted = rootEnabled ? await _hasRootAccess() : false;
+    final rootGranted =
+        rootEnabled ? await _hasRootAccess(forceRefresh: refreshAccess) : false;
     final shizukuGranted =
-        shizukuEnabled ? await _hasShizukuPermission() : false;
+        shizukuEnabled
+            ? await _hasShizukuPermission(forceRefresh: refreshAccess)
+            : false;
 
     for (final path in paths) {
       if (_canAccessDirectoryWithDartIo(path)) {
@@ -607,12 +630,15 @@ class LocalLibraryManager {
     LocalLibrarySource source,
   ) async {
     final root = await _localCacheRoot();
-    final file = File(_joinPath(root.path, '${_safeCacheName(source.id)}.json'));
+    final file =
+        File(_joinPath(root.path, '${_safeCacheName(source.id)}.json'));
     if (!file.existsSync()) {
-      return _LocalLibrarySourceCache(file, <String, _LocalLibraryCachedItem>{});
+      return _LocalLibrarySourceCache(
+          file, <String, _LocalLibraryCachedItem>{});
     }
     try {
-      final data = jsonDecode(await file.readAsString()) as Map<String, dynamic>;
+      final data =
+          jsonDecode(await file.readAsString()) as Map<String, dynamic>;
       final rawItems = data['items'];
       final items = <String, _LocalLibraryCachedItem>{};
       if (rawItems is Map) {
@@ -627,7 +653,8 @@ class LocalLibraryManager {
       }
       return _LocalLibrarySourceCache(file, items);
     } catch (_) {
-      return _LocalLibrarySourceCache(file, <String, _LocalLibraryCachedItem>{});
+      return _LocalLibrarySourceCache(
+          file, <String, _LocalLibraryCachedItem>{});
     }
   }
 
@@ -664,7 +691,8 @@ class LocalLibraryManager {
           continue;
         }
         final existing = cache.itemFor(rawId, dirPath);
-        if (await _hasUsableManagedCoverCache(item, existing?.coverPath?.trim())) {
+        if (await _hasUsableManagedCoverCache(
+            item, existing?.coverPath?.trim())) {
           continue;
         }
         await Future<void>.delayed(
@@ -737,7 +765,8 @@ class LocalLibraryManager {
     _LocalLibraryCachedItem? existing,
   ) async {
     if (item.isManagedDownloadItem) {
-      return _ensureManagedDownloadCoverCache(item, existing?.coverPath?.trim());
+      return _ensureManagedDownloadCoverCache(
+          item, existing?.coverPath?.trim());
     }
     final dirPath = item.fileSystemPath?.trim() ?? '';
     if (dirPath.isEmpty || !item.localStorageExists) {
@@ -901,7 +930,8 @@ class LocalLibraryManager {
   }
 
   String _managedDownloadCoverCacheKey(String rawId, String directoryPath) {
-    final composite = _LocalLibrarySourceCache._cacheItemKey(rawId, directoryPath);
+    final composite =
+        _LocalLibrarySourceCache._cacheItemKey(rawId, directoryPath);
     return _stableHash(composite);
   }
 
@@ -993,7 +1023,8 @@ class LocalLibraryManager {
       if (!sourceExists) {
         continue;
       }
-      if (source.isManagedDownload || await _isDownloadDirectoryAsync(source.path)) {
+      if (source.isManagedDownload ||
+          await _isDownloadDirectoryAsync(source.path)) {
         await _scanDownloadSource(source);
       } else {
         await _scanAlbumSource(source);
@@ -1081,7 +1112,8 @@ class LocalLibraryManager {
     }
     final cached = item.localCoverPath?.trim();
     if (item.isManagedDownloadItem) {
-      final managedCached = await _ensureManagedDownloadCoverCache(item, cached);
+      final managedCached =
+          await _ensureManagedDownloadCoverCache(item, cached);
       if (managedCached != null && managedCached.isNotEmpty) {
         return managedCached;
       }
@@ -1165,8 +1197,8 @@ class LocalLibraryManager {
     final sources = await _buildSources();
     var count = 0;
     for (final source in sources) {
-      final sourceLooksLikeDownload =
-          source.isManagedDownload || await _isDownloadDirectoryAsync(source.path);
+      final sourceLooksLikeDownload = source.isManagedDownload ||
+          await _isDownloadDirectoryAsync(source.path);
       if (!sourceLooksLikeDownload) {
         continue;
       }
@@ -1276,8 +1308,10 @@ class LocalLibraryManager {
     }
 
     final cache = await _loadSourceCache(source);
+    final hiddenIndex = await LocalTrashStore.instance.hiddenIndex();
     final sourceDirectoryNames = (await _listDirectoryEntries(source.path))
         .where((entry) => entry.isDirectory)
+        .where((entry) => entry.name != _localTrashDirectoryName)
         .map((entry) => entry.name.toLowerCase())
         .toSet();
     final openDbPath = (await _writeDatabaseSnapshot(source, dbBytes)).path;
@@ -1286,23 +1320,22 @@ class LocalLibraryManager {
     try {
       final db = sqlite3.open(openDbPath);
       try {
-        final rows = db
-            .select('select * from download order by time desc')
-            .toList()
-          ..sort((a, b) {
-            final score = _downloadRowPriority(
-              (b['id'] as String? ?? '').trim(),
-              (b['directory'] as String? ?? '').trim(),
-            ).compareTo(_downloadRowPriority(
-              (a['id'] as String? ?? '').trim(),
-              (a['directory'] as String? ?? '').trim(),
-            ));
-            if (score != 0) {
-              return score;
-            }
-            return ((b['time'] as int?) ?? 0)
-                .compareTo((a['time'] as int?) ?? 0);
-          });
+        final rows =
+            db.select('select * from download order by time desc').toList()
+              ..sort((a, b) {
+                final score = _downloadRowPriority(
+                  (b['id'] as String? ?? '').trim(),
+                  (b['directory'] as String? ?? '').trim(),
+                ).compareTo(_downloadRowPriority(
+                  (a['id'] as String? ?? '').trim(),
+                  (a['directory'] as String? ?? '').trim(),
+                ));
+                if (score != 0) {
+                  return score;
+                }
+                return ((b['time'] as int?) ?? 0)
+                    .compareTo((a['time'] as int?) ?? 0);
+              });
         final seenDirectories = <String>{};
 
         for (final row in rows) {
@@ -1332,12 +1365,24 @@ class LocalLibraryManager {
               rawDirectory,
               baseItem,
             );
+            final localItemId = 'local_download::${source.id}::$rawId';
+            if (hiddenIndex.matchesManagedDownload(
+              itemId: localItemId,
+              sourceDbPath: dbPath,
+              sourceDbId: rawId,
+              sourceDirectory:
+                  rawDirectory.isNotEmpty ? rawDirectory : itemDirectory,
+              originalPath: itemDirectory,
+            )) {
+              continue;
+            }
             final dedupeKey = itemDirectory.toLowerCase();
             if (!seenDirectories.add(dedupeKey)) {
               continue;
             }
 
-            final localType = _effectiveDownloadTypeForLocalItem(baseItem, rawId);
+            final localType =
+                _effectiveDownloadTypeForLocalItem(baseItem, rawId);
             final eps = baseItem.eps.isNotEmpty
                 ? List<String>.from(baseItem.eps)
                 : _buildLocalEpisodeNames(baseItem.downloadedEps.length);
@@ -1356,16 +1401,18 @@ class LocalLibraryManager {
               continue;
             }
             final item = LocalLibraryComicItem(
-              itemId: 'local_download::${source.id}::$rawId',
+              itemId: localItemId,
               originalId: rawId,
               type: localType,
               name: _metadataTitleForDownloadedRow(row, baseItem),
-              subTitle: _metadataAuthorForDownloadedRow(row, jsonText, baseItem),
+              subTitle:
+                  _metadataAuthorForDownloadedRow(row, jsonText, baseItem),
               tags: _metadataTagsForDownloadedRow(row, jsonText, baseItem),
               sourceDisplayName:
                   _displayNameForDownloaded(baseItem, rawId, localType),
               fileSystemPath: itemDirectory,
-              episodeFiles: cachedItem?.episodeFiles ?? const <int, List<String>>{},
+              episodeFiles:
+                  cachedItem?.episodeFiles ?? const <int, List<String>>{},
               downloadedEps: downloadedEps,
               eps: eps,
               localCoverPath: localStorageExists ? cachedItem?.coverPath : null,
@@ -1374,10 +1421,17 @@ class LocalLibraryManager {
               aliases: [rawId, itemDirectory],
               favoriteTarget: _favoriteTargetForDownloaded(baseItem, rawId),
               comicSize: baseItem.comicSize,
+              sourceDbPath: dbPath,
+              sourceDbId: rawId,
+              sourceDirectory:
+                  rawDirectory.isNotEmpty ? rawDirectory : itemDirectory,
+              sourceRowJson: jsonText,
+              sourceRowTimeMillis: timeValue,
             )..time = baseItem.time;
             items.add(item);
           } catch (e) {
-            print('[PicaKeep] Skip invalid download row for ${source.path}: $e');
+            print(
+                '[PicaKeep] Skip invalid download row for ${source.path}: $e');
           }
         }
       } finally {
@@ -1398,8 +1452,13 @@ class LocalLibraryManager {
     LocalLibrarySource source,
   ) async {
     final entries = await _listDirectoryEntries(source.path);
+    final hiddenIndex = await LocalTrashStore.instance.hiddenIndex();
     final items = <LocalLibraryComicItem>[];
     for (final entry in entries.where((entry) => entry.isDirectory)) {
+      if (entry.name == _localTrashDirectoryName ||
+          hiddenIndex.matchesPath(entry.path)) {
+        continue;
+      }
       final episodeFiles = await _buildDownloadedEpisodeFiles(entry.path, null);
       if (episodeFiles.isEmpty) {
         continue;
@@ -1408,11 +1467,14 @@ class LocalLibraryManager {
         ..sort((a, b) => a.key.compareTo(b.key));
       final coverPath = await _pickCoverPath(
         entry.path,
-        orderedEpisodes.isEmpty ? const <String>[] : orderedEpisodes.first.value,
+        orderedEpisodes.isEmpty
+            ? const <String>[]
+            : orderedEpisodes.first.value,
       );
       final sizeMb = await _computeDirectorySizeMbForPath(entry.path);
+      final itemId = 'local_download::${source.id}::${entry.name}';
       final item = LocalLibraryComicItem(
-        itemId: 'local_download::${source.id}::${entry.name}',
+        itemId: itemId,
         originalId: entry.name,
         type: DownloadType.other,
         name: entry.name,
@@ -1421,7 +1483,8 @@ class LocalLibraryManager {
         sourceDisplayName: '本地扫描',
         fileSystemPath: entry.path,
         episodeFiles: episodeFiles,
-        downloadedEps: List<int>.from(orderedEpisodes.map((entry) => entry.key)),
+        downloadedEps:
+            List<int>.from(orderedEpisodes.map((entry) => entry.key)),
         eps: _buildLocalEpisodeNames(episodeFiles.length),
         localCoverPath: coverPath,
         localStorageExists: true,
@@ -1445,8 +1508,10 @@ class LocalLibraryManager {
     final trustStorageFromDatabase =
         await _shouldUsePrivilegedFallbackForDirectory(source.path);
     final cache = await _loadSourceCache(source);
+    final hiddenIndex = await LocalTrashStore.instance.hiddenIndex();
     final sourceDirectoryNames = (await _listDirectoryEntries(source.path))
         .where((entry) => entry.isDirectory)
+        .where((entry) => entry.name != _localTrashDirectoryName)
         .map((entry) => entry.name.toLowerCase())
         .toSet();
     final openDbPath = (await _writeDatabaseSnapshot(source, dbBytes)).path;
@@ -1500,6 +1565,17 @@ class LocalLibraryManager {
           rawDirectory,
           baseItem,
         );
+        final localItemId = 'local_download::${source.id}::$rawId';
+        if (hiddenIndex.matchesManagedDownload(
+          itemId: localItemId,
+          sourceDbPath: dbPath,
+          sourceDbId: rawId,
+          sourceDirectory:
+              rawDirectory.isNotEmpty ? rawDirectory : itemDirectory,
+          originalPath: itemDirectory,
+        )) {
+          continue;
+        }
         final dedupeKey = itemDirectory.toLowerCase();
         if (!seenDirectories.add(dedupeKey)) {
           continue;
@@ -1525,7 +1601,7 @@ class LocalLibraryManager {
           continue;
         }
         final item = LocalLibraryComicItem(
-          itemId: 'local_download::${source.id}::$rawId',
+          itemId: localItemId,
           originalId: rawId,
           type: localType,
           name: _metadataTitleForDownloadedRow(row, baseItem),
@@ -1543,6 +1619,12 @@ class LocalLibraryManager {
           aliases: [rawId, itemDirectory],
           favoriteTarget: _favoriteTargetForDownloaded(baseItem, rawId),
           comicSize: sizeMb,
+          sourceDbPath: dbPath,
+          sourceDbId: rawId,
+          sourceDirectory:
+              rawDirectory.isNotEmpty ? rawDirectory : itemDirectory,
+          sourceRowJson: jsonText,
+          sourceRowTimeMillis: timeValue,
         )..time = baseItem.time;
 
         _indexItem(item);
@@ -1583,7 +1665,12 @@ class LocalLibraryManager {
     final children = <LocalLibraryStorageChildEntry>[];
     double totalSize = 0;
     final entries = await _listDirectoryEntries(source.path);
+    final hiddenIndex = await LocalTrashStore.instance.hiddenIndex();
     for (final entry in entries.where((entry) => entry.isDirectory)) {
+      if (entry.name == _localTrashDirectoryName ||
+          hiddenIndex.matchesPath(entry.path)) {
+        continue;
+      }
       final episodeFiles = await _buildDownloadedEpisodeFiles(
         entry.path,
         null,
@@ -1596,8 +1683,9 @@ class LocalLibraryManager {
         entry.path,
         episodeFiles[0] ?? const <String>[],
       );
+      final itemId = 'local_download::${source.id}::${entry.name}';
       final item = LocalLibraryComicItem(
-        itemId: 'local_download::${source.id}::${entry.name}',
+        itemId: itemId,
         originalId: entry.name,
         type: DownloadType.other,
         name: entry.name,
@@ -1606,7 +1694,8 @@ class LocalLibraryManager {
         sourceDisplayName: '本地扫描',
         fileSystemPath: entry.path,
         episodeFiles: episodeFiles,
-        downloadedEps: List<int>.generate(episodeFiles.length, (index) => index),
+        downloadedEps:
+            List<int>.generate(episodeFiles.length, (index) => index),
         eps: _buildLocalEpisodeNames(episodeFiles.length),
         localCoverPath: coverPath,
         localStorageExists: true,
@@ -1648,8 +1737,12 @@ class LocalLibraryManager {
 
     final albumDirs = await _collectLeafAlbumDirectoryPaths(source.path);
     final children = <LocalLibraryStorageChildEntry>[];
+    final hiddenIndex = await LocalTrashStore.instance.hiddenIndex();
 
     for (final dirPath in albumDirs) {
+      if (hiddenIndex.matchesPath(dirPath)) {
+        continue;
+      }
       final imageFiles = await _sortedAlbumImagesForPath(dirPath);
       if (imageFiles.isEmpty) {
         continue;
@@ -1776,9 +1869,12 @@ class LocalLibraryManager {
           .toSet();
 
       var count = 0;
+      final hiddenIndex = LocalTrashStore.instance.hiddenIndexSync();
       for (final entry in _safeList(root).whereType<Directory>()) {
         final dirName = _basename(entry.path);
         if (dirName.isEmpty ||
+            dirName == _localTrashDirectoryName ||
+            hiddenIndex.matchesPath(entry.path) ||
             knownIds.contains(dirName) ||
             knownDirectories.contains(dirName)) {
           continue;
@@ -1889,7 +1985,8 @@ class LocalLibraryManager {
     final childDirs = entries.where((entry) => entry.isDirectory).toList()
       ..sort((a, b) => _naturalCompare(a.name, b.name));
     if (childDirs.isNotEmpty) {
-      final exact = childDirs.where((entry) => entry.name == ep.toString()).toList();
+      final exact =
+          childDirs.where((entry) => entry.name == ep.toString()).toList();
       final target = exact.isNotEmpty
           ? exact.first
           : (ep > 0 && ep <= childDirs.length ? childDirs[ep - 1] : null);
@@ -1928,12 +2025,18 @@ class LocalLibraryManager {
     final result = <String>[];
 
     Future<bool> visit(String path) async {
+      if (_basename(path) == _localTrashDirectoryName) {
+        return false;
+      }
       final children = await _listDirectoryEntries(path);
       final hasImages = children.any(
         (entry) => !entry.isDirectory && _isVisibleImagePath(entry.path),
       );
       var hasAlbumDescendant = false;
       for (final subDir in children.where((entry) => entry.isDirectory)) {
+        if (subDir.name == _localTrashDirectoryName) {
+          continue;
+        }
         if (await visit(subDir.path)) {
           hasAlbumDescendant = true;
         }
@@ -2122,7 +2225,9 @@ class LocalLibraryManager {
     if (candidate == null) {
       return rootPath;
     }
-    return candidate.startsWith('/') ? candidate : _joinPath(rootPath, candidate);
+    return candidate.startsWith('/')
+        ? candidate
+        : _joinPath(rootPath, candidate);
   }
 
   static bool _managedDownloadDirectoryExistsInIndex(
@@ -2133,8 +2238,10 @@ class LocalLibraryManager {
     if (sourceDirectoryNames.isEmpty) {
       return false;
     }
-    final normalizedRoot = rootPath.replaceAll('\\', '/').replaceFirst(RegExp(r'/+$'), '');
-    final normalizedItem = itemDirectory.replaceAll('\\', '/').replaceFirst(RegExp(r'/+$'), '');
+    final normalizedRoot =
+        rootPath.replaceAll('\\', '/').replaceFirst(RegExp(r'/+$'), '');
+    final normalizedItem =
+        itemDirectory.replaceAll('\\', '/').replaceFirst(RegExp(r'/+$'), '');
     final candidateName = normalizedItem.startsWith('$normalizedRoot/')
         ? normalizedItem.substring(normalizedRoot.length + 1).split('/').first
         : _basename(normalizedItem);
@@ -2302,9 +2409,9 @@ class LocalLibraryManager {
   }
 
   static String? _androidPrivilegedAccessMethod(String operation) {
-    final rootEnabled =
-        normalizeAndroidRootMode(appdata.settings[androidRootModeSettingIndex]) ==
-            '1';
+    final rootEnabled = normalizeAndroidRootMode(
+            appdata.settings[androidRootModeSettingIndex]) ==
+        '1';
     if (rootEnabled) {
       switch (operation) {
         case 'listDirectoryEntries':
@@ -2371,13 +2478,16 @@ class LocalLibraryManager {
     }
   }
 
-  static Future<bool> _hasShizukuPermission() async {
+  static Future<bool> _hasShizukuPermission({
+    bool forceRefresh = false,
+  }) async {
     if (!Platform.isAndroid) {
       return false;
     }
     try {
       return await _storageAccessChannel.invokeMethod<bool>(
             'hasShizukuPermission',
+            {'forceRefresh': forceRefresh},
           ) ??
           false;
     } catch (_) {
@@ -2385,13 +2495,16 @@ class LocalLibraryManager {
     }
   }
 
-  static Future<bool> _hasRootAccess() async {
+  static Future<bool> _hasRootAccess({
+    bool forceRefresh = false,
+  }) async {
     if (!Platform.isAndroid) {
       return false;
     }
     try {
       return await _storageAccessChannel.invokeMethod<bool>(
             'hasRootAccess',
+            {'forceRefresh': forceRefresh},
           ) ??
           false;
     } catch (_) {
@@ -2400,9 +2513,9 @@ class LocalLibraryManager {
   }
 
   static bool _isAndroidPrivilegedAccessEnabled() {
-    final rootEnabled =
-        normalizeAndroidRootMode(appdata.settings[androidRootModeSettingIndex]) ==
-            '1';
+    final rootEnabled = normalizeAndroidRootMode(
+            appdata.settings[androidRootModeSettingIndex]) ==
+        '1';
     if (rootEnabled) {
       return true;
     }
@@ -2614,7 +2727,8 @@ class LocalLibraryManager {
       'category',
       'labels',
     ]);
-    final size = _downloadRowDouble(row, const ['size', 'comicSize', 'totalSize']);
+    final size =
+        _downloadRowDouble(row, const ['size', 'comicSize', 'totalSize']);
     final comic = ScannedDownloadedComic(
       comicId: rawId,
       title: title,
@@ -2842,7 +2956,8 @@ class LocalLibraryManager {
       for (final nestedKey in const ['comicItem', 'comic', 'metadata']) {
         final nested = data[nestedKey];
         if (nested is Map) {
-          final values = pick(nested, const ['tags', 'tagList', 'metadataTags']);
+          final values =
+              pick(nested, const ['tags', 'tagList', 'metadataTags']);
           if (values != null) {
             return values;
           }

@@ -1046,7 +1046,7 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
           return;
         }
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(result.error ?? '删除失败'.tl)),
+          SnackBar(content: Text(deleteFailureMessage(result.error).tl)),
         );
         return;
       }
@@ -1272,8 +1272,9 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
                           IconButton(
                             icon: const Icon(Icons.delete_outline),
                             tooltip: '删除'.tl,
-                            onPressed:
-                                _selectedCount == 0 ? null : _deleteSelectedItems,
+                            onPressed: _selectedCount == 0
+                                ? null
+                                : _deleteSelectedItems,
                           ),
                         ]
                       : [
@@ -1302,7 +1303,8 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
                             onPressed: _showSortDialog,
                           ),
                           IconButton(
-                            icon: Icon(_searchMode ? Icons.close : Icons.search),
+                            icon:
+                                Icon(_searchMode ? Icons.close : Icons.search),
                             tooltip: _searchMode ? '关闭搜索'.tl : '搜索'.tl,
                             onPressed: () {
                               setState(() {

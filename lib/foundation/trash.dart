@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/services.dart';
 import 'package:picakeep/base.dart';
 import 'package:picakeep/foundation/app.dart';
 import 'package:picakeep/foundation/app_runtime_mode.dart';
@@ -8,13 +9,26 @@ import 'package:picakeep/foundation/download.dart';
 import 'package:picakeep/foundation/download_model.dart';
 import 'package:picakeep/foundation/local_library.dart';
 import 'package:picakeep/foundation/local_library_settings.dart';
+import 'package:picakeep/foundation/local_trash_store.dart';
 import 'package:picakeep/foundation/remote_library_data_source.dart';
 import 'package:picakeep/server/library_trash_store.dart';
 import 'package:picakeep/server/local_server_runtime.dart';
+import 'package:sqlite3/sqlite3.dart';
 
 const deleteBehaviorTrash = 'trash';
 const deleteBehaviorPermanent = 'permanent';
 const localTrashDirectoryName = '.picakeep_trash';
+const deleteFailureLocalPathNotFound = 'local_path_not_found';
+const deleteFailurePermissionDenied = 'permission_denied';
+const _storageAccessChannelName = 'com.example.picakeep/storage_access';
+
+const MethodChannel _storageAccessChannel =
+    MethodChannel(_storageAccessChannelName);
+
+enum _PrivilegedWriteMode {
+  root,
+  shizuku,
+}
 
 String _joinTrashPath(String parent, String child) {
   return '$parent${Platform.pathSeparator}$child';
@@ -22,7 +36,8 @@ String _joinTrashPath(String parent, String child) {
 
 String _basenameTrashPath(String path) {
   final normalized = path.replaceAll('\\', '/');
-  final segments = normalized.split('/').where((entry) => entry.isNotEmpty).toList();
+  final segments =
+      normalized.split('/').where((entry) => entry.isNotEmpty).toList();
   return segments.isEmpty ? normalized : segments.last;
 }
 
@@ -44,6 +59,187 @@ enum TrashItemScope {
 enum TrashItemKind {
   comic,
   album,
+}
+
+enum _LocalPathState {
+  exists,
+  missing,
+  permissionDenied,
+}
+
+Future<bool> _hasRootAccess({
+  bool forceRefresh = false,
+}) async {
+  if (!App.isAndroid) {
+    return false;
+  }
+  try {
+    return await _storageAccessChannel.invokeMethod<bool>(
+          'hasRootAccess',
+          {'forceRefresh': forceRefresh},
+        ) ??
+        false;
+  } catch (_) {
+    return false;
+  }
+}
+
+Future<bool> _hasShizukuPermission({
+  bool forceRefresh = false,
+}) async {
+  if (!App.isAndroid) {
+    return false;
+  }
+  try {
+    return await _storageAccessChannel.invokeMethod<bool>(
+          'hasShizukuPermission',
+          {'forceRefresh': forceRefresh},
+        ) ??
+        false;
+  } catch (_) {
+    return false;
+  }
+}
+
+List<_PrivilegedWriteMode> _enabledPrivilegedWriteModes() {
+  if (!App.isAndroid) {
+    return const [];
+  }
+  final modes = <_PrivilegedWriteMode>[];
+  if (normalizeAndroidRootMode(appdata.settings[androidRootModeSettingIndex]) ==
+      '1') {
+    modes.add(_PrivilegedWriteMode.root);
+  }
+  if (normalizeAndroidShizukuMode(
+          appdata.settings[androidShizukuModeSettingIndex]) ==
+      '1') {
+    modes.add(_PrivilegedWriteMode.shizuku);
+  }
+  return modes;
+}
+
+Future<_PrivilegedWriteMode?> _resolvePrivilegedWriteMode({
+  bool forceRefresh = false,
+}) async {
+  if (!App.isAndroid) {
+    return null;
+  }
+  for (final mode in _enabledPrivilegedWriteModes()) {
+    switch (mode) {
+      case _PrivilegedWriteMode.root:
+        if (await _hasRootAccess(forceRefresh: forceRefresh)) {
+          return mode;
+        }
+        break;
+      case _PrivilegedWriteMode.shizuku:
+        if (await _hasShizukuPermission(forceRefresh: forceRefresh)) {
+          return mode;
+        }
+        break;
+    }
+  }
+  return null;
+}
+
+Future<_PrivilegedWriteMode?> _resolvePrivilegedWriteModeForOperation() async {
+  final mode = await _resolvePrivilegedWriteMode();
+  if (mode != null) {
+    return mode;
+  }
+  if (_enabledPrivilegedWriteModes().isEmpty) {
+    return null;
+  }
+  return _resolvePrivilegedWriteMode(forceRefresh: true);
+}
+
+Future<bool> _privilegedPathExists(
+  String path, {
+  required _PrivilegedWriteMode mode,
+}) async {
+  if (!App.isAndroid) {
+    return false;
+  }
+  try {
+    final method = switch (mode) {
+      _PrivilegedWriteMode.root => 'existsWithRoot',
+      _PrivilegedWriteMode.shizuku => 'existsWithShizuku',
+    };
+    return await _storageAccessChannel.invokeMethod<bool>(
+          method,
+          {'path': path},
+        ) ??
+        false;
+  } catch (_) {
+    return false;
+  }
+}
+
+Future<void> _privilegedDeletePath(
+  String path, {
+  required _PrivilegedWriteMode mode,
+}) async {
+  final method = switch (mode) {
+    _PrivilegedWriteMode.root => 'deletePathWithRoot',
+    _PrivilegedWriteMode.shizuku => 'deletePathWithShizuku',
+  };
+  await _storageAccessChannel.invokeMethod<void>(
+    method,
+    {'path': path},
+  );
+}
+
+Future<Uint8List?> _privilegedReadFileBytes(
+  String path, {
+  required _PrivilegedWriteMode mode,
+}) async {
+  final method = switch (mode) {
+    _PrivilegedWriteMode.root => 'readFileWithRoot',
+    _PrivilegedWriteMode.shizuku => 'readFileWithShizuku',
+  };
+  final result = await _storageAccessChannel.invokeMethod<Object>(
+    method,
+    {'path': path},
+  );
+  if (result is Uint8List) {
+    return result;
+  }
+  if (result is ByteData) {
+    return result.buffer.asUint8List();
+  }
+  if (result is List) {
+    return Uint8List.fromList(result.cast<int>());
+  }
+  return null;
+}
+
+Future<void> _privilegedWriteFileBytes(
+  String path,
+  Uint8List bytes, {
+  required _PrivilegedWriteMode mode,
+}) async {
+  final method = switch (mode) {
+    _PrivilegedWriteMode.root => 'writeFileWithRoot',
+    _PrivilegedWriteMode.shizuku => 'writeFileWithShizuku',
+  };
+  await _storageAccessChannel.invokeMethod<void>(
+    method,
+    {'path': path, 'bytes': bytes},
+  );
+}
+
+Future<void> _privilegedMovePath(
+  String sourcePath,
+  String targetPath, {
+  required _PrivilegedWriteMode mode,
+}) async {
+  final method = switch (mode) {
+    _PrivilegedWriteMode.root => 'movePathWithRoot',
+    _PrivilegedWriteMode.shizuku => 'movePathWithShizuku',
+  };
+  await _storageAccessChannel.invokeMethod<void>(
+    method,
+    {'sourcePath': sourcePath, 'targetPath': targetPath},
+  );
 }
 
 TrashItemKind _inferTrashItemKind(
@@ -105,6 +301,11 @@ class TrashItemRecord {
     this.rootId = '',
     this.remotePath = '',
     this.detailUrl = '',
+    this.sourceDbPath = '',
+    this.sourceDbId = '',
+    this.sourceDirectory = '',
+    this.sourceDbTimeMillis = 0,
+    this.sourceDbRecordRemoved = false,
   });
 
   final String id;
@@ -123,6 +324,11 @@ class TrashItemRecord {
   final String rootId;
   final String remotePath;
   final String detailUrl;
+  final String sourceDbPath;
+  final String sourceDbId;
+  final String sourceDirectory;
+  final int sourceDbTimeMillis;
+  final bool sourceDbRecordRemoved;
 
   bool get isLocal => scope == TrashItemScope.local;
 
@@ -145,6 +351,11 @@ class TrashItemRecord {
         'rootId': rootId,
         'remotePath': remotePath,
         'detailUrl': detailUrl,
+        'sourceDbPath': sourceDbPath,
+        'sourceDbId': sourceDbId,
+        'sourceDirectory': sourceDirectory,
+        'sourceDbTimeMillis': sourceDbTimeMillis,
+        'sourceDbRecordRemoved': sourceDbRecordRemoved,
       };
 
   factory TrashItemRecord.fromJson(Map<String, dynamic> json) {
@@ -163,13 +374,75 @@ class TrashItemRecord {
       sourceLabel: (json['sourceLabel'] as String? ?? '').trim(),
       originalPath: (json['originalPath'] as String? ?? '').trim(),
       trashedPath: (json['trashedPath'] as String? ?? '').trim(),
-      deletedAt: DateTime.tryParse((json['deletedAt'] as String? ?? '').trim()) ??
-          DateTime.fromMillisecondsSinceEpoch(0),
+      deletedAt:
+          DateTime.tryParse((json['deletedAt'] as String? ?? '').trim()) ??
+              DateTime.fromMillisecondsSinceEpoch(0),
       sizeBytes: (json['sizeBytes'] as num?)?.toInt() ?? 0,
       snapshotJson: (json['snapshotJson'] as String? ?? '{}').trim(),
       rootId: (json['rootId'] as String? ?? '').trim(),
       remotePath: (json['remotePath'] as String? ?? '').trim(),
       detailUrl: (json['detailUrl'] as String? ?? '').trim(),
+      sourceDbPath: (json['sourceDbPath'] as String? ?? '').trim(),
+      sourceDbId: (json['sourceDbId'] as String? ?? '').trim(),
+      sourceDirectory: (json['sourceDirectory'] as String? ?? '').trim(),
+      sourceDbTimeMillis: (json['sourceDbTimeMillis'] as num?)?.toInt() ?? 0,
+      sourceDbRecordRemoved: json['sourceDbRecordRemoved'] == true ||
+          json['sourceDbRecordRemoved'] == 1,
+    );
+  }
+
+  factory TrashItemRecord.fromLocalStore(LocalTrashRecordData data) {
+    return TrashItemRecord(
+      id: data.id,
+      scope: TrashItemScope.local,
+      itemKind: data.itemKind == TrashItemKind.album.name
+          ? TrashItemKind.album
+          : TrashItemKind.comic,
+      itemId: data.itemId,
+      title: data.title,
+      subtitle: data.subtitle,
+      cover: data.cover,
+      sourceLabel: data.sourceLabel,
+      originalPath: data.originalPath,
+      trashedPath: data.trashedPath,
+      deletedAt: DateTime.fromMillisecondsSinceEpoch(data.deletedAtMillis),
+      sizeBytes: data.sizeBytes,
+      snapshotJson: data.snapshotJson,
+      rootId: data.rootId,
+      remotePath: data.remotePath,
+      detailUrl: data.detailUrl,
+      sourceDbPath: data.sourceDbPath,
+      sourceDbId: data.sourceDbId,
+      sourceDirectory: data.sourceDirectory,
+      sourceDbTimeMillis: data.sourceDbTimeMillis,
+      sourceDbRecordRemoved: data.sourceDbRecordRemoved,
+    );
+  }
+
+  LocalTrashRecordData toLocalStoreData(
+      {String state = localTrashStateTrashed}) {
+    return LocalTrashRecordData(
+      id: id,
+      state: state,
+      itemKind: itemKind.name,
+      itemId: itemId,
+      title: title,
+      subtitle: subtitle,
+      cover: cover,
+      sourceLabel: sourceLabel,
+      originalPath: originalPath,
+      trashedPath: trashedPath,
+      deletedAtMillis: deletedAt.millisecondsSinceEpoch,
+      sizeBytes: sizeBytes,
+      snapshotJson: snapshotJson,
+      rootId: rootId,
+      remotePath: remotePath,
+      detailUrl: detailUrl,
+      sourceDbPath: sourceDbPath,
+      sourceDbId: sourceDbId,
+      sourceDirectory: sourceDirectory,
+      sourceDbTimeMillis: sourceDbTimeMillis,
+      sourceDbRecordRemoved: sourceDbRecordRemoved,
     );
   }
 }
@@ -231,6 +504,20 @@ DeleteActionTexts buildDeleteActionTexts({
   );
 }
 
+String deleteFailureMessage(String? error) {
+  switch (error) {
+    case deleteFailurePermissionDenied:
+      return '当前路径权限不足，无法删除。请检查 Shizuku 授权 / Root 模式，或改用可访问目录。';
+    case deleteFailureLocalPathNotFound:
+      return '未找到可删除的本地目录或下载记录。';
+    case 'delete_failed':
+    case null:
+      return '删除失败';
+    default:
+      return error;
+  }
+}
+
 class TrashManager {
   TrashManager._();
 
@@ -264,11 +551,13 @@ class TrashManager {
   Future<List<TrashItemRecord>> listItems({TrashItemScope? scope}) async {
     await ensureLoaded();
     final items = <TrashItemRecord>[
-      ...(scope == null
-          ? _items
-          : _items.where((item) => item.scope == scope)),
+      ...(scope == null ? _items : _items.where((item) => item.scope == scope)),
     ];
     if (scope != TrashItemScope.remote) {
+      items.addAll(
+        (await LocalTrashStore.instance.listTrashed())
+            .map(TrashItemRecord.fromLocalStore),
+      );
       items.addAll(await _listServerLocalItems());
     }
     items.sort((a, b) => b.deletedAt.compareTo(a.deletedAt));
@@ -301,7 +590,10 @@ class TrashManager {
       return DeleteItemResult.success();
     }
     if (!useTrashByDefault) {
-      await _deleteLocalItemPermanently(item);
+      final error = await _deleteLocalItemPermanently(item);
+      if (error != null) {
+        return DeleteItemResult.failure(error);
+      }
       return DeleteItemResult.success();
     }
     return _moveLocalItemToTrash(item);
@@ -329,6 +621,12 @@ class TrashManager {
       await LocalServerRuntime.instance.restoreTrashItem(recordId);
       return;
     }
+    final storedRecord = await LocalTrashStore.instance.find(recordId);
+    if (storedRecord != null && storedRecord.state == localTrashStateTrashed) {
+      await _restoreStoredLocalItem(
+          TrashItemRecord.fromLocalStore(storedRecord));
+      return;
+    }
     await ensureLoaded();
     final record = _items.cast<TrashItemRecord?>().firstWhere(
           (item) => item?.id == recordId,
@@ -342,7 +640,11 @@ class TrashManager {
     }
 
     final trashedDir = Directory(record.trashedPath);
-    if (!trashedDir.existsSync()) {
+    final trashedExists = await _resolveLocalPathState(trashedDir);
+    if (trashedExists == _LocalPathState.permissionDenied) {
+      throw StateError(deleteFailurePermissionDenied);
+    }
+    if (trashedExists == _LocalPathState.missing) {
       throw StateError('trashed directory not found');
     }
 
@@ -350,8 +652,20 @@ class TrashManager {
     if (originalDir.existsSync()) {
       throw StateError('original path already exists');
     }
-    originalDir.parent.createSync(recursive: true);
-    await _moveDirectory(trashedDir, originalDir);
+    if (trashedDir.existsSync()) {
+      originalDir.parent.createSync(recursive: true);
+      await _moveDirectory(trashedDir, originalDir);
+    } else {
+      final mode = await _resolvePrivilegedWriteModeForOperation();
+      if (mode == null) {
+        throw StateError(deleteFailurePermissionDenied);
+      }
+      await _privilegedMovePath(
+        record.trashedPath,
+        record.originalPath,
+        mode: mode,
+      );
+    }
 
     final restored = parseDownloadedItemRecordJson(
       record.itemId,
@@ -360,7 +674,8 @@ class TrashManager {
     if (restored != null && !record.itemId.startsWith('local_')) {
       final manager = DownloadManager();
       await manager.init();
-      manager.upsertDbRecordOnly(restored, _basenameTrashPath(record.originalPath));
+      manager.upsertDbRecordOnly(
+          restored, _basenameTrashPath(record.originalPath));
     }
 
     _items.removeWhere((item) => item.id == recordId);
@@ -373,6 +688,36 @@ class TrashManager {
       await LocalServerRuntime.instance.purgeTrashItem(recordId);
       return;
     }
+    final storedRecord = await LocalTrashStore.instance.find(recordId);
+    if (storedRecord != null && storedRecord.state == localTrashStateTrashed) {
+      final record = TrashItemRecord.fromLocalStore(storedRecord);
+      if (record.trashedPath.isNotEmpty) {
+        final dir = Directory(record.trashedPath);
+        final dirState = await _resolveLocalPathState(dir);
+        if (dirState == _LocalPathState.permissionDenied) {
+          throw StateError(deleteFailurePermissionDenied);
+        }
+        if (dirState == _LocalPathState.exists) {
+          if (dir.existsSync()) {
+            await dir.delete(recursive: true);
+          } else {
+            final mode = await _resolvePrivilegedWriteModeForOperation();
+            if (mode == null) {
+              throw StateError(deleteFailurePermissionDenied);
+            }
+            await _privilegedDeletePath(record.trashedPath, mode: mode);
+          }
+        }
+      }
+      if (record.sourceDbPath.trim().isNotEmpty ||
+          record.sourceDbId.trim().isNotEmpty) {
+        await LocalTrashStore.instance.markPurged(recordId);
+      } else {
+        await LocalTrashStore.instance.delete(recordId);
+      }
+      App.notifyLocalDataChanged();
+      return;
+    }
     await ensureLoaded();
     final record = _items.cast<TrashItemRecord?>().firstWhere(
           (item) => item?.id == recordId,
@@ -383,8 +728,20 @@ class TrashManager {
     }
     if (record.trashedPath.isNotEmpty) {
       final dir = Directory(record.trashedPath);
-      if (dir.existsSync()) {
-        await dir.delete(recursive: true);
+      final dirState = await _resolveLocalPathState(dir);
+      if (dirState == _LocalPathState.permissionDenied) {
+        throw StateError(deleteFailurePermissionDenied);
+      }
+      if (dirState == _LocalPathState.exists) {
+        if (dir.existsSync()) {
+          await dir.delete(recursive: true);
+        } else {
+          final mode = await _resolvePrivilegedWriteModeForOperation();
+          if (mode == null) {
+            throw StateError(deleteFailurePermissionDenied);
+          }
+          await _privilegedDeletePath(record.trashedPath, mode: mode);
+        }
       }
     }
     _items.removeWhere((item) => item.id == recordId);
@@ -392,30 +749,305 @@ class TrashManager {
     App.notifyLocalDataChanged();
   }
 
+  Future<void> _restoreStoredLocalItem(TrashItemRecord record) async {
+    if (!record.isLocal) {
+      throw StateError('remote trash restore is not ready');
+    }
+
+    if (record.trashedPath.isNotEmpty) {
+      final trashedDir = Directory(record.trashedPath);
+      final trashedState = await _resolveLocalPathState(trashedDir);
+      if (trashedState == _LocalPathState.permissionDenied) {
+        throw StateError(deleteFailurePermissionDenied);
+      }
+      if (trashedState == _LocalPathState.missing) {
+        throw StateError('trashed directory not found');
+      }
+
+      final originalDir = Directory(record.originalPath);
+      if (originalDir.existsSync()) {
+        throw StateError('original path already exists');
+      }
+      if (trashedDir.existsSync()) {
+        originalDir.parent.createSync(recursive: true);
+        await _moveDirectory(trashedDir, originalDir);
+      } else {
+        final mode = await _resolvePrivilegedWriteModeForOperation();
+        if (mode == null) {
+          throw StateError(deleteFailurePermissionDenied);
+        }
+        await _privilegedMovePath(
+          record.trashedPath,
+          record.originalPath,
+          mode: mode,
+        );
+      }
+    }
+
+    if (record.sourceDbRecordRemoved) {
+      await _restoreSourceDbRecord(record);
+    }
+
+    await LocalTrashStore.instance.delete(record.id);
+    App.notifyLocalDataChanged();
+  }
+
+  Future<bool> _removeSourceDbRecord(_LocalDeleteTarget target) async {
+    final sourceDbPath = target.sourceDbPath?.trim() ?? '';
+    final sourceDbId = target.sourceDbId?.trim().isNotEmpty == true
+        ? target.sourceDbId!.trim()
+        : target.downloadDbId?.trim() ?? '';
+    final sourceDirectory = target.sourceDirectory?.trim() ?? '';
+    if (sourceDbPath.isEmpty ||
+        (sourceDbId.isEmpty && sourceDirectory.isEmpty)) {
+      return false;
+    }
+    return _mutateSourceDbFile(
+      sourceDbPath,
+      skipIfMissing: true,
+      mutate: (db) async {
+        if (sourceDbId.isNotEmpty &&
+            db.select(
+              'select 1 from download where id = ? limit 1',
+              [sourceDbId],
+            ).isNotEmpty) {
+          db.execute('delete from download where id = ?', [sourceDbId]);
+          return;
+        }
+        if (sourceDirectory.isNotEmpty) {
+          db.execute('delete from download where directory = ?', [
+            sourceDirectory,
+          ]);
+        }
+      },
+    );
+  }
+
+  Future<bool> _mutateSourceDbFile(
+    String sourceDbPath, {
+    required Future<void> Function(Database db) mutate,
+    bool createIfMissing = false,
+    bool skipIfMissing = false,
+  }) async {
+    final file = File(sourceDbPath);
+    Uint8List? sourceBytes;
+    var exists = false;
+    var needsPrivilegedRead = false;
+    _PrivilegedWriteMode? mode;
+    try {
+      exists = await file.exists();
+      if (exists) {
+        try {
+          sourceBytes = await file.readAsBytes();
+        } on FileSystemException catch (e) {
+          if (!_isPermissionDenied(e)) {
+            rethrow;
+          }
+          needsPrivilegedRead = true;
+        }
+      }
+    } on FileSystemException catch (e) {
+      if (!_isPermissionDenied(e)) {
+        rethrow;
+      }
+      needsPrivilegedRead = true;
+    }
+
+    if (App.isAndroid && (needsPrivilegedRead || !exists)) {
+      mode = await _resolvePrivilegedWriteModeForOperation();
+      if (mode != null) {
+        final privilegedExists = await _privilegedPathExists(
+          sourceDbPath,
+          mode: mode,
+        );
+        if (privilegedExists) {
+          exists = true;
+          sourceBytes =
+              await _privilegedReadFileBytes(sourceDbPath, mode: mode);
+          if (sourceBytes == null) {
+            throw StateError(deleteFailurePermissionDenied);
+          }
+        } else {
+          exists = false;
+        }
+      }
+    }
+
+    if (exists && sourceBytes == null) {
+      if (mode == null && App.isAndroid) {
+        mode = await _resolvePrivilegedWriteModeForOperation();
+      }
+      if (mode != null) {
+        sourceBytes = await _privilegedReadFileBytes(sourceDbPath, mode: mode);
+      }
+      if (sourceBytes == null) {
+        throw StateError(deleteFailurePermissionDenied);
+      }
+    }
+
+    if (!exists) {
+      if (skipIfMissing) {
+        return true;
+      }
+      if (!createIfMissing) {
+        return false;
+      }
+    }
+
+    final tempRoot =
+        Directory(_joinTrashPath(App.dataPath, 'trash_db_mutation'));
+    tempRoot.createSync(recursive: true);
+    final tempFile = File(
+      _joinTrashPath(
+        tempRoot.path,
+        'download_${DateTime.now().microsecondsSinceEpoch}.db',
+      ),
+    );
+
+    try {
+      if (sourceBytes != null && sourceBytes.isNotEmpty) {
+        await tempFile.writeAsBytes(sourceBytes, flush: true);
+      }
+      final db = sqlite3.open(tempFile.path);
+      try {
+        db.execute('''
+          create table if not exists download (
+            id text primary key,
+            title text,
+            subtitle text,
+            time int,
+            directory text,
+            size int,
+            json text
+          )
+        ''');
+        await mutate(db);
+      } finally {
+        db.dispose();
+      }
+      final nextBytes = await tempFile.readAsBytes();
+      try {
+        file.parent.createSync(recursive: true);
+        await file.writeAsBytes(nextBytes, flush: true);
+      } on FileSystemException catch (e) {
+        if (!_isPermissionDenied(e)) {
+          rethrow;
+        }
+        final mode = await _resolvePrivilegedWriteModeForOperation();
+        if (mode == null) {
+          throw StateError(deleteFailurePermissionDenied);
+        }
+        await _privilegedWriteFileBytes(sourceDbPath, nextBytes, mode: mode);
+      }
+      return true;
+    } finally {
+      if (tempFile.existsSync()) {
+        try {
+          tempFile.deleteSync();
+        } catch (_) {}
+      }
+    }
+  }
+
+  Future<void> _restoreSourceDbRecord(TrashItemRecord record) async {
+    final sourceDbPath = record.sourceDbPath.trim();
+    final sourceDbId = record.sourceDbId.trim().isNotEmpty
+        ? record.sourceDbId.trim()
+        : record.itemId.trim();
+    final directory = record.sourceDirectory.trim().isNotEmpty
+        ? record.sourceDirectory.trim()
+        : _basenameTrashPath(record.originalPath);
+    if (sourceDbPath.isEmpty || sourceDbId.isEmpty || directory.isEmpty) {
+      return;
+    }
+    final restored = parseDownloadedItemRecordJson(
+      sourceDbId,
+      record.snapshotJson,
+      directory: directory,
+    );
+    if (restored == null) {
+      return;
+    }
+    await _mutateSourceDbFile(
+      sourceDbPath,
+      createIfMissing: true,
+      mutate: (db) async {
+        db.execute('''
+          insert or replace into download
+          values (?,?,?,?,?,?,?)
+        ''', [
+          sourceDbId,
+          restored.name,
+          restored.subTitle,
+          record.sourceDbTimeMillis > 0
+              ? record.sourceDbTimeMillis
+              : record.deletedAt.millisecondsSinceEpoch,
+          directory,
+          restored.comicSize,
+          record.snapshotJson,
+        ]);
+      },
+    );
+  }
+
   Future<DeleteItemResult> _moveLocalItemToTrash(DownloadedItem item) async {
     final target = await _resolveLocalDeleteTarget(item);
     if (target == null) {
-      return DeleteItemResult.failure('local_path_not_found');
+      return DeleteItemResult.failure(deleteFailureLocalPathNotFound);
     }
     final sourceDir = Directory(target.originalPath);
-    if (!sourceDir.existsSync()) {
-      return DeleteItemResult.failure('local_path_not_found');
+    final pathState = await _resolveLocalPathState(sourceDir);
+    if (pathState == _LocalPathState.permissionDenied) {
+      return DeleteItemResult.failure(deleteFailurePermissionDenied);
+    }
+    if (pathState == _LocalPathState.missing && !target.hasSourceDbRecord) {
+      return DeleteItemResult.failure(deleteFailureLocalPathNotFound);
     }
 
-    final sourceSizeBytes = await _computeDirectorySize(sourceDir);
     final snapshot = await _buildLocalTrashSnapshot(item, target);
-    final trashRoot =
-        Directory(_joinTrashPath(sourceDir.parent.path, localTrashDirectoryName));
-    trashRoot.createSync(recursive: true);
     final recordId = _generateRecordId();
-    final trashedPath = _joinTrashPath(trashRoot.path, recordId);
-    final trashedDir = Directory(trashedPath);
-    await _moveDirectory(sourceDir, trashedDir);
+    var trashedPath = '';
+    var sourceSizeBytes = 0;
+    if (pathState == _LocalPathState.exists) {
+      final canDirectIo = sourceDir.existsSync();
+      if (canDirectIo) {
+        sourceSizeBytes = await _computeDirectorySize(sourceDir);
+      }
+      final trashRootPath =
+          _joinTrashPath(sourceDir.parent.path, localTrashDirectoryName);
+      trashedPath = _joinTrashPath(trashRootPath, recordId);
+      if (canDirectIo) {
+        Directory(trashRootPath).createSync(recursive: true);
+        await _moveDirectory(sourceDir, Directory(trashedPath));
+      } else {
+        final mode = await _resolvePrivilegedWriteModeForOperation();
+        if (mode == null) {
+          return DeleteItemResult.failure(deleteFailurePermissionDenied);
+        }
+        await _privilegedMovePath(
+          target.originalPath,
+          trashedPath,
+          mode: mode,
+        );
+      }
+    }
 
-    if (target.downloadDbId != null) {
-      final manager = DownloadManager();
-      await manager.init();
-      manager.deleteDbRecordOnly(target.downloadDbId!);
+    final sourceDbId = target.sourceDbId?.trim().isNotEmpty == true
+        ? target.sourceDbId!.trim()
+        : target.downloadDbId?.trim() ?? '';
+    final sourceDirectory = target.sourceDirectory?.trim().isNotEmpty == true
+        ? target.sourceDirectory!.trim()
+        : _basenameTrashPath(target.originalPath);
+    var sourceDbRecordRemoved = false;
+    if (target.hasSourceDbRecord) {
+      try {
+        sourceDbRecordRemoved = await _removeSourceDbRecord(target);
+      } on StateError catch (e) {
+        if (e.message == deleteFailurePermissionDenied) {
+          return DeleteItemResult.failure(deleteFailurePermissionDenied);
+        }
+        rethrow;
+      }
     }
 
     final record = TrashItemRecord(
@@ -437,38 +1069,85 @@ class TrashManager {
       remotePath: '',
       detailUrl: '',
       rootId: '',
+      sourceDbPath: target.sourceDbPath?.trim() ?? '',
+      sourceDbId: sourceDbId,
+      sourceDirectory: sourceDirectory,
+      sourceDbTimeMillis: target.sourceDbTimeMillis ?? 0,
+      sourceDbRecordRemoved: sourceDbRecordRemoved,
     );
 
-    await ensureLoaded();
-    _items.add(record);
-    await _save();
+    await LocalTrashStore.instance.upsert(record.toLocalStoreData());
     App.notifyLocalDataChanged();
     return DeleteItemResult.success(record);
   }
 
-  Future<void> _deleteLocalItemPermanently(DownloadedItem item) async {
+  Future<String?> _deleteLocalItemPermanently(DownloadedItem item) async {
     final target = await _resolveLocalDeleteTarget(item);
     if (target == null) {
-      return;
+      return deleteFailureLocalPathNotFound;
     }
-    if (target.downloadDbId != null) {
-      final manager = DownloadManager();
-      await manager.init();
-      await manager.deletePermanentlyByIds([target.downloadDbId!]);
-      App.notifyLocalDataChanged();
-      return;
-    }
+    final sourceDbId = target.sourceDbId?.trim().isNotEmpty == true
+        ? target.sourceDbId!.trim()
+        : target.downloadDbId?.trim() ?? '';
     final dir = Directory(target.originalPath);
-    if (dir.existsSync()) {
-      await dir.delete(recursive: true);
+    final pathState = await _resolveLocalPathState(dir);
+    if (pathState == _LocalPathState.permissionDenied) {
+      return deleteFailurePermissionDenied;
+    }
+    if (pathState == _LocalPathState.missing && !target.hasSourceDbRecord) {
+      return deleteFailureLocalPathNotFound;
+    }
+
+    if (target.hasSourceDbRecord || sourceDbId.isNotEmpty) {
+      if (pathState == _LocalPathState.exists) {
+        if (dir.existsSync()) {
+          await dir.delete(recursive: true);
+        } else {
+          final mode = await _resolvePrivilegedWriteModeForOperation();
+          if (mode == null) {
+            return deleteFailurePermissionDenied;
+          }
+          await _privilegedDeletePath(target.originalPath, mode: mode);
+        }
+      }
+      try {
+        await _removeSourceDbRecord(target);
+      } on StateError catch (e) {
+        if (e.message == deleteFailurePermissionDenied) {
+          return deleteFailurePermissionDenied;
+        }
+        rethrow;
+      }
+      App.notifyLocalDataChanged();
+      return null;
+    }
+    if (pathState == _LocalPathState.exists) {
+      if (dir.existsSync()) {
+        await dir.delete(recursive: true);
+      } else {
+        final mode = await _resolvePrivilegedWriteModeForOperation();
+        if (mode == null) {
+          return deleteFailurePermissionDenied;
+        }
+        await _privilegedDeletePath(target.originalPath, mode: mode);
+      }
     }
     App.notifyLocalDataChanged();
+    return null;
   }
 
   Future<_TrashSnapshotPayload> _buildLocalTrashSnapshot(
     DownloadedItem item,
     _LocalDeleteTarget target,
   ) async {
+    final sourceRowJson = target.sourceRowJson?.trim() ?? '';
+    final sourceDbId = target.sourceDbId?.trim() ?? '';
+    if (sourceRowJson.isNotEmpty && sourceDbId.isNotEmpty) {
+      return _TrashSnapshotPayload(
+        itemId: sourceDbId,
+        snapshotJson: sourceRowJson,
+      );
+    }
     if (item is LocalLibraryComicItem && target.downloadDbId != null) {
       final manager = DownloadManager();
       await manager.init();
@@ -486,7 +1165,8 @@ class TrashManager {
     );
   }
 
-  Future<_LocalDeleteTarget?> _resolveLocalDeleteTarget(DownloadedItem item) async {
+  Future<_LocalDeleteTarget?> _resolveLocalDeleteTarget(
+      DownloadedItem item) async {
     if (item is LocalLibraryComicItem) {
       final path = item.fileSystemPath?.trim() ?? '';
       if (path.isEmpty) {
@@ -494,8 +1174,19 @@ class TrashManager {
       }
       return _LocalDeleteTarget(
         originalPath: path,
-        downloadDbId: item.isManagedDownloadItem ? item.originalId.trim() : null,
-        restoreItemId: item.isManagedDownloadItem ? item.originalId.trim() : item.id,
+        downloadDbId:
+            item.isManagedDownloadItem ? item.originalId.trim() : null,
+        restoreItemId:
+            item.isManagedDownloadItem ? item.originalId.trim() : item.id,
+        sourceDbPath: item.sourceDbPath?.trim(),
+        sourceDbId: item.sourceDbId?.trim().isNotEmpty == true
+            ? item.sourceDbId!.trim()
+            : (item.isManagedDownloadItem ? item.originalId.trim() : null),
+        sourceDirectory: item.sourceDirectory?.trim().isNotEmpty == true
+            ? item.sourceDirectory!.trim()
+            : _basenameTrashPath(path),
+        sourceRowJson: item.sourceRowJson,
+        sourceDbTimeMillis: item.sourceRowTimeMillis,
       );
     }
 
@@ -505,10 +1196,17 @@ class TrashManager {
     if (directory.isEmpty || (manager.path?.trim().isEmpty ?? true)) {
       return null;
     }
+    final dbPath =
+        manager.dbFilePath ?? _joinTrashPath(manager.path!, 'download.db');
     return _LocalDeleteTarget(
       originalPath: _joinTrashPath(manager.path!, directory),
       downloadDbId: item.id,
       restoreItemId: item.id,
+      sourceDbPath: dbPath,
+      sourceDbId: item.id,
+      sourceDirectory: directory,
+      sourceRowJson: jsonEncode(item.toJson()),
+      sourceDbTimeMillis: item.time?.millisecondsSinceEpoch,
     );
   }
 
@@ -589,10 +1287,12 @@ class TrashManager {
       if (entity is Directory) {
         await _copyDirectory(
           entity,
-          Directory(_joinTrashPath(destination.path, _basenameTrashPath(entity.path))),
+          Directory(_joinTrashPath(
+              destination.path, _basenameTrashPath(entity.path))),
         );
       } else if (entity is File) {
-        await entity.copy(_joinTrashPath(destination.path, _basenameTrashPath(entity.path)));
+        await entity.copy(
+            _joinTrashPath(destination.path, _basenameTrashPath(entity.path)));
       }
     }
   }
@@ -611,6 +1311,40 @@ class TrashManager {
     }
     return total;
   }
+
+  _LocalPathState _localPathState(Directory dir) {
+    try {
+      return dir.existsSync()
+          ? _LocalPathState.exists
+          : _LocalPathState.missing;
+    } on FileSystemException catch (e) {
+      if (_isPermissionDenied(e)) {
+        return _LocalPathState.permissionDenied;
+      }
+      return _LocalPathState.missing;
+    }
+  }
+
+  Future<_LocalPathState> _resolveLocalPathState(Directory dir) async {
+    final localState = _localPathState(dir);
+    if (localState != _LocalPathState.permissionDenied || !App.isAndroid) {
+      return localState;
+    }
+    final mode = await _resolvePrivilegedWriteModeForOperation();
+    if (mode == null) {
+      return _LocalPathState.permissionDenied;
+    }
+    final exists = await _privilegedPathExists(dir.path, mode: mode);
+    return exists ? _LocalPathState.exists : _LocalPathState.missing;
+  }
+
+  bool _isPermissionDenied(FileSystemException e) {
+    final message = e.message.toLowerCase();
+    final osMessage = e.osError?.message.toLowerCase() ?? '';
+    return e.osError?.errorCode == 13 ||
+        message.contains('permission denied') ||
+        osMessage.contains('permission denied');
+  }
 }
 
 class _LocalDeleteTarget {
@@ -618,11 +1352,26 @@ class _LocalDeleteTarget {
     required this.originalPath,
     required this.restoreItemId,
     this.downloadDbId,
+    this.sourceDbPath,
+    this.sourceDbId,
+    this.sourceDirectory,
+    this.sourceRowJson,
+    this.sourceDbTimeMillis,
   });
 
   final String originalPath;
   final String restoreItemId;
   final String? downloadDbId;
+  final String? sourceDbPath;
+  final String? sourceDbId;
+  final String? sourceDirectory;
+  final String? sourceRowJson;
+  final int? sourceDbTimeMillis;
+
+  bool get hasSourceDbRecord =>
+      (sourceDbPath?.trim().isNotEmpty ?? false) ||
+      (sourceDbId?.trim().isNotEmpty ?? false) ||
+      (downloadDbId?.trim().isNotEmpty ?? false);
 }
 
 class _TrashSnapshotPayload {

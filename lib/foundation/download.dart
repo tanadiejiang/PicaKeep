@@ -1,11 +1,105 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:sqlite3/sqlite3.dart';
 import '../base.dart';
 import '../tools/extensions.dart';
 import 'download_model.dart';
+import 'local_library_settings.dart';
+import 'local_trash_store.dart';
+
+const _storageAccessChannelName = 'com.example.picakeep/storage_access';
+
+const MethodChannel _storageAccessChannel =
+    MethodChannel(_storageAccessChannelName);
+
+enum _PrivilegedDeleteMode {
+  root,
+  shizuku,
+}
+
+Future<bool> _hasRootAccess({bool forceRefresh = false}) async {
+  if (!Platform.isAndroid) {
+    return false;
+  }
+  try {
+    return await _storageAccessChannel.invokeMethod<bool>(
+          'hasRootAccess',
+          {'forceRefresh': forceRefresh},
+        ) ??
+        false;
+  } catch (_) {
+    return false;
+  }
+}
+
+Future<bool> _hasShizukuPermission({bool forceRefresh = false}) async {
+  if (!Platform.isAndroid) {
+    return false;
+  }
+  try {
+    return await _storageAccessChannel.invokeMethod<bool>(
+          'hasShizukuPermission',
+          {'forceRefresh': forceRefresh},
+        ) ??
+        false;
+  } catch (_) {
+    return false;
+  }
+}
+
+List<_PrivilegedDeleteMode> _enabledPrivilegedDeleteModes() {
+  if (!Platform.isAndroid) {
+    return const [];
+  }
+  final modes = <_PrivilegedDeleteMode>[];
+  if (normalizeAndroidRootMode(appdata.settings[androidRootModeSettingIndex]) ==
+      '1') {
+    modes.add(_PrivilegedDeleteMode.root);
+  }
+  if (normalizeAndroidShizukuMode(
+          appdata.settings[androidShizukuModeSettingIndex]) ==
+      '1') {
+    modes.add(_PrivilegedDeleteMode.shizuku);
+  }
+  return modes;
+}
+
+Future<_PrivilegedDeleteMode?> _resolvePrivilegedDeleteMode({
+  bool forceRefresh = false,
+}) async {
+  for (final mode in _enabledPrivilegedDeleteModes()) {
+    switch (mode) {
+      case _PrivilegedDeleteMode.root:
+        if (await _hasRootAccess(forceRefresh: forceRefresh)) {
+          return mode;
+        }
+        break;
+      case _PrivilegedDeleteMode.shizuku:
+        if (await _hasShizukuPermission(forceRefresh: forceRefresh)) {
+          return mode;
+        }
+        break;
+    }
+  }
+  return null;
+}
+
+Future<void> _deletePathWithPrivilegedMode(
+  String path, {
+  required _PrivilegedDeleteMode mode,
+}) async {
+  final method = switch (mode) {
+    _PrivilegedDeleteMode.root => 'deletePathWithRoot',
+    _PrivilegedDeleteMode.shizuku => 'deletePathWithShizuku',
+  };
+  await _storageAccessChannel.invokeMethod<void>(
+    method,
+    {'path': path},
+  );
+}
 
 class DownloadManager with _DownloadDb {
   static DownloadManager? cache;
@@ -90,6 +184,8 @@ class DownloadManager with _DownloadDb {
     _dbFilePath = null;
     _clearLookupCaches();
   }
+
+  String? get dbFilePath => _dbFilePath;
 
   String _comicPath(String relativeDir) => '${path!}$pathSep$relativeDir';
 
@@ -192,10 +288,11 @@ class DownloadManager with _DownloadDb {
 
   Future<void> deletePermanentlyByIds(List<String> ids) async {
     for (var id in ids) {
+      final directory = getDirectory(id);
       _deleteFromDb(id);
-      var comic = Directory("$path/${getDirectory(id)}");
+      var comic = Directory("$path/$directory");
       try {
-        comic.delete(recursive: true);
+        await comic.delete(recursive: true);
       } catch (e) {
         if (e is! PathNotFoundException) {
           rethrow;
@@ -210,7 +307,8 @@ class DownloadManager with _DownloadDb {
     _clearLookupCaches();
   }
 
-  void upsertDbRecordOnly(DownloadedItem item, String directory, [DateTime? time]) {
+  void upsertDbRecordOnly(DownloadedItem item, String directory,
+      [DateTime? time]) {
     _addToDb(item, directory, time);
     _clearLookupCaches();
   }
@@ -220,11 +318,37 @@ class DownloadManager with _DownloadDb {
       if (comic.downloadedEps.length == 1) {
         return "Delete Error: only one downloaded episode";
       }
-      if (Directory("$path/${getDirectory(comic.id)}/${ep + 1}").existsSync()) {
-        Directory("$path/${getDirectory(comic.id)}/${ep + 1}")
-            .deleteSync(recursive: true);
+      final comicDirectory = "$path/${getDirectory(comic.id)}";
+      final episodeDirectory = Directory("$comicDirectory/${ep + 1}");
+      var deleted = false;
+      try {
+        if (episodeDirectory.existsSync()) {
+          await episodeDirectory.delete(recursive: true);
+          deleted = true;
+        }
+      } on FileSystemException catch (e) {
+        if (!_isPermissionDenied(e)) {
+          rethrow;
+        }
       }
-      var size = Directory("$path/${getDirectory(comic.id)}").getMBSizeSync();
+      if (!deleted) {
+        final mode = await _resolvePrivilegedDeleteMode();
+        final resolvedMode = mode ??
+            (_enabledPrivilegedDeleteModes().isEmpty
+                ? null
+                : await _resolvePrivilegedDeleteMode(forceRefresh: true));
+        if (resolvedMode == null) {
+          return '当前路径权限不足，无法删除。请检查 Shizuku 授权 / Root 模式，或改用可访问目录。';
+        }
+        await _deletePathWithPrivilegedMode(
+          episodeDirectory.path,
+          mode: resolvedMode,
+        );
+      }
+      var size = comic.comicSize;
+      try {
+        size = Directory(comicDirectory).getMBSizeSync();
+      } catch (_) {}
       comic.downloadedEps.remove(ep);
       comic.comicSize = size;
       _addToDb(comic, comic.directory ?? getDirectory(comic.id));
@@ -233,6 +357,14 @@ class DownloadManager with _DownloadDb {
     } catch (e) {
       return e.toString();
     }
+  }
+
+  bool _isPermissionDenied(FileSystemException e) {
+    final message = e.message.toLowerCase();
+    final osMessage = e.osError?.message.toLowerCase() ?? '';
+    return e.osError?.errorCode == 13 ||
+        message.contains('permission denied') ||
+        osMessage.contains('permission denied');
   }
 
   File getCoverForDisplay(String id) {
@@ -307,10 +439,16 @@ class DownloadManager with _DownloadDb {
 
     int count = 0;
     final entries = dir.listSync();
+    final hiddenIndex = LocalTrashStore.instance.hiddenIndexSync();
     for (final entry in entries) {
       if (entry is! Directory) continue;
       final dirName = entry.uri.pathSegments.last;
-      if (dirName.isEmpty || dirName == 'download.db') continue;
+      if (dirName.isEmpty ||
+          dirName == 'download.db' ||
+          dirName == '.picakeep_trash' ||
+          hiddenIndex.matchesPath(entry.path)) {
+        continue;
+      }
 
       // Check if this directory has ANY image files (either in subdirs or flat)
       final subEntries = entry.listSync();
@@ -395,6 +533,8 @@ class DownloadManager with _DownloadDb {
     final bestItems = <String, DownloadedItem>{};
     final bestScores = <String, int>{};
     final orderedKeys = <String>[];
+    final hiddenIndex = LocalTrashStore.instance.hiddenIndexSync();
+    final dbPath = _dbFilePath ?? '$path/download.db';
     for (var e in result) {
       final rawId = (e['id'] as String? ?? '').trim();
       final rawDirectory = (e['directory'] as String? ?? '').trim();
@@ -407,6 +547,17 @@ class DownloadManager with _DownloadDb {
       if (item != null) {
         parsed++;
         final resolvedDirectory = _resolveDirectoryForId(rawId, rawDirectory);
+        final originalPath = _comicPath(resolvedDirectory);
+        if (hiddenIndex.matchesManagedDownload(
+          itemId: rawId,
+          sourceDbPath: dbPath,
+          sourceDbId: rawId,
+          sourceDirectory:
+              rawDirectory.isNotEmpty ? rawDirectory : resolvedDirectory,
+          originalPath: originalPath,
+        )) {
+          continue;
+        }
         final dedupeKey = resolvedDirectory.isNotEmpty
             ? resolvedDirectory.toLowerCase()
             : rawId.toLowerCase();
