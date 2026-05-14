@@ -1026,8 +1026,9 @@ class LocalLibraryManager {
       if (!sourceExists) {
         continue;
       }
-      if (source.isManagedDownload ||
-          await _isDownloadDirectoryAsync(source.path)) {
+      final looksLikeDownload =
+          source.isManagedDownload || await _isDownloadDirectoryAsync(source.path);
+      if (looksLikeDownload) {
         await _scanDownloadSource(source);
       } else {
         await _scanAlbumSource(source);
@@ -1458,6 +1459,14 @@ class LocalLibraryManager {
   Future<List<LocalLibraryComicItem>> _loadDirectoryOnlyDownloadSourceMetadata(
     LocalLibrarySource source,
   ) async {
+    if (await _shouldTreatAsSingleAlbumSource(source.path)) {
+      final item = await _buildSingleAlbumItem(source);
+      if (item == null) {
+        return const <LocalLibraryComicItem>[];
+      }
+      return [item];
+    }
+
     final entries = await _listDirectoryEntries(source.path);
     final hiddenIndex = await LocalTrashStore.instance.hiddenIndex();
     final items = <LocalLibraryComicItem>[];
@@ -1672,6 +1681,35 @@ class LocalLibraryManager {
   Future<void> _scanDirectoryOnlyDownloadSource(
     LocalLibrarySource source,
   ) async {
+    if (await _shouldTreatAsSingleAlbumSource(source.path)) {
+      final item = await _buildSingleAlbumItem(source);
+      if (item == null) {
+        return;
+      }
+      _indexItem(item);
+      _items.add(item);
+      _storageEntries.add(
+        LocalLibraryStorageEntry(
+          id: source.id,
+          title: source.title,
+          path: source.path,
+          sizeMb: item.comicSize ?? 0,
+          comicCount: 1,
+          children: [
+            LocalLibraryStorageChildEntry(
+              id: item.id,
+              title: item.name,
+              path: source.path,
+              sizeMb: item.comicSize ?? 0,
+              sourceDisplayName: item.sourceDisplayName,
+            ),
+          ],
+          source: source,
+        ),
+      );
+      return;
+    }
+
     final children = <LocalLibraryStorageChildEntry>[];
     double totalSize = 0;
     final entries = await _listDirectoryEntries(source.path);
@@ -1745,9 +1783,15 @@ class LocalLibraryManager {
       return;
     }
 
+    if (await _shouldTreatAsSingleAlbumSource(source.path)) {
+      await _scanSingleAlbumSource(source);
+      return;
+    }
+
     final albumDirs = await _collectLeafAlbumDirectoryPaths(source.path);
     final children = <LocalLibraryStorageChildEntry>[];
     final hiddenIndex = await LocalTrashStore.instance.hiddenIndex();
+    double totalSize = 0;
 
     for (final dirPath in albumDirs) {
       if (hiddenIndex.matchesPath(dirPath)) {
@@ -1779,6 +1823,7 @@ class LocalLibraryManager {
       )..time = await _computeAlbumTimeForPath(dirPath, imageFiles);
       _indexItem(item);
       _items.add(item);
+      totalSize += sizeMb;
       children.add(
         LocalLibraryStorageChildEntry(
           id: item.id,
@@ -1795,12 +1840,113 @@ class LocalLibraryManager {
         id: source.id,
         title: source.title,
         path: source.path,
-        sizeMb: await _computeDirectorySizeMbForPath(source.path),
+        sizeMb: totalSize,
         comicCount: children.length,
         children: children,
         source: source,
       ),
     );
+  }
+
+  Future<void> _scanSingleAlbumSource(LocalLibrarySource source) async {
+    final hiddenIndex = await LocalTrashStore.instance.hiddenIndex();
+    if (hiddenIndex.matchesPath(source.path)) {
+      return;
+    }
+    final episodeFiles = await _buildDownloadedEpisodeFiles(source.path, null);
+    if (episodeFiles.isEmpty) {
+      return;
+    }
+    final orderedEntries = episodeFiles.entries.toList()
+      ..sort((a, b) => a.key.compareTo(b.key));
+    final orderedImages = orderedEntries.expand((entry) => entry.value).toList();
+    final coverPath = await _pickCoverPath(
+      source.path,
+      orderedEntries.isEmpty ? const <String>[] : orderedEntries.first.value,
+    );
+    final sizeMb = await _computeDirectorySizeMbForPath(source.path);
+    final downloadedEps =
+        orderedEntries.map((entry) => entry.key).toList(growable: false);
+    final item = LocalLibraryComicItem(
+      itemId: 'local_album::${source.path}',
+      originalId: source.path,
+      type: DownloadType.favorite,
+      name: _basename(source.path),
+      subTitle: '',
+      tags: const <String>[],
+      sourceDisplayName: '图集',
+      fileSystemPath: source.path,
+      episodeFiles: episodeFiles,
+      downloadedEps: downloadedEps.isEmpty ? const <int>[0] : downloadedEps,
+      eps: _buildLocalEpisodeNames(episodeFiles.length),
+      localCoverPath: coverPath,
+      localStorageExists: true,
+      canDelete: false,
+      aliases: [source.path],
+      comicSize: sizeMb,
+    )..time = await _computeAlbumTimeForPath(source.path, orderedImages);
+    _indexItem(item);
+    _items.add(item);
+    _storageEntries.add(
+      LocalLibraryStorageEntry(
+        id: source.id,
+        title: source.title,
+        path: source.path,
+        sizeMb: sizeMb,
+        comicCount: 1,
+        children: [
+          LocalLibraryStorageChildEntry(
+            id: item.id,
+            title: item.name,
+            path: source.path,
+            sizeMb: sizeMb,
+            sourceDisplayName: item.sourceDisplayName,
+          ),
+        ],
+        source: source,
+      ),
+    );
+  }
+
+  Future<LocalLibraryComicItem?> _buildSingleAlbumItem(
+    LocalLibrarySource source,
+  ) async {
+    final hiddenIndex = await LocalTrashStore.instance.hiddenIndex();
+    if (hiddenIndex.matchesPath(source.path)) {
+      return null;
+    }
+    final episodeFiles = await _buildDownloadedEpisodeFiles(source.path, null);
+    if (episodeFiles.isEmpty) {
+      return null;
+    }
+    final orderedEntries = episodeFiles.entries.toList()
+      ..sort((a, b) => a.key.compareTo(b.key));
+    final orderedImages = orderedEntries.expand((entry) => entry.value).toList();
+    final coverPath = await _pickCoverPath(
+      source.path,
+      orderedEntries.isEmpty ? const <String>[] : orderedEntries.first.value,
+    );
+    final sizeMb = await _computeDirectorySizeMbForPath(source.path);
+    final downloadedEps =
+        orderedEntries.map((entry) => entry.key).toList(growable: false);
+    return LocalLibraryComicItem(
+      itemId: 'local_album::${source.path}',
+      originalId: source.path,
+      type: DownloadType.favorite,
+      name: _basename(source.path),
+      subTitle: '',
+      tags: const <String>[],
+      sourceDisplayName: '图集',
+      fileSystemPath: source.path,
+      episodeFiles: episodeFiles,
+      downloadedEps: downloadedEps.isEmpty ? const <int>[0] : downloadedEps,
+      eps: _buildLocalEpisodeNames(episodeFiles.length),
+      localCoverPath: coverPath,
+      localStorageExists: true,
+      canDelete: false,
+      aliases: [source.path],
+      comicSize: sizeMb,
+    )..time = await _computeAlbumTimeForPath(source.path, orderedImages);
   }
 
   void _indexItem(LocalLibraryComicItem item) {
@@ -2061,6 +2207,47 @@ class LocalLibraryManager {
     await visit(rootPath);
     result.sort();
     return result;
+  }
+
+  static Future<bool> _shouldTreatAsSingleAlbumSource(String rootPath) async {
+    final children = await _listDirectoryEntries(rootPath);
+    if (children.isEmpty) {
+      return false;
+    }
+    if (children.any((entry) => !entry.isDirectory && _isVisibleImagePath(entry.path))) {
+      return true;
+    }
+    final childDirs = children.where((entry) => entry.isDirectory).toList(growable: false);
+    if (childDirs.isEmpty) {
+      return false;
+    }
+    final imageBearingDirs = <_LocalDirectoryEntry>[];
+    for (final childDir in childDirs) {
+      if (await _containsVisibleImagesForPath(childDir.path)) {
+        imageBearingDirs.add(childDir);
+      }
+    }
+    if (imageBearingDirs.isEmpty || imageBearingDirs.length != childDirs.length) {
+      return false;
+    }
+    return imageBearingDirs.every(
+      (entry) => _looksLikeEpisodeDirectoryName(entry.name),
+    );
+  }
+
+  static bool _looksLikeEpisodeDirectoryName(String name) {
+    final normalized = name.trim().toLowerCase();
+    if (normalized.isEmpty) {
+      return false;
+    }
+    return RegExp(r'^\d+$').hasMatch(normalized) ||
+        RegExp(r'^0\d+$').hasMatch(normalized) ||
+        RegExp(r'^第?\d+[话話章节卷卷集册冊]$').hasMatch(normalized) ||
+        normalized.startsWith('ep') ||
+        normalized.startsWith('episode') ||
+        normalized.startsWith('chapter') ||
+        normalized.startsWith('chap') ||
+        normalized.startsWith('vol');
   }
 
   static Future<List<String>> _sortedAlbumImagesForPath(String dirPath) {

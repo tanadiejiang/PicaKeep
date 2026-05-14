@@ -1527,7 +1527,7 @@ class _DirectoryPathDialog extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final screenWidth = MediaQuery.sizeOf(context).width;
-    final stackedActions = screenWidth < 560;
+    final browseButtonWidth = screenWidth < 420 ? 96.0 : 120.0;
     return Dialog(
       insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
       child: ConstrainedBox(
@@ -1540,58 +1540,38 @@ class _DirectoryPathDialog extends StatelessWidget {
             children: [
               Text(title, style: Theme.of(context).textTheme.headlineSmall),
               const SizedBox(height: 20),
-              if (stackedActions) ...[
-                TextField(
-                  controller: controller,
-                  textInputAction: TextInputAction.done,
-                  decoration: InputDecoration(
-                    hintText: hintText,
-                    border: const OutlineInputBorder(),
-                  ),
-                  onSubmitted: (_) => onConfirm(),
-                ),
-                const SizedBox(height: 12),
-                GestureDetector(
-                  onLongPress: onLongPressBrowse,
-                  child: OutlinedButton.icon(
-                    style: OutlinedButton.styleFrom(
-                      minimumSize: const Size(double.infinity, 48),
-                    ),
-                    onPressed: onBrowse,
-                    icon: const Icon(Icons.folder_open, size: 18),
-                    label: Text('浏览'.tl),
-                  ),
-                ),
-              ] else ...[
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Expanded(
-                      child: TextField(
-                        controller: controller,
-                        textInputAction: TextInputAction.done,
-                        decoration: InputDecoration(
-                          hintText: hintText,
-                          border: const OutlineInputBorder(),
-                        ),
-                        onSubmitted: (_) => onConfirm(),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: controller,
+                      textInputAction: TextInputAction.done,
+                      decoration: InputDecoration(
+                        hintText: hintText,
+                        border: const OutlineInputBorder(),
                       ),
+                      onSubmitted: (_) => onConfirm(),
                     ),
-                    const SizedBox(width: 8),
-                    GestureDetector(
+                  ),
+                  const SizedBox(width: 8),
+                  SizedBox(
+                    width: browseButtonWidth,
+                    child: GestureDetector(
                       onLongPress: onLongPressBrowse,
                       child: OutlinedButton.icon(
                         style: OutlinedButton.styleFrom(
-                          minimumSize: const Size(0, 48),
+                          minimumSize: const Size(0, 56),
+                          padding: const EdgeInsets.symmetric(horizontal: 10),
                         ),
                         onPressed: onBrowse,
                         icon: const Icon(Icons.folder_open, size: 18),
                         label: Text('浏览'.tl),
                       ),
                     ),
-                  ],
-                ),
-              ],
+                  ),
+                ],
+              ),
               const SizedBox(height: 10),
               Text(
                 helperText,
@@ -1684,7 +1664,7 @@ class _DownloadDirTileState extends State<_DownloadDirTile> {
         },
         onLongPressBrowse: () async {
           Navigator.of(ctx).pop();
-          final browsed = await _openInternalDirectoryBrowser(
+          final browsed = await openInternalDirectoryBrowser(
             context,
             title: '选择本应用下载目录'.tl,
             initialPath: controller.text,
@@ -1803,7 +1783,7 @@ class _OriginalDownloadDirTileState extends State<_OriginalDownloadDirTile> {
         },
         onLongPressBrowse: () async {
           Navigator.of(ctx).pop();
-          final browsed = await _openInternalDirectoryBrowser(
+          final browsed = await openInternalDirectoryBrowser(
             context,
             title: '选择原应用下载目录'.tl,
             initialPath: controller.text,
