@@ -179,15 +179,8 @@ class _RemoteComicCover extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final devicePixelRatio = MediaQuery.devicePixelRatioOf(context);
-    final cacheWidth = _cacheDimension(width, devicePixelRatio);
-    final resizedProvider = ResizeImage.resizeIfNeeded(
-      cacheWidth,
-      null,
-      provider,
-    );
     return Image(
-      image: resizedProvider,
+      image: provider,
       fit: BoxFit.cover,
       width: width,
       height: height,
@@ -196,14 +189,6 @@ class _RemoteComicCover extends StatelessWidget {
         child: const Icon(Icons.broken_image_outlined, size: 18),
       ),
     );
-  }
-
-  int? _cacheDimension(double logicalSize, double pixelRatio) {
-    if (!logicalSize.isFinite || logicalSize <= 0) {
-      return null;
-    }
-    final value = (logicalSize * pixelRatio).round();
-    return value > 0 ? value : null;
   }
 }
 

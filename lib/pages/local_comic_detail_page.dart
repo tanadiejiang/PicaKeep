@@ -3,6 +3,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:photo_view/photo_view.dart';
 import 'package:picakeep/base.dart';
 import 'package:picakeep/components/scrollable.dart';
 import 'package:picakeep/foundation/app.dart';
@@ -756,35 +757,19 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
   }
 
   void _showCoverPreviewFile(File cover) {
-    showDialog<void>(
-      context: context,
-      builder: (context) => Dialog(
-        clipBehavior: Clip.antiAlias,
-        child: InteractiveViewer(
-          child: Hero(
-            tag: 'local-cover-${_comic.id}',
-            child: Image.file(cover, fit: BoxFit.contain),
-          ),
-        ),
+    App.globalTo(
+      () => _CoverPreviewPage(
+        imageProvider: FileImage(cover),
+        heroTag: 'local-cover-${_comic.id}',
       ),
     );
   }
 
   void _showCoverPreviewProvider(ImageProvider<Object> coverProvider) {
-    showDialog<void>(
-      context: context,
-      builder: (context) => Dialog(
-        clipBehavior: Clip.antiAlias,
-        child: InteractiveViewer(
-          child: Hero(
-            tag: 'local-cover-${_comic.id}',
-            child: Image(
-              image: coverProvider,
-              fit: BoxFit.contain,
-              errorBuilder: (_, __, ___) => _placeholderCover(),
-            ),
-          ),
-        ),
+    App.globalTo(
+      () => _CoverPreviewPage(
+        imageProvider: coverProvider,
+        heroTag: 'local-cover-${_comic.id}',
       ),
     );
   }
@@ -1363,5 +1348,51 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
           ),
         ),
     ];
+  }
+}
+
+class _CoverPreviewPage extends StatelessWidget {
+  const _CoverPreviewPage({
+    required this.imageProvider,
+    required this.heroTag,
+  });
+
+  final ImageProvider<Object> imageProvider;
+  final String heroTag;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Text('图片'.tl),
+      ),
+      body: Hero(
+        tag: heroTag,
+        child: PhotoView(
+          minScale: PhotoViewComputedScale.contained * 0.9,
+          imageProvider: imageProvider,
+          filterQuality: FilterQuality.medium,
+          loadingBuilder: (context, event) {
+            return const ColoredBox(
+              color: Colors.black,
+              child: Center(child: CircularProgressIndicator()),
+            );
+          },
+          errorBuilder: (context, error, stackTrace, retry) {
+            return ColoredBox(
+              color: Colors.black,
+              child: Center(
+                child: IconButton(
+                  tooltip: '重试'.tl,
+                  color: Colors.white,
+                  icon: const Icon(Icons.refresh),
+                  onPressed: retry,
+                ),
+              ),
+            );
+          },
+        ),
+      ),
+    );
   }
 }
