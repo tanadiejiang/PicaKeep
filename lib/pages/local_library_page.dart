@@ -16,6 +16,7 @@ import 'package:picakeep/foundation/local_library_settings.dart';
 import 'package:picakeep/foundation/remote_library_data_source.dart';
 import 'package:picakeep/foundation/service_data_source.dart';
 import 'package:picakeep/foundation/trash.dart';
+import 'package:picakeep/pages/settings/settings_page.dart';
 import 'package:picakeep/tools/read_history_helper.dart';
 import 'package:picakeep/tools/translations.dart';
 
@@ -1535,13 +1536,6 @@ class _LocalLibraryFilesPageState extends State<LocalLibraryFilesPage> {
   bool _loading = true;
   List<LocalLibrarySource> _sources = const <LocalLibrarySource>[];
 
-  static const _androidCommonPaths = <String>[
-    '/storage/emulated/0/Download',
-    '/storage/emulated/0/Android/data',
-    '/storage/emulated/0/Pictures',
-    '/sdcard/Download',
-  ];
-
   @override
   void initState() {
     super.initState();
@@ -1572,6 +1566,34 @@ class _LocalLibraryFilesPageState extends State<LocalLibraryFilesPage> {
     }
   }
 
+  Future<String?> _browsePath(String initialPath) async {
+    if (App.isAndroid) {
+      return openInternalDirectoryBrowser(
+        context,
+        title: '选择本地漫画路径'.tl,
+        initialPath: initialPath,
+      );
+    }
+    return _pickFolder();
+  }
+
+  Future<void> _addPathAndReload(String path) async {
+    final normalized = path.trim();
+    if (normalized.isEmpty) {
+      return;
+    }
+    await _manager.addConfiguredLocalComicPath(normalized);
+    if (!mounted) {
+      return;
+    }
+    await _load();
+    await _refreshLocalLibrary();
+    if (!mounted) {
+      return;
+    }
+    await _load();
+  }
+
   Future<void> _showAddPathDialog() async {
     final controller = TextEditingController();
     final isDesktop = App.isDesktop;
@@ -1598,7 +1620,22 @@ class _LocalLibraryFilesPageState extends State<LocalLibraryFilesPage> {
                       Expanded(
                         child: FilledButton.icon(
                           onPressed: () async {
-                            final path = await _pickFolder();
+                            if (App.isAndroid) {
+                              final initialPath = controller.text.trim();
+                              Navigator.of(dialogContext).pop();
+                              await Future<void>.delayed(Duration.zero);
+                              if (!mounted) {
+                                return;
+                              }
+                              final path = await _browsePath(initialPath);
+                              if (path == null) {
+                                return;
+                              }
+                              await _addPathAndReload(path);
+                              return;
+                            }
+                            final path =
+                                await _browsePath(controller.text.trim());
                             if (path != null) {
                               controller.text = path;
                               setStateDialog(() {});
@@ -1610,31 +1647,6 @@ class _LocalLibraryFilesPageState extends State<LocalLibraryFilesPage> {
                       ),
                     ],
                   ),
-                  if (App.isAndroid) ...[
-                    const SizedBox(height: 12),
-                    Align(
-                      alignment: Alignment.centerLeft,
-                      child: Text(
-                        '安卓常用目录'.tl,
-                        style: Theme.of(context).textTheme.labelLarge,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    Wrap(
-                      spacing: 8,
-                      runSpacing: 8,
-                      children: [
-                        for (final path in _androidCommonPaths)
-                          ActionChip(
-                            label: Text(path),
-                            onPressed: () {
-                              controller.text = path;
-                              setStateDialog(() {});
-                            },
-                          ),
-                      ],
-                    ),
-                  ],
                   if (isDesktop && controller.text.trim().isNotEmpty) ...[
                     const SizedBox(height: 12),
                     SizedBox(
@@ -1662,13 +1674,11 @@ class _LocalLibraryFilesPageState extends State<LocalLibraryFilesPage> {
                 if (path.isEmpty) {
                   return;
                 }
-                await _manager.addConfiguredLocalComicPath(path);
-                await _refreshLocalLibrary();
+                await _addPathAndReload(path);
                 if (!dialogContext.mounted) {
                   return;
                 }
                 Navigator.of(dialogContext).pop();
-                await _load();
               },
               child: Text('确定'.tl),
             ),
@@ -1752,7 +1762,7 @@ class _LocalLibraryFilesPageState extends State<LocalLibraryFilesPage> {
                           ),
                           const SizedBox(height: 8),
                           Text(
-                            '这里仅保留普通目录选择与路径管理；受限目录请到设置页的下载目录弹窗中长按“浏览”处理。'.tl,
+                            '这里会打开与设置页一致的内置文件夹浏览器，支持安卓全部文件访问权限、Shizuku 授权或 Root 模式。'.tl,
                           ),
                           const SizedBox(height: 12),
                           FilledButton.icon(

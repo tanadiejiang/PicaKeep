@@ -66,6 +66,13 @@ String _normalizeDirectoryPath(String path) {
   return normalized.isEmpty ? '/' : normalized;
 }
 
+bool _prefersManageAllFilesMode(String? path) {
+  final normalized = _normalizeDirectoryPath(path ?? '');
+  return normalized.startsWith('/storage/') ||
+      normalized.startsWith('/sdcard') ||
+      normalized == '/';
+}
+
 Future<List<_DirectoryBrowserEntry>> _listEntriesWithDartIo(String path) async {
   final directory = Directory(path);
   if (!await directory.exists()) {
@@ -133,20 +140,25 @@ Future<List<_DirectoryBrowserEntry>> _listEntriesWithShizuku(String path) async 
       .toList(growable: false);
 }
 
-Future<String?> _openInternalDirectoryBrowser(
+Future<String?> openInternalDirectoryBrowser(
   BuildContext context, {
   required String title,
   String? initialPath,
+  bool rootNavigator = true,
 }) async {
   if (!App.isAndroid) {
     return null;
   }
   final controller = _AndroidStorageAccessController.instance;
   final hasAllFilesAccess = await controller.hasManageAllFilesAccess();
-  final hasShizukuAccess =
-      _isAndroidShizukuModeEnabled() && await controller.hasShizukuPermission();
-  final hasRootAccess =
-      _isAndroidRootModeEnabled() && await _requestAndroidRootAccess();
+  final preferManageAllFiles = _prefersManageAllFilesMode(initialPath);
+  final hasShizukuAccess = !preferManageAllFiles &&
+          _isAndroidShizukuModeEnabled()
+      ? await controller.hasShizukuPermission()
+      : false;
+  final hasRootAccess = !preferManageAllFiles && _isAndroidRootModeEnabled()
+      ? await _requestAndroidRootAccess()
+      : false;
   if (!hasAllFilesAccess && !hasShizukuAccess && !hasRootAccess) {
     if (context.mounted) {
       _showSettingMessage(
@@ -164,7 +176,7 @@ Future<String?> _openInternalDirectoryBrowser(
       : hasShizukuAccess
           ? _AndroidDirectoryBrowseMode.shizuku
           : _AndroidDirectoryBrowseMode.manageAllFiles;
-  return Navigator.of(context).push<String>(
+  return Navigator.of(context, rootNavigator: rootNavigator).push<String>(
     MaterialPageRoute(
       builder: (_) => _InternalDirectoryBrowserPage(
         title: title,
