@@ -10,7 +10,7 @@ import 'download_model.dart';
 import 'local_library_settings.dart';
 import 'local_trash_store.dart';
 
-const _storageAccessChannelName = 'com.example.picakeep/storage_access';
+const _storageAccessChannelName = 'lingxue.picakee/storage_access';
 
 const MethodChannel _storageAccessChannel =
     MethodChannel(_storageAccessChannelName);

@@ -20,7 +20,7 @@ const String webUA =
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36";
 
 //App version
-const appVersion = "1.0.0";
+const appVersion = "1.8.18";
 
 //Define breakpoints for wide screen devices
 const changePoint = 600;

@@ -379,7 +379,7 @@ class _AndroidStorageAccessController {
       _AndroidStorageAccessController._();
 
   static const MethodChannel _channel =
-      MethodChannel('com.example.picakeep/storage_access');
+      MethodChannel('lingxue.picakee/storage_access');
 
   Future<bool> hasManageAllFilesAccess() async {
     if (!App.isAndroid) {
@@ -710,6 +710,12 @@ class _InternalDirectoryBrowserPageState
   static const _androidPresetRoots = <String>[
     '/',
     '/storage/emulated/0',
+    '/data/user/0/lingxue.picakee',
+    '/data/data/lingxue.picakee',
+    '/storage/emulated/0/Android/data/lingxue.picakee',
+    '/data/user/0/com.example.picakeep',
+    '/data/data/com.example.picakeep',
+    '/storage/emulated/0/Android/data/com.example.picakeep',
     '/data/user/0/com.github.pacalini.pica_comic',
     '/data/data/com.github.pacalini.pica_comic',
     '/storage/emulated/0/Android/data/com.github.pacalini.pica_comic',

@@ -20,7 +20,7 @@ const deleteBehaviorPermanent = 'permanent';
 const localTrashDirectoryName = '.picakeep_trash';
 const deleteFailureLocalPathNotFound = 'local_path_not_found';
 const deleteFailurePermissionDenied = 'permission_denied';
-const _storageAccessChannelName = 'com.example.picakeep/storage_access';
+const _storageAccessChannelName = 'lingxue.picakee/storage_access';
 
 const MethodChannel _storageAccessChannel =
     MethodChannel(_storageAccessChannelName);

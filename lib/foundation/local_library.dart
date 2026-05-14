@@ -458,7 +458,7 @@ class LocalPathReadingData extends ReadingData {
 class LocalLibraryManager {
   static final LocalLibraryManager instance = LocalLibraryManager._();
   static const MethodChannel _storageAccessChannel =
-      MethodChannel('com.example.picakeep/storage_access');
+      MethodChannel('lingxue.picakee/storage_access');
 
   factory LocalLibraryManager() => instance;
 
