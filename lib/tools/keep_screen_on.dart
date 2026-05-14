@@ -2,7 +2,7 @@ import 'package:flutter/services.dart';
 import 'package:picakeep/foundation/app.dart';
 
 const MethodChannel _keepScreenOnChannel =
-    MethodChannel('com.github.pacalini.pica_comic/keepScreenOn');
+    MethodChannel('lingxue.picakee/keepScreenOn');
 
 void setKeepScreenOn() async {
   if (!App.isMobile) {

@@ -5,7 +5,7 @@ plugins {
 }
 
 android {
-    namespace = "com.example.picakeep"
+    namespace = "lingxue.picakee"
     compileSdk = flutter.compileSdkVersion
     ndkVersion = "28.2.13676358"
 
@@ -22,7 +22,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.example.picakeep"
+        applicationId = "lingxue.picakee"
         minSdk = flutter.minSdkVersion
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode

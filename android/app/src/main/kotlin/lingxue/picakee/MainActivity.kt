@@ -1,4 +1,4 @@
-package com.example.picakeep
+package lingxue.picakee
 
 import android.Manifest
 import android.content.Intent
@@ -1059,11 +1059,11 @@ class MainActivity : FlutterActivity() {
     companion object {
         private const val TAG = "PicaKeepStartup"
         private const val FOREGROUND_SERVICE_CHANNEL =
-            "com.example.picakeep/foreground_service"
+            "lingxue.picakee/foreground_service"
         private const val KEEP_SCREEN_ON_CHANNEL =
-            "com.github.pacalini.pica_comic/keepScreenOn"
+            "lingxue.picakee/keepScreenOn"
         private const val STORAGE_ACCESS_CHANNEL =
-            "com.example.picakeep/storage_access"
+            "lingxue.picakee/storage_access"
         private const val REQUEST_CODE_POST_NOTIFICATIONS = 1001
         private const val REQUEST_CODE_SHIZUKU = 1002
         private const val PRIVILEGED_PROCESS_TIMEOUT_MS = 5_000L
