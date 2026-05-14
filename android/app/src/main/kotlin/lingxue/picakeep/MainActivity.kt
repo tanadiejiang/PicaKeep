@@ -1,4 +1,4 @@
-package lingxue.picakee
+package lingxue.picakeep
 
 import android.Manifest
 import android.content.Intent
@@ -447,7 +447,9 @@ class MainActivity : FlutterActivity() {
     private fun executeTextProcess(
         process: Process,
         timeoutMs: Long = PRIVILEGED_PROCESS_TIMEOUT_MS,
+        operation: String = "process",
     ): ProcessTextResult {
+        val deadlineNanos = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMs)
         val stdout = storageExecutor.submit<String> {
             process.inputStream.bufferedReader().use { it.readText() }
         }
@@ -457,18 +459,25 @@ class MainActivity : FlutterActivity() {
         val waitResult = storageExecutor.submit<Int> {
             process.waitFor()
         }
+        fun remainingMs(minimumMs: Long = 1_000L): Long {
+            val remaining = TimeUnit.NANOSECONDS.toMillis(deadlineNanos - System.nanoTime())
+            return maxOf(minimumMs, remaining)
+        }
         try {
             val exitCode = waitResult.get(timeoutMs, TimeUnit.MILLISECONDS)
             return ProcessTextResult(
                 exitCode,
-                stdout.get(1, TimeUnit.SECONDS),
-                stderr.get(1, TimeUnit.SECONDS),
+                stdout.get(remainingMs(), TimeUnit.MILLISECONDS),
+                stderr.get(remainingMs(), TimeUnit.MILLISECONDS),
             )
         } catch (error: Throwable) {
             process.destroyForcibly()
             waitResult.cancel(true)
             stdout.cancel(true)
             stderr.cancel(true)
+            if (error is TimeoutException) {
+                throw IllegalStateException("$operation timeout after ${timeoutMs}ms", error)
+            }
             throw error
         }
     }
@@ -476,7 +485,9 @@ class MainActivity : FlutterActivity() {
     private fun executeBytesProcess(
         process: Process,
         timeoutMs: Long = PRIVILEGED_READ_TIMEOUT_MS,
+        operation: String = "process",
     ): ProcessBytesResult {
+        val deadlineNanos = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMs)
         val stdout = storageExecutor.submit<ByteArray> {
             process.inputStream.use { it.readBytes() }
         }
@@ -486,18 +497,25 @@ class MainActivity : FlutterActivity() {
         val waitResult = storageExecutor.submit<Int> {
             process.waitFor()
         }
+        fun remainingMs(minimumMs: Long = 1_000L): Long {
+            val remaining = TimeUnit.NANOSECONDS.toMillis(deadlineNanos - System.nanoTime())
+            return maxOf(minimumMs, remaining)
+        }
         try {
             val exitCode = waitResult.get(timeoutMs, TimeUnit.MILLISECONDS)
             return ProcessBytesResult(
                 exitCode,
-                stdout.get(1, TimeUnit.SECONDS),
-                stderr.get(1, TimeUnit.SECONDS),
+                stdout.get(remainingMs(), TimeUnit.MILLISECONDS),
+                stderr.get(remainingMs(), TimeUnit.MILLISECONDS),
             )
         } catch (error: Throwable) {
             process.destroyForcibly()
             waitResult.cancel(true)
             stdout.cancel(true)
             stderr.cancel(true)
+            if (error is TimeoutException) {
+                throw IllegalStateException("$operation timeout after ${timeoutMs}ms", error)
+            }
             throw error
         }
     }
@@ -506,7 +524,9 @@ class MainActivity : FlutterActivity() {
         process: Process,
         bytes: ByteArray,
         timeoutMs: Long = PRIVILEGED_READ_TIMEOUT_MS,
+        operation: String = "process",
     ): ProcessTextResult {
+        val deadlineNanos = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMs)
         val writer = storageExecutor.submit<Unit> {
             process.outputStream.use { output ->
                 output.write(bytes)
@@ -522,13 +542,17 @@ class MainActivity : FlutterActivity() {
         val waitResult = storageExecutor.submit<Int> {
             process.waitFor()
         }
+        fun remainingMs(minimumMs: Long = 1_000L): Long {
+            val remaining = TimeUnit.NANOSECONDS.toMillis(deadlineNanos - System.nanoTime())
+            return maxOf(minimumMs, remaining)
+        }
         try {
             writer.get(timeoutMs, TimeUnit.MILLISECONDS)
-            val exitCode = waitResult.get(timeoutMs, TimeUnit.MILLISECONDS)
+            val exitCode = waitResult.get(remainingMs(), TimeUnit.MILLISECONDS)
             return ProcessTextResult(
                 exitCode,
-                stdout.get(1, TimeUnit.SECONDS),
-                stderr.get(1, TimeUnit.SECONDS),
+                stdout.get(remainingMs(), TimeUnit.MILLISECONDS),
+                stderr.get(remainingMs(), TimeUnit.MILLISECONDS),
             )
         } catch (error: Throwable) {
             process.destroyForcibly()
@@ -536,6 +560,9 @@ class MainActivity : FlutterActivity() {
             waitResult.cancel(true)
             stdout.cancel(true)
             stderr.cancel(true)
+            if (error is TimeoutException) {
+                throw IllegalStateException("$operation timeout after ${timeoutMs}ms", error)
+            }
             throw error
         }
     }
@@ -667,6 +694,7 @@ class MainActivity : FlutterActivity() {
             val completed = executeTextProcess(
                 Runtime.getRuntime().exec(arrayOf("su", "-c", "id")),
                 PRIVILEGED_PROCESS_TIMEOUT_MS,
+                "root access check",
             )
             completed.exitCode == 0 &&
                 (completed.stdout + completed.stderr).lowercase().contains("uid=0")
@@ -797,32 +825,41 @@ class MainActivity : FlutterActivity() {
     ): List<Map<String, String>> {
         var lastError: String? = null
         for (candidate in candidatePaths(path)) {
-            val command =
-                "if [ -d ${shellEscape(candidate)} ]; then cd ${shellEscape(candidate)} && for e in ./* ./.[!.]* ./..?*; do [ -e \"\$e\" ] || continue; name=\${e#./}; if [ -d \"\$e\" ]; then printf 'd\\t%s\\n' \"\$name\"; elif [ -f \"\$e\" ]; then printf 'f\\t%s\\n' \"\$name\"; fi; done; else echo __PICAKKEEP_NO_DIR__ 1>&2; exit 2; fi"
-            val completed = executeTextProcess(startProcess(command))
-            val stdout = completed.stdout
+            val completed = try {
+                executeTextProcess(
+                    startProcess(directoryListCommand(candidate)),
+                    PRIVILEGED_DIRECTORY_LIST_TIMEOUT_MS,
+                    "directory listing for $candidate",
+                )
+            } catch (error: Throwable) {
+                lastError = "$candidate: ${exceptionDetail(error)}"
+                continue
+            }
             val stderr = completed.stderr
             if (completed.exitCode == 0) {
-                return stdout
+                return completed.stdout
                     .lineSequence()
-                    .map { it.trim() }
-                    .filter { it.isNotEmpty() }
-                    .mapNotNull { line ->
-                        val index = line.indexOf('\t')
-                        if (index <= 0 || index == line.length - 1) {
+                    .map { it.trimEnd() }
+                    .filter { it.isNotBlank() }
+                    .mapNotNull { rawLine ->
+                        val parts = rawLine.split('\t', limit = 2)
+                        if (parts.size != 2) {
                             null
                         } else {
-                            val type = if (line.substring(0, index) == "d") "directory" else "file"
-                            val name = line.substring(index + 1).trim()
-                            if (name.isEmpty() || name == "." || name == "..") {
-                                null
-                            } else {
-                                mapOf("type" to type, "name" to name)
+                            val type = parts[0].trim()
+                            val name = parts[1].trim()
+                            when {
+                                name.isEmpty() || name == "." || name == ".." -> null
+                                type != "directory" && type != "file" -> null
+                                else -> mapOf("type" to type, "name" to name)
                             }
                         }
                     }
                     .distinctBy { "${it["type"]}\u0000${it["name"]}" }
-                    .sortedWith(compareBy<Map<String, String>> { it["type"] != "directory" }.thenBy { it["name"]?.lowercase() })
+                    .sortedWith(
+                        compareBy<Map<String, String>> { it["type"] != "directory" }
+                            .thenBy { it["name"]?.lowercase() },
+                    )
                     .toList()
             }
             lastError = buildPrivilegedError(stderr, "目录不存在或当前应用不可访问", "目录读取失败")
@@ -932,11 +969,37 @@ class MainActivity : FlutterActivity() {
     private fun candidatePaths(path: String): LinkedHashSet<String> {
         val normalized = path.trim().ifEmpty { "/" }
         val candidatePaths = linkedSetOf(normalized)
+        if (normalized == "/data/user/0") {
+            candidatePaths.add("/data/data")
+            candidatePaths.add("/data_mirror/data_ce/null/0")
+        }
         if (normalized.startsWith("/data/user/0/")) {
             candidatePaths.add(normalized.replaceFirst("/data/user/0/", "/data/data/"))
+            candidatePaths.add(
+                normalized.replaceFirst("/data/user/0/", "/data_mirror/data_ce/null/0/"),
+            )
+        }
+        if (normalized == "/data/data") {
+            candidatePaths.add("/data/user/0")
+            candidatePaths.add("/data_mirror/data_ce/null/0")
         }
         if (normalized.startsWith("/data/data/")) {
             candidatePaths.add(normalized.replaceFirst("/data/data/", "/data/user/0/"))
+            candidatePaths.add(
+                normalized.replaceFirst("/data/data/", "/data_mirror/data_ce/null/0/"),
+            )
+        }
+        if (normalized == "/data_mirror/data_ce/null/0") {
+            candidatePaths.add("/data/user/0")
+            candidatePaths.add("/data/data")
+        }
+        if (normalized.startsWith("/data_mirror/data_ce/null/0/")) {
+            candidatePaths.add(
+                normalized.replaceFirst("/data_mirror/data_ce/null/0/", "/data/user/0/"),
+            )
+            candidatePaths.add(
+                normalized.replaceFirst("/data_mirror/data_ce/null/0/", "/data/data/"),
+            )
         }
         if (normalized.startsWith("/storage/emulated/0/")) {
             candidatePaths.add(normalized.replaceFirst("/storage/emulated/0/", "/sdcard/"))
@@ -946,6 +1009,72 @@ class MainActivity : FlutterActivity() {
         }
         return candidatePaths
     }
+
+    private fun directoryListCommand(candidate: String): String =
+        """
+        target=${shellEscape(candidate)}
+        if [ ! -e "${'$'}target" ]; then
+          echo __PICAKKEEP_NODIR__ 1>&2
+          exit 2
+        fi
+        if [ ! -d "${'$'}target" ]; then
+          echo __PICAKKEEP_NOTDIR__ 1>&2
+          exit 3
+        fi
+        cd "${'$'}target" || {
+          echo __PICAKKEEP_CD_FAILED__ 1>&2
+          exit 4
+        }
+
+        list_with_ls() {
+          LC_ALL=C ls -1A 2>/dev/null | while IFS= read -r name; do
+            [ -n "${'$'}name" ] || continue
+            [ "${'$'}name" = "." ] && continue
+            [ "${'$'}name" = ".." ] && continue
+            if [ -d "${'$'}name" ]; then
+              kind=directory
+            elif [ -f "${'$'}name" ]; then
+              kind=file
+            else
+              kind=other
+            fi
+            printf '%s\t%s\n' "${'$'}kind" "${'$'}name"
+          done
+        }
+
+        list_with_find() {
+          find . -mindepth 1 -maxdepth 1 2>/dev/null | while IFS= read -r item; do
+            [ -n "${'$'}item" ] || continue
+            name=${'$'}{item#./}
+            [ -n "${'$'}name" ] || continue
+            if [ -d "${'$'}item" ]; then
+              kind=directory
+            elif [ -f "${'$'}item" ]; then
+              kind=file
+            else
+              kind=other
+            fi
+            printf '%s\t%s\n' "${'$'}kind" "${'$'}name"
+          done
+        }
+
+        output=${'$'}(list_with_ls)
+        status=${'$'}?
+        if [ ${'$'}status -eq 0 ] && [ -n "${'$'}output" ]; then
+          printf '%s\n' "${'$'}output"
+          exit 0
+        fi
+
+        output=${'$'}(list_with_find)
+        status=${'$'}?
+        if [ ${'$'}status -eq 0 ]; then
+          printf '%s\n' "${'$'}output"
+          exit 0
+        fi
+
+        echo __PICAKKEEP_LIST_FAILED__ 1>&2
+        exit 5
+        """.trimIndent()
 
     private fun parentPath(path: String): String {
         val normalized = path.trim().ifEmpty { "/" }
@@ -958,15 +1087,26 @@ class MainActivity : FlutterActivity() {
 
     private fun buildPrivilegedError(stderr: String, notFoundMessage: String, fallback: String): String {
         return if (stderr.contains("__PICAKKEEP_NO_DIR__") ||
+            stderr.contains("__PICAKKEEP_NODIR__") ||
             stderr.contains("__PICAKKEEP_NO_FILE__") ||
             stderr.contains("__PICAKKEEP_NO_PATH__")
         ) {
             notFoundMessage
+        } else if (stderr.contains("__PICAKKEEP_NOTDIR__")) {
+            "目标不是目录"
+        } else if (stderr.contains("__PICAKKEEP_CD_FAILED__")) {
+            "进入目录失败"
+        } else if (stderr.contains("__PICAKKEEP_LIST_FAILED__")) {
+            "目录列出命令失败"
         } else if (stderr.isNotBlank()) {
             stderr
         } else {
             fallback
         }
+    }
+
+    private fun exceptionDetail(error: Throwable): String {
+        return error.message?.takeIf { it.isNotBlank() } ?: error.javaClass.simpleName
     }
 
     private fun newShizukuProcess(
@@ -1059,14 +1199,15 @@ class MainActivity : FlutterActivity() {
     companion object {
         private const val TAG = "PicaKeepStartup"
         private const val FOREGROUND_SERVICE_CHANNEL =
-            "lingxue.picakee/foreground_service"
+            "lingxue.picakeep/foreground_service"
         private const val KEEP_SCREEN_ON_CHANNEL =
-            "lingxue.picakee/keepScreenOn"
+            "lingxue.picakeep/keepScreenOn"
         private const val STORAGE_ACCESS_CHANNEL =
-            "lingxue.picakee/storage_access"
+            "lingxue.picakeep/storage_access"
         private const val REQUEST_CODE_POST_NOTIFICATIONS = 1001
         private const val REQUEST_CODE_SHIZUKU = 1002
         private const val PRIVILEGED_PROCESS_TIMEOUT_MS = 5_000L
+        private const val PRIVILEGED_DIRECTORY_LIST_TIMEOUT_MS = 45_000L
         private const val PRIVILEGED_READ_TIMEOUT_MS = 15_000L
         private const val SHIZUKU_ACCESS_CACHE_MS = 1_500L
         private const val ROOT_ACCESS_CACHE_MS = 30 * 60 * 1000L

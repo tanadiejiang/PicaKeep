@@ -155,6 +155,20 @@ class App {
 
   static bool temporaryDisablePopGesture = false;
 
+  static int _navigationLockDepth = 0;
+
+  static bool get isNavigationLocked => _navigationLockDepth > 0;
+
+  static void beginNavigationLock() {
+    _navigationLockDepth++;
+  }
+
+  static void endNavigationLock() {
+    if (_navigationLockDepth > 0) {
+      _navigationLockDepth--;
+    }
+  }
+
   static Future<void> applyDisplayModePreference() async {
     if (!isAndroid) {
       return;

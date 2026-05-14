@@ -10,7 +10,7 @@ import 'download_model.dart';
 import 'local_library_settings.dart';
 import 'local_trash_store.dart';
 
-const _storageAccessChannelName = 'lingxue.picakee/storage_access';
+const _storageAccessChannelName = 'lingxue.picakeep/storage_access';
 
 const MethodChannel _storageAccessChannel =
     MethodChannel(_storageAccessChannelName);
@@ -307,9 +307,53 @@ class DownloadManager with _DownloadDb {
     _clearLookupCaches();
   }
 
-  void upsertDbRecordOnly(DownloadedItem item, String directory,
-      [DateTime? time]) {
-    _addToDb(item, directory, time);
+  int? rowIdFor(String id) {
+    if (_db == null) {
+      return null;
+    }
+    final result = _db!.select('''
+      select rowid as __rowid__
+      from download
+      where id = ?
+      limit 1
+    ''', [id]);
+    if (result.isEmpty) {
+      return null;
+    }
+    return result.first['__rowid__'] as int?;
+  }
+
+  void upsertDbRecordOnly(
+    DownloadedItem item,
+    String directory, [
+    DateTime? time,
+    int? rowId,
+  ]) {
+    if (rowId != null && rowId > 0) {
+      _db!.execute('''
+        insert or replace into download(
+          rowid,
+          id,
+          title,
+          subtitle,
+          time,
+          directory,
+          size,
+          json
+        ) values (?,?,?,?,?,?,?,?)
+      ''', [
+        rowId,
+        item.id,
+        item.name,
+        item.subTitle,
+        (time ?? DateTime.now()).millisecondsSinceEpoch,
+        directory,
+        item.comicSize,
+        jsonEncode(item.toJson()),
+      ]);
+    } else {
+      _addToDb(item, directory, time);
+    }
     _clearLookupCaches();
   }
 

@@ -30,6 +30,7 @@ import 'package:picakeep/tools/block_screenshot.dart';
 import 'package:share_plus/share_plus.dart';
 
 part 'app_settings.dart';
+part 'internal_directory_browser.dart';
 part 'app_capabilities_settings.dart';
 part 'runtime_service_settings.dart';
 part 'explore_settings.dart';
