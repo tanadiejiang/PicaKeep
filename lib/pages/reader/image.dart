@@ -318,13 +318,16 @@ class _ComicImageState extends State<ComicImage> with WidgetsBindingObserver {
       );
     }
 
+    final devicePixelRatio =
+        MediaQuery.of(context).devicePixelRatio.clamp(1.0, 4.0).toDouble();
+
     var width = widget.width??MediaQuery.of(context).size.width;
     double? height = widget.height;
 
     Size? cacheSize = _cache[widget.image.hashCode];
     if(cacheSize != null){
       height = cacheSize.height * (width / cacheSize.width);
-      height = height.ceilToDouble();
+      height = _snapLogicalDimension(height, devicePixelRatio);
     }
 
     var brightness = Theme.of(context).brightness;
@@ -340,7 +343,7 @@ class _ComicImageState extends State<ComicImage> with WidgetsBindingObserver {
       _cache[widget.image.hashCode] = imageSize;
       if (imageSize.width > 0) {
         height = imageSize.height * (width / imageSize.width);
-        height = height.ceilToDouble();
+        height = _snapLogicalDimension(height, devicePixelRatio);
       }
       Widget result = RawImage(
         // Do not clone the image, because RawImage is a stateless wrapper.
@@ -376,9 +379,7 @@ class _ComicImageState extends State<ComicImage> with WidgetsBindingObserver {
       result = SizedBox(
         width: width,
         height: height,
-        child: Center(
-          child: result,
-        ),
+        child: result,
       );
       return result;
     } else {
@@ -405,6 +406,14 @@ class _ComicImageState extends State<ComicImage> with WidgetsBindingObserver {
         ),
       );
     }
+  }
+
+  double _snapLogicalDimension(double value, double devicePixelRatio) {
+    if (!value.isFinite || value <= 0) {
+      return value;
+    }
+    final physicalPixels = (value * devicePixelRatio).round();
+    return physicalPixels / devicePixelRatio;
   }
 
   @override

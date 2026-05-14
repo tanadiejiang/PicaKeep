@@ -152,7 +152,7 @@ class DownloadedComicTile extends StatelessWidget {
                   borderRadius: BorderRadius.circular(8),
                 ),
                 clipBehavior: Clip.antiAlias,
-                child: _buildImage(),
+                child: _buildImage(context),
               ),
               SizedBox.fromSize(size: const Size(16, 5)),
               Expanded(
@@ -189,7 +189,7 @@ class DownloadedComicTile extends StatelessWidget {
                   borderRadius: BorderRadius.circular(8),
                 ),
                 clipBehavior: Clip.antiAlias,
-                child: _buildImage(),
+                child: _buildImage(context),
               ),
             ),
             Positioned(
@@ -272,22 +272,41 @@ class DownloadedComicTile extends StatelessWidget {
     );
   }
 
-  Widget _buildImage() {
+  Widget _buildImage(BuildContext context) {
     final provider = imageProvider;
     final resolvedProvider = provider ??
         (imagePath.path.isEmpty ? null : FileImage(imagePath) as ImageProvider<Object>);
     if (resolvedProvider == null) {
       return const Center(child: Icon(Icons.image_not_supported));
     }
-    return Image(
-      image: resolvedProvider,
-      fit: BoxFit.cover,
-      height: double.infinity,
-      gaplessPlayback: false,
-      filterQuality: FilterQuality.medium,
-      errorBuilder: (_, __, ___) =>
-          const Center(child: Icon(Icons.image_not_supported)),
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final pixelRatio = MediaQuery.devicePixelRatioOf(context);
+        final cacheWidth = _cacheDimension(constraints.maxWidth, pixelRatio);
+        final resizedProvider = ResizeImage.resizeIfNeeded(
+          cacheWidth,
+          null,
+          resolvedProvider,
+        );
+        return Image(
+          image: resizedProvider,
+          fit: BoxFit.cover,
+          height: double.infinity,
+          gaplessPlayback: false,
+          filterQuality: FilterQuality.medium,
+          errorBuilder: (_, __, ___) =>
+              const Center(child: Icon(Icons.image_not_supported)),
+        );
+      },
     );
+  }
+
+  int? _cacheDimension(double logicalSize, double pixelRatio) {
+    if (!logicalSize.isFinite || logicalSize <= 0) {
+      return null;
+    }
+    final resolved = (logicalSize * pixelRatio).round();
+    return resolved > 0 ? resolved : null;
   }
 }
 

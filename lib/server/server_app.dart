@@ -466,7 +466,7 @@ class PicaKeepAdminServer {
         continue;
       }
       previewCoverUrls.add(
-        '/api/library/items/${Uri.encodeComponent(item.id)}/cover',
+        _buildItemCoverUrl(item),
       );
       if (previewCoverUrls.length >= 6) {
         break;
@@ -501,7 +501,7 @@ class PicaKeepAdminServer {
       'imageCount': item.imageCount,
       'totalBytes': item.totalBytes,
       'updatedAt': item.updatedAt.toIso8601String(),
-      'coverUrl': '/api/library/items/$encodedId/cover',
+      'coverUrl': _buildItemCoverUrl(item),
       'detailUrl': '/api/library/items/$encodedId',
       'episodeCount': item.episodes.length,
       'hasMultipleEpisodes': item.hasMultipleEpisodes,
@@ -511,6 +511,7 @@ class PicaKeepAdminServer {
               item.id,
               episode,
               includePages: includePages,
+              item: item,
             ),
           )
           .toList(),
@@ -521,21 +522,51 @@ class PicaKeepAdminServer {
     String itemId,
     ServerResourceEpisodeSummary episode, {
     bool includePages = false,
+    ServerResourceItemSummary? item,
   }) {
     final encodedId = Uri.encodeComponent(itemId);
+    final coverUrl = item == null
+        ? '/api/library/items/$encodedId/cover'
+        : _buildItemCoverUrl(item);
     return {
       'index': episode.index,
       'title': episode.title,
       'path': episode.path,
       'imageCount': episode.imageCount,
       'totalBytes': episode.totalBytes,
-      'coverUrl': '/api/library/items/$encodedId/cover',
+      'coverUrl': coverUrl,
       if (includePages)
         'pages': [
           for (var i = 0; i < episode.imagePaths.length; i++)
             '/api/library/items/$encodedId/images/${episode.index}/$i',
         ],
     };
+  }
+
+  String _buildItemCoverUrl(ServerResourceItemSummary item) {
+    final encodedId = Uri.encodeComponent(item.id);
+    final coverVersion = _coverVersionToken(item);
+    final version = Uri.encodeQueryComponent(coverVersion);
+    return '/api/library/items/$encodedId/cover?v=$version';
+  }
+
+  String _coverVersionToken(ServerResourceItemSummary item) {
+    final coverPath = item.coverPath?.trim() ?? '';
+    if (coverPath.isEmpty) {
+      return item.updatedAt.millisecondsSinceEpoch.toString();
+    }
+    try {
+      final stat = File(coverPath).statSync();
+      return '${item.updatedAt.millisecondsSinceEpoch}:${_basename(coverPath)}:${stat.modified.millisecondsSinceEpoch}:${stat.size}';
+    } catch (_) {
+      return '${item.updatedAt.millisecondsSinceEpoch}:${_basename(coverPath)}';
+    }
+  }
+
+  String _basename(String path) {
+    final normalized = path.replaceAll('\\', '/');
+    final parts = normalized.split('/').where((entry) => entry.isNotEmpty).toList();
+    return parts.isEmpty ? normalized : parts.last;
   }
 
   Future<Response> _fileResponse(Request request, File file) async {

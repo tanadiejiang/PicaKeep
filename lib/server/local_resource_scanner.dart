@@ -68,6 +68,7 @@ class _ServerResourceMetadata {
     required this.subtitle,
     required this.displayId,
     required this.tags,
+    required this.coverPath,
     required this.sourceDisplayName,
     required this.episodeTitles,
     required this.updatedAt,
@@ -77,6 +78,7 @@ class _ServerResourceMetadata {
   final String subtitle;
   final String displayId;
   final List<String> tags;
+  final String coverPath;
   final String sourceDisplayName;
   final List<String> episodeTitles;
   final DateTime? updatedAt;
@@ -423,7 +425,11 @@ class LocalResourceScanner {
       path: directory.path,
       imageCount: imageCount,
       totalBytes: totalBytes,
-      coverPath: titledEpisodes.first.coverPath,
+      coverPath: _resolveItemCoverPath(
+        metadata?.coverPath,
+        directory,
+        titledEpisodes,
+      ),
       episodes: titledEpisodes,
       updatedAt: updatedAt,
     );
@@ -544,6 +550,7 @@ class LocalResourceScanner {
       tags: parsedTags.isNotEmpty
           ? parsedTags
           : _extractTagValues(data, comicItemMap),
+      coverPath: _extractCoverPath(data, comicItemMap, parsedItem),
       sourceDisplayName: _firstNonEmptyValue([
         data?['sourceDisplayName']?.toString(),
         parsedItem?.sourceDisplayName,
@@ -957,9 +964,82 @@ class LocalResourceScanner {
       path: directory.path,
       imageCount: images.length,
       totalBytes: await _calculateTotalBytes(images),
-      coverPath: images.first.path,
+      coverPath: _resolveEpisodeCoverPath(directory, images),
       imagePaths: images.map((e) => e.path).toList(growable: false),
     );
+  }
+
+  String _extractCoverPath(
+    Map<String, dynamic>? data,
+    Map<String, dynamic>? comicItemMap,
+    DownloadedItem? parsedItem,
+  ) {
+    final parsedCover = parsedItem?.localCoverPath?.trim() ?? '';
+    if (parsedCover.isNotEmpty && File(parsedCover).existsSync()) {
+      return parsedCover;
+    }
+
+    for (final map in _candidateMetadataMaps(data, comicItemMap)) {
+      for (final key in const ['coverPath', 'cover', 'localCoverPath']) {
+        final raw = map[key]?.toString().trim() ?? '';
+        if (raw.isEmpty) {
+          continue;
+        }
+        final file = File(raw);
+        if (file.existsSync()) {
+          return file.path;
+        }
+      }
+    }
+    return '';
+  }
+
+  String _resolveItemCoverPath(
+    String? metadataCoverPath,
+    Directory directory,
+    List<ServerResourceEpisodeSummary> episodes,
+  ) {
+    final normalizedMetadataPath = metadataCoverPath?.trim() ?? '';
+    if (normalizedMetadataPath.isNotEmpty &&
+        File(normalizedMetadataPath).existsSync()) {
+      return normalizedMetadataPath;
+    }
+
+    final coverFile = _findCoverLikeImage(directory);
+    if (coverFile != null) {
+      return coverFile.path;
+    }
+
+    for (final episode in episodes) {
+      final coverPath = episode.coverPath?.trim() ?? '';
+      if (coverPath.isNotEmpty) {
+        return coverPath;
+      }
+    }
+    return '';
+  }
+
+  String _resolveEpisodeCoverPath(Directory directory, List<File> images) {
+    final coverFile = _findCoverLikeImage(directory);
+    if (coverFile != null) {
+      return coverFile.path;
+    }
+    return images.first.path;
+  }
+
+  File? _findCoverLikeImage(Directory directory) {
+    for (final entity in _safeList(directory)) {
+      if (entity is! File) {
+        continue;
+      }
+      if (!_isImageFile(entity.path) || _isInServerTrash(entity.path)) {
+        continue;
+      }
+      if (_isCoverLikeFile(entity.path)) {
+        return entity;
+      }
+    }
+    return null;
   }
 
   Future<int> _calculateTotalBytes(List<File> files) async {
