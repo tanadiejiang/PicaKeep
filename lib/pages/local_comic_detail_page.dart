@@ -709,8 +709,13 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
             ? (_comic as RemoteLibraryRootItem).coverImageProvider
             : null;
     final hasLocalCover = cover.existsSync();
+    final heroTag = 'local-cover-${_comic.id}';
     return GestureDetector(
-      onTap: hasLocalCover ? () => _showCoverPreview(cover) : null,
+      onTap: hasLocalCover
+          ? () => _showCoverPreviewFile(cover)
+          : coverProvider != null
+              ? () => _showCoverPreviewProvider(coverProvider)
+              : null,
       child: Container(
         width: width,
         height: height,
@@ -721,7 +726,7 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
         clipBehavior: Clip.antiAlias,
         child: hasLocalCover
             ? Hero(
-                tag: 'local-cover-${_comic.id}',
+                tag: heroTag,
                 child: Image.file(
                   cover,
                   fit: BoxFit.cover,
@@ -731,12 +736,15 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
                 ),
               )
             : coverProvider != null
-                ? Image(
-                    image: coverProvider,
-                    fit: BoxFit.cover,
-                    filterQuality: FilterQuality.medium,
-                    isAntiAlias: true,
-                    errorBuilder: (_, __, ___) => _placeholderCover(),
+                ? Hero(
+                    tag: heroTag,
+                    child: Image(
+                      image: coverProvider,
+                      fit: BoxFit.cover,
+                      filterQuality: FilterQuality.medium,
+                      isAntiAlias: true,
+                      errorBuilder: (_, __, ___) => _placeholderCover(),
+                    ),
                   )
                 : _placeholderCover(),
       ),
@@ -747,7 +755,7 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
     return const Center(child: Icon(Icons.image_not_supported, size: 36));
   }
 
-  void _showCoverPreview(File cover) {
+  void _showCoverPreviewFile(File cover) {
     showDialog<void>(
       context: context,
       builder: (context) => Dialog(
@@ -756,6 +764,25 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
           child: Hero(
             tag: 'local-cover-${_comic.id}',
             child: Image.file(cover, fit: BoxFit.contain),
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _showCoverPreviewProvider(ImageProvider<Object> coverProvider) {
+    showDialog<void>(
+      context: context,
+      builder: (context) => Dialog(
+        clipBehavior: Clip.antiAlias,
+        child: InteractiveViewer(
+          child: Hero(
+            tag: 'local-cover-${_comic.id}',
+            child: Image(
+              image: coverProvider,
+              fit: BoxFit.contain,
+              errorBuilder: (_, __, ___) => _placeholderCover(),
+            ),
           ),
         ),
       ),

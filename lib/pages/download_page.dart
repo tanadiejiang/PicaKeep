@@ -684,7 +684,52 @@ class DownloadPageLogic extends StateController {
         );
   }
 
-  void _prefetchCoverThumbnails(List<DownloadedItem> items) {}
+  void _prefetchCoverThumbnails(List<DownloadedItem> items) {
+    final remoteItems = items
+        .where(
+          (item) => item is RemoteLibraryComicItem || item is RemoteLibraryRootItem,
+        )
+        .take(12)
+        .toList(growable: false);
+    if (remoteItems.isEmpty) {
+      return;
+    }
+    unawaited(Future<void>.delayed(const Duration(milliseconds: 96), () async {
+      for (final item in remoteItems) {
+        if (!baseComics.any((comic) => comic.id == item.id)) {
+          continue;
+        }
+        final provider = _coverImageProviders[item.id] ?? coverImageProviderFor(item);
+        if (provider == null) {
+          continue;
+        }
+        unawaited(_warmImageProvider(provider).catchError((_) {}));
+        await Future<void>.delayed(const Duration(milliseconds: 16));
+      }
+    }));
+  }
+
+  Future<void> _warmImageProvider(ImageProvider<Object> provider) {
+    final completer = Completer<void>();
+    final stream = provider.resolve(const ImageConfiguration());
+    late final ImageStreamListener listener;
+    listener = ImageStreamListener(
+      (image, synchronousCall) {
+        if (!completer.isCompleted) {
+          completer.complete();
+        }
+        stream.removeListener(listener);
+      },
+      onError: (exception, stackTrace) {
+        if (!completer.isCompleted) {
+          completer.complete();
+        }
+        stream.removeListener(listener);
+      },
+    );
+    stream.addListener(listener);
+    return completer.future;
+  }
 
   void _scheduleCoverRefresh() {
     if (_isScrollInteracting) {
@@ -1366,7 +1411,7 @@ class _DownloadPageState extends State<DownloadPage>
                   },
                   child: SmoothCustomScrollView(
                     cacheExtent: App.isMobile
-                        ? MediaQuery.of(context).size.height * 0.25
+                        ? MediaQuery.of(context).size.height
                         : MediaQuery.of(context).size.height,
                     slivers: [
                       _buildAppbar(context, logic),
@@ -2570,7 +2615,9 @@ class _DownloadedComicInfoViewState extends State<DownloadedComicInfoView> {
                       ],
                     ),
                   ),
-                  SizedBox(height: math.max(mediaQuery.padding.bottom, 12)),
+                  SizedBox(
+                    height: math.max(mediaQuery.padding.bottom, 12) + 28,
+                  ),
                 ],
               ),
             ),

@@ -1,13 +1,15 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 import 'package:picakeep/base.dart';
 import 'package:picakeep/foundation/app.dart';
 import 'package:picakeep/foundation/app_runtime_mode.dart';
 import 'package:picakeep/foundation/download_model.dart';
-import 'package:picakeep/foundation/image_loader/stream_image_provider.dart';
+import 'package:picakeep/foundation/image_loader/base_image_provider.dart';
 import 'package:picakeep/foundation/local_favorites.dart';
 import 'package:picakeep/pages/reader/comic_reading_page.dart';
 
@@ -728,14 +730,6 @@ class _RemoteLibraryCoverDiskCache {
     );
   }
 
-  static Future<Stream<List<int>>> loadOrDownload(
-    RemoteLibraryClient client,
-    String url,
-  ) async {
-    final file = await ensureDownloaded(client, url);
-    return file.openRead();
-  }
-
   static Future<File> ensureDownloaded(
     RemoteLibraryClient client,
     String url,
@@ -817,6 +811,50 @@ class _RemoteLibraryCoverDiskCache {
       hash = (hash * 1099511628211) & 0x7fffffffffffffff;
     }
     return hash.toRadixString(16);
+  }
+}
+
+class _RemoteLibraryCoverImageProvider
+    extends BaseImageProvider<_RemoteLibraryCoverImageProvider> {
+  const _RemoteLibraryCoverImageProvider({
+    required this.client,
+    required this.url,
+  });
+
+  final RemoteLibraryClient client;
+  final String url;
+
+  @override
+  String get key => 'remote_cover::$url';
+
+  @override
+  Future<_RemoteLibraryCoverImageProvider> obtainKey(
+    ImageConfiguration configuration,
+  ) {
+    return SynchronousFuture<_RemoteLibraryCoverImageProvider>(this);
+  }
+
+  @override
+  Future<Uint8List> load(StreamController<ImageChunkEvent> chunkEvents) async {
+    File file = _RemoteLibraryCoverDiskCache.cachedFileFor(url);
+    if (!await _RemoteLibraryCoverDiskCache._isUsable(file)) {
+      file = await _RemoteLibraryCoverDiskCache.ensureDownloaded(client, url);
+    }
+
+    final totalBytes = await file.length();
+    final bytesBuilder = BytesBuilder(copy: false);
+    var cumulativeBytesLoaded = 0;
+    await for (final chunk in file.openRead()) {
+      bytesBuilder.add(chunk);
+      cumulativeBytesLoaded += chunk.length;
+      chunkEvents.add(
+        ImageChunkEvent(
+          cumulativeBytesLoaded: cumulativeBytesLoaded,
+          expectedTotalBytes: totalBytes > 0 ? totalBytes : null,
+        ),
+      );
+    }
+    return bytesBuilder.takeBytes();
   }
 }
 
@@ -933,15 +971,9 @@ class RemoteLibraryClient {
     if (resolved.isEmpty) {
       return null;
     }
-    final cachedFile = _RemoteLibraryCoverDiskCache.cachedFileFor(resolved);
-    try {
-      if (cachedFile.existsSync() && cachedFile.lengthSync() > 0) {
-        return FileImage(cachedFile);
-      }
-    } catch (_) {}
-    return StreamImageProvider(
-      () => _RemoteLibraryCoverDiskCache.loadOrDownload(this, resolved),
-      'remote_cover::$resolved',
+    return _RemoteLibraryCoverImageProvider(
+      client: this,
+      url: resolved,
     );
   }
 

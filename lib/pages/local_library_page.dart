@@ -122,13 +122,13 @@ class _LocalLibraryComicTile extends DownloadedComicTile {
 }
 
 class _RemoteRootCollage extends StatelessWidget {
-  const _RemoteRootCollage({required this.urls});
+  const _RemoteRootCollage({required this.item});
 
-  final List<String> urls;
+  final RemoteLibraryRootItem item;
 
   @override
   Widget build(BuildContext context) {
-    final visibleUrls = urls
+    final visibleUrls = item.previewCoverUrls
         .map((entry) => entry.trim())
         .where((entry) => entry.isNotEmpty)
         .take(6)
@@ -147,16 +147,63 @@ class _RemoteRootCollage extends StatelessWidget {
       ),
       itemCount: visibleUrls.length,
       itemBuilder: (context, index) {
-        return Image.network(
-          visibleUrls[index],
-          fit: BoxFit.cover,
-          errorBuilder: (_, __, ___) => Container(
-            color: Theme.of(context).colorScheme.secondaryContainer,
-            child: const Icon(Icons.broken_image_outlined, size: 18),
-          ),
-        );
+        final provider = item.client.coverImageProviderForUrl(visibleUrls[index]);
+        return provider == null
+            ? Container(
+                color: Theme.of(context).colorScheme.secondaryContainer,
+                child: const Icon(Icons.broken_image_outlined, size: 18),
+              )
+            : Image(
+                image: provider,
+                fit: BoxFit.cover,
+                errorBuilder: (_, __, ___) => Container(
+                  color: Theme.of(context).colorScheme.secondaryContainer,
+                  child: const Icon(Icons.broken_image_outlined, size: 18),
+                ),
+              );
       },
     );
+  }
+}
+
+class _RemoteComicCover extends StatelessWidget {
+  const _RemoteComicCover({
+    required this.provider,
+    required this.width,
+    required this.height,
+  });
+
+  final ImageProvider<Object> provider;
+  final double width;
+  final double height;
+
+  @override
+  Widget build(BuildContext context) {
+    final devicePixelRatio = MediaQuery.devicePixelRatioOf(context);
+    final cacheWidth = _cacheDimension(width, devicePixelRatio);
+    final resizedProvider = ResizeImage.resizeIfNeeded(
+      cacheWidth,
+      null,
+      provider,
+    );
+    return Image(
+      image: resizedProvider,
+      fit: BoxFit.cover,
+      width: width,
+      height: height,
+      errorBuilder: (_, __, ___) => Container(
+        color: Theme.of(context).colorScheme.secondaryContainer,
+        child: const Icon(Icons.broken_image_outlined, size: 18),
+      ),
+    );
+  }
+
+  int? _cacheDimension(double logicalSize, double pixelRatio) {
+    if (!logicalSize.isFinite || logicalSize <= 0) {
+      return null;
+    }
+    final value = (logicalSize * pixelRatio).round();
+    return value > 0 ? value : null;
   }
 }
 
@@ -201,7 +248,7 @@ class _LocalLibraryRemoteRootCard extends StatelessWidget {
                     height: 124,
                     child: Container(
                       color: Theme.of(context).colorScheme.secondaryContainer,
-                      child: _RemoteRootCollage(urls: item.previewCoverUrls),
+                      child: _RemoteRootCollage(item: item),
                     ),
                   ),
                 ),
@@ -564,11 +611,15 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
   Future<List<DownloadedItem>> _loadRemoteItems() async {
     final rootId = widget.remoteRootId?.trim() ?? '';
     if (rootId.isNotEmpty) {
-      final items = await _remoteDataSource.fetchItemsForRoot(rootId);
+      final items = await _remoteDataSource.fetchItemsForRoot(
+        rootId,
+        forceRefresh: true,
+      );
       return _sortItems(items.toList());
     }
     final roots = await _remoteDataSource.fetchRootItems(
       customLibraryOnly: true,
+      forceRefresh: true,
     );
     return _sortItems(roots.cast<DownloadedItem>().toList());
   }
@@ -808,137 +859,194 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
 
   Future<void> _showAlbumQuickActions(DownloadedItem item) async {
     final theme = Theme.of(context);
-    final colorScheme = theme.colorScheme;
     final author = item.subTitle.trim();
+    final tags = item.tags
+        .map((tag) => tag.trim())
+        .where((tag) => tag.isNotEmpty)
+        .toList(growable: false);
+    final eps = item.eps;
+    final coverFile = _coverFile(item);
+    final coverProvider = _coverImageProvider(item);
     await showModalBottomSheet<void>(
       context: context,
-      backgroundColor: Colors.transparent,
       isScrollControlled: true,
+      showDragHandle: false,
+      useSafeArea: false,
       builder: (sheetContext) {
-        Widget buildActionTile({
-          required IconData icon,
-          required String title,
-          required String subtitle,
-          required VoidCallback onTap,
-        }) {
-          return Material(
-            color: colorScheme.surfaceContainerLow,
-            borderRadius: BorderRadius.circular(18),
-            child: InkWell(
+        Widget buildCover() {
+          if (coverProvider != null) {
+            return ClipRRect(
               borderRadius: BorderRadius.circular(18),
-              onTap: onTap,
-              child: Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 16,
-                  vertical: 14,
-                ),
-                child: Row(
-                  children: [
-                    Container(
-                      width: 40,
-                      height: 40,
-                      decoration: BoxDecoration(
-                        color: colorScheme.primaryContainer,
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: Icon(icon, color: colorScheme.primary),
-                    ),
-                    const SizedBox(width: 14),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Text(title, style: theme.textTheme.titleMedium),
-                          const SizedBox(height: 4),
-                          Text(
-                            subtitle,
-                            style: theme.textTheme.bodySmall?.copyWith(
-                              color: colorScheme.onSurfaceVariant,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Icon(
-                      Icons.chevron_right_rounded,
-                      color: colorScheme.outline,
-                    ),
-                  ],
-                ),
+              child: _RemoteComicCover(
+                provider: coverProvider,
+                width: 112,
+                height: 168,
               ),
-            ),
+            );
+          }
+          if (coverFile.path.isNotEmpty && coverFile.existsSync()) {
+            return ClipRRect(
+              borderRadius: BorderRadius.circular(18),
+              child: Image.file(
+                coverFile,
+                fit: BoxFit.cover,
+                width: 112,
+                height: 168,
+                errorBuilder: (_, __, ___) => _buildCoverFallback(),
+              ),
+            );
+          }
+          return _buildCoverFallback();
+        }
+
+        Widget buildActionButton({
+          required Widget child,
+          required VoidCallback onPressed,
+          required bool filled,
+        }) {
+          final style = FilledButton.styleFrom(
+            minimumSize: const Size.fromHeight(56),
+          );
+          if (filled) {
+            return FilledButton(
+              style: style,
+              onPressed: onPressed,
+              child: child,
+            );
+          }
+          return FilledButton.tonal(
+            style: style,
+            onPressed: onPressed,
+            child: child,
           );
         }
 
         return SafeArea(
           top: false,
           child: Padding(
-            padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
-            child: Material(
-              color: colorScheme.surface,
-              borderRadius: const BorderRadius.vertical(
-                top: Radius.circular(28),
-                bottom: Radius.circular(28),
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 0),
+            child: ConstrainedBox(
+              constraints: BoxConstraints(
+                maxHeight:
+                    MediaQuery.of(sheetContext).size.height -
+                    MediaQuery.of(sheetContext).padding.vertical -
+                    24,
               ),
-              clipBehavior: Clip.antiAlias,
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(18, 12, 18, 18),
+              child: SingleChildScrollView(
                 child: Column(
-                  mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Center(
-                      child: Container(
-                        width: 40,
-                        height: 4,
-                        decoration: BoxDecoration(
-                          color: colorScheme.outlineVariant,
-                          borderRadius: BorderRadius.circular(999),
+                    const SizedBox(height: 4),
+                    Material(
+                      color: theme.colorScheme.surfaceContainerLow,
+                      surfaceTintColor: theme.colorScheme.surfaceTint,
+                      borderRadius: const BorderRadius.all(Radius.circular(20)),
+                      child: Padding(
+                        padding: const EdgeInsets.all(16),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            buildCover(),
+                            const SizedBox(width: 14),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    item.name,
+                                    style: theme.textTheme.titleLarge,
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                  if (author.isNotEmpty) ...[
+                                    const SizedBox(height: 8),
+                                    Text(
+                                      author,
+                                      style: theme.textTheme.bodyMedium,
+                                    ),
+                                  ],
+                                  const SizedBox(height: 6),
+                                  Text(
+                                    item.sourceDisplayName,
+                                    style: theme.textTheme.bodySmall?.copyWith(
+                                      color: theme.colorScheme.outline,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 8),
+                                  Text(
+                                    '${eps.length} ${eps.length == 1 ? '章' : '章节'}',
+                                    style: theme.textTheme.bodySmall?.copyWith(
+                                      color: theme.colorScheme.outline,
+                                    ),
+                                  ),
+                                  if (tags.isNotEmpty) ...[
+                                    const SizedBox(height: 12),
+                                    Wrap(
+                                      spacing: 6,
+                                      runSpacing: 6,
+                                      children: [
+                                        for (final tag in tags)
+                                          Container(
+                                            padding: const EdgeInsets.symmetric(
+                                              horizontal: 8,
+                                              vertical: 4,
+                                            ),
+                                            decoration: BoxDecoration(
+                                              color: theme.colorScheme
+                                                  .secondaryContainer,
+                                              borderRadius:
+                                                  BorderRadius.circular(999),
+                                            ),
+                                            child: Text(
+                                              tag,
+                                              style:
+                                                  const TextStyle(fontSize: 12),
+                                            ),
+                                          ),
+                                      ],
+                                    ),
+                                  ],
+                                ],
+                              ),
+                            ),
+                          ],
                         ),
                       ),
                     ),
-                    const SizedBox(height: 16),
-                    Text(
-                      item.name,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: theme.textTheme.titleLarge,
-                    ),
-                    if (author.isNotEmpty) ...[
-                      const SizedBox(height: 6),
-                      Text(
-                        author,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: theme.textTheme.bodyMedium?.copyWith(
-                          color: colorScheme.onSurfaceVariant,
-                        ),
+                    const SizedBox(height: 20),
+                    SizedBox(
+                      height: 56,
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: buildActionButton(
+                              filled: false,
+                              onPressed: () {
+                                Navigator.of(sheetContext).pop();
+                                _openItem(item);
+                              },
+                              child: Text('查看详情'.tl),
+                            ),
+                          ),
+                          const SizedBox(width: 16),
+                          Expanded(
+                            child: buildActionButton(
+                              filled: true,
+                              onPressed: () async {
+                                Navigator.of(sheetContext).pop();
+                                await ensureHistoryBeforeRead(item);
+                                await App.pushInner(
+                                  () => item.createReadingPage(),
+                                );
+                              },
+                              child: Text('阅读'.tl),
+                            ),
+                          ),
+                        ],
                       ),
-                    ],
-                    const SizedBox(height: 18),
-                    buildActionTile(
-                      icon: Icons.menu_book_rounded,
-                      title: '阅读'.tl,
-                      subtitle: '直接进入阅读器，并保留当前图集列表'.tl,
-                      onTap: () async {
-                        Navigator.of(sheetContext).pop();
-                        await ensureHistoryBeforeRead(item);
-                        await App.pushInner(
-                          () => item.createReadingPage(),
-                        );
-                      },
                     ),
-                    const SizedBox(height: 12),
-                    buildActionTile(
-                      icon: Icons.info_outline_rounded,
-                      title: '详情页'.tl,
-                      subtitle: '查看章节、标签和相关推荐'.tl,
-                      onTap: () {
-                        Navigator.of(sheetContext).pop();
-                        _openItem(item);
-                      },
+                    SizedBox(
+                      height: (MediaQuery.of(sheetContext).padding.bottom) + 12,
                     ),
                   ],
                 ),
@@ -947,6 +1055,22 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
           ),
         );
       },
+    );
+  }
+
+  Widget _buildCoverFallback() {
+    return Container(
+      width: 112,
+      height: 168,
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(18),
+      ),
+      child: Icon(
+        Icons.menu_book_outlined,
+        size: 40,
+        color: Theme.of(context).colorScheme.outline,
+      ),
     );
   }
 
