@@ -10,10 +10,12 @@ class _DirectoryQuickPath {
   const _DirectoryQuickPath({
     required this.label,
     required this.path,
+    this.browseMode,
   });
 
   final String label;
   final String path;
+  final _AndroidDirectoryBrowseMode? browseMode;
 }
 
 class _DirectoryBrowserEntry {
@@ -68,9 +70,39 @@ String _normalizeDirectoryPath(String path) {
 
 bool _prefersManageAllFilesMode(String? path) {
   final normalized = _normalizeDirectoryPath(path ?? '');
-  return normalized.startsWith('/storage/') ||
-      normalized.startsWith('/sdcard') ||
-      normalized == '/';
+  if (normalized == '/' || normalized.isEmpty) {
+    return false;
+  }
+  if (_requiresPrivilegedDirectoryAccess(normalized)) {
+    return false;
+  }
+  return normalized.startsWith('/storage/') || normalized.startsWith('/sdcard');
+}
+
+bool _isAndroidDataLikePath(String path) {
+  final normalized = _normalizeDirectoryPath(path);
+  return normalized == '/storage/emulated/0/Android/data' ||
+      normalized.startsWith('/storage/emulated/0/Android/data/') ||
+      normalized == '/sdcard/Android/data' ||
+      normalized.startsWith('/sdcard/Android/data/');
+}
+
+bool _requiresPrivilegedDirectoryAccess(String path) {
+  final normalized = _normalizeDirectoryPath(path);
+  return normalized.startsWith('/data/') ||
+      normalized == '/data' ||
+      normalized.startsWith('/data_mirror/') ||
+      normalized == '/data_mirror' ||
+      _isAndroidDataLikePath(normalized);
+}
+
+String _directoryNameFromPath(String path) {
+  final normalized = _normalizeDirectoryPath(path);
+  if (normalized == '/') {
+    return '/';
+  }
+  final segments = normalized.split('/')..removeWhere((e) => e.isEmpty);
+  return segments.isEmpty ? '/' : segments.last;
 }
 
 Future<List<_DirectoryBrowserEntry>> _listEntriesWithDartIo(String path) async {
@@ -182,6 +214,9 @@ Future<String?> openInternalDirectoryBrowser(
         title: title,
         initialPath: initialPath,
         browseMode: browseMode,
+        allowManageAllFiles: hasAllFilesAccess,
+        allowShizuku: hasShizukuAccess,
+        allowRoot: hasRootAccess,
       ),
     ),
   );
@@ -192,11 +227,17 @@ class _InternalDirectoryBrowserPage extends StatefulWidget {
     required this.title,
     required this.initialPath,
     required this.browseMode,
+    required this.allowManageAllFiles,
+    required this.allowShizuku,
+    required this.allowRoot,
   });
 
   final String title;
   final String? initialPath;
   final _AndroidDirectoryBrowseMode browseMode;
+  final bool allowManageAllFiles;
+  final bool allowShizuku;
+  final bool allowRoot;
 
   @override
   State<_InternalDirectoryBrowserPage> createState() =>
@@ -216,20 +257,31 @@ class _InternalDirectoryBrowserPageState
   ];
 
   static const _quickPaths = <_DirectoryQuickPath>[
-    _DirectoryQuickPath(label: 'Root/应用目录', path: '/data/user/0'),
+    _DirectoryQuickPath(
+      label: 'Root/应用目录',
+      path: '/data/user/0',
+      browseMode: _AndroidDirectoryBrowseMode.root,
+    ),
     _DirectoryQuickPath(
       label: 'Shizuku/应用目录',
       path: '/storage/emulated/0/Android/data/',
+      browseMode: _AndroidDirectoryBrowseMode.shizuku,
     ),
     _DirectoryQuickPath(
       label: '原应用目录',
       path: '/data/user/0/com.github.pacalini.pica_comic',
+      browseMode: _AndroidDirectoryBrowseMode.root,
     ),
-    _DirectoryQuickPath(label: '普通目录', path: '/storage/emulated/0'),
+    _DirectoryQuickPath(
+      label: '普通目录',
+      path: '/storage/emulated/0',
+      browseMode: _AndroidDirectoryBrowseMode.manageAllFiles,
+    ),
   ];
 
   late final TextEditingController _searchController;
   late String _currentPath;
+  late _AndroidDirectoryBrowseMode _browseMode;
   bool _loading = true;
   bool _showPresetRoots = false;
   int _pathLoadToken = 0;
@@ -240,6 +292,10 @@ class _InternalDirectoryBrowserPageState
   void initState() {
     super.initState();
     _currentPath = _normalizeInitialPath(widget.initialPath);
+    _browseMode = _resolveBrowseModeForPath(
+      _currentPath,
+      preferred: widget.browseMode,
+    );
     _searchController = TextEditingController();
     _searchController.addListener(() {
       if (mounted) {
@@ -260,9 +316,42 @@ class _InternalDirectoryBrowserPageState
     if (value.isNotEmpty) {
       return _normalizeDirectoryPath(value);
     }
-    return widget.browseMode == _AndroidDirectoryBrowseMode.root
-        ? '/'
-        : '/storage/emulated/0';
+    return '/storage/emulated/0';
+  }
+
+  _AndroidDirectoryBrowseMode _resolveBrowseModeForPath(
+    String path, {
+    _AndroidDirectoryBrowseMode? preferred,
+  }) {
+    final normalized = _normalizeDirectoryPath(path);
+    if (_requiresPrivilegedDirectoryAccess(normalized)) {
+      if (preferred == _AndroidDirectoryBrowseMode.shizuku &&
+          widget.allowShizuku) {
+        return _AndroidDirectoryBrowseMode.shizuku;
+      }
+      if (preferred == _AndroidDirectoryBrowseMode.root && widget.allowRoot) {
+        return _AndroidDirectoryBrowseMode.root;
+      }
+      if (_isAndroidDataLikePath(normalized) && widget.allowShizuku) {
+        return _AndroidDirectoryBrowseMode.shizuku;
+      }
+      if (widget.allowRoot) {
+        return _AndroidDirectoryBrowseMode.root;
+      }
+      if (widget.allowShizuku) {
+        return _AndroidDirectoryBrowseMode.shizuku;
+      }
+    }
+    if (widget.allowManageAllFiles) {
+      return _AndroidDirectoryBrowseMode.manageAllFiles;
+    }
+    if (widget.allowRoot) {
+      return _AndroidDirectoryBrowseMode.root;
+    }
+    if (widget.allowShizuku) {
+      return _AndroidDirectoryBrowseMode.shizuku;
+    }
+    return preferred ?? widget.browseMode;
   }
 
   Future<void> _loadCurrentPath() async {
@@ -275,7 +364,7 @@ class _InternalDirectoryBrowserPageState
       });
     }
     try {
-      final children = switch (widget.browseMode) {
+      var children = switch (_browseMode) {
         _AndroidDirectoryBrowseMode.root =>
           await _listEntriesWithRoot(targetPath),
         _AndroidDirectoryBrowseMode.shizuku =>
@@ -283,6 +372,10 @@ class _InternalDirectoryBrowserPageState
         _AndroidDirectoryBrowseMode.manageAllFiles =>
           await _listEntriesWithDartIo(targetPath),
       };
+      children = await _injectKnownMissingEntries(
+        targetPath,
+        children,
+      );
       if (!mounted ||
           loadToken != _pathLoadToken ||
           targetPath != _currentPath) {
@@ -306,14 +399,92 @@ class _InternalDirectoryBrowserPageState
     }
   }
 
+  Future<List<_DirectoryBrowserEntry>> _injectKnownMissingEntries(
+    String targetPath,
+    List<_DirectoryBrowserEntry> children,
+  ) async {
+    if (_browseMode == _AndroidDirectoryBrowseMode.manageAllFiles ||
+        !_isAndroidDataLikePath(targetPath)) {
+      return children;
+    }
+
+    final existingPaths = children
+        .map((entry) => _normalizeDirectoryPath(entry.path))
+        .toSet();
+    final injected = <_DirectoryBrowserEntry>[];
+
+    for (final candidatePath in _androidPresetRoots) {
+      final normalizedCandidate = _normalizeDirectoryPath(candidatePath);
+      if (_parentDirectoryPath(normalizedCandidate) !=
+          _normalizeDirectoryPath(targetPath)) {
+        continue;
+      }
+      if (existingPaths.contains(normalizedCandidate)) {
+        continue;
+      }
+      final exists = switch (_browseMode) {
+        _AndroidDirectoryBrowseMode.root =>
+          await _AndroidStorageAccessController.instance
+              .existsWithRoot(normalizedCandidate),
+        _AndroidDirectoryBrowseMode.shizuku =>
+          await _AndroidStorageAccessController.instance
+              .existsWithShizuku(normalizedCandidate),
+        _AndroidDirectoryBrowseMode.manageAllFiles => false,
+      };
+      if (!exists) {
+        continue;
+      }
+      injected.add(
+        _DirectoryBrowserEntry(
+          name: _directoryNameFromPath(normalizedCandidate),
+          path: normalizedCandidate,
+          isDirectory: true,
+        ),
+      );
+    }
+
+    if (injected.isEmpty) {
+      return children;
+    }
+
+    final merged = <_DirectoryBrowserEntry>[
+      ...children,
+      ...injected,
+    ];
+    merged.sort((a, b) {
+      if (a.isDirectory != b.isDirectory) {
+        return a.isDirectory ? -1 : 1;
+      }
+      return a.name.toLowerCase().compareTo(b.name.toLowerCase());
+    });
+    return merged;
+  }
+
   void _setCurrentPath(String path) {
+    _setCurrentPathWithMode(path);
+  }
+
+  void _setCurrentPathWithMode(
+    String path, {
+    _AndroidDirectoryBrowseMode? preferredMode,
+  }) {
     final nextPath = _normalizeDirectoryPath(path);
+    final nextMode = _resolveBrowseModeForPath(
+      nextPath,
+      preferred: preferredMode ?? _browseMode,
+    );
     if (nextPath == _currentPath) {
+      if (nextMode != _browseMode) {
+        setState(() {
+          _browseMode = nextMode;
+        });
+      }
       _loadCurrentPath();
       return;
     }
     setState(() {
       _currentPath = nextPath;
+      _browseMode = nextMode;
     });
     _searchController.clear();
     _loadCurrentPath();
@@ -334,7 +505,7 @@ class _InternalDirectoryBrowserPageState
     _setCurrentPath(parent);
   }
 
-  IconData get _browseModeIcon => switch (widget.browseMode) {
+  IconData get _browseModeIcon => switch (_browseMode) {
         _AndroidDirectoryBrowseMode.root => Icons.bolt,
         _AndroidDirectoryBrowseMode.shizuku => Icons.bolt,
         _AndroidDirectoryBrowseMode.manageAllFiles => Icons.folder_open,
@@ -450,7 +621,10 @@ class _InternalDirectoryBrowserPageState
                 items[i].label,
                 style: const TextStyle(fontSize: 11),
               ),
-              onPressed: () => _setCurrentPath(items[i].path),
+              onPressed: () => _setCurrentPathWithMode(
+                items[i].path,
+                preferredMode: items[i].browseMode,
+              ),
               visualDensity: VisualDensity.compact,
             ),
             if (i != items.length - 1) const SizedBox(width: 6),
@@ -480,7 +654,7 @@ class _InternalDirectoryBrowserPageState
                 path,
                 style: const TextStyle(fontSize: 11),
               ),
-              onPressed: () => _setCurrentPath(path),
+              onPressed: () => _setCurrentPathWithMode(path),
               visualDensity: VisualDensity.compact,
             ),
         ],
@@ -546,6 +720,7 @@ class _InternalDirectoryBrowserPageState
     required String title,
     required String subtitle,
     required bool tappable,
+    Widget? titleTrailing,
     VoidCallback? onTap,
   }) {
     final theme = Theme.of(context);
@@ -575,13 +750,40 @@ class _InternalDirectoryBrowserPageState
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(
-                        title,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: theme.textTheme.titleSmall?.copyWith(
-                          fontWeight: FontWeight.w600,
-                        ),
+                      LayoutBuilder(
+                        builder: (context, constraints) {
+                          return Wrap(
+                            spacing: 8,
+                            runSpacing: 2,
+                            crossAxisAlignment: WrapCrossAlignment.center,
+                            children: [
+                              ConstrainedBox(
+                                constraints: BoxConstraints(
+                                  maxWidth: titleTrailing == null
+                                      ? constraints.maxWidth
+                                      : constraints.maxWidth * 0.52,
+                                ),
+                                child: Text(
+                                  title,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: theme.textTheme.titleSmall?.copyWith(
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ),
+                              if (titleTrailing != null)
+                                DefaultTextStyle.merge(
+                                  style: theme.textTheme.bodySmall?.copyWith(
+                                        color:
+                                            theme.colorScheme.onSurfaceVariant,
+                                      ) ??
+                                      const TextStyle(),
+                                  child: titleTrailing,
+                                ),
+                            ],
+                          );
+                        },
                       ),
                       const SizedBox(height: 4),
                       Text(
@@ -661,10 +863,20 @@ class _InternalDirectoryBrowserPageState
     );
   }
 
+  String? _currentPathCountsText() {
+    if (_loading || _errorText != null) {
+      return null;
+    }
+    final directoryCount = _children.where((entry) => entry.isDirectory).length;
+    final fileCount = _children.length - directoryCount;
+    return '$directoryCount 个文件夹 · $fileCount 个文件';
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final parentPath = _parentDirectoryPath(_currentPath);
+    final countsText = _currentPathCountsText();
     return Scaffold(
       appBar: AppBar(
         title: Text(widget.title),
@@ -710,6 +922,16 @@ class _InternalDirectoryBrowserPageState
               title: '上一层'.tl,
               subtitle: parentPath,
               tappable: true,
+              titleTrailing: countsText == null
+                  ? null
+                  : Text(
+                      countsText,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                    ),
               onTap: _openParent,
             ),
           Expanded(

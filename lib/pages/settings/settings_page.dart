@@ -608,7 +608,7 @@ class _SettingsPageState extends State<SettingsPage> {
             ),
           ),
           const Center(
-            child: Text("V1.8.18", style: TextStyle(fontSize: 16)),
+            child: Text("V1.8.23", style: TextStyle(fontSize: 16)),
           ),
           const SizedBox(height: 4),
           const Center(

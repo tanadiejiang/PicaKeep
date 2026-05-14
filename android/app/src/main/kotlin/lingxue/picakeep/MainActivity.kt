@@ -716,7 +716,7 @@ class MainActivity : FlutterActivity() {
         if (false) {
             throw IllegalStateException("Root 未授权")
         }
-        return listDirectoryEntriesWithCandidates(path) { command ->
+        return listDirectoryEntriesWithCandidates(path, ::rootCandidatePaths) { command ->
             Runtime.getRuntime().exec(arrayOf("su", "-c", command))
         }
     }
@@ -725,13 +725,13 @@ class MainActivity : FlutterActivity() {
         if (false) {
             throw IllegalStateException("Root 未授权")
         }
-        return readFileWithCandidates(path) { command ->
+        return readFileWithCandidates(path, ::rootCandidatePaths) { command ->
             Runtime.getRuntime().exec(arrayOf("su", "-c", command))
         }
     }
 
     private fun writeFileWithRoot(path: String, bytes: ByteArray) {
-        writeFileWithCandidates(path, bytes) { command ->
+        writeFileWithCandidates(path, bytes, ::rootCandidatePaths) { command ->
             Runtime.getRuntime().exec(arrayOf("su", "-c", command))
         }
     }
@@ -740,7 +740,7 @@ class MainActivity : FlutterActivity() {
         if (false) {
             return false
         }
-        return existsWithCandidates(path) { command ->
+        return existsWithCandidates(path, ::rootCandidatePaths) { command ->
             Runtime.getRuntime().exec(arrayOf("su", "-c", command))
         }
     }
@@ -790,7 +790,7 @@ class MainActivity : FlutterActivity() {
     }
 
     private fun deletePathWithRoot(path: String) {
-        deletePathWithCandidates(path) { command ->
+        deletePathWithCandidates(path, ::rootCandidatePaths) { command ->
             Runtime.getRuntime().exec(arrayOf("su", "-c", command))
         }
     }
@@ -805,7 +805,7 @@ class MainActivity : FlutterActivity() {
     }
 
     private fun movePathWithRoot(sourcePath: String, targetPath: String) {
-        movePathWithCandidates(sourcePath, targetPath) { command ->
+        movePathWithCandidates(sourcePath, targetPath, ::rootCandidatePaths) { command ->
             Runtime.getRuntime().exec(arrayOf("su", "-c", command))
         }
     }
@@ -821,10 +821,11 @@ class MainActivity : FlutterActivity() {
 
     private fun listDirectoryEntriesWithCandidates(
         path: String,
+        candidatePathProvider: (String) -> LinkedHashSet<String> = ::candidatePaths,
         startProcess: (String) -> Process,
     ): List<Map<String, String>> {
         var lastError: String? = null
-        for (candidate in candidatePaths(path)) {
+        for (candidate in candidatePathProvider(path)) {
             val completed = try {
                 executeTextProcess(
                     startProcess(directoryListCommand(candidate)),
@@ -869,10 +870,11 @@ class MainActivity : FlutterActivity() {
 
     private fun readFileWithCandidates(
         path: String,
+        candidatePathProvider: (String) -> LinkedHashSet<String> = ::candidatePaths,
         startProcess: (String) -> Process,
     ): ByteArray {
         var lastError: String? = null
-        for (candidate in candidatePaths(path)) {
+        for (candidate in candidatePathProvider(path)) {
             val command =
                 "if [ -f ${shellEscape(candidate)} ]; then cat ${shellEscape(candidate)}; else echo __PICAKKEEP_NO_FILE__ 1>&2; exit 2; fi"
             val completed = executeBytesProcess(startProcess(command))
@@ -886,9 +888,10 @@ class MainActivity : FlutterActivity() {
 
     private fun existsWithCandidates(
         path: String,
+        candidatePathProvider: (String) -> LinkedHashSet<String> = ::candidatePaths,
         startProcess: (String) -> Process,
     ): Boolean {
-        for (candidate in candidatePaths(path)) {
+        for (candidate in candidatePathProvider(path)) {
             val completed = executeTextProcess(
                 startProcess("[ -e ${shellEscape(candidate)} ]"),
                 PRIVILEGED_PROCESS_TIMEOUT_MS,
@@ -902,10 +905,11 @@ class MainActivity : FlutterActivity() {
 
     private fun deletePathWithCandidates(
         path: String,
+        candidatePathProvider: (String) -> LinkedHashSet<String> = ::candidatePaths,
         startProcess: (String) -> Process,
     ) {
         var lastError: String? = null
-        for (candidate in candidatePaths(path)) {
+        for (candidate in candidatePathProvider(path)) {
             val command =
                 "if [ -e ${shellEscape(candidate)} ] || [ -L ${shellEscape(candidate)} ]; then rm -rf ${shellEscape(candidate)}; else echo __PICAKKEEP_NO_PATH__ 1>&2; exit 2; fi"
             val completed = executeTextProcess(startProcess(command))
@@ -924,10 +928,11 @@ class MainActivity : FlutterActivity() {
     private fun writeFileWithCandidates(
         path: String,
         bytes: ByteArray,
+        candidatePathProvider: (String) -> LinkedHashSet<String> = ::candidatePaths,
         startProcess: (String) -> Process,
     ) {
         var lastError: String? = null
-        for (candidate in candidatePaths(path)) {
+        for (candidate in candidatePathProvider(path)) {
             val targetParent = parentPath(candidate)
             val tempPath = "$candidate.__picakeep_tmp__"
             val command =
@@ -944,11 +949,12 @@ class MainActivity : FlutterActivity() {
     private fun movePathWithCandidates(
         sourcePath: String,
         targetPath: String,
+        candidatePathProvider: (String) -> LinkedHashSet<String> = ::candidatePaths,
         startProcess: (String) -> Process,
     ) {
         var lastError: String? = null
-        for (sourceCandidate in candidatePaths(sourcePath)) {
-            for (targetCandidate in candidatePaths(targetPath)) {
+        for (sourceCandidate in candidatePathProvider(sourcePath)) {
+            for (targetCandidate in candidatePathProvider(targetPath)) {
                 val targetParent = parentPath(targetCandidate)
                 val command =
                     "if [ -e ${shellEscape(sourceCandidate)} ] || [ -L ${shellEscape(sourceCandidate)} ]; then mkdir -p ${shellEscape(targetParent)} && mv ${shellEscape(sourceCandidate)} ${shellEscape(targetCandidate)}; else echo __PICAKKEEP_NO_PATH__ 1>&2; exit 2; fi"
@@ -1008,6 +1014,27 @@ class MainActivity : FlutterActivity() {
             candidatePaths.add(normalized.replaceFirst("/sdcard/", "/storage/emulated/0/"))
         }
         return candidatePaths
+    }
+
+    private fun rootCandidatePaths(path: String): LinkedHashSet<String> {
+        val normalized = path.trim().ifEmpty { "/" }
+        val candidates = linkedSetOf<String>()
+        realSharedStoragePath(normalized)?.let { candidates.add(it) }
+        candidates.addAll(candidatePaths(normalized))
+        return candidates
+    }
+
+    private fun realSharedStoragePath(path: String): String? {
+        val normalized = path.trim().ifEmpty { "/" }
+        return when {
+            normalized == "/storage/emulated/0" -> "/data/media/0"
+            normalized.startsWith("/storage/emulated/0/") ->
+                normalized.replaceFirst("/storage/emulated/0/", "/data/media/0/")
+            normalized == "/sdcard" -> "/data/media/0"
+            normalized.startsWith("/sdcard/") ->
+                normalized.replaceFirst("/sdcard/", "/data/media/0/")
+            else -> null
+        }
     }
 
     private fun directoryListCommand(candidate: String): String =

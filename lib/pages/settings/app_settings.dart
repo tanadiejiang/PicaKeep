@@ -592,6 +592,36 @@ class _AndroidStorageAccessController {
       throw Exception((e.message ?? e.code).trim());
     }
   }
+
+  Future<bool> existsWithRoot(String path) async {
+    if (!App.isAndroid) {
+      return false;
+    }
+    try {
+      return await _channel.invokeMethod<bool>(
+            'existsWithRoot',
+            {'path': path},
+          ) ??
+          false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<bool> existsWithShizuku(String path) async {
+    if (!App.isAndroid) {
+      return false;
+    }
+    try {
+      return await _channel.invokeMethod<bool>(
+            'existsWithShizuku',
+            {'path': path},
+          ) ??
+          false;
+    } catch (_) {
+      return false;
+    }
+  }
 }
 
 bool _isAndroidRootModeEnabled() {
