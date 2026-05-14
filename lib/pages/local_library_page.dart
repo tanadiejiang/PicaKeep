@@ -335,6 +335,10 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
   bool _remoteAvailable = false;
   bool _selecting = false;
   String? _errorText;
+  bool _isDeleteOperationRunning = false;
+  int _deleteProgressCurrent = 0;
+  int _deleteProgressTotal = 0;
+  String _deleteProgressActionLabel = '';
   List<DownloadedItem> _items = const <DownloadedItem>[];
   late _LocalLibraryView _view = widget.preferRemoteView || _isRemoteRootPage
       ? _LocalLibraryView.remote
@@ -370,6 +374,10 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
     return _enableRemoteMultiSelectDelete && item is RemoteLibraryComicItem;
   }
 
+  bool get _isOperationRunning => _isDeleteOperationRunning;
+
+  String get _deleteProgressHint => '请不要退出，强制退出可能导致操作异常';
+
   bool _isItemSelected(DownloadedItem item) {
     return _selectedItemIds.contains(item.id);
   }
@@ -399,6 +407,78 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
         _selecting = false;
       }
     });
+  }
+
+  String _operationErrorText(Object error) {
+    final message = error is StateError
+        ? error.message.toString()
+        : error.toString().replaceFirst('Exception: ', '');
+    if (message.contains(deleteFailurePermissionDenied) ||
+        message.toLowerCase().contains('permission denied')) {
+      return deleteFailureMessage(deleteFailurePermissionDenied).tl;
+    }
+    if (message.contains(deleteFailureLocalPathNotFound)) {
+      return deleteFailureMessage(deleteFailureLocalPathNotFound).tl;
+    }
+    return message.replaceFirst('Bad state: ', '');
+  }
+
+  Future<String?> _runDeleteOperation(
+    List<RemoteLibraryComicItem> items,
+  ) async {
+    if (_isDeleteOperationRunning || items.isEmpty) {
+      return null;
+    }
+    setState(() {
+      _isDeleteOperationRunning = true;
+      _deleteProgressCurrent = 0;
+      _deleteProgressTotal = items.length;
+      _deleteProgressActionLabel =
+          TrashManager.instance.useTrashByDefault ? '正在放进回收站' : '正在删除';
+    });
+    App.beginNavigationLock();
+    App.temporaryDisablePopGesture = true;
+    String? errorText;
+    try {
+      for (int i = 0; i < items.length; i++) {
+        if (mounted) {
+          setState(() {
+            _deleteProgressCurrent = i + 1;
+          });
+        } else {
+          _deleteProgressCurrent = i + 1;
+        }
+        final result = await TrashManager.instance.deleteItem(items[i]);
+        if (!result.ok) {
+          errorText = deleteFailureMessage(result.error).tl;
+          break;
+        }
+      }
+    } catch (e) {
+      errorText = _operationErrorText(e);
+    } finally {
+      try {
+        await _load();
+      } catch (e) {
+        errorText ??= _operationErrorText(e);
+      }
+      App.temporaryDisablePopGesture = false;
+      App.endNavigationLock();
+      if (mounted) {
+        setState(() {
+          _isDeleteOperationRunning = false;
+          _deleteProgressCurrent = 0;
+          _deleteProgressTotal = 0;
+          _deleteProgressActionLabel = '';
+        });
+      } else {
+        _isDeleteOperationRunning = false;
+        _deleteProgressCurrent = 0;
+        _deleteProgressTotal = 0;
+        _deleteProgressActionLabel = '';
+      }
+    }
+    return errorText;
   }
 
   Future<void> _setView(_LocalLibraryView nextView) async {
@@ -1039,19 +1119,12 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
       return;
     }
 
-    for (final item in _selectedRemoteItems) {
-      final result = await TrashManager.instance.deleteItem(item);
-      if (!result.ok) {
-        if (!mounted) {
-          return;
-        }
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(deleteFailureMessage(result.error).tl)),
-        );
-        return;
-      }
+    final error = await _runDeleteOperation(_selectedRemoteItems);
+    if (error != null && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(error)),
+      );
     }
-    await _load();
   }
 
   Widget _buildSelectionFrame({
@@ -1237,6 +1310,111 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
     );
   }
 
+  Widget _buildDeleteProgressOverlay() {
+    final theme = Theme.of(context);
+    final progressText = '$_deleteProgressCurrent/$_deleteProgressTotal';
+    final isDesktop = App.isDesktop;
+    final barrierColor = Color.alphaBlend(
+      theme.colorScheme.primary.withValues(alpha: 0.06),
+      Colors.white.withValues(alpha: 0.76),
+    );
+    final panelColor = Color.alphaBlend(
+      theme.colorScheme.primary.withValues(alpha: 0.04),
+      theme.colorScheme.surface.withValues(alpha: 0.97),
+    );
+    return Stack(
+      children: [
+        ModalBarrier(
+          dismissible: false,
+          color: barrierColor,
+        ),
+        Center(
+          child: ConstrainedBox(
+            constraints: BoxConstraints(
+              maxWidth: isDesktop ? 440 : 300,
+              minWidth: isDesktop ? 340 : 260,
+            ),
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                color: panelColor,
+                borderRadius: BorderRadius.circular(24),
+                boxShadow: [
+                  BoxShadow(
+                    color: theme.colorScheme.shadow.withValues(alpha: 0.08),
+                    blurRadius: 24,
+                    offset: const Offset(0, 10),
+                  ),
+                ],
+                border: Border.all(
+                  color:
+                      theme.colorScheme.outlineVariant.withValues(alpha: 0.45),
+                ),
+              ),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 24,
+                  vertical: 22,
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    SizedBox(
+                      width: 36,
+                      height: 36,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 3.2,
+                        color: theme.colorScheme.primary,
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    if (isDesktop)
+                      Text(
+                        '$_deleteProgressActionLabel $progressText',
+                        textAlign: TextAlign.center,
+                        style: theme.textTheme.titleMedium?.copyWith(
+                          fontWeight: FontWeight.w700,
+                          color: theme.colorScheme.onSurface,
+                        ),
+                      )
+                    else ...[
+                      Text(
+                        _deleteProgressActionLabel,
+                        textAlign: TextAlign.center,
+                        style: theme.textTheme.titleMedium?.copyWith(
+                          fontWeight: FontWeight.w700,
+                          color: theme.colorScheme.onSurface,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        progressText,
+                        textAlign: TextAlign.center,
+                        style: theme.textTheme.titleSmall?.copyWith(
+                          fontWeight: FontWeight.w600,
+                          color: theme.colorScheme.primary,
+                          height: 1.25,
+                        ),
+                      ),
+                    ],
+                    const SizedBox(height: 12),
+                    Text(
+                      _deleteProgressHint.tl,
+                      textAlign: TextAlign.center,
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                        height: 1.35,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final items = _filteredItems;
@@ -1244,7 +1422,7 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
         (_view == _LocalLibraryView.remote && _remoteAvailable)
             ? (_isAlbumOnly ? '刷新远程图集'.tl : '刷新远程资源库'.tl)
             : (_isAlbumOnly ? '刷新图集'.tl : '刷新资源库'.tl);
-    return Scaffold(
+    Widget page = Scaffold(
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : SmoothCustomScrollView(
@@ -1326,6 +1504,21 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
                   ),
               ],
             ),
+    );
+    if (_isOperationRunning) {
+      page = Stack(
+        fit: StackFit.expand,
+        children: [
+          page,
+          Positioned.fill(
+            child: _buildDeleteProgressOverlay(),
+          ),
+        ],
+      );
+    }
+    return PopScope(
+      canPop: !_isOperationRunning,
+      child: page,
     );
   }
 }

@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:picakeep/foundation/app.dart';
 import 'package:picakeep/foundation/remote_library_data_source.dart';
 import 'package:picakeep/foundation/trash.dart';
 import 'package:picakeep/tools/translations.dart';
@@ -33,6 +34,10 @@ class _TrashPageState extends State<TrashPage>
   final Set<String> _selectedKeys = <String>{};
   bool _selecting = false;
   String? _errorText;
+  bool _isOperationRunning = false;
+  int _operationProgressCurrent = 0;
+  int _operationProgressTotal = 0;
+  String _operationActionLabel = '';
 
   List<TrashItemRecord> get _filteredLocalItems => _localItems
       .where((item) => item.isAlbum == (_kindView == _TrashItemKindView.album))
@@ -60,6 +65,8 @@ class _TrashPageState extends State<TrashPage>
       .where((item) => _selectedKeys.contains(_selectionKeyForRemote(item)))
       .toList(growable: false);
 
+  String get _operationProgressHint => '请不要退出，强制退出可能导致操作异常';
+
   @override
   void initState() {
     super.initState();
@@ -74,7 +81,9 @@ class _TrashPageState extends State<TrashPage>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed && mounted) {
+    if (state == AppLifecycleState.resumed &&
+        mounted &&
+        !_isOperationRunning) {
       setState(() {
         _loadTask = _reload();
       });
@@ -155,23 +164,115 @@ class _TrashPageState extends State<TrashPage>
     });
   }
 
-  Future<void> _runAction(Future<void> Function() action) async {
+  Iterable<String> get _currentVisibleSelectionKeys sync* {
+    if (_view == _TrashPageView.local) {
+      for (final item in _filteredLocalItems) {
+        yield _selectionKeyForLocal(item);
+      }
+      return;
+    }
+    for (final item in _filteredRemoteItems) {
+      yield _selectionKeyForRemote(item);
+    }
+  }
+
+  bool get _allVisibleItemsSelected {
+    final keys = _currentVisibleSelectionKeys.toList(growable: false);
+    return keys.isNotEmpty && keys.every(_selectedKeys.contains);
+  }
+
+  void _toggleSelectAllVisible() {
+    final keys = _currentVisibleSelectionKeys.toList(growable: false);
+    if (keys.isEmpty) {
+      return;
+    }
+    setState(() {
+      if (_allVisibleItemsSelected) {
+        _clearSelectionState();
+        return;
+      }
+      _selectedKeys
+        ..clear()
+        ..addAll(keys);
+      _selecting = true;
+    });
+  }
+
+  String _operationErrorText(Object error) {
+    final message = error is StateError
+        ? error.message.toString()
+        : error.toString().replaceFirst('Exception: ', '');
+    if (message.contains(deleteFailurePermissionDenied) ||
+        message.toLowerCase().contains('permission denied')) {
+      return deleteFailureMessage(deleteFailurePermissionDenied).tl;
+    }
+    if (message.contains(deleteFailureLocalPathNotFound)) {
+      return deleteFailureMessage(deleteFailureLocalPathNotFound).tl;
+    }
+    return message.replaceFirst('Bad state: ', '');
+  }
+
+  Future<void> _runItemsOperation<T>({
+    required String actionLabel,
+    required List<T> items,
+    required Future<void> Function(T item) onItem,
+  }) async {
+    if (_isOperationRunning || items.isEmpty) {
+      return;
+    }
+    setState(() {
+      _isOperationRunning = true;
+      _operationProgressCurrent = 0;
+      _operationProgressTotal = items.length;
+      _operationActionLabel = actionLabel;
+    });
+    App.beginNavigationLock();
+    App.temporaryDisablePopGesture = true;
+    String? errorText;
     try {
-      await action();
-      if (!mounted) {
-        return;
+      for (int i = 0; i < items.length; i++) {
+        if (mounted) {
+          setState(() {
+            _operationProgressCurrent = i + 1;
+          });
+        } else {
+          _operationProgressCurrent = i + 1;
+        }
+        await onItem(items[i]);
       }
-      await _reload();
-      setState(() {
-        _loadTask = Future<void>.value();
-      });
     } catch (e) {
-      if (!mounted) {
-        return;
+      errorText = _operationErrorText(e);
+    } finally {
+      try {
+        await _reload();
+        if (mounted) {
+          setState(() {
+            _loadTask = Future<void>.value();
+          });
+        }
+      } catch (e) {
+        errorText ??= _operationErrorText(e);
       }
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(e.toString())),
-      );
+      App.temporaryDisablePopGesture = false;
+      App.endNavigationLock();
+      if (mounted) {
+        setState(() {
+          _isOperationRunning = false;
+          _operationProgressCurrent = 0;
+          _operationProgressTotal = 0;
+          _operationActionLabel = '';
+        });
+      } else {
+        _isOperationRunning = false;
+        _operationProgressCurrent = 0;
+        _operationProgressTotal = 0;
+        _operationActionLabel = '';
+      }
+      if (errorText != null && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(errorText)),
+        );
+      }
     }
   }
 
@@ -198,7 +299,7 @@ class _TrashPageState extends State<TrashPage>
       ),
     );
     if (confirmed == true) {
-      await _runAction(action);
+      await action();
     }
   }
 
@@ -206,17 +307,19 @@ class _TrashPageState extends State<TrashPage>
     if (_selectedCount == 0) {
       return;
     }
-    await _runAction(() async {
-      if (_view == _TrashPageView.local) {
-        for (final item in _selectedLocalItems) {
-          await TrashManager.instance.restoreLocalItem(item.id);
-        }
-      } else {
-        for (final item in _selectedRemoteItems) {
-          await TrashManager.instance.restoreRemoteItem(item.id);
-        }
-      }
-    });
+    if (_view == _TrashPageView.local) {
+      await _runItemsOperation<TrashItemRecord>(
+        actionLabel: '正在恢复',
+        items: _selectedLocalItems,
+        onItem: (item) => TrashManager.instance.restoreLocalItem(item.id),
+      );
+      return;
+    }
+    await _runItemsOperation<RemoteLibraryTrashItem>(
+      actionLabel: '正在恢复',
+      items: _selectedRemoteItems,
+      onItem: (item) => TrashManager.instance.restoreRemoteItem(item.id),
+    );
   }
 
   Future<void> _deleteSelectedPermanently() async {
@@ -228,21 +331,132 @@ class _TrashPageState extends State<TrashPage>
       content: '确定要彻底删除已选择的$_selectedCount个$_currentItemLabel吗？'.tl,
       action: () async {
         if (_view == _TrashPageView.local) {
-          for (final item in _selectedLocalItems) {
-            await TrashManager.instance.permanentlyDeleteTrashItem(item.id);
-          }
-        } else {
-          for (final item in _selectedRemoteItems) {
-            await TrashManager.instance.permanentlyDeleteRemoteItem(item.id);
-          }
+          await _runItemsOperation<TrashItemRecord>(
+            actionLabel: '正在删除',
+            items: _selectedLocalItems,
+            onItem: (item) =>
+                TrashManager.instance.permanentlyDeleteTrashItem(item.id),
+          );
+          return;
         }
+        await _runItemsOperation<RemoteLibraryTrashItem>(
+          actionLabel: '正在删除',
+          items: _selectedRemoteItems,
+          onItem: (item) =>
+              TrashManager.instance.permanentlyDeleteRemoteItem(item.id),
+        );
       },
+    );
+  }
+
+  Widget _buildOperationOverlay() {
+    final theme = Theme.of(context);
+    final progressText = '$_operationProgressCurrent/$_operationProgressTotal';
+    final isDesktop = App.isDesktop;
+    final barrierColor = Color.alphaBlend(
+      theme.colorScheme.primary.withValues(alpha: 0.06),
+      Colors.white.withValues(alpha: 0.76),
+    );
+    final panelColor = Color.alphaBlend(
+      theme.colorScheme.primary.withValues(alpha: 0.04),
+      theme.colorScheme.surface.withValues(alpha: 0.97),
+    );
+    return Stack(
+      children: [
+        ModalBarrier(
+          dismissible: false,
+          color: barrierColor,
+        ),
+        Center(
+          child: ConstrainedBox(
+            constraints: BoxConstraints(
+              maxWidth: isDesktop ? 440 : 300,
+              minWidth: isDesktop ? 340 : 260,
+            ),
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                color: panelColor,
+                borderRadius: BorderRadius.circular(24),
+                boxShadow: [
+                  BoxShadow(
+                    color: theme.colorScheme.shadow.withValues(alpha: 0.08),
+                    blurRadius: 24,
+                    offset: const Offset(0, 10),
+                  ),
+                ],
+                border: Border.all(
+                  color:
+                      theme.colorScheme.outlineVariant.withValues(alpha: 0.45),
+                ),
+              ),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 24,
+                  vertical: 22,
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    SizedBox(
+                      width: 36,
+                      height: 36,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 3.2,
+                        color: theme.colorScheme.primary,
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    if (isDesktop)
+                      Text(
+                        '$_operationActionLabel $progressText',
+                        textAlign: TextAlign.center,
+                        style: theme.textTheme.titleMedium?.copyWith(
+                          fontWeight: FontWeight.w700,
+                          color: theme.colorScheme.onSurface,
+                        ),
+                      )
+                    else ...[
+                      Text(
+                        _operationActionLabel,
+                        textAlign: TextAlign.center,
+                        style: theme.textTheme.titleMedium?.copyWith(
+                          fontWeight: FontWeight.w700,
+                          color: theme.colorScheme.onSurface,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        progressText,
+                        textAlign: TextAlign.center,
+                        style: theme.textTheme.titleSmall?.copyWith(
+                          fontWeight: FontWeight.w600,
+                          color: theme.colorScheme.primary,
+                          height: 1.25,
+                        ),
+                      ),
+                    ],
+                    const SizedBox(height: 12),
+                    Text(
+                      _operationProgressHint.tl,
+                      textAlign: TextAlign.center,
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                        height: 1.35,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
     );
   }
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
+    Widget page = Scaffold(
       appBar: AppBar(
         title: _selecting
             ? Text('已选择 @num 个项目'.tlParams({'num': _selectedCount.toString()}))
@@ -255,6 +469,17 @@ class _TrashPageState extends State<TrashPage>
             : null,
         actions: _selecting
             ? [
+                IconButton(
+                  tooltip: (_allVisibleItemsSelected ? '取消全选' : '全选').tl,
+                  onPressed: _currentVisibleSelectionKeys.isEmpty
+                      ? null
+                      : _toggleSelectAllVisible,
+                  icon: Icon(
+                    _allVisibleItemsSelected
+                        ? Icons.clear_all
+                        : Icons.select_all,
+                  ),
+                ),
                 IconButton(
                   tooltip: '恢复'.tl,
                   onPressed: _selectedCount == 0 ? null : _restoreSelected,
@@ -361,6 +586,21 @@ class _TrashPageState extends State<TrashPage>
           );
         },
       ),
+    );
+    if (_isOperationRunning) {
+      page = Stack(
+        fit: StackFit.expand,
+        children: [
+          page,
+          Positioned.fill(
+            child: _buildOperationOverlay(),
+          ),
+        ],
+      );
+    }
+    return PopScope(
+      canPop: !_isOperationRunning,
+      child: page,
     );
   }
 
