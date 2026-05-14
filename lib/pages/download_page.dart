@@ -398,13 +398,32 @@ class DownloadPageLogic extends StateController {
   VoidCallback? _localDataListener;
   VoidCallback? _serviceStateListener;
   bool _isRefreshingFromLocalData = false;
+  bool _isDeletingItems = false;
+  int _deleteProgressCurrent = 0;
+  int _deleteProgressTotal = 0;
+  String _deleteProgressActionLabel = '';
   _DownloadedLibraryView _view = _DownloadedLibraryView.local;
   bool remoteAvailable = false;
   bool _forceRemoteRefreshOnNextReload = false;
   _DownloadedLoadIssue? _loadIssue;
 
+  bool get isDeleteOperationRunning => _isDeletingItems;
+
+  int get deleteProgressCurrent => _deleteProgressCurrent;
+
+  int get deleteProgressTotal => _deleteProgressTotal;
+
+  String get deleteProgressActionLabel {
+    if (_deleteProgressActionLabel.isNotEmpty) {
+      return _deleteProgressActionLabel;
+    }
+    return TrashManager.instance.useTrashByDefault ? '正在放进回收站' : '正在删除';
+  }
+
+  String get deleteProgressHint => '请不要退出，强制退出可能导致操作异常';
+
   Future<void> _refreshFromNotifier() async {
-    if (_isRefreshingFromLocalData) {
+    if (_isRefreshingFromLocalData || _isDeletingItems) {
       return;
     }
     _isRefreshingFromLocalData = true;
@@ -460,6 +479,9 @@ class DownloadPageLogic extends StateController {
 
   void forceRemoteRefresh() {
     _forceRemoteRefreshOnNextReload = true;
+    if (_isDeletingItems) {
+      return;
+    }
     refresh();
   }
 
@@ -518,6 +540,10 @@ class DownloadPageLogic extends StateController {
 
   @override
   void refresh() {
+    if (_isDeletingItems) {
+      _forceRemoteRefreshOnNextReload = true;
+      return;
+    }
     searchMode = false;
     selecting = false;
     selectedNum = 0;
@@ -926,28 +952,60 @@ class DownloadPageLogic extends StateController {
     return deleteFailureMessage(error).tl;
   }
 
+  String _deleteErrorTextFromException(Object error) {
+    final message = error.toString();
+    if (message.contains(deleteFailurePermissionDenied) ||
+        message.toLowerCase().contains('permission denied')) {
+      return _deleteErrorText(deleteFailurePermissionDenied);
+    }
+    return message;
+  }
+
   Future<String?> deleteItems(Iterable<DownloadedItem> items) async {
+    if (_isDeletingItems) {
+      return null;
+    }
+    final targets = items.where(canDeleteItem).toList(growable: false);
+    if (targets.isEmpty) {
+      return null;
+    }
+    _isDeletingItems = true;
+    _deleteProgressCurrent = 0;
+    _deleteProgressTotal = targets.length;
+    _deleteProgressActionLabel =
+        TrashManager.instance.useTrashByDefault ? '正在放进回收站' : '正在删除';
+    App.beginNavigationLock();
+    App.temporaryDisablePopGesture = true;
+    update();
+    String? errorText;
     try {
-      for (final item in items) {
-        if (!canDeleteItem(item)) {
-          continue;
-        }
+      for (int i = 0; i < targets.length; i++) {
+        _deleteProgressCurrent = i + 1;
+        update();
+        final item = targets[i];
         final result = await TrashManager.instance.deleteItem(item);
         if (!result.ok) {
-          return _deleteErrorText(result.error ?? 'delete_failed');
+          errorText = _deleteErrorText(result.error ?? 'delete_failed');
+          break;
         }
       }
-      await reload();
-      update();
-      return null;
     } catch (e) {
-      final message = e.toString();
-      if (message.contains(deleteFailurePermissionDenied) ||
-          message.toLowerCase().contains('permission denied')) {
-        return _deleteErrorText(deleteFailurePermissionDenied);
+      errorText = _deleteErrorTextFromException(e);
+    } finally {
+      try {
+        await reload();
+      } catch (e) {
+        errorText ??= _deleteErrorTextFromException(e);
       }
-      return message;
+      _isDeletingItems = false;
+      _deleteProgressCurrent = 0;
+      _deleteProgressTotal = 0;
+      _deleteProgressActionLabel = '';
+      App.temporaryDisablePopGesture = false;
+      App.endNavigationLock();
+      update();
     }
+    return errorText;
   }
 
   Future<int> rescanDisk() async {
@@ -1285,42 +1343,163 @@ class _DownloadPageState extends State<DownloadPage>
       },
       builder: (logic) {
         _logic = logic;
-        if (logic.loading) {
-          return const Scaffold(
-            body: Center(
-              child: CircularProgressIndicator(),
-            ),
+        Widget page = logic.loading
+            ? const Scaffold(
+                body: Center(
+                  child: CircularProgressIndicator(),
+                ),
+              )
+            : Scaffold(
+                floatingActionButton: _buildFAB(context, logic),
+                body: NotificationListener<ScrollNotification>(
+                  onNotification: (notification) {
+                    if (notification is ScrollStartNotification ||
+                        (notification is UserScrollNotification &&
+                            notification.direction != ScrollDirection.idle)) {
+                      logic.setScrollInteracting(true);
+                    } else if (notification is ScrollEndNotification ||
+                        (notification is UserScrollNotification &&
+                            notification.direction == ScrollDirection.idle)) {
+                      logic.setScrollInteracting(false);
+                    }
+                    return false;
+                  },
+                  child: SmoothCustomScrollView(
+                    cacheExtent: App.isMobile
+                        ? MediaQuery.of(context).size.height * 0.25
+                        : MediaQuery.of(context).size.height,
+                    slivers: [
+                      _buildAppbar(context, logic),
+                      if (logic.showSourceSelector)
+                        _buildSourceSelector(context, logic),
+                      _buildComics(context, logic)
+                    ],
+                  ),
+                ),
+              );
+        if (logic.isDeleteOperationRunning) {
+          page = Stack(
+            fit: StackFit.expand,
+            children: [
+              page,
+              Positioned.fill(
+                child: _buildDeleteProgressOverlayContent(context, logic),
+              ),
+            ],
           );
         }
-        return Scaffold(
-          floatingActionButton: _buildFAB(context, logic),
-          body: NotificationListener<ScrollNotification>(
-            onNotification: (notification) {
-              if (notification is ScrollStartNotification ||
-                  (notification is UserScrollNotification &&
-                      notification.direction != ScrollDirection.idle)) {
-                logic.setScrollInteracting(true);
-              } else if (notification is ScrollEndNotification ||
-                  (notification is UserScrollNotification &&
-                      notification.direction == ScrollDirection.idle)) {
-                logic.setScrollInteracting(false);
-              }
-              return false;
-            },
-            child: SmoothCustomScrollView(
-              cacheExtent: App.isMobile
-                  ? MediaQuery.of(context).size.height * 0.25
-                  : MediaQuery.of(context).size.height,
-              slivers: [
-                _buildAppbar(context, logic),
-                if (logic.showSourceSelector)
-                  _buildSourceSelector(context, logic),
-                _buildComics(context, logic)
-              ],
-            ),
-          ),
+        return PopScope(
+          canPop: !logic.isDeleteOperationRunning,
+          child: page,
         );
       },
+    );
+  }
+
+  Widget _buildDeleteProgressOverlayContent(
+      BuildContext context, DownloadPageLogic logic) {
+    final theme = Theme.of(context);
+    final progressText =
+        '${logic.deleteProgressCurrent}/${logic.deleteProgressTotal}';
+    final isDesktop = App.isDesktop;
+    final barrierColor = Color.alphaBlend(
+      theme.colorScheme.primary.withValues(alpha: 0.06),
+      Colors.white.withValues(alpha: 0.76),
+    );
+    final panelColor = Color.alphaBlend(
+      theme.colorScheme.primary.withValues(alpha: 0.04),
+      theme.colorScheme.surface.withValues(alpha: 0.97),
+    );
+    return Stack(
+      children: [
+        ModalBarrier(
+          dismissible: false,
+          color: barrierColor,
+        ),
+        Center(
+          child: ConstrainedBox(
+            constraints: BoxConstraints(
+              maxWidth: isDesktop ? 440 : 300,
+              minWidth: isDesktop ? 340 : 260,
+            ),
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                color: panelColor,
+                borderRadius: BorderRadius.circular(24),
+                boxShadow: [
+                  BoxShadow(
+                    color: theme.colorScheme.shadow.withValues(alpha: 0.08),
+                    blurRadius: 24,
+                    offset: const Offset(0, 10),
+                  ),
+                ],
+                border: Border.all(
+                  color:
+                      theme.colorScheme.outlineVariant.withValues(alpha: 0.45),
+                ),
+              ),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 24,
+                  vertical: 22,
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    SizedBox(
+                      width: 36,
+                      height: 36,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 3.2,
+                        color: theme.colorScheme.primary,
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    if (isDesktop)
+                      Text(
+                        '${logic.deleteProgressActionLabel.tl} $progressText',
+                        textAlign: TextAlign.center,
+                        style: theme.textTheme.titleMedium?.copyWith(
+                          fontWeight: FontWeight.w700,
+                          color: theme.colorScheme.onSurface,
+                        ),
+                      )
+                    else ...[
+                      Text(
+                        logic.deleteProgressActionLabel.tl,
+                        textAlign: TextAlign.center,
+                        style: theme.textTheme.titleMedium?.copyWith(
+                          fontWeight: FontWeight.w700,
+                          color: theme.colorScheme.onSurface,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        progressText,
+                        textAlign: TextAlign.center,
+                        style: theme.textTheme.titleSmall?.copyWith(
+                          fontWeight: FontWeight.w600,
+                          color: theme.colorScheme.primary,
+                          height: 1.25,
+                        ),
+                      ),
+                    ],
+                    const SizedBox(height: 12),
+                    Text(
+                      logic.deleteProgressHint.tl,
+                      textAlign: TextAlign.center,
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                        height: 1.35,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
     );
   }
 
@@ -1430,33 +1609,6 @@ class _DownloadPageState extends State<DownloadPage>
                   ),
                 ),
               ),
-            if (selected)
-              Positioned(
-                top: 10,
-                right: 10,
-                child: IgnorePointer(
-                  child: Container(
-                    width: 24,
-                    height: 24,
-                    decoration: BoxDecoration(
-                      color: colorScheme.primary,
-                      shape: BoxShape.circle,
-                      boxShadow: [
-                        BoxShadow(
-                          color: colorScheme.shadow.withValues(alpha: 0.18),
-                          blurRadius: 8,
-                          offset: const Offset(0, 2),
-                        ),
-                      ],
-                    ),
-                    child: Icon(
-                      Icons.check,
-                      size: 16,
-                      color: colorScheme.onPrimary,
-                    ),
-                  ),
-                ),
-              ),
           ],
         ),
       ),
@@ -1515,7 +1667,6 @@ class _DownloadPageState extends State<DownloadPage>
                             );
                             return;
                           }
-                          logic.refresh();
                         },
                         child: Text(texts.confirmLabel.tl),
                       ),
@@ -1589,7 +1740,9 @@ class _DownloadPageState extends State<DownloadPage>
   Widget _buildFAB(BuildContext context, DownloadPageLogic logic) =>
       FloatingActionButton(
         enableFeedback: true,
-        onPressed: () {
+        onPressed: logic.isDeleteOperationRunning
+            ? null
+            : () {
           if (!logic.selecting) {
             logic.selecting = true;
             logic.update();
@@ -1630,7 +1783,6 @@ class _DownloadPageState extends State<DownloadPage>
                           );
                           return;
                         }
-                        logic.refresh();
                       },
                       child: Text(
                           buildDeleteActionTexts(count: logic.selectedNum)

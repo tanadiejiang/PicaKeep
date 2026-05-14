@@ -201,6 +201,7 @@ class LocalLibraryComicItem extends DownloadedItem {
     this.sourceDbPath,
     this.sourceDbId,
     this.sourceDirectory,
+    this.sourceDbRowId,
     this.sourceRowJson,
     this.sourceRowTimeMillis,
   })  : _type = type,
@@ -234,6 +235,7 @@ class LocalLibraryComicItem extends DownloadedItem {
   final String? sourceDbPath;
   final String? sourceDbId;
   final String? sourceDirectory;
+  final int? sourceDbRowId;
   final String? sourceRowJson;
   final int? sourceRowTimeMillis;
 
@@ -310,6 +312,7 @@ class LocalLibraryComicItem extends DownloadedItem {
         'sourceDbPath': sourceDbPath,
         'sourceDbId': sourceDbId,
         'sourceDirectory': sourceDirectory,
+        'sourceDbRowId': sourceDbRowId,
         'sourceRowJson': sourceRowJson,
         'sourceRowTimeMillis': sourceRowTimeMillis,
         'comicSize': comicSize,
@@ -458,7 +461,7 @@ class LocalPathReadingData extends ReadingData {
 class LocalLibraryManager {
   static final LocalLibraryManager instance = LocalLibraryManager._();
   static const MethodChannel _storageAccessChannel =
-      MethodChannel('lingxue.picakee/storage_access');
+      MethodChannel('lingxue.picakeep/storage_access');
 
   factory LocalLibraryManager() => instance;
 
@@ -1320,8 +1323,11 @@ class LocalLibraryManager {
     try {
       final db = sqlite3.open(openDbPath);
       try {
-        final rows =
-            db.select('select * from download order by time desc').toList()
+        final rows = db
+            .select(
+              'select rowid as __rowid__, * from download order by time desc',
+            )
+            .toList()
               ..sort((a, b) {
                 final score = _downloadRowPriority(
                   (b['id'] as String? ?? '').trim(),
@@ -1425,6 +1431,7 @@ class LocalLibraryManager {
               sourceDbId: rawId,
               sourceDirectory:
                   rawDirectory.isNotEmpty ? rawDirectory : itemDirectory,
+              sourceDbRowId: (row['__rowid__'] as int?) ?? 0,
               sourceRowJson: jsonText,
               sourceRowTimeMillis: timeValue,
             )..time = baseItem.time;
@@ -1520,7 +1527,9 @@ class LocalLibraryManager {
     final sourceItems = <LocalLibraryComicItem>[];
     try {
       final rows = db
-          .select('select * from download order by time desc')
+          .select(
+            'select rowid as __rowid__, * from download order by time desc',
+          )
           .toList()
         ..sort((a, b) {
           final score = _downloadRowPriority(
@@ -1623,6 +1632,7 @@ class LocalLibraryManager {
           sourceDbId: rawId,
           sourceDirectory:
               rawDirectory.isNotEmpty ? rawDirectory : itemDirectory,
+          sourceDbRowId: (row['__rowid__'] as int?) ?? 0,
           sourceRowJson: jsonText,
           sourceRowTimeMillis: timeValue,
         )..time = baseItem.time;

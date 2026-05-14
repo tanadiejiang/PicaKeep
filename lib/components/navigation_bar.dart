@@ -227,7 +227,12 @@ class _NaviPaneState extends State<NaviPane>
                 message: action.label,
                 child: IconButton(
                   icon: Icon(action.icon),
-                  onPressed: action.onTap,
+                  onPressed: () {
+                    if (App.isNavigationLocked) {
+                      return;
+                    }
+                    action.onTap();
+                  },
                 ),
               )
           ],
@@ -261,6 +266,9 @@ class _NaviPaneState extends State<NaviPane>
                       enabled: currentPage == index,
                       entry: widget.paneItems[index],
                       onTap: () {
+                        if (App.isNavigationLocked) {
+                          return;
+                        }
                         setState(() {
                           currentPage = index;
                         });
@@ -303,6 +311,9 @@ class _NaviPaneState extends State<NaviPane>
                       entry: widget.paneItems[index],
                       showTitle: value == 3,
                       onTap: () {
+                        if (App.isNavigationLocked) {
+                          return;
+                        }
                         setState(() {
                           currentPage = index;
                         });
@@ -367,7 +378,12 @@ class _SideNaviWidgetState extends State<_SideNaviWidget> {
       onExit: (details) => setState(() => isHovering = false),
       child: GestureDetector(
         behavior: HitTestBehavior.translucent,
-        onTap: widget.onTap,
+        onTap: () {
+          if (App.isNavigationLocked) {
+            return;
+          }
+          widget.onTap();
+        },
         child: AnimatedContainer(
             duration: const Duration(milliseconds: 180),
             margin: const EdgeInsets.symmetric(vertical: 4),
@@ -424,7 +440,12 @@ class _PaneActionWidgetState extends State<_PaneActionWidget> {
       onExit: (details) => setState(() => isHovering = false),
       child: GestureDetector(
         behavior: HitTestBehavior.translucent,
-        onTap: widget.entry.onTap,
+        onTap: () {
+          if (App.isNavigationLocked) {
+            return;
+          }
+          widget.entry.onTap();
+        },
         child: AnimatedContainer(
             duration: const Duration(milliseconds: 180),
             margin: const EdgeInsets.symmetric(vertical: 4),
@@ -515,7 +536,12 @@ class _SingleBottomNaviWidgetState extends State<_SingleBottomNaviWidget>
           onExit: (details) => setState(() => isHovering = false),
           child: GestureDetector(
             behavior: HitTestBehavior.translucent,
-            onTap: widget.onTap,
+            onTap: () {
+              if (App.isNavigationLocked) {
+                return;
+              }
+              widget.onTap();
+            },
             child: buildContent(),
           ),
         );
@@ -625,6 +651,9 @@ class _NaviPopScope extends StatelessWidget {
               if (didPop || App.temporaryDisablePopGesture) {
                 return;
               }
+              if (App.isNavigationLocked) {
+                return;
+              }
               action();
             },
             child: child,
@@ -640,6 +669,10 @@ class _NaviPopScope extends StatelessWidget {
             if (details.velocity.pixelsPerSecond.dx < 0 ||
                 details.velocity.pixelsPerSecond.dx > 0) {
               if (panStartAtEdge) {
+                if (App.isNavigationLocked) {
+                  panStartAtEdge = false;
+                  return;
+                }
                 action();
               }
             }

@@ -504,26 +504,6 @@ class _TrashPageState extends State<TrashPage>
                       ),
                     ),
                   ),
-                if (selected)
-                  Positioned(
-                    top: 10,
-                    right: 10,
-                    child: IgnorePointer(
-                      child: Container(
-                        width: 24,
-                        height: 24,
-                        decoration: BoxDecoration(
-                          color: colorScheme.primary,
-                          shape: BoxShape.circle,
-                        ),
-                        child: Icon(
-                          Icons.check,
-                          size: 16,
-                          color: colorScheme.onPrimary,
-                        ),
-                      ),
-                    ),
-                  ),
               ],
             ),
           ),

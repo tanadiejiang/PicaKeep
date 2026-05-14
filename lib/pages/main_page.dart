@@ -90,7 +90,10 @@ class _MainPageState extends State<MainPage> {
   void _openHubPage(Widget Function() pageBuilder) {
     final navigator = _navigatorKey.currentState;
     final context = _navigatorKey.currentContext;
-    if (navigator == null || context == null || _isPaneActionNavigating) {
+    if (navigator == null ||
+        context == null ||
+        _isPaneActionNavigating ||
+        App.isNavigationLocked) {
       return;
     }
 
@@ -205,6 +208,9 @@ class _MainPageState extends State<MainPage> {
         );
       },
       onPageChange: (index) {
+        if (App.isNavigationLocked) {
+          return;
+        }
         HapticFeedback.selectionClick();
         _navigatorKey.currentState?.pushAndRemoveUntil(
           AppPageRoute(

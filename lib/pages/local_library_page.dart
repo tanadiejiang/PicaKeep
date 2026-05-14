@@ -1061,39 +1061,32 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
     if (!_canSelectItem(item)) {
       return child;
     }
-    final showIndicator = _selecting || _isItemSelected(item);
-    if (!showIndicator) {
+    final selected = _isItemSelected(item);
+    if (!selected) {
       return child;
     }
-    final selected = _isItemSelected(item);
     final colorScheme = Theme.of(context).colorScheme;
     return Stack(
       children: [
         child,
         Positioned.fill(
           child: IgnorePointer(
-            child: AnimatedContainer(
-              duration: const Duration(milliseconds: 120),
+            child: DecoratedBox(
               decoration: BoxDecoration(
                 borderRadius: BorderRadius.circular(12),
                 border: Border.all(
-                  color: selected ? colorScheme.primary : Colors.transparent,
+                  color: colorScheme.primary,
                   width: 1.5,
                 ),
-                color: selected
-                    ? colorScheme.primaryContainer.withValues(alpha: 0.28)
-                    : Colors.transparent,
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [
+                    colorScheme.primary.withValues(alpha: 0.08),
+                    colorScheme.primary.withValues(alpha: 0.20),
+                  ],
+                ),
               ),
-            ),
-          ),
-        ),
-        Positioned(
-          top: 10,
-          right: 10,
-          child: IgnorePointer(
-            child: Icon(
-              selected ? Icons.check_circle : Icons.radio_button_unchecked,
-              color: selected ? colorScheme.primary : colorScheme.outline,
             ),
           ),
         ),

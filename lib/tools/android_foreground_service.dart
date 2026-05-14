@@ -18,7 +18,7 @@ class AndroidForegroundServiceController {
       AndroidForegroundServiceController._();
 
   static const MethodChannel _channel =
-      MethodChannel('lingxue.picakee/foreground_service');
+      MethodChannel('lingxue.picakeep/foreground_service');
 
   Future<void> startOrUpdate({
     required String title,

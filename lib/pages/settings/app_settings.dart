@@ -67,7 +67,8 @@ void _showManagedDataModeHint(BuildContext context, String message) {
   final theme = Theme.of(context);
   _managedDataModeHintEntry = OverlayEntry(
     builder: (overlayContext) {
-      final media = MediaQuery.maybeOf(overlayContext) ?? MediaQuery.of(context);
+      final media =
+          MediaQuery.maybeOf(overlayContext) ?? MediaQuery.of(context);
       final bottom = media.viewPadding.bottom + 16;
       return Positioned(
         left: 12,
@@ -379,7 +380,7 @@ class _AndroidStorageAccessController {
       _AndroidStorageAccessController._();
 
   static const MethodChannel _channel =
-      MethodChannel('lingxue.picakee/storage_access');
+      MethodChannel('lingxue.picakeep/storage_access');
 
   Future<bool> hasManageAllFilesAccess() async {
     if (!App.isAndroid) {
@@ -512,6 +513,37 @@ class _AndroidStorageAccessController {
     }
   }
 
+  Future<List<Map<String, String>>> listDirectoryEntriesWithRoot(
+    String path,
+  ) async {
+    if (!App.isAndroid) {
+      return const <Map<String, String>>[];
+    }
+    try {
+      final result = await _channel.invokeListMethod<Object>(
+        'listDirectoryEntriesWithRoot',
+        {'path': path},
+      );
+      return (result ?? const <Object>[])
+          .whereType<Map>()
+          .map((item) {
+            final name = item['name']?.toString().trim() ?? '';
+            if (name.isEmpty) {
+              return const <String, String>{};
+            }
+            final type = item['type']?.toString().trim() ?? 'file';
+            return <String, String>{
+              'name': name,
+              'type': type,
+            };
+          })
+          .where((item) => item.isNotEmpty)
+          .toList(growable: false);
+    } on PlatformException catch (e) {
+      throw Exception((e.message ?? e.code).trim());
+    }
+  }
+
   Future<List<String>> listDirectoriesWithShizuku(String path) async {
     if (!App.isAndroid) {
       return const <String>[];
@@ -523,6 +555,37 @@ class _AndroidStorageAccessController {
       );
       return (result ?? const <Object>[])
           .map((item) => item.toString().trim())
+          .where((item) => item.isNotEmpty)
+          .toList(growable: false);
+    } on PlatformException catch (e) {
+      throw Exception((e.message ?? e.code).trim());
+    }
+  }
+
+  Future<List<Map<String, String>>> listDirectoryEntriesWithShizuku(
+    String path,
+  ) async {
+    if (!App.isAndroid) {
+      return const <Map<String, String>>[];
+    }
+    try {
+      final result = await _channel.invokeListMethod<Object>(
+        'listDirectoryEntriesWithShizuku',
+        {'path': path},
+      );
+      return (result ?? const <Object>[])
+          .whereType<Map>()
+          .map((item) {
+            final name = item['name']?.toString().trim() ?? '';
+            if (name.isEmpty) {
+              return const <String, String>{};
+            }
+            final type = item['type']?.toString().trim() ?? 'file';
+            return <String, String>{
+              'name': name,
+              'type': type,
+            };
+          })
           .where((item) => item.isNotEmpty)
           .toList(growable: false);
     } on PlatformException catch (e) {
@@ -549,12 +612,6 @@ Future<void> _setAndroidShizukuModeEnabled(bool value) async {
   await appdata.updateSettings();
 }
 
-enum _AndroidDirectoryBrowseMode {
-  manageAllFiles,
-  shizuku,
-  root,
-}
-
 Future<bool> _requestAndroidRootAccess({bool forceRefresh = false}) async {
   if (!App.isAndroid) {
     return false;
@@ -562,479 +619,6 @@ Future<bool> _requestAndroidRootAccess({bool forceRefresh = false}) async {
   return _AndroidStorageAccessController.instance.hasRootAccess(
     forceRefresh: forceRefresh,
   );
-}
-
-String _joinDirectoryPath(String parent, String child) {
-  if (parent.isEmpty || parent == '/') {
-    return '/$child';
-  }
-  if (parent.endsWith('/')) {
-    return '$parent$child';
-  }
-  return '$parent/$child';
-}
-
-String? _parentDirectoryPath(String path) {
-  final normalized = path.trim();
-  if (normalized.isEmpty || normalized == '/') {
-    return null;
-  }
-  final segments = normalized.split('/')..removeWhere((e) => e.isEmpty);
-  if (segments.isEmpty) {
-    return '/';
-  }
-  segments.removeLast();
-  if (segments.isEmpty) {
-    return '/';
-  }
-  return '/${segments.join('/')}';
-}
-
-Future<List<String>> _listDirectoriesWithDartIo(String path) async {
-  final directory = Directory(path);
-  if (!await directory.exists()) {
-    throw Exception('目录不存在或当前应用不可访问'.tl);
-  }
-  final directories = <String>{};
-  await for (final entity in directory.list(followLinks: false)) {
-    if (entity is! Directory) {
-      continue;
-    }
-    final segments = entity.uri.pathSegments
-        .where((segment) => segment.isNotEmpty)
-        .toList(growable: false);
-    if (segments.isEmpty) {
-      continue;
-    }
-    final name = segments.last.trim();
-    if (name.isNotEmpty) {
-      directories.add(name);
-    }
-  }
-  final sortedDirectories = directories.toList()
-    ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
-  return sortedDirectories;
-}
-
-Future<List<String>> _listDirectoriesWithRoot(String path) async {
-  final rawPath = path.trim().replaceAll('\\', '/');
-  final normalizedPath = rawPath.isEmpty
-      ? '/'
-      : (() {
-          var value = rawPath.startsWith('/') ? rawPath : '/$rawPath';
-          while (value.length > 1 && value.endsWith('/')) {
-            value = value.substring(0, value.length - 1);
-          }
-          return value.isEmpty ? '/' : value;
-        })();
-  return _AndroidStorageAccessController.instance
-      .listDirectoriesWithRoot(normalizedPath);
-}
-
-Future<List<String>> _listDirectoriesWithShizuku(String path) {
-  final rawPath = path.trim().replaceAll('\\', '/');
-  final normalizedPath = rawPath.isEmpty
-      ? '/'
-      : (() {
-          var value = rawPath.startsWith('/') ? rawPath : '/$rawPath';
-          while (value.length > 1 && value.endsWith('/')) {
-            value = value.substring(0, value.length - 1);
-          }
-          return value.isEmpty ? '/' : value;
-        })();
-  return _AndroidStorageAccessController.instance.listDirectoriesWithShizuku(
-    normalizedPath,
-  );
-}
-
-Future<String?> _openInternalDirectoryBrowser(
-  BuildContext context, {
-  required String title,
-  String? initialPath,
-}) async {
-  if (!App.isAndroid) {
-    return null;
-  }
-  final controller = _AndroidStorageAccessController.instance;
-  final hasAllFilesAccess = await controller.hasManageAllFilesAccess();
-  final hasShizukuAccess =
-      _isAndroidShizukuModeEnabled() && await controller.hasShizukuPermission();
-  final hasRootAccess =
-      _isAndroidRootModeEnabled() && await _requestAndroidRootAccess();
-  if (!hasAllFilesAccess && !hasShizukuAccess && !hasRootAccess) {
-    if (context.mounted) {
-      _showSettingMessage(
-        context,
-        '长按“浏览”前，请先授予安卓全部文件访问权限，或开启 Shizuku 授权 / Root 模式'.tl,
-      );
-    }
-    return null;
-  }
-  if (!context.mounted) {
-    return null;
-  }
-  final browseMode = hasRootAccess
-      ? _AndroidDirectoryBrowseMode.root
-      : hasShizukuAccess
-          ? _AndroidDirectoryBrowseMode.shizuku
-          : _AndroidDirectoryBrowseMode.manageAllFiles;
-  return Navigator.of(context).push<String>(
-    MaterialPageRoute(
-      builder: (_) => _InternalDirectoryBrowserPage(
-        title: title,
-        initialPath: initialPath,
-        browseMode: browseMode,
-      ),
-    ),
-  );
-}
-
-class _InternalDirectoryBrowserPage extends StatefulWidget {
-  const _InternalDirectoryBrowserPage({
-    required this.title,
-    required this.initialPath,
-    required this.browseMode,
-  });
-
-  final String title;
-  final String? initialPath;
-  final _AndroidDirectoryBrowseMode browseMode;
-
-  @override
-  State<_InternalDirectoryBrowserPage> createState() =>
-      _InternalDirectoryBrowserPageState();
-}
-
-class _InternalDirectoryBrowserPageState
-    extends State<_InternalDirectoryBrowserPage> {
-  static const _androidPresetRoots = <String>[
-    '/',
-    '/storage/emulated/0',
-    '/data/user/0/lingxue.picakee',
-    '/data/data/lingxue.picakee',
-    '/storage/emulated/0/Android/data/lingxue.picakee',
-    '/data/user/0/com.example.picakeep',
-    '/data/data/com.example.picakeep',
-    '/storage/emulated/0/Android/data/com.example.picakeep',
-    '/data/user/0/com.github.pacalini.pica_comic',
-    '/data/data/com.github.pacalini.pica_comic',
-    '/storage/emulated/0/Android/data/com.github.pacalini.pica_comic',
-    '/storage/emulated/0/Android/data',
-    '/sdcard',
-  ];
-
-  late final TextEditingController _pathController;
-  late String _currentPath;
-  bool _loading = true;
-  bool _showPresetRoots = false;
-  int _pathLoadToken = 0;
-  String? _errorText;
-  List<String> _children = const <String>[];
-
-  @override
-  void initState() {
-    super.initState();
-    _currentPath = _normalizeInitialPath(widget.initialPath);
-    _pathController = TextEditingController(text: _currentPath);
-    _loadCurrentPath();
-  }
-
-  @override
-  void dispose() {
-    _pathController.dispose();
-    super.dispose();
-  }
-
-  String _normalizeInitialPath(String? path) {
-    final value = path?.trim() ?? '';
-    if (value.isNotEmpty) {
-      return value;
-    }
-    return widget.browseMode == _AndroidDirectoryBrowseMode.root
-        ? '/'
-        : '/storage/emulated/0';
-  }
-
-  String _normalizePathInput(String path) {
-    final trimmed = path.trim();
-    if (trimmed.isEmpty) {
-      return _currentPath;
-    }
-    var normalized = trimmed.replaceAll('\\', '/');
-    if (!normalized.startsWith('/')) {
-      normalized = '/$normalized';
-    }
-    while (normalized.length > 1 && normalized.endsWith('/')) {
-      normalized = normalized.substring(0, normalized.length - 1);
-    }
-    return normalized.isEmpty ? '/' : normalized;
-  }
-
-  void _updatePathController() {
-    _pathController.value = TextEditingValue(
-      text: _currentPath,
-      selection: TextSelection.collapsed(offset: _currentPath.length),
-    );
-  }
-
-  Future<void> _loadCurrentPath() async {
-    final loadToken = ++_pathLoadToken;
-    final targetPath = _currentPath;
-    if (mounted) {
-      setState(() {
-        _loading = true;
-        _errorText = null;
-      });
-    }
-    try {
-      final children = switch (widget.browseMode) {
-        _AndroidDirectoryBrowseMode.root =>
-          await _listDirectoriesWithRoot(targetPath),
-        _AndroidDirectoryBrowseMode.shizuku =>
-          await _listDirectoriesWithShizuku(targetPath),
-        _AndroidDirectoryBrowseMode.manageAllFiles =>
-          await _listDirectoriesWithDartIo(targetPath),
-      };
-      if (!mounted ||
-          loadToken != _pathLoadToken ||
-          targetPath != _currentPath) {
-        return;
-      }
-      setState(() {
-        _children = children;
-        _loading = false;
-      });
-    } catch (e) {
-      if (!mounted ||
-          loadToken != _pathLoadToken ||
-          targetPath != _currentPath) {
-        return;
-      }
-      setState(() {
-        _children = const <String>[];
-        _errorText = e.toString().trim();
-        _loading = false;
-      });
-    }
-  }
-
-  void _setCurrentPath(String path) {
-    final nextPath = _normalizePathInput(path);
-    if (nextPath == _currentPath) {
-      _updatePathController();
-      _loadCurrentPath();
-      return;
-    }
-    setState(() {
-      _currentPath = nextPath;
-    });
-    _updatePathController();
-    _loadCurrentPath();
-  }
-
-  void _jumpToTypedPath() {
-    _setCurrentPath(_pathController.text);
-  }
-
-  void _openChild(String name) {
-    _setCurrentPath(_joinDirectoryPath(_currentPath, name));
-  }
-
-  void _openParent() {
-    final parent = _parentDirectoryPath(_currentPath);
-    if (parent == null) {
-      return;
-    }
-    _setCurrentPath(parent);
-  }
-
-  Widget _buildPathJumpBar(BuildContext context) {
-    return Row(
-      children: [
-        Expanded(
-          child: TextField(
-            controller: _pathController,
-            onSubmitted: (_) => _jumpToTypedPath(),
-            decoration: InputDecoration(
-              prefixIcon: const Icon(Icons.route_outlined),
-              hintText: '输入路径后可直接跳转'.tl,
-              border: const OutlineInputBorder(),
-              suffixIcon: IconButton(
-                onPressed: () {
-                  setState(() {
-                    _showPresetRoots = !_showPresetRoots;
-                  });
-                },
-                icon: Icon(
-                  _showPresetRoots ? Icons.expand_less : Icons.expand_more,
-                ),
-                tooltip: _showPresetRoots ? '收起快捷路径'.tl : '展开快捷路径'.tl,
-              ),
-            ),
-          ),
-        ),
-        const SizedBox(width: 8),
-        FilledButton(
-          onPressed: _jumpToTypedPath,
-          child: Text('跳转'.tl),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildPresetRoots() {
-    return AnimatedCrossFade(
-      duration: const Duration(milliseconds: 180),
-      crossFadeState: _showPresetRoots
-          ? CrossFadeState.showFirst
-          : CrossFadeState.showSecond,
-      firstChild: Padding(
-        padding: const EdgeInsets.only(top: 12),
-        child: Align(
-          alignment: Alignment.centerLeft,
-          child: Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              for (final path in _androidPresetRoots)
-                ActionChip(
-                  label: Text(path),
-                  onPressed: () => _setCurrentPath(path),
-                ),
-            ],
-          ),
-        ),
-      ),
-      secondChild: const SizedBox.shrink(),
-    );
-  }
-
-  int get _listHeaderCount {
-    var count = 0;
-    if (_parentDirectoryPath(_currentPath) != null) {
-      count++;
-    }
-    if (_errorText != null) {
-      count++;
-    }
-    if (_children.isEmpty && _errorText == null) {
-      count++;
-    }
-    return count;
-  }
-
-  Widget _buildListItem(BuildContext context, int index) {
-    var cursor = 0;
-    if (_parentDirectoryPath(_currentPath) != null) {
-      if (index == cursor) {
-        return ListTile(
-          leading: const Icon(Icons.arrow_upward),
-          title: Text('上一级'.tl),
-          onTap: _openParent,
-        );
-      }
-      cursor++;
-    }
-    if (_errorText != null) {
-      if (index == cursor) {
-        return ListTile(
-          leading: const Icon(Icons.error_outline),
-          title: Text('目录读取失败'.tl),
-          subtitle: Text(_errorText!),
-        );
-      }
-      cursor++;
-    }
-    if (_children.isEmpty && _errorText == null) {
-      if (index == cursor) {
-        return ListTile(
-          leading: const Icon(Icons.folder_off_outlined),
-          title: Text('当前目录下没有可浏览的子文件夹'.tl),
-        );
-      }
-      cursor++;
-    }
-    final child = _children[index - cursor];
-    return ListTile(
-      leading: const Icon(Icons.folder_outlined),
-      title: Text(child),
-      subtitle: Text(_joinDirectoryPath(_currentPath, child)),
-      trailing: const Icon(Icons.chevron_right),
-      onTap: () => _openChild(child),
-    );
-  }
-
-  Widget _buildPageHeader(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            switch (widget.browseMode) {
-              _AndroidDirectoryBrowseMode.root => '当前使用 Root 模式浏览目录'.tl,
-              _AndroidDirectoryBrowseMode.shizuku => '当前使用 Shizuku 授权浏览目录'.tl,
-              _AndroidDirectoryBrowseMode.manageAllFiles =>
-                '当前使用安卓全部文件访问权限浏览目录'.tl,
-            },
-            style: Theme.of(context).textTheme.labelLarge,
-          ),
-          const SizedBox(height: 8),
-          _buildPathJumpBar(context),
-          _buildPresetRoots(),
-          const SizedBox(height: 12),
-          SizedBox(
-            width: double.infinity,
-            child: FilledButton.icon(
-              onPressed: () => Navigator.of(context).pop(_currentPath),
-              icon: const Icon(Icons.check),
-              label: Text('选择当前文件夹'.tl),
-            ),
-          ),
-          const SizedBox(height: 8),
-        ],
-      ),
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final bottomPadding = MediaQuery.of(context).padding.bottom;
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(widget.title),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.refresh),
-            onPressed: _loadCurrentPath,
-            tooltip: '刷新'.tl,
-          ),
-        ],
-      ),
-      body: SmoothScrollProvider(
-        builder: (context, controller, physics) => ListView.builder(
-          controller: controller,
-          keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
-          physics: physics,
-          cacheExtent: 480,
-          padding: EdgeInsets.only(bottom: bottomPadding + 12),
-          itemCount: 1 + (_loading ? 1 : _listHeaderCount + _children.length),
-          itemBuilder: (context, index) {
-            if (index == 0) {
-              return _buildPageHeader(context);
-            }
-            if (_loading) {
-              return const Padding(
-                padding: EdgeInsets.symmetric(vertical: 48),
-                child: Center(child: CircularProgressIndicator()),
-              );
-            }
-            return _buildListItem(context, index - 1);
-          },
-        ),
-      ),
-    );
-  }
 }
 
 class _AndroidManageAllFilesAccessTile extends StatefulWidget {
@@ -1240,8 +824,7 @@ class _AndroidShizukuModeTileState extends State<_AndroidShizukuModeTile>
           return;
         }
 
-        final running =
-            _running ??
+        final running = _running ??
             (await controller.getShizukuStatus(forceRefresh: true)).running;
         if (!running) {
           await controller.openShizukuApp();
@@ -1664,8 +1247,8 @@ class _ManagedDataSourceModeTileState
     if (_busy) {
       return;
     }
-    final accessRequirement = await LocalLibraryManager()
-        .getManagedSourceAccessRequirement(
+    final accessRequirement =
+        await LocalLibraryManager().getManagedSourceAccessRequirement(
       value,
       refreshAccess: true,
     );

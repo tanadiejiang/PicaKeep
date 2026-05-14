@@ -1,4 +1,4 @@
-package lingxue.picakee
+package lingxue.picakeep
 
 import android.app.NotificationChannel
 import android.app.NotificationManager

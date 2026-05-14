@@ -5,6 +5,7 @@ import 'package:sqlite3/sqlite3.dart';
 import 'app.dart';
 
 const localTrashStateTrashed = 'trash';
+const localTrashStatePending = 'pending';
 const localTrashStatePurged = 'purged';
 
 String _joinLocalTrashPath(String parent, String child) {
@@ -48,6 +49,7 @@ class LocalTrashRecordData {
     this.sourceDbPath = '',
     this.sourceDbId = '',
     this.sourceDirectory = '',
+    this.sourceDbRowId = 0,
     this.sourceDbTimeMillis = 0,
     this.sourceDbRecordRemoved = false,
   });
@@ -71,6 +73,7 @@ class LocalTrashRecordData {
   final String sourceDbPath;
   final String sourceDbId;
   final String sourceDirectory;
+  final int sourceDbRowId;
   final int sourceDbTimeMillis;
   final bool sourceDbRecordRemoved;
 
@@ -95,6 +98,7 @@ class LocalTrashRecordData {
       sourceDbPath: row['source_db_path'] as String? ?? '',
       sourceDbId: row['source_db_id'] as String? ?? '',
       sourceDirectory: row['source_directory'] as String? ?? '',
+      sourceDbRowId: (row['source_db_rowid'] as int?) ?? 0,
       sourceDbTimeMillis: (row['source_db_time'] as int?) ?? 0,
       sourceDbRecordRemoved:
           ((row['source_db_record_removed'] as int?) ?? 0) != 0,
@@ -172,6 +176,7 @@ class LocalTrashStore {
     _db = sqlite3.open(nextPath);
     _dbPath = nextPath;
     _createTables(_db!);
+    _migrateTables(_db!);
     return _db!;
   }
 
@@ -203,9 +208,10 @@ class LocalTrashStore {
         source_db_path,
         source_db_id,
         source_directory,
+        source_db_rowid,
         source_db_time,
         source_db_record_removed
-      ) values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+      ) values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     ''', [
       record.id,
       record.state,
@@ -226,6 +232,7 @@ class LocalTrashStore {
       record.sourceDbPath,
       record.sourceDbId,
       record.sourceDirectory,
+      record.sourceDbRowId,
       record.sourceDbTimeMillis,
       record.sourceDbRecordRemoved ? 1 : 0,
     ]);
@@ -332,6 +339,7 @@ class LocalTrashStore {
         source_db_path text,
         source_db_id text,
         source_directory text,
+        source_db_rowid integer not null default 0,
         source_db_time integer,
         source_db_record_removed integer not null default 0
       )
@@ -347,5 +355,19 @@ class LocalTrashStore {
       create index if not exists idx_local_trash_source_directory
       on local_trash(source_db_path, source_directory)
     ''');
+  }
+
+  void _migrateTables(Database db) {
+    final columns = db
+        .select('pragma table_info(local_trash)')
+        .map((row) => (row['name'] as String? ?? '').trim())
+        .where((name) => name.isNotEmpty)
+        .toSet();
+    if (!columns.contains('source_db_rowid')) {
+      db.execute('''
+        alter table local_trash
+        add column source_db_rowid integer not null default 0
+      ''');
+    }
   }
 }

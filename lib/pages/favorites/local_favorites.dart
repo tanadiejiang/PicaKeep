@@ -774,7 +774,19 @@ class _ComicsPageViewState extends State<ComicsPageView> {
               margin: const EdgeInsets.symmetric(vertical: 2, horizontal: 4),
               decoration: BoxDecoration(
                 color: selected
-                    ? Theme.of(context).colorScheme.surfaceContainerHighest
+                    ? Theme.of(context)
+                        .colorScheme
+                        .primary
+                        .withValues(alpha: 0.14)
+                    : null,
+                border: selected
+                    ? Border.all(
+                        color: Theme.of(context)
+                            .colorScheme
+                            .primary
+                            .withValues(alpha: 0.75),
+                        width: 1.2,
+                      )
                     : null,
                 borderRadius: BorderRadius.circular(12),
               ),
@@ -1084,7 +1096,17 @@ class _LocalFavoritesFolderState extends State<LocalFavoritesFolder> {
                             color: selected
                                 ? Theme.of(context)
                                     .colorScheme
-                                    .surfaceContainerHighest
+                                    .primary
+                                    .withValues(alpha: 0.14)
+                                : null,
+                            border: selected
+                                ? Border.all(
+                                    color: Theme.of(context)
+                                        .colorScheme
+                                        .primary
+                                        .withValues(alpha: 0.75),
+                                    width: 1.2,
+                                  )
                                 : null,
                             borderRadius: BorderRadius.circular(12),
                           ),

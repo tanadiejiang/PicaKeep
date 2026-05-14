@@ -20,7 +20,7 @@ const deleteBehaviorPermanent = 'permanent';
 const localTrashDirectoryName = '.picakeep_trash';
 const deleteFailureLocalPathNotFound = 'local_path_not_found';
 const deleteFailurePermissionDenied = 'permission_denied';
-const _storageAccessChannelName = 'lingxue.picakee/storage_access';
+const _storageAccessChannelName = 'lingxue.picakeep/storage_access';
 
 const MethodChannel _storageAccessChannel =
     MethodChannel(_storageAccessChannelName);
@@ -304,6 +304,7 @@ class TrashItemRecord {
     this.sourceDbPath = '',
     this.sourceDbId = '',
     this.sourceDirectory = '',
+    this.sourceDbRowId = 0,
     this.sourceDbTimeMillis = 0,
     this.sourceDbRecordRemoved = false,
   });
@@ -327,6 +328,7 @@ class TrashItemRecord {
   final String sourceDbPath;
   final String sourceDbId;
   final String sourceDirectory;
+  final int sourceDbRowId;
   final int sourceDbTimeMillis;
   final bool sourceDbRecordRemoved;
 
@@ -354,6 +356,7 @@ class TrashItemRecord {
         'sourceDbPath': sourceDbPath,
         'sourceDbId': sourceDbId,
         'sourceDirectory': sourceDirectory,
+        'sourceDbRowId': sourceDbRowId,
         'sourceDbTimeMillis': sourceDbTimeMillis,
         'sourceDbRecordRemoved': sourceDbRecordRemoved,
       };
@@ -385,6 +388,7 @@ class TrashItemRecord {
       sourceDbPath: (json['sourceDbPath'] as String? ?? '').trim(),
       sourceDbId: (json['sourceDbId'] as String? ?? '').trim(),
       sourceDirectory: (json['sourceDirectory'] as String? ?? '').trim(),
+      sourceDbRowId: (json['sourceDbRowId'] as num?)?.toInt() ?? 0,
       sourceDbTimeMillis: (json['sourceDbTimeMillis'] as num?)?.toInt() ?? 0,
       sourceDbRecordRemoved: json['sourceDbRecordRemoved'] == true ||
           json['sourceDbRecordRemoved'] == 1,
@@ -414,6 +418,7 @@ class TrashItemRecord {
       sourceDbPath: data.sourceDbPath,
       sourceDbId: data.sourceDbId,
       sourceDirectory: data.sourceDirectory,
+      sourceDbRowId: data.sourceDbRowId,
       sourceDbTimeMillis: data.sourceDbTimeMillis,
       sourceDbRecordRemoved: data.sourceDbRecordRemoved,
     );
@@ -441,6 +446,7 @@ class TrashItemRecord {
       sourceDbPath: sourceDbPath,
       sourceDbId: sourceDbId,
       sourceDirectory: sourceDirectory,
+      sourceDbRowId: sourceDbRowId,
       sourceDbTimeMillis: sourceDbTimeMillis,
       sourceDbRecordRemoved: sourceDbRecordRemoved,
     );
@@ -675,7 +681,13 @@ class TrashManager {
       final manager = DownloadManager();
       await manager.init();
       manager.upsertDbRecordOnly(
-          restored, _basenameTrashPath(record.originalPath));
+        restored,
+        _basenameTrashPath(record.originalPath),
+        record.sourceDbTimeMillis > 0
+            ? DateTime.fromMillisecondsSinceEpoch(record.sourceDbTimeMillis)
+            : record.deletedAt,
+        record.sourceDbRowId > 0 ? record.sourceDbRowId : null,
+      );
     }
 
     _items.removeWhere((item) => item.id == recordId);
@@ -968,20 +980,96 @@ class TrashManager {
     if (restored == null) {
       return;
     }
+    final restoreTimeMillis = record.sourceDbTimeMillis > 0
+        ? record.sourceDbTimeMillis
+        : record.deletedAt.millisecondsSinceEpoch;
+    final requestedRowId = record.sourceDbRowId > 0 ? record.sourceDbRowId : 0;
     await _mutateSourceDbFile(
       sourceDbPath,
       createIfMissing: true,
       mutate: (db) async {
+        final existingRow = db.select(
+          '''
+            select rowid as __rowid__
+            from download
+            where id = ?
+            limit 1
+          ''',
+          [sourceDbId],
+        );
+        if (existingRow.isNotEmpty) {
+          db.execute('''
+            update download
+            set title = ?,
+                subtitle = ?,
+                time = ?,
+                directory = ?,
+                size = ?,
+                json = ?
+            where id = ?
+          ''', [
+            restored.name,
+            restored.subTitle,
+            restoreTimeMillis,
+            directory,
+            restored.comicSize,
+            record.snapshotJson,
+            sourceDbId,
+          ]);
+          return;
+        }
+
+        if (requestedRowId > 0) {
+          final occupiedRow = db.select(
+            '''
+              select id
+              from download
+              where rowid = ?
+              limit 1
+            ''',
+            [requestedRowId],
+          );
+          if (occupiedRow.isEmpty) {
+            db.execute('''
+              insert into download(
+                rowid,
+                id,
+                title,
+                subtitle,
+                time,
+                directory,
+                size,
+                json
+              ) values (?,?,?,?,?,?,?,?)
+            ''', [
+              requestedRowId,
+              sourceDbId,
+              restored.name,
+              restored.subTitle,
+              restoreTimeMillis,
+              directory,
+              restored.comicSize,
+              record.snapshotJson,
+            ]);
+            return;
+          }
+        }
+
         db.execute('''
-          insert or replace into download
-          values (?,?,?,?,?,?,?)
+          insert into download(
+            id,
+            title,
+            subtitle,
+            time,
+            directory,
+            size,
+            json
+          ) values (?,?,?,?,?,?,?)
         ''', [
           sourceDbId,
           restored.name,
           restored.subTitle,
-          record.sourceDbTimeMillis > 0
-              ? record.sourceDbTimeMillis
-              : record.deletedAt.millisecondsSinceEpoch,
+          restoreTimeMillis,
           directory,
           restored.comicSize,
           record.snapshotJson,
@@ -1006,79 +1094,137 @@ class TrashManager {
 
     final snapshot = await _buildLocalTrashSnapshot(item, target);
     final recordId = _generateRecordId();
-    var trashedPath = '';
-    var sourceSizeBytes = 0;
-    if (pathState == _LocalPathState.exists) {
-      final canDirectIo = sourceDir.existsSync();
-      if (canDirectIo) {
-        sourceSizeBytes = await _computeDirectorySize(sourceDir);
-      }
-      final trashRootPath =
-          _joinTrashPath(sourceDir.parent.path, localTrashDirectoryName);
-      trashedPath = _joinTrashPath(trashRootPath, recordId);
-      if (canDirectIo) {
-        Directory(trashRootPath).createSync(recursive: true);
-        await _moveDirectory(sourceDir, Directory(trashedPath));
-      } else {
-        final mode = await _resolvePrivilegedWriteModeForOperation();
-        if (mode == null) {
-          return DeleteItemResult.failure(deleteFailurePermissionDenied);
-        }
-        await _privilegedMovePath(
-          target.originalPath,
-          trashedPath,
-          mode: mode,
-        );
-      }
-    }
-
     final sourceDbId = target.sourceDbId?.trim().isNotEmpty == true
         ? target.sourceDbId!.trim()
         : target.downloadDbId?.trim() ?? '';
     final sourceDirectory = target.sourceDirectory?.trim().isNotEmpty == true
         ? target.sourceDirectory!.trim()
         : _basenameTrashPath(target.originalPath);
-    var sourceDbRecordRemoved = false;
-    if (target.hasSourceDbRecord) {
-      try {
-        sourceDbRecordRemoved = await _removeSourceDbRecord(target);
-      } on StateError catch (e) {
-        if (e.message == deleteFailurePermissionDenied) {
-          return DeleteItemResult.failure(deleteFailurePermissionDenied);
-        }
-        rethrow;
-      }
-    }
+    final sourceDbRowId = target.sourceDbRowId ?? 0;
+    final deletedAt = DateTime.now();
+    final trashedPath = pathState == _LocalPathState.exists
+        ? _joinTrashPath(
+            _joinTrashPath(sourceDir.parent.path, localTrashDirectoryName),
+            recordId,
+          )
+        : '';
 
-    final record = TrashItemRecord(
+    final pendingRecord = _buildLocalTrashRecord(
       id: recordId,
-      scope: TrashItemScope.local,
-      itemKind: item is LocalLibraryComicItem && item.isAlbum
-          ? TrashItemKind.album
-          : TrashItemKind.comic,
-      itemId: snapshot.itemId,
-      title: item.name,
-      subtitle: item.subTitle,
-      cover: item.localCoverPath?.trim() ?? '',
-      sourceLabel: item.sourceDisplayName,
+      item: item,
+      snapshot: snapshot,
       originalPath: target.originalPath,
       trashedPath: trashedPath,
-      deletedAt: DateTime.now(),
-      sizeBytes: sourceSizeBytes,
-      snapshotJson: snapshot.snapshotJson,
-      remotePath: '',
-      detailUrl: '',
-      rootId: '',
+      deletedAt: deletedAt,
+      sizeBytes: _estimateItemSizeBytes(item),
       sourceDbPath: target.sourceDbPath?.trim() ?? '',
       sourceDbId: sourceDbId,
       sourceDirectory: sourceDirectory,
+      sourceDbRowId: sourceDbRowId,
       sourceDbTimeMillis: target.sourceDbTimeMillis ?? 0,
-      sourceDbRecordRemoved: sourceDbRecordRemoved,
+      sourceDbRecordRemoved: false,
+    );
+    await LocalTrashStore.instance.upsert(
+      pendingRecord.toLocalStoreData(state: localTrashStatePending),
     );
 
-    await LocalTrashStore.instance.upsert(record.toLocalStoreData());
-    App.notifyLocalDataChanged();
-    return DeleteItemResult.success(record);
+    var sourceDbRecordRemoved = false;
+    var directoryMoved = false;
+    try {
+      if (target.hasSourceDbRecord) {
+        sourceDbRecordRemoved = await _removeSourceDbRecord(target);
+      }
+
+      if (pathState == _LocalPathState.exists) {
+        final canDirectIo = sourceDir.existsSync();
+        if (canDirectIo) {
+          Directory(sourceDir.parent.path).createSync(recursive: true);
+          await _moveDirectory(sourceDir, Directory(trashedPath));
+        } else {
+          final mode = await _resolvePrivilegedWriteModeForOperation();
+          if (mode == null) {
+            throw StateError(deleteFailurePermissionDenied);
+          }
+          await _privilegedMovePath(
+            target.originalPath,
+            trashedPath,
+            mode: mode,
+          );
+        }
+        directoryMoved = true;
+      }
+
+      final record = _buildLocalTrashRecord(
+        id: recordId,
+        item: item,
+        snapshot: snapshot,
+        originalPath: target.originalPath,
+        trashedPath: trashedPath,
+        deletedAt: deletedAt,
+        sizeBytes: pendingRecord.sizeBytes,
+        sourceDbPath: target.sourceDbPath?.trim() ?? '',
+        sourceDbId: sourceDbId,
+        sourceDirectory: sourceDirectory,
+        sourceDbRowId: sourceDbRowId,
+        sourceDbTimeMillis: target.sourceDbTimeMillis ?? 0,
+        sourceDbRecordRemoved: sourceDbRecordRemoved,
+      );
+
+      await LocalTrashStore.instance.upsert(record.toLocalStoreData());
+      App.notifyLocalDataChanged();
+      return DeleteItemResult.success(record);
+    } catch (e) {
+      if (directoryMoved) {
+        try {
+          final trashedDir = Directory(trashedPath);
+          if (trashedDir.existsSync()) {
+            await _moveDirectory(trashedDir, Directory(target.originalPath));
+          } else if (trashedPath.isNotEmpty) {
+            final mode = await _resolvePrivilegedWriteModeForOperation();
+            if (mode != null) {
+              await _privilegedMovePath(
+                trashedPath,
+                target.originalPath,
+                mode: mode,
+              );
+            }
+          }
+        } catch (rollbackError) {
+          print('[PicaKeep] Failed to roll back moved directory: $rollbackError');
+        }
+      }
+      if (sourceDbRecordRemoved) {
+        try {
+          await _restoreSourceDbRecord(
+            _buildLocalTrashRecord(
+              id: recordId,
+              item: item,
+              snapshot: snapshot,
+              originalPath: target.originalPath,
+              trashedPath: trashedPath,
+              deletedAt: deletedAt,
+              sizeBytes: pendingRecord.sizeBytes,
+              sourceDbPath: target.sourceDbPath?.trim() ?? '',
+              sourceDbId: sourceDbId,
+              sourceDirectory: sourceDirectory,
+              sourceDbRowId: sourceDbRowId,
+              sourceDbTimeMillis: target.sourceDbTimeMillis ?? 0,
+              sourceDbRecordRemoved: true,
+            ),
+          );
+        } catch (rollbackError) {
+          print('[PicaKeep] Failed to roll back source DB record: $rollbackError');
+        }
+      }
+      await LocalTrashStore.instance.delete(recordId);
+      if (e is StateError && e.message == deleteFailurePermissionDenied) {
+        return DeleteItemResult.failure(deleteFailurePermissionDenied);
+      }
+      if (e is FileSystemException && _isPermissionDenied(e)) {
+        return DeleteItemResult.failure(deleteFailurePermissionDenied);
+      }
+      rethrow;
+    }
   }
 
   Future<String?> _deleteLocalItemPermanently(DownloadedItem item) async {
@@ -1165,6 +1311,57 @@ class TrashManager {
     );
   }
 
+  int _estimateItemSizeBytes(DownloadedItem item) {
+    final sizeMb = item.comicSize;
+    if (sizeMb == null || !sizeMb.isFinite || sizeMb <= 0) {
+      return 0;
+    }
+    return (sizeMb * 1024 * 1024).round();
+  }
+
+  TrashItemRecord _buildLocalTrashRecord({
+    required String id,
+    required DownloadedItem item,
+    required _TrashSnapshotPayload snapshot,
+    required String originalPath,
+    required String trashedPath,
+    required DateTime deletedAt,
+    required int sizeBytes,
+    required String sourceDbPath,
+    required String sourceDbId,
+    required String sourceDirectory,
+    required int sourceDbRowId,
+    required int sourceDbTimeMillis,
+    required bool sourceDbRecordRemoved,
+  }) {
+    return TrashItemRecord(
+      id: id,
+      scope: TrashItemScope.local,
+      itemKind: item is LocalLibraryComicItem && item.isAlbum
+          ? TrashItemKind.album
+          : TrashItemKind.comic,
+      itemId: snapshot.itemId,
+      title: item.name,
+      subtitle: item.subTitle,
+      cover: item.localCoverPath?.trim() ?? '',
+      sourceLabel: item.sourceDisplayName,
+      originalPath: originalPath,
+      trashedPath: trashedPath,
+      deletedAt: deletedAt,
+      sizeBytes: sizeBytes,
+      snapshotJson: snapshot.snapshotJson,
+      remotePath: '',
+      detailUrl: '',
+      rootId: '',
+      sourceDbPath: sourceDbPath,
+      sourceDbId: sourceDbId,
+      sourceDirectory: sourceDirectory,
+      sourceDbRowId: sourceDbRowId,
+      sourceDbTimeMillis: sourceDbTimeMillis,
+      sourceDbRecordRemoved: sourceDbRecordRemoved,
+    );
+  }
+
   Future<_LocalDeleteTarget?> _resolveLocalDeleteTarget(
       DownloadedItem item) async {
     if (item is LocalLibraryComicItem) {
@@ -1185,6 +1382,7 @@ class TrashManager {
         sourceDirectory: item.sourceDirectory?.trim().isNotEmpty == true
             ? item.sourceDirectory!.trim()
             : _basenameTrashPath(path),
+        sourceDbRowId: item.sourceDbRowId,
         sourceRowJson: item.sourceRowJson,
         sourceDbTimeMillis: item.sourceRowTimeMillis,
       );
@@ -1205,6 +1403,7 @@ class TrashManager {
       sourceDbPath: dbPath,
       sourceDbId: item.id,
       sourceDirectory: directory,
+      sourceDbRowId: manager.rowIdFor(item.id),
       sourceRowJson: jsonEncode(item.toJson()),
       sourceDbTimeMillis: item.time?.millisecondsSinceEpoch,
     );
@@ -1297,21 +1496,6 @@ class TrashManager {
     }
   }
 
-  Future<int> _computeDirectorySize(Directory dir) async {
-    var total = 0;
-    if (!dir.existsSync()) {
-      return total;
-    }
-    await for (final entity in dir.list(recursive: true)) {
-      if (entity is File) {
-        try {
-          total += await entity.length();
-        } catch (_) {}
-      }
-    }
-    return total;
-  }
-
   _LocalPathState _localPathState(Directory dir) {
     try {
       return dir.existsSync()
@@ -1355,6 +1539,7 @@ class _LocalDeleteTarget {
     this.sourceDbPath,
     this.sourceDbId,
     this.sourceDirectory,
+    this.sourceDbRowId,
     this.sourceRowJson,
     this.sourceDbTimeMillis,
   });
@@ -1365,6 +1550,7 @@ class _LocalDeleteTarget {
   final String? sourceDbPath;
   final String? sourceDbId;
   final String? sourceDirectory;
+  final int? sourceDbRowId;
   final String? sourceRowJson;
   final int? sourceDbTimeMillis;
 
