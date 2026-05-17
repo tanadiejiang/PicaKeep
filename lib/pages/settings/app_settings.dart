@@ -593,6 +593,34 @@ class _AndroidStorageAccessController {
     }
   }
 
+  Future<List<Map<String, String>>> listAndroidDataDirectoryWithShizuku() async {
+    if (!App.isAndroid) {
+      return const <Map<String, String>>[];
+    }
+    try {
+      final result = await _channel.invokeListMethod<Object>(
+        'listAndroidDataDirectoryWithShizuku',
+      );
+      return (result ?? const <Object>[])
+          .whereType<Map>()
+          .map((item) {
+            final name = item['name']?.toString().trim() ?? '';
+            if (name.isEmpty) {
+              return const <String, String>{};
+            }
+            final type = item['type']?.toString().trim() ?? 'file';
+            return <String, String>{
+              'name': name,
+              'type': type,
+            };
+          })
+          .where((item) => item.isNotEmpty)
+          .toList(growable: false);
+    } on PlatformException catch (e) {
+      throw Exception((e.message ?? e.code).trim());
+    }
+  }
+
   Future<bool> existsWithRoot(String path) async {
     if (!App.isAndroid) {
       return false;
@@ -2021,161 +2049,6 @@ class _LanguageSettingTile extends StatelessWidget {
           App.updater?.call();
         },
       ),
-    );
-  }
-}
-
-class LogSetting extends StatefulWidget {
-  const LogSetting({super.key});
-
-  @override
-  State<LogSetting> createState() => _LogSettingState();
-}
-
-class _LogSettingState extends State<LogSetting> {
-  Future<void> _exportLogs() async {
-    final directory = Directory('${App.dataPath}/logs');
-    if (!directory.existsSync()) {
-      directory.createSync(recursive: true);
-    }
-    final timestamp = DateTime.now().toIso8601String().replaceAll(':', '-');
-    final file = File('${directory.path}/picakeep-log-$timestamp.txt');
-    await file.writeAsString(LogManager().toString());
-
-    if (App.isDesktop) {
-      final location =
-          await getSaveLocation(suggestedName: file.uri.pathSegments.last);
-      if (location == null) {
-        return;
-      }
-      await XFile(file.path).saveTo(location.path);
-      if (mounted) {
-        _showSettingMessage(context, '日志已导出'.tl);
-      }
-      return;
-    }
-
-    await Share.shareXFiles([XFile(file.path)], text: 'PicaKeep Logs');
-  }
-
-  Color _levelColor(ColorScheme scheme, LogLevel level) {
-    return switch (level) {
-      LogLevel.error => scheme.error,
-      LogLevel.warning => scheme.errorContainer,
-      LogLevel.info => scheme.primaryContainer,
-    };
-  }
-
-  Color _levelTextColor(LogLevel level) {
-    return level == LogLevel.error ? Colors.white : Colors.black;
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Logs'),
-        actions: [
-          PopupMenuButton<String>(
-            onSelected: (value) async {
-              if (value == 'clear') {
-                setState(LogManager.clear);
-              } else if (value == 'ignore') {
-                LogManager.ignoreLimitation = true;
-                _showSettingMessage(context, '仅在本次运行时有效'.tl);
-              } else if (value == 'export') {
-                await _exportLogs();
-              }
-            },
-            itemBuilder: (context) => [
-              PopupMenuItem<String>(
-                value: 'clear',
-                child: Text('清空'.tl),
-              ),
-              PopupMenuItem<String>(
-                value: 'ignore',
-                child: Text('禁用长度限制'.tl),
-              ),
-              PopupMenuItem<String>(
-                value: 'export',
-                child: Text('导出'.tl),
-              ),
-            ],
-          ),
-        ],
-      ),
-      body: LogManager.logs.isEmpty
-          ? Center(child: Text('暂无日志'.tl))
-          : ListView.builder(
-              reverse: true,
-              itemCount: LogManager.logs.length,
-              itemBuilder: (context, index) {
-                final log = LogManager.logs[LogManager.logs.length - index - 1];
-                final colorScheme = Theme.of(context).colorScheme;
-                return Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-                  child: SelectionArea(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          children: [
-                            Container(
-                              decoration: BoxDecoration(
-                                color: colorScheme.surfaceContainerHighest,
-                                borderRadius: const BorderRadius.all(
-                                  Radius.circular(16),
-                                ),
-                              ),
-                              child: Padding(
-                                padding: const EdgeInsets.fromLTRB(5, 0, 5, 1),
-                                child: Text(log.title),
-                              ),
-                            ),
-                            const SizedBox(width: 3),
-                            Container(
-                              decoration: BoxDecoration(
-                                color: _levelColor(colorScheme, log.level),
-                                borderRadius: const BorderRadius.all(
-                                  Radius.circular(16),
-                                ),
-                              ),
-                              child: Padding(
-                                padding: const EdgeInsets.fromLTRB(5, 0, 5, 1),
-                                child: Text(
-                                  log.level.name,
-                                  style: TextStyle(
-                                    color: _levelTextColor(log.level),
-                                  ),
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 6),
-                        Text(log.content),
-                        const SizedBox(height: 4),
-                        Text(
-                          log.time.toString().replaceAll(RegExp(r'\.\w+'), ''),
-                        ),
-                        TextButton(
-                          onPressed: () async {
-                            await Clipboard.setData(
-                              ClipboardData(text: log.content),
-                            );
-                            if (context.mounted) {
-                              _showSettingMessage(context, '已复制'.tl);
-                            }
-                          },
-                          child: Text('复制'.tl),
-                        ),
-                        const Divider(),
-                      ],
-                    ),
-                  ),
-                );
-              },
-            ),
     );
   }
 }

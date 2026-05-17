@@ -30,6 +30,10 @@ android {
         multiDexEnabled = true
     }
 
+    buildFeatures {
+        aidl = true
+    }
+
     buildTypes {
         release {
             signingConfig = signingConfigs.getByName("debug")

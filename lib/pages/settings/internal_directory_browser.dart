@@ -87,6 +87,12 @@ bool _isAndroidDataLikePath(String path) {
       normalized.startsWith('/sdcard/Android/data/');
 }
 
+bool _isAndroidDataRootPath(String path) {
+  final normalized = _normalizeDirectoryPath(path);
+  return normalized == '/storage/emulated/0/Android/data' ||
+      normalized == '/sdcard/Android/data';
+}
+
 bool _requiresPrivilegedDirectoryAccess(String path) {
   final normalized = _normalizeDirectoryPath(path);
   return normalized.startsWith('/data/') ||
@@ -158,8 +164,18 @@ Future<List<_DirectoryBrowserEntry>> _listEntriesWithRoot(String path) async {
 }
 
 Future<List<_DirectoryBrowserEntry>> _listEntriesWithShizuku(String path) async {
-  final items = await _AndroidStorageAccessController.instance
-      .listDirectoryEntriesWithShizuku(_normalizeDirectoryPath(path));
+  final normalizedPath = _normalizeDirectoryPath(path);
+  final controller = _AndroidStorageAccessController.instance;
+  List<Map<String, String>> items;
+  if (_isAndroidDataRootPath(normalizedPath)) {
+    try {
+      items = await controller.listAndroidDataDirectoryWithShizuku();
+    } catch (_) {
+      items = await controller.listDirectoryEntriesWithShizuku(normalizedPath);
+    }
+  } else {
+    items = await controller.listDirectoryEntriesWithShizuku(normalizedPath);
+  }
   return items
       .map(
         (item) => _DirectoryBrowserEntry(
@@ -246,6 +262,8 @@ class _InternalDirectoryBrowserPage extends StatefulWidget {
 
 class _InternalDirectoryBrowserPageState
     extends State<_InternalDirectoryBrowserPage> {
+  static const String _shizukuFuseHintPrefsKey =
+      'shizuku_fuse_limit_hint_dismissed';
   static const _androidPresetRoots = <String>[
     '/data/user/0',
     '/storage/emulated/0',
@@ -284,6 +302,7 @@ class _InternalDirectoryBrowserPageState
   late _AndroidDirectoryBrowseMode _browseMode;
   bool _loading = true;
   bool _showPresetRoots = false;
+  bool _shizukuFuseHintDismissed = false;
   int _pathLoadToken = 0;
   String? _errorText;
   List<_DirectoryBrowserEntry> _children = const <_DirectoryBrowserEntry>[];
@@ -300,6 +319,15 @@ class _InternalDirectoryBrowserPageState
     _searchController.addListener(() {
       if (mounted) {
         setState(() {});
+      }
+    });
+    SharedPreferences.getInstance().then((prefs) {
+      if (!mounted) {
+        return;
+      }
+      final dismissed = prefs.getBool(_shizukuFuseHintPrefsKey) ?? false;
+      if (dismissed != _shizukuFuseHintDismissed) {
+        setState(() => _shizukuFuseHintDismissed = dismissed);
       }
     });
     _loadCurrentPath();
@@ -603,6 +631,110 @@ class _InternalDirectoryBrowserPageState
     );
   }
 
+  Widget _buildShizukuFuseLimitHint(BuildContext context) {
+    final theme = Theme.of(context);
+    final hintText =
+        'Shizuku 模式下 Android/data 受 FUSE 限制，可能少 1-2 项；完整结果需要 Root'.tl;
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.fromLTRB(12, 6, 12, 0),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceContainerHigh,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(12),
+          onTap: _showShizukuFuseLimitDialog,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            child: Row(
+              children: [
+                Icon(
+                  Icons.info_outline,
+                  size: 18,
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    hintText,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 4),
+                Icon(
+                  Icons.chevron_right,
+                  size: 18,
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _showShizukuFuseLimitDialog() async {
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text('Shizuku 模式下 Android/data 显示上限'.tl),
+        content: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text('当前模式：仅 Shizuku 授权（uid=2000 shell）。'.tl),
+              const SizedBox(height: 12),
+              Text(
+                '/storage/emulated/0/Android/data 在 MIUI FUSE 下被过滤，dirent 与 java.io.File.listFiles() 都拿不到完整列表。'.tl,
+              ),
+              const SizedBox(height: 12),
+              Text(
+                '已通过 IPackageManager.getInstalledPackages 与 dirent 做并集回退，能补回绝大多数包名目录。'.tl,
+              ),
+              const SizedBox(height: 12),
+              Text(
+                '剩余 1-2 项通常是：getInstalledPackages 不会返回的孤儿包目录，以及 Android/data/.nomedia 这类非包名顶层文件。'.tl,
+              ),
+              const SizedBox(height: 12),
+              Text(
+                '要拿到完整结果，需要切换到 Root 模式。Root 模式与普通 manageAllFiles 模式不会出现本提示。'.tl,
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: Text('关闭'.tl),
+          ),
+          TextButton(
+            onPressed: () async {
+              final prefs = await SharedPreferences.getInstance();
+              await prefs.setBool(_shizukuFuseHintPrefsKey, true);
+              if (!mounted) {
+                return;
+              }
+              setState(() => _shizukuFuseHintDismissed = true);
+              if (dialogContext.mounted) {
+                Navigator.of(dialogContext).pop();
+              }
+            },
+            child: Text('不再提示'.tl),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildHorizontalPathChips({
     required List<_DirectoryQuickPath> items,
     bool useModeIcon = false,
@@ -891,6 +1023,10 @@ class _InternalDirectoryBrowserPageState
       body: Column(
         children: [
           _buildBreadcrumbBar(context),
+          if (_browseMode == _AndroidDirectoryBrowseMode.shizuku &&
+              _isAndroidDataRootPath(_currentPath) &&
+              !_shizukuFuseHintDismissed)
+            _buildShizukuFuseLimitHint(context),
           Padding(
             padding: const EdgeInsets.fromLTRB(12, 6, 12, 0),
             child: _buildSearchBar(),

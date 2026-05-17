@@ -707,10 +707,12 @@ class _RemoteLibrarySnapshot {
   const _RemoteLibrarySnapshot({
     required this.roots,
     required this.items,
+    required this.signature,
   });
 
   final List<RemoteLibraryRootSummary> roots;
   final List<RemoteLibraryComicItem> items;
+  final String signature;
 }
 
 class _RemoteLibraryCoverDiskCache {
@@ -981,6 +983,19 @@ class RemoteLibraryClient {
     return (await _fetchSnapshot(forceRefresh: forceRefresh)).items;
   }
 
+  String? get currentSignature {
+    final signature = _snapshotCache?.signature.trim() ?? '';
+    return signature.isEmpty ? null : signature;
+  }
+
+  static RemoteLibraryClient? tryFromCurrentSettings() {
+    try {
+      return RemoteLibraryClient.fromCurrentSettings();
+    } catch (_) {
+      return null;
+    }
+  }
+
   Future<List<RemoteLibraryComicItem>> fetchItemsForRoot(
     String rootId, {
     bool forceRefresh = false,
@@ -1111,9 +1126,11 @@ class RemoteLibraryClient {
             )
             .toList(growable: false);
     final roots = _readRoots(payload['roots'], items);
+    final signature = _readText(payload['librarySignature']);
     return _RemoteLibrarySnapshot(
       roots: roots,
       items: items,
+      signature: signature,
     );
   }
 

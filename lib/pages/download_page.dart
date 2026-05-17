@@ -16,6 +16,7 @@ import 'package:picakeep/foundation/local_data_source.dart';
 import 'package:picakeep/foundation/local_favorites.dart';
 import 'package:picakeep/foundation/local_library.dart';
 import 'package:picakeep/foundation/local_library_settings.dart';
+import 'package:picakeep/foundation/remote_library_event_channel.dart';
 import 'package:picakeep/foundation/remote_library_data_source.dart';
 import 'package:picakeep/foundation/service_data_source.dart';
 import 'package:picakeep/foundation/trash.dart';
@@ -30,21 +31,17 @@ import 'package:picakeep/tools/read_history_helper.dart';
 import 'package:picakeep/tools/tags_translation.dart';
 import 'local_comic_detail_page.dart';
 
-void _toComicInfoPage(BuildContext context, DownloadedItem comic) {
+void _toComicInfoPage(DownloadedItem comic) {
   if (comic is RemoteLibraryRootItem) {
-    Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => DownloadPage(
-          remoteRootId: comic.root.id,
-          title: comic.name,
-        ),
+    App.pushInner(
+      () => DownloadPage(
+        remoteRootId: comic.root.id,
+        title: comic.name,
       ),
     );
     return;
   }
-  Navigator.of(context).push(MaterialPageRoute(
-    builder: (_) => LocalComicDetailPage(comic: comic),
-  ));
+  App.pushInner(() => LocalComicDetailPage(comic: comic));
 }
 
 extension ReadComic on DownloadedItem {
@@ -406,6 +403,7 @@ class DownloadPageLogic extends StateController {
   bool remoteAvailable = false;
   bool _forceRemoteRefreshOnNextReload = false;
   _DownloadedLoadIssue? _loadIssue;
+  DateTime? _lastManualRemoteRefreshAt;
 
   bool get isDeleteOperationRunning => _isDeletingItems;
 
@@ -482,6 +480,24 @@ class DownloadPageLogic extends StateController {
     if (_isDeletingItems) {
       return;
     }
+    refresh();
+  }
+
+  bool get showManualRemoteRefreshButton =>
+      !selecting &&
+      !searchMode &&
+      (_view == _DownloadedLibraryView.remote ||
+          _view == _DownloadedLibraryView.aggregate);
+
+  void triggerManualRemoteRefresh() {
+    final now = DateTime.now();
+    final lastTriggeredAt = _lastManualRemoteRefreshAt;
+    if (lastTriggeredAt != null &&
+        now.difference(lastTriggeredAt) < const Duration(milliseconds: 1500)) {
+      return;
+    }
+    _lastManualRemoteRefreshAt = now;
+    _forceRemoteRefreshOnNextReload = true;
     refresh();
   }
 
@@ -687,7 +703,8 @@ class DownloadPageLogic extends StateController {
   void _prefetchCoverThumbnails(List<DownloadedItem> items) {
     final remoteItems = items
         .where(
-          (item) => item is RemoteLibraryComicItem || item is RemoteLibraryRootItem,
+          (item) =>
+              item is RemoteLibraryComicItem || item is RemoteLibraryRootItem,
         )
         .take(12)
         .toList(growable: false);
@@ -699,7 +716,8 @@ class DownloadPageLogic extends StateController {
         if (!baseComics.any((comic) => comic.id == item.id)) {
           continue;
         }
-        final provider = _coverImageProviders[item.id] ?? coverImageProviderFor(item);
+        final provider =
+            _coverImageProviders[item.id] ?? coverImageProviderFor(item);
         if (provider == null) {
           continue;
         }
@@ -942,6 +960,7 @@ class DownloadPageLogic extends StateController {
     String direction, {
     bool forceRemoteRefresh = false,
   }) async {
+    RemoteLibraryEventChannel.instance.onRemotePageActivated();
     final rootId = remoteRootId?.trim() ?? '';
     final downloads = rootId.isNotEmpty
         ? await _remoteDataSource.fetchItemsForRoot(
@@ -1040,7 +1059,7 @@ class DownloadPageLogic extends StateController {
       try {
         await reload();
       } catch (e) {
-        errorText ??= _deleteErrorTextFromException(e);
+        print('[PicaKeep] DownloadPage reload after delete failed: $e');
       }
       _isDeletingItems = false;
       _deleteProgressCurrent = 0;
@@ -1324,6 +1343,7 @@ class _DownloadPageState extends State<DownloadPage>
     if (logic == null || !logic.shouldAutoRefreshOnResume) {
       return;
     }
+    RemoteLibraryEventChannel.instance.onRemotePageActivated();
     logic.forceRemoteRefresh();
   }
 
@@ -1338,6 +1358,7 @@ class _DownloadPageState extends State<DownloadPage>
       return;
     }
     _wasCurrentRoute = true;
+    RemoteLibraryEventChannel.instance.onRemotePageActivated();
     if (_hasActivatedOnce) {
       return;
     }
@@ -1609,7 +1630,7 @@ class _DownloadPageState extends State<DownloadPage>
                     }
                     logic.update();
                   } else if (isRootItem) {
-                    _toComicInfoPage(context, item);
+                    _toComicInfoPage(item);
                   } else {
                     _showInfo(index, logic, context);
                   }
@@ -1678,7 +1699,7 @@ class _DownloadPageState extends State<DownloadPage>
           onTap: () {
             if (isRootItem) {
               Future.delayed(const Duration(milliseconds: 120), () {
-                _toComicInfoPage(App.globalContext!, item);
+                _toComicInfoPage(item);
               });
               return;
             }
@@ -1729,7 +1750,7 @@ class _DownloadPageState extends State<DownloadPage>
           child: Text("查看漫画详情".tl),
           onTap: () {
             Future.delayed(const Duration(milliseconds: 300), () {
-              _toComicInfoPage(App.globalContext!, logic.comics[index]);
+              _toComicInfoPage(logic.comics[index]);
             });
           },
         ),
@@ -1788,58 +1809,60 @@ class _DownloadPageState extends State<DownloadPage>
         onPressed: logic.isDeleteOperationRunning
             ? null
             : () {
-          if (!logic.selecting) {
-            logic.selecting = true;
-            logic.update();
-          } else {
-            if (logic.selectedNum == 0) return;
-            showDialog(
-              context: context,
-              builder: (dialogContext) {
-                return AlertDialog(
-                  title: Text(buildDeleteActionTexts(count: logic.selectedNum)
-                      .title
-                      .tl),
-                  content: Text(buildDeleteActionTexts(count: logic.selectedNum)
-                      .content
-                      .tl),
-                  actions: [
-                    TextButton(
-                      onPressed: () => App.globalBack(),
-                      child: Text("取消".tl),
-                    ),
-                    TextButton(
-                      onPressed: () async {
-                        App.globalBack();
-                        final items = <DownloadedItem>[];
-                        for (int i = 0; i < logic.selected.length; i++) {
-                          if (logic.selected[i] &&
-                              logic.canDeleteItem(logic.comics[i])) {
-                            items.add(logic.comics[i]);
-                          }
-                        }
-                        if (items.isEmpty) {
-                          return;
-                        }
-                        final error = await logic.deleteItems(items);
-                        if (error != null && context.mounted) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(content: Text(error)),
-                          );
-                          return;
-                        }
-                      },
-                      child: Text(
-                          buildDeleteActionTexts(count: logic.selectedNum)
-                              .confirmLabel
-                              .tl),
-                    ),
-                  ],
-                );
+                if (!logic.selecting) {
+                  logic.selecting = true;
+                  logic.update();
+                } else {
+                  if (logic.selectedNum == 0) return;
+                  showDialog(
+                    context: context,
+                    builder: (dialogContext) {
+                      return AlertDialog(
+                        title: Text(
+                            buildDeleteActionTexts(count: logic.selectedNum)
+                                .title
+                                .tl),
+                        content: Text(
+                            buildDeleteActionTexts(count: logic.selectedNum)
+                                .content
+                                .tl),
+                        actions: [
+                          TextButton(
+                            onPressed: () => App.globalBack(),
+                            child: Text("取消".tl),
+                          ),
+                          TextButton(
+                            onPressed: () async {
+                              App.globalBack();
+                              final items = <DownloadedItem>[];
+                              for (int i = 0; i < logic.selected.length; i++) {
+                                if (logic.selected[i] &&
+                                    logic.canDeleteItem(logic.comics[i])) {
+                                  items.add(logic.comics[i]);
+                                }
+                              }
+                              if (items.isEmpty) {
+                                return;
+                              }
+                              final error = await logic.deleteItems(items);
+                              if (error != null && context.mounted) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(content: Text(error)),
+                                );
+                                return;
+                              }
+                            },
+                            child: Text(
+                                buildDeleteActionTexts(count: logic.selectedNum)
+                                    .confirmLabel
+                                    .tl),
+                          ),
+                        ],
+                      );
+                    },
+                  );
+                }
               },
-            );
-          }
-        },
         child: logic.selecting
             ? const Icon(Icons.delete_forever_outlined)
             : const Icon(Icons.checklist_outlined),
@@ -1926,6 +1949,14 @@ class _DownloadPageState extends State<DownloadPage>
 
   List<Widget> _buildActions(BuildContext context, DownloadPageLogic logic) {
     return [
+      if (logic.showManualRemoteRefreshButton)
+        Tooltip(
+          message: '刷新远程'.tl,
+          child: IconButton(
+            icon: const Icon(Icons.refresh),
+            onPressed: logic.triggerManualRemoteRefresh,
+          ),
+        ),
       if (!logic.selecting && !logic.searchMode)
         Tooltip(
           message: "排序".tl,
@@ -2043,8 +2074,7 @@ class _DownloadPageState extends State<DownloadPage>
                         } else {
                           for (int i = 0; i < logic.selected.length; i++) {
                             if (logic.selected[i]) {
-                              _toComicInfoPage(
-                                  App.globalContext!, logic.comics[i]);
+                              _toComicInfoPage(logic.comics[i]);
                             }
                           }
                         }
@@ -2596,8 +2626,8 @@ class _DownloadedComicInfoViewState extends State<DownloadedComicInfoView> {
                               minimumSize: const Size.fromHeight(56),
                             ),
                             onPressed: () {
-                              App.globalBack();
-                              _toComicInfoPage(context, _comic);
+                              Navigator.of(context).pop();
+                              _toComicInfoPage(_comic);
                             },
                             child: Text("查看详情".tl),
                           ),

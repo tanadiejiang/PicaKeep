@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
@@ -13,6 +14,7 @@ import 'package:picakeep/foundation/app_runtime_mode.dart';
 import 'package:picakeep/foundation/download_model.dart';
 import 'package:picakeep/foundation/local_library.dart';
 import 'package:picakeep/foundation/local_library_settings.dart';
+import 'package:picakeep/foundation/remote_library_event_channel.dart';
 import 'package:picakeep/foundation/remote_library_data_source.dart';
 import 'package:picakeep/foundation/service_data_source.dart';
 import 'package:picakeep/foundation/trash.dart';
@@ -372,6 +374,8 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
   int _deleteProgressCurrent = 0;
   int _deleteProgressTotal = 0;
   String _deleteProgressActionLabel = '';
+  bool _forceRemoteRefreshOnNextLoad = false;
+  DateTime? _lastManualRemoteRefreshAt;
   List<DownloadedItem> _items = const <DownloadedItem>[];
   late _LocalLibraryView _view = widget.preferRemoteView || _isRemoteRootPage
       ? _LocalLibraryView.remote
@@ -564,12 +568,20 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
   }
 
   Future<void> _refreshCurrentLibrary({bool rescan = false}) async {
-    if (_view == _LocalLibraryView.remote && _remoteAvailable) {
-      await _load();
-      return;
-    }
     await _refreshLocalLibrary(rescan: rescan);
     await _load();
+  }
+
+  void _triggerManualRemoteRefresh() {
+    final now = DateTime.now();
+    final lastTriggeredAt = _lastManualRemoteRefreshAt;
+    if (lastTriggeredAt != null &&
+        now.difference(lastTriggeredAt) < const Duration(milliseconds: 1500)) {
+      return;
+    }
+    _lastManualRemoteRefreshAt = now;
+    _forceRemoteRefreshOnNextLoad = true;
+    unawaited(_load());
   }
 
   Future<bool> _checkRemoteAvailability() async {
@@ -594,17 +606,20 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
   }
 
   Future<List<DownloadedItem>> _loadRemoteItems() async {
+    RemoteLibraryEventChannel.instance.onRemotePageActivated();
     final rootId = widget.remoteRootId?.trim() ?? '';
+    final forceRemoteRefresh = _forceRemoteRefreshOnNextLoad;
+    _forceRemoteRefreshOnNextLoad = false;
     if (rootId.isNotEmpty) {
       final items = await _remoteDataSource.fetchItemsForRoot(
         rootId,
-        forceRefresh: true,
+        forceRefresh: forceRemoteRefresh,
       );
       return _sortItems(items.toList());
     }
     final roots = await _remoteDataSource.fetchRootItems(
       customLibraryOnly: true,
-      forceRefresh: true,
+      forceRefresh: forceRemoteRefresh,
     );
     return _sortItems(roots.cast<DownloadedItem>().toList());
   }
@@ -1528,8 +1543,12 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
   @override
   Widget build(BuildContext context) {
     final items = _filteredItems;
+    final isRemoteRefreshView =
+        (_view == _LocalLibraryView.remote ||
+            _view == _LocalLibraryView.aggregate) &&
+        _remoteAvailable;
     final refreshTooltip =
-        (_view == _LocalLibraryView.remote && _remoteAvailable)
+        isRemoteRefreshView
             ? (_isAlbumOnly ? '刷新远程图集'.tl : '刷新远程资源库'.tl)
             : (_isAlbumOnly ? '刷新图集'.tl : '刷新资源库'.tl);
     Widget page = Scaffold(
@@ -1562,9 +1581,11 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
                           IconButton(
                             icon: const Icon(Icons.refresh),
                             tooltip: refreshTooltip,
-                            onPressed: () async {
-                              await _refreshCurrentLibrary();
-                            },
+                            onPressed: isRemoteRefreshView
+                                ? _triggerManualRemoteRefresh
+                                : () async {
+                                    await _refreshCurrentLibrary();
+                                  },
                           ),
                           if (!widget.albumOnly)
                             IconButton(

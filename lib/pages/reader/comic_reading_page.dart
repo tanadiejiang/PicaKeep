@@ -154,6 +154,7 @@ class ComicReadingPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return StateBuilder<ComicReadingPageLogic>(initState: (logic) {
+      App.setReadingActive(true);
       _syncReaderSystemUi(useDarkBackground: useDarkBackground, visible: false);
       if (appdata.settings[14] == "1") {
         setKeepScreenOn();
@@ -210,6 +211,7 @@ class ComicReadingPage extends StatelessWidget {
         Future.microtask(() =>
             StateController.findOrNull<WindowFrameController>()?.resetTheme());
       }
+      App.setReadingActive(false);
     }, builder: (logic) {
       _syncReaderSystemUi(
         useDarkBackground: useDarkBackground,
@@ -340,7 +342,7 @@ class ComicReadingPage extends StatelessWidget {
             icon: const Icon(
               Icons.arrow_back,
             ),
-            onPressed: () => App.globalBack(),
+            onPressed: () => Navigator.of(context).maybePop(),
           ),
         ),
         Positioned(

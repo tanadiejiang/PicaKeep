@@ -88,13 +88,26 @@ class LocalServerRuntime {
   Future<void> refreshResourceState() {
     return _runExclusive(() async {
       _invalidateStandaloneSnapshot();
+      final nextConfig = await _resolveEffectiveConfig();
+      await PicaKeepServerConfig.save(configPath, nextConfig);
       final server = _server;
       if (server != null && server.isRunning) {
+        final currentConfig = server.config ?? await _loadBaseConfig();
         try {
-          await server.rescanResources();
+          if (_hasSameServerBinding(currentConfig, nextConfig)) {
+            await server.applyConfig(nextConfig);
+          } else {
+            await _restartWithResolvedConfig(nextConfig);
+          }
         } catch (e, s) {
-          _state.addLog('scan', '重新扫描本地资源失败: $e');
+          _state.addLog('config', '热更新服务配置失败，回退到重新扫描: $e');
           _state.addLog('scan', s.toString());
+          try {
+            await server.rescanResources();
+          } catch (rescanError, rescanStack) {
+            _state.addLog('scan', '重新扫描本地资源失败: $rescanError');
+            _state.addLog('scan', rescanStack.toString());
+          }
         }
       }
       _notify();
@@ -187,37 +200,8 @@ class LocalServerRuntime {
 
   Future<void> restart() {
     return _runExclusive(() async {
-      final server = _server;
-      if (server != null) {
-        try {
-          await server.stop();
-        } finally {
-          _server = null;
-          _invalidateStandaloneSnapshot();
-          _notify();
-        }
-      }
-      _invalidateStandaloneSnapshot();
       final config = await _resolveEffectiveConfig();
-      await PicaKeepServerConfig.save(configPath, config);
-      final nextServer = PicaKeepAdminServer(
-        configPath: configPath,
-        runtimeState: _state,
-      );
-      _server = nextServer;
-      _notify();
-      try {
-        await nextServer.start(config: config);
-      } catch (e) {
-        _server = null;
-        if (_isPortAlreadyBoundError(e)) {
-          _state.markError('端口 ${config.port} 已被占用');
-          _notify();
-          return;
-        }
-        _notify();
-        rethrow;
-      }
+      await _restartWithResolvedConfig(config);
       _notify();
     });
   }
@@ -347,6 +331,49 @@ class LocalServerRuntime {
       return PicaKeepServerConfig.defaults();
     }
     return PicaKeepServerConfig.load(configPath);
+  }
+
+  bool _hasSameServerBinding(
+    PicaKeepServerConfig currentConfig,
+    PicaKeepServerConfig nextConfig,
+  ) {
+    return currentConfig.host.trim() == nextConfig.host.trim() &&
+        currentConfig.port == nextConfig.port;
+  }
+
+  Future<void> _restartWithResolvedConfig(
+    PicaKeepServerConfig config,
+  ) async {
+    final server = _server;
+    if (server != null) {
+      try {
+        await server.stop();
+      } finally {
+        _server = null;
+        _invalidateStandaloneSnapshot();
+        _notify();
+      }
+    }
+    _invalidateStandaloneSnapshot();
+    await PicaKeepServerConfig.save(configPath, config);
+    final nextServer = PicaKeepAdminServer(
+      configPath: configPath,
+      runtimeState: _state,
+    );
+    _server = nextServer;
+    _notify();
+    try {
+      await nextServer.start(config: config);
+    } catch (e) {
+      _server = null;
+      if (_isPortAlreadyBoundError(e)) {
+        _state.markError('端口 ${config.port} 已被占用');
+        _notify();
+        return;
+      }
+      _notify();
+      rethrow;
+    }
   }
 
   Future<ServerResourceSnapshot> _readStandaloneSnapshot(

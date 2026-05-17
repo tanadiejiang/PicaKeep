@@ -31,6 +31,7 @@ class ServiceInfoSnapshot {
     this.connectionCount,
     this.libraryRootCount,
     this.resourceBytes,
+    this.librarySignature,
     this.totalRequests,
     this.startedAt,
   });
@@ -50,6 +51,7 @@ class ServiceInfoSnapshot {
   final int? connectionCount;
   final int? libraryRootCount;
   final int? resourceBytes;
+  final String? librarySignature;
   final int? totalRequests;
   final String? startedAt;
 
@@ -144,6 +146,7 @@ class RemoteRuntimeServiceDataSource implements RuntimeServiceDataSource {
         final connectionCount = _tryReadInt(payload?['connectionCount']);
         final libraryRootCount = _tryReadInt(payload?['libraryRootCount']);
         final resourceBytes = _tryReadInt(payload?['resourceBytes']);
+        final librarySignature = payload?['librarySignature']?.toString();
         final totalRequests = _tryReadInt(payload?['totalRequests']);
         final startedAt = payload?['startedAt']?.toString();
         final adminUrl = payload?['adminUrl']?.toString();
@@ -170,6 +173,7 @@ class RemoteRuntimeServiceDataSource implements RuntimeServiceDataSource {
           connectionCount: connectionCount,
           libraryRootCount: libraryRootCount,
           resourceBytes: resourceBytes,
+          librarySignature: librarySignature,
           totalRequests: totalRequests,
           startedAt: startedAt,
         );

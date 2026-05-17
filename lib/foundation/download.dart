@@ -11,6 +11,7 @@ import 'local_library_settings.dart';
 import 'local_trash_store.dart';
 
 const _storageAccessChannelName = 'lingxue.picakeep/storage_access';
+const _androidApplicationId = 'lingxue.picakeep';
 
 const MethodChannel _storageAccessChannel =
     MethodChannel(_storageAccessChannelName);
@@ -87,6 +88,51 @@ Future<_PrivilegedDeleteMode?> _resolvePrivilegedDeleteMode({
   return null;
 }
 
+Future<bool> _pathExistsWithPrivilegedMode(
+  String path, {
+  required _PrivilegedDeleteMode mode,
+}) async {
+  final method = switch (mode) {
+    _PrivilegedDeleteMode.root => 'existsWithRoot',
+    _PrivilegedDeleteMode.shizuku => 'existsWithShizuku',
+  };
+  return await _storageAccessChannel.invokeMethod<bool>(
+        method,
+        {'path': path},
+      ) ??
+      false;
+}
+
+String _normalizeAndroidStoragePath(String path) {
+  var normalized = path.trim().replaceAll('\\', '/');
+  while (normalized.contains('//')) {
+    normalized = normalized.replaceAll('//', '/');
+  }
+  while (normalized.length > 1 && normalized.endsWith('/')) {
+    normalized = normalized.substring(0, normalized.length - 1);
+  }
+  return normalized;
+}
+
+bool _isOtherAppAndroidContainerRoot(String path) {
+  if (!Platform.isAndroid) {
+    return false;
+  }
+  final normalized = _normalizeAndroidStoragePath(path);
+  final segments =
+      normalized.split('/').where((entry) => entry.isNotEmpty).toList();
+  final androidIndex = segments.indexOf('Android');
+  if (androidIndex < 0 || androidIndex + 2 >= segments.length) {
+    return false;
+  }
+  final container = segments[androidIndex + 1];
+  if (container != 'data' && container != 'obb') {
+    return false;
+  }
+  final packageName = segments[androidIndex + 2];
+  return packageName.isNotEmpty && packageName != _androidApplicationId;
+}
+
 Future<void> _deletePathWithPrivilegedMode(
   String path, {
   required _PrivilegedDeleteMode mode,
@@ -146,8 +192,15 @@ class DownloadManager with _DownloadDb {
     } else {
       path = appdata.settings[22];
     }
-    var dir = Directory(path!);
-    if (!await dir.exists()) {
+    final dir = Directory(path!);
+    final shouldUsePrivilegedExists = _isOtherAppAndroidContainerRoot(path!);
+    if (shouldUsePrivilegedExists) {
+      final mode = await _resolvePrivilegedDeleteMode(forceRefresh: true);
+      if (mode == null ||
+          !await _pathExistsWithPrivilegedMode(path!, mode: mode)) {
+        throw StateError('download_path_permission_denied');
+      }
+    } else if (!await dir.exists()) {
       await dir.create(recursive: true);
     }
     print('[PicaKeep] Download path: $path');
