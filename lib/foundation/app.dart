@@ -18,6 +18,11 @@ class AppStartupTrace {
 
   static void log(String stage) {
     debugPrint('[PicaKeep][startup][${_stopwatch.elapsedMilliseconds}ms] $stage');
+    LogManager.addLog(
+      LogLevel.info,
+      'Startup',
+      '[${_stopwatch.elapsedMilliseconds}ms] $stage',
+    );
   }
 }
 
@@ -45,6 +50,8 @@ class App {
 
   static final ValueNotifier<int> serviceRuntimeVersion = ValueNotifier(0);
 
+  static final ValueNotifier<bool> isReadingActive = ValueNotifier(false);
+
   static void notifyLocalDataChanged() {
     localDataVersion.value++;
     updater?.call();
@@ -61,6 +68,13 @@ class App {
 
   static void notifyServiceRuntimeChanged() {
     serviceRuntimeVersion.value++;
+  }
+
+  static void setReadingActive(bool active) {
+    if (isReadingActive.value == active) {
+      return;
+    }
+    isReadingActive.value = active;
   }
 
   static UiModes uiMode([BuildContext? context]) {
@@ -130,9 +144,15 @@ class App {
         .push<T>(AppPageRoute(builder: (context) => page()));
   }
 
-  /// Full-screen reader on the root stack (matches PicaComic); ensures [globalBack] closes the reader.
-  static Future<T?> openReader<T extends Object?>(Widget Function() page) =>
-      globalTo<T>(page);
+  static Future<T?> openReader<T extends Object?>(
+    Widget Function() page, {
+    BuildContext? context,
+  }) {
+    if (context != null) {
+      return to<T>(context, page);
+    }
+    return globalTo<T>(page);
+  }
 
   /// Prefer the tab [Navigator] when present (matches PicaComic main stack).
   static BuildContext get innerOrGlobalContext =>

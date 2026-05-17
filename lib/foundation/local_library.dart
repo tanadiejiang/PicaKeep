@@ -528,9 +528,8 @@ class LocalLibraryManager {
   }
 
   Future<ManagedSourceAccessRequirement> getManagedSourceAccessRequirement(
-    String mode,
-    {bool refreshAccess = false}
-  ) async {
+      String mode,
+      {bool refreshAccess = false}) async {
     final normalizedMode = normalizeManagedDataSourceMode(mode);
     final currentPath = await resolveCurrentDownloadPath();
     final originalPath = configuredOriginalDownloadPath;
@@ -561,10 +560,9 @@ class LocalLibraryManager {
         '1';
     final rootGranted =
         rootEnabled ? await _hasRootAccess(forceRefresh: refreshAccess) : false;
-    final shizukuGranted =
-        shizukuEnabled
-            ? await _hasShizukuPermission(forceRefresh: refreshAccess)
-            : false;
+    final shizukuGranted = shizukuEnabled
+        ? await _hasShizukuPermission(forceRefresh: refreshAccess)
+        : false;
 
     for (final path in paths) {
       if (_canAccessDirectoryWithDartIo(path)) {
@@ -1026,8 +1024,8 @@ class LocalLibraryManager {
       if (!sourceExists) {
         continue;
       }
-      final looksLikeDownload =
-          source.isManagedDownload || await _isDownloadDirectoryAsync(source.path);
+      final looksLikeDownload = source.isManagedDownload ||
+          await _isDownloadDirectoryAsync(source.path);
       if (looksLikeDownload) {
         await _scanDownloadSource(source);
       } else {
@@ -1210,6 +1208,9 @@ class LocalLibraryManager {
         if (!source.isManagedDownload) {
           continue;
         }
+        if (await _shouldUsePrivilegedFallbackForDirectory(source.path)) {
+          continue;
+        }
         try {
           Directory(source.path).createSync(recursive: true);
         } catch (_) {}
@@ -1329,20 +1330,20 @@ class LocalLibraryManager {
               'select rowid as __rowid__, * from download order by time desc',
             )
             .toList()
-              ..sort((a, b) {
-                final score = _downloadRowPriority(
-                  (b['id'] as String? ?? '').trim(),
-                  (b['directory'] as String? ?? '').trim(),
-                ).compareTo(_downloadRowPriority(
-                  (a['id'] as String? ?? '').trim(),
-                  (a['directory'] as String? ?? '').trim(),
-                ));
-                if (score != 0) {
-                  return score;
-                }
-                return ((b['time'] as int?) ?? 0)
-                    .compareTo((a['time'] as int?) ?? 0);
-              });
+          ..sort((a, b) {
+            final score = _downloadRowPriority(
+              (b['id'] as String? ?? '').trim(),
+              (b['directory'] as String? ?? '').trim(),
+            ).compareTo(_downloadRowPriority(
+              (a['id'] as String? ?? '').trim(),
+              (a['directory'] as String? ?? '').trim(),
+            ));
+            if (score != 0) {
+              return score;
+            }
+            return ((b['time'] as int?) ?? 0)
+                .compareTo((a['time'] as int?) ?? 0);
+          });
         final seenDirectories = <String>{};
 
         for (final row in rows) {
@@ -1859,7 +1860,8 @@ class LocalLibraryManager {
     }
     final orderedEntries = episodeFiles.entries.toList()
       ..sort((a, b) => a.key.compareTo(b.key));
-    final orderedImages = orderedEntries.expand((entry) => entry.value).toList();
+    final orderedImages =
+        orderedEntries.expand((entry) => entry.value).toList();
     final coverPath = await _pickCoverPath(
       source.path,
       orderedEntries.isEmpty ? const <String>[] : orderedEntries.first.value,
@@ -1921,7 +1923,8 @@ class LocalLibraryManager {
     }
     final orderedEntries = episodeFiles.entries.toList()
       ..sort((a, b) => a.key.compareTo(b.key));
-    final orderedImages = orderedEntries.expand((entry) => entry.value).toList();
+    final orderedImages =
+        orderedEntries.expand((entry) => entry.value).toList();
     final coverPath = await _pickCoverPath(
       source.path,
       orderedEntries.isEmpty ? const <String>[] : orderedEntries.first.value,
@@ -2214,10 +2217,12 @@ class LocalLibraryManager {
     if (children.isEmpty) {
       return false;
     }
-    if (children.any((entry) => !entry.isDirectory && _isVisibleImagePath(entry.path))) {
+    if (children.any(
+        (entry) => !entry.isDirectory && _isVisibleImagePath(entry.path))) {
       return true;
     }
-    final childDirs = children.where((entry) => entry.isDirectory).toList(growable: false);
+    final childDirs =
+        children.where((entry) => entry.isDirectory).toList(growable: false);
     if (childDirs.isEmpty) {
       return false;
     }
@@ -2227,7 +2232,8 @@ class LocalLibraryManager {
         imageBearingDirs.add(childDir);
       }
     }
-    if (imageBearingDirs.isEmpty || imageBearingDirs.length != childDirs.length) {
+    if (imageBearingDirs.isEmpty ||
+        imageBearingDirs.length != childDirs.length) {
       return false;
     }
     return imageBearingDirs.every(

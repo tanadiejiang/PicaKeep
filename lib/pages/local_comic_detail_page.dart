@@ -250,8 +250,12 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
       _comic,
       legacyTargets: _historyTargetsFor(_comic),
     );
+    if (!mounted) {
+      return;
+    }
     await App.openReader(
       () => _comic.createReadingPage(ep: ep, page: page),
+      context: context,
     );
     await Future<void>.delayed(const Duration(milliseconds: 50));
     if (mounted) {

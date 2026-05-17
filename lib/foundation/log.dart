@@ -11,7 +11,13 @@ class LogManager {
 
   static bool ignoreLimitation = false;
 
+  static bool recordingEnabled = true;
+
   static void addLog(LogLevel level, String title, String content) {
+    if (!recordingEnabled) {
+      return;
+    }
+
     if (!ignoreLimitation && content.length > maxLogLength) {
       content = "${content.substring(0, maxLogLength)}...";
     }

@@ -28,8 +28,10 @@ import 'package:picakeep/server/local_server_runtime.dart';
 import 'package:picakeep/server/local_server_runtime_sync.dart';
 import 'package:picakeep/tools/block_screenshot.dart';
 import 'package:share_plus/share_plus.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 part 'app_settings.dart';
+part 'log_settings.dart';
 part 'internal_directory_browser.dart';
 part 'app_capabilities_settings.dart';
 part 'runtime_service_settings.dart';

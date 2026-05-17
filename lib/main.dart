@@ -10,6 +10,7 @@ import 'components/window_frame.dart';
 import 'foundation/app.dart';
 import 'foundation/history.dart';
 import 'foundation/local_favorites.dart';
+import 'foundation/remote_library_event_channel.dart';
 import 'pages/auth_page.dart';
 import 'pages/main_page.dart';
 import 'server/local_server_runtime_sync.dart';
@@ -122,8 +123,7 @@ class PicaKeepApp extends StatefulWidget {
   State<PicaKeepApp> createState() => _PicaKeepAppState();
 }
 
-class _PicaKeepAppState extends State<PicaKeepApp>
-    with WidgetsBindingObserver {
+class _PicaKeepAppState extends State<PicaKeepApp> with WidgetsBindingObserver {
   static const List<Color> _seedColors = [
     Colors.blue,
     Colors.red,
@@ -155,6 +155,7 @@ class _PicaKeepAppState extends State<PicaKeepApp>
     App.updater = _refreshApp;
     App.serviceConfigVersion.addListener(_handleServiceStateSyncRequest);
     App.serviceRuntimeVersion.addListener(_handleServiceStateSyncRequest);
+    RemoteLibraryEventChannel.instance.start();
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     if (appdata.settings[12] == '1') {
       blockScreenshot();
@@ -226,12 +227,14 @@ class _PicaKeepAppState extends State<PicaKeepApp>
     if (state == AppLifecycleState.hidden ||
         state == AppLifecycleState.inactive ||
         state == AppLifecycleState.paused) {
+      RemoteLibraryEventChannel.instance.onBackground();
       _requireAuthOnResume = appdata.settings[13] == '1';
       _lastBackgroundedAt = DateTime.now();
       return;
     }
 
     if (state == AppLifecycleState.resumed) {
+      RemoteLibraryEventChannel.instance.onForeground();
       final backgroundDuration = _lastBackgroundedAt == null
           ? Duration.zero
           : DateTime.now().difference(_lastBackgroundedAt!);

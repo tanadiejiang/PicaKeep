@@ -21,6 +21,7 @@ const localTrashDirectoryName = '.picakeep_trash';
 const deleteFailureLocalPathNotFound = 'local_path_not_found';
 const deleteFailurePermissionDenied = 'permission_denied';
 const _storageAccessChannelName = 'lingxue.picakeep/storage_access';
+const _androidApplicationId = 'lingxue.picakeep';
 
 const MethodChannel _storageAccessChannel =
     MethodChannel(_storageAccessChannelName);
@@ -39,6 +40,56 @@ String _basenameTrashPath(String path) {
   final segments =
       normalized.split('/').where((entry) => entry.isNotEmpty).toList();
   return segments.isEmpty ? normalized : segments.last;
+}
+
+String _normalizeAndroidStoragePath(String path) {
+  var normalized = path.trim().replaceAll('\\', '/');
+  while (normalized.contains('//')) {
+    normalized = normalized.replaceAll('//', '/');
+  }
+  while (normalized.length > 1 && normalized.endsWith('/')) {
+    normalized = normalized.substring(0, normalized.length - 1);
+  }
+  return normalized;
+}
+
+bool _shouldForcePrivilegedIo(String path) {
+  if (!App.isAndroid) {
+    return false;
+  }
+  final normalized = _normalizeAndroidStoragePath(path);
+  final segments =
+      normalized.split('/').where((entry) => entry.isNotEmpty).toList();
+  final androidIndex = segments.indexOf('Android');
+  if (androidIndex < 0 || androidIndex + 2 >= segments.length) {
+    return false;
+  }
+  final container = segments[androidIndex + 1];
+  if (container != 'data' && container != 'obb') {
+    return false;
+  }
+  final packageName = segments[androidIndex + 2];
+  return packageName.isNotEmpty && packageName != _androidApplicationId;
+}
+
+bool _sameNormalizedPath(String left, String right) {
+  final normalizedLeft = _normalizeAndroidStoragePath(left).toLowerCase();
+  final normalizedRight = _normalizeAndroidStoragePath(right).toLowerCase();
+  return normalizedLeft.isNotEmpty && normalizedLeft == normalizedRight;
+}
+
+bool _isUnsafeLocalDeleteRoot(String originalPath, String? sourceDbPath) {
+  final sourceDb = sourceDbPath?.trim() ?? '';
+  if (sourceDb.isEmpty) {
+    return false;
+  }
+  final dbParent = File(sourceDb).parent.path;
+  if (_sameNormalizedPath(originalPath, dbParent)) {
+    return true;
+  }
+  final dbGrandParent = File(dbParent).parent.path;
+  return _shouldForcePrivilegedIo(originalPath) &&
+      _sameNormalizedPath(originalPath, dbGrandParent);
 }
 
 String normalizeDeleteBehavior(String? value) {
@@ -655,10 +706,16 @@ class TrashManager {
     }
 
     final originalDir = Directory(record.originalPath);
-    if (originalDir.existsSync()) {
+    final originalState = await _resolveLocalPathState(originalDir);
+    if (originalState == _LocalPathState.permissionDenied) {
+      throw StateError(deleteFailurePermissionDenied);
+    }
+    if (originalState == _LocalPathState.exists) {
       throw StateError('original path already exists');
     }
-    if (trashedDir.existsSync()) {
+    final mustUsePrivileged = _shouldForcePrivilegedIo(record.trashedPath) ||
+        _shouldForcePrivilegedIo(record.originalPath);
+    if (!mustUsePrivileged && trashedDir.existsSync()) {
       originalDir.parent.createSync(recursive: true);
       await _moveDirectory(trashedDir, originalDir);
     } else {
@@ -692,6 +749,9 @@ class TrashManager {
 
     _items.removeWhere((item) => item.id == recordId);
     await _save();
+    if (_isServerMode) {
+      LocalServerRuntime.instance.markResourceStateDirty();
+    }
     App.notifyLocalDataChanged();
   }
 
@@ -710,7 +770,9 @@ class TrashManager {
           throw StateError(deleteFailurePermissionDenied);
         }
         if (dirState == _LocalPathState.exists) {
-          if (dir.existsSync()) {
+          final mustUsePrivileged =
+              _shouldForcePrivilegedIo(record.trashedPath);
+          if (!mustUsePrivileged && dir.existsSync()) {
             await dir.delete(recursive: true);
           } else {
             final mode = await _resolvePrivilegedWriteModeForOperation();
@@ -726,6 +788,9 @@ class TrashManager {
         await LocalTrashStore.instance.markPurged(recordId);
       } else {
         await LocalTrashStore.instance.delete(recordId);
+      }
+      if (_isServerMode) {
+        LocalServerRuntime.instance.markResourceStateDirty();
       }
       App.notifyLocalDataChanged();
       return;
@@ -745,7 +810,8 @@ class TrashManager {
         throw StateError(deleteFailurePermissionDenied);
       }
       if (dirState == _LocalPathState.exists) {
-        if (dir.existsSync()) {
+        final mustUsePrivileged = _shouldForcePrivilegedIo(record.trashedPath);
+        if (!mustUsePrivileged && dir.existsSync()) {
           await dir.delete(recursive: true);
         } else {
           final mode = await _resolvePrivilegedWriteModeForOperation();
@@ -758,6 +824,9 @@ class TrashManager {
     }
     _items.removeWhere((item) => item.id == recordId);
     await _save();
+    if (_isServerMode) {
+      LocalServerRuntime.instance.markResourceStateDirty();
+    }
     App.notifyLocalDataChanged();
   }
 
@@ -777,10 +846,16 @@ class TrashManager {
       }
 
       final originalDir = Directory(record.originalPath);
-      if (originalDir.existsSync()) {
+      final originalState = await _resolveLocalPathState(originalDir);
+      if (originalState == _LocalPathState.permissionDenied) {
+        throw StateError(deleteFailurePermissionDenied);
+      }
+      if (originalState == _LocalPathState.exists) {
         throw StateError('original path already exists');
       }
-      if (trashedDir.existsSync()) {
+      final mustUsePrivileged = _shouldForcePrivilegedIo(record.trashedPath) ||
+          _shouldForcePrivilegedIo(record.originalPath);
+      if (!mustUsePrivileged && trashedDir.existsSync()) {
         originalDir.parent.createSync(recursive: true);
         await _moveDirectory(trashedDir, originalDir);
       } else {
@@ -801,6 +876,9 @@ class TrashManager {
     }
 
     await LocalTrashStore.instance.delete(record.id);
+    if (_isServerMode) {
+      LocalServerRuntime.instance.markResourceStateDirty();
+    }
     App.notifyLocalDataChanged();
   }
 
@@ -938,6 +1016,15 @@ class TrashManager {
         db.dispose();
       }
       final nextBytes = await tempFile.readAsBytes();
+      final mustUsePrivileged = _shouldForcePrivilegedIo(sourceDbPath);
+      if (mustUsePrivileged) {
+        final mode = await _resolvePrivilegedWriteModeForOperation();
+        if (mode == null) {
+          throw StateError(deleteFailurePermissionDenied);
+        }
+        await _privilegedWriteFileBytes(sourceDbPath, nextBytes, mode: mode);
+        return true;
+      }
       try {
         file.parent.createSync(recursive: true);
         await file.writeAsBytes(nextBytes, flush: true);
@@ -1084,6 +1171,14 @@ class TrashManager {
       return DeleteItemResult.failure(deleteFailureLocalPathNotFound);
     }
     final sourceDir = Directory(target.originalPath);
+    print(
+      '[PicaKeep][Trash] move local item to trash path=${target.originalPath} db=${target.sourceDbPath ?? ''} directory=${target.sourceDirectory ?? ''}',
+    );
+    if (_isUnsafeLocalDeleteRoot(target.originalPath, target.sourceDbPath)) {
+      print(
+          '[PicaKeep][Trash] refuse unsafe delete root: ${target.originalPath}');
+      return DeleteItemResult.failure(deleteFailureLocalPathNotFound);
+    }
     final pathState = await _resolveLocalPathState(sourceDir);
     if (pathState == _LocalPathState.permissionDenied) {
       return DeleteItemResult.failure(deleteFailurePermissionDenied);
@@ -1136,7 +1231,8 @@ class TrashManager {
       }
 
       if (pathState == _LocalPathState.exists) {
-        final canDirectIo = sourceDir.existsSync();
+        final mustUsePrivileged = _shouldForcePrivilegedIo(target.originalPath);
+        final canDirectIo = !mustUsePrivileged && sourceDir.existsSync();
         if (canDirectIo) {
           Directory(sourceDir.parent.path).createSync(recursive: true);
           await _moveDirectory(sourceDir, Directory(trashedPath));
@@ -1171,13 +1267,18 @@ class TrashManager {
       );
 
       await LocalTrashStore.instance.upsert(record.toLocalStoreData());
+      if (_isServerMode) {
+        LocalServerRuntime.instance.markResourceStateDirty();
+      }
       App.notifyLocalDataChanged();
       return DeleteItemResult.success(record);
     } catch (e) {
       if (directoryMoved) {
         try {
           final trashedDir = Directory(trashedPath);
-          if (trashedDir.existsSync()) {
+          final mustUsePrivileged = _shouldForcePrivilegedIo(trashedPath) ||
+              _shouldForcePrivilegedIo(target.originalPath);
+          if (!mustUsePrivileged && trashedDir.existsSync()) {
             await _moveDirectory(trashedDir, Directory(target.originalPath));
           } else if (trashedPath.isNotEmpty) {
             final mode = await _resolvePrivilegedWriteModeForOperation();
@@ -1190,7 +1291,8 @@ class TrashManager {
             }
           }
         } catch (rollbackError) {
-          print('[PicaKeep] Failed to roll back moved directory: $rollbackError');
+          print(
+              '[PicaKeep] Failed to roll back moved directory: $rollbackError');
         }
       }
       if (sourceDbRecordRemoved) {
@@ -1213,7 +1315,8 @@ class TrashManager {
             ),
           );
         } catch (rollbackError) {
-          print('[PicaKeep] Failed to roll back source DB record: $rollbackError');
+          print(
+              '[PicaKeep] Failed to roll back source DB record: $rollbackError');
         }
       }
       await LocalTrashStore.instance.delete(recordId);
@@ -1244,9 +1347,10 @@ class TrashManager {
       return deleteFailureLocalPathNotFound;
     }
 
+    final mustUsePrivileged = _shouldForcePrivilegedIo(target.originalPath);
     if (target.hasSourceDbRecord || sourceDbId.isNotEmpty) {
       if (pathState == _LocalPathState.exists) {
-        if (dir.existsSync()) {
+        if (!mustUsePrivileged && dir.existsSync()) {
           await dir.delete(recursive: true);
         } else {
           final mode = await _resolvePrivilegedWriteModeForOperation();
@@ -1264,11 +1368,14 @@ class TrashManager {
         }
         rethrow;
       }
+      if (_isServerMode) {
+        LocalServerRuntime.instance.markResourceStateDirty();
+      }
       App.notifyLocalDataChanged();
       return null;
     }
     if (pathState == _LocalPathState.exists) {
-      if (dir.existsSync()) {
+      if (!mustUsePrivileged && dir.existsSync()) {
         await dir.delete(recursive: true);
       } else {
         final mode = await _resolvePrivilegedWriteModeForOperation();
@@ -1277,6 +1384,9 @@ class TrashManager {
         }
         await _privilegedDeletePath(target.originalPath, mode: mode);
       }
+    }
+    if (_isServerMode) {
+      LocalServerRuntime.instance.markResourceStateDirty();
     }
     App.notifyLocalDataChanged();
     return null;
@@ -1294,7 +1404,7 @@ class TrashManager {
         snapshotJson: sourceRowJson,
       );
     }
-    if (item is LocalLibraryComicItem && target.downloadDbId != null) {
+    if (item is! LocalLibraryComicItem && target.downloadDbId != null) {
       final manager = DownloadManager();
       await manager.init();
       final original = await manager.getComicOrNull(target.downloadDbId!);
@@ -1511,7 +1621,10 @@ class TrashManager {
 
   Future<_LocalPathState> _resolveLocalPathState(Directory dir) async {
     final localState = _localPathState(dir);
-    if (localState != _LocalPathState.permissionDenied || !App.isAndroid) {
+    final shouldCheckPrivileged = App.isAndroid &&
+        (localState == _LocalPathState.permissionDenied ||
+            _shouldForcePrivilegedIo(dir.path));
+    if (!shouldCheckPrivileged) {
       return localState;
     }
     final mode = await _resolvePrivilegedWriteModeForOperation();
