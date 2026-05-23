@@ -593,7 +593,8 @@ class _AndroidStorageAccessController {
     }
   }
 
-  Future<List<Map<String, String>>> listAndroidDataDirectoryWithShizuku() async {
+  Future<List<Map<String, String>>>
+      listAndroidDataDirectoryWithShizuku() async {
     if (!App.isAndroid) {
       return const <Map<String, String>>[];
     }
@@ -1077,7 +1078,6 @@ class _AndroidRootModeTileState extends State<_AndroidRootModeTile>
 
 Widget buildAppSettings(double width, BuildContext context) {
   return buildTwoColumnLayout(width, [
-    const _AppServiceSettingsSection(),
     SettingsTitle('日志'.tl),
     ListTile(
       leading: const Icon(Icons.bug_report),
@@ -1089,15 +1089,11 @@ Widget buildAppSettings(double width, BuildContext context) {
         );
       },
     ),
-    SettingsTitle('数据'.tl),
+    SettingsTitle('存储位置'.tl),
     const _DownloadDirTile(),
     const _OriginalDownloadDirTile(),
     const _LocalComicPathsTile(),
-    if (App.isAndroid) const _AndroidManageAllFilesAccessTile(),
-    if (App.isAndroid) const _AndroidShizukuModeTile(),
-    if (App.isAndroid) const _AndroidRootModeTile(),
-    const _LocalAlbumImageSortTile(),
-    const _LocalLibraryListSortTile(),
+    SettingsTitle('数据管理'.tl),
     _ManagedDataSourceModeTile(
       width: width,
       onRefresh: () => _refreshLocalComics(context),
@@ -1111,6 +1107,10 @@ Widget buildAppSettings(double width, BuildContext context) {
       onTap: () => _rescanLocalComics(context),
     ),
     const _DeleteBehaviorTile(),
+    if (App.isAndroid) SettingsTitle('访问权限（Android）'.tl),
+    if (App.isAndroid) const _AndroidManageAllFilesAccessTile(),
+    if (App.isAndroid) const _AndroidShizukuModeTile(),
+    if (App.isAndroid) const _AndroidRootModeTile(),
     SettingsTitle('隐私'.tl),
     if (App.isAndroid)
       SwitchSetting(
@@ -1937,94 +1937,6 @@ class _LocalComicPathsTile extends StatelessWidget {
           MaterialPageRoute(builder: (_) => const LocalLibraryFilesPage()),
         );
       },
-    );
-  }
-}
-
-class _LocalAlbumImageSortTile extends StatelessWidget {
-  const _LocalAlbumImageSortTile();
-
-  Future<void> _changeSort(String value) async {
-    appdata.settings[localAlbumImageSortSettingIndex] =
-        normalizeLocalAlbumImageSort(value);
-    await appdata.updateSettings();
-    await LocalLibraryManager().refresh();
-    App.notifyLocalDataChanged();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return buildResponsiveSettingTile(
-      leading: const Icon(Icons.sort_by_alpha),
-      title: Text('本地图集图片排序'.tl),
-      subtitle: Text('作用于普通本地图集的阅读图片顺序'.tl),
-      trailingWidth: 180,
-      trailing: Select(
-        width: 180,
-        initialValue: normalizeLocalAlbumImageSort(
-          appdata.settings[localAlbumImageSortSettingIndex],
-        ),
-        values: const [
-          localAlbumImageSortNameAsc,
-          localAlbumImageSortNameDesc,
-          localAlbumImageSortTimeAsc,
-          localAlbumImageSortTimeDesc,
-        ],
-        titles: const [
-          '名称正序',
-          '名称倒序',
-          '时间正序',
-          '时间倒序',
-        ],
-        onChanged: (value) async {
-          await _changeSort(value);
-        },
-      ),
-    );
-  }
-}
-
-class _LocalLibraryListSortTile extends StatelessWidget {
-  const _LocalLibraryListSortTile();
-
-  Future<void> _changeSort(String value) async {
-    appdata.settings[localLibraryListSortSettingIndex] =
-        normalizeLocalLibraryListSort(value);
-    await appdata.updateSettings();
-    App.notifyLocalDataChanged();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return buildResponsiveSettingTile(
-      leading: const Icon(Icons.view_module_outlined),
-      title: Text('本地图集列表排序'.tl),
-      trailingWidth: 180,
-      trailing: Select(
-        width: 180,
-        initialValue: normalizeLocalLibraryListSort(
-          appdata.settings[localLibraryListSortSettingIndex],
-        ),
-        values: const [
-          'time_desc',
-          'time_asc',
-          'name_asc',
-          'name_desc',
-          'size_desc',
-          'size_asc',
-        ],
-        titles: const [
-          '最近更新优先',
-          '最早更新优先',
-          '名称 A-Z',
-          '名称 Z-A',
-          '体积从大到小',
-          '体积从小到大',
-        ],
-        onChanged: (value) async {
-          await _changeSort(value);
-        },
-      ),
     );
   }
 }

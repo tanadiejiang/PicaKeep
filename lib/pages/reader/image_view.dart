@@ -101,65 +101,65 @@ extension ImageExt on ComicReadingPage {
       return NotificationListener<OverscrollNotification>(
         onNotification: handleContinuousOverscroll,
         child: ScrollablePositionedList.builder(
-        itemScrollController: logic.itemScrollController,
-        itemPositionsListener: logic.itemScrollListener,
-        itemCount: logic.urls.length,
-        addSemanticIndexes: false,
-        minCacheExtent: MediaQuery.of(context).size.height * 3,
-        scrollController: logic.scrollController,
-        scrollBehavior: const MaterialScrollBehavior()
-            .copyWith(scrollbars: false, dragDevices: _kTouchLikeDeviceTypes),
-        physics: (logic.noScroll || logic.isCtrlPressed || logic.mouseScroll)
-            ? const NeverScrollableScrollPhysics()
-            : const ClampingScrollPhysics(),
-        itemBuilder: (context, index) {
-          return LayoutBuilder(builder: (context, constraints) {
-            final mediaSize = MediaQuery.of(context).size;
-            final width = constraints.maxWidth;
-            final height = constraints.hasBoundedHeight
-                ? constraints.maxHeight
-                : mediaSize.height;
+          itemScrollController: logic.itemScrollController,
+          itemPositionsListener: logic.itemScrollListener,
+          itemCount: logic.urls.length,
+          addSemanticIndexes: false,
+          minCacheExtent: MediaQuery.of(context).size.height * 3,
+          scrollController: logic.scrollController,
+          scrollBehavior: const MaterialScrollBehavior()
+              .copyWith(scrollbars: false, dragDevices: _kTouchLikeDeviceTypes),
+          physics: (logic.noScroll || logic.isCtrlPressed || logic.mouseScroll)
+              ? const NeverScrollableScrollPhysics()
+              : const ClampingScrollPhysics(),
+          itemBuilder: (context, index) {
+            return LayoutBuilder(builder: (context, constraints) {
+              final mediaSize = MediaQuery.of(context).size;
+              final width = constraints.maxWidth;
+              final height = constraints.hasBoundedHeight
+                  ? constraints.maxHeight
+                  : mediaSize.height;
 
-            double imageWidth = width;
+              double imageWidth = width;
 
-            if (height / width < 1.2 && appdata.settings[43] == "1") {
-              imageWidth = height / 1.2;
-            }
+              if (height / width < 1.2 && appdata.settings[43] == "1") {
+                imageWidth = height / 1.2;
+              }
 
-            precacheComicImage(logic, context, index + 1, target);
+              precacheComicImage(logic, context, index + 1, target);
 
-            if (_shouldUseOriginalLocalImageStrategy(logic)) {
+              if (_shouldUseOriginalLocalImageStrategy(logic)) {
+                return ComicImage(
+                  filterQuality: FilterQuality.medium,
+                  image: createImageProvider(type, logic, index, target),
+                  width: imageWidth,
+                  fit: BoxFit.contain,
+                );
+              }
+
+              final imageRequest = _createReaderImageRequest(
+                context,
+                logic,
+                index,
+                target,
+                layoutWidth: imageWidth,
+              );
               return ComicImage(
                 filterQuality: FilterQuality.medium,
-                image: createImageProvider(type, logic, index, target),
+                image: imageRequest.provider,
                 width: imageWidth,
                 fit: BoxFit.contain,
               );
-            }
-
-            final imageRequest = _createReaderImageRequest(
-              context,
-              logic,
-              index,
-              target,
-              layoutWidth: imageWidth,
-            );
-            return ComicImage(
-              filterQuality: FilterQuality.low,
-              gaplessPlayback: true,
-              image: imageRequest.provider,
-              width: imageWidth,
-              height: imageWidth * 1.2,
-              fit: BoxFit.cover,
-            );
-          });
-        },
+            });
+          },
         ),
       );
     }
 
     final decoration = BoxDecoration(
-      color: useDarkBackground ? Colors.black : Theme.of(context).colorScheme.surface,
+      color: useDarkBackground
+          ? Colors.black
+          : Theme.of(context).colorScheme.surface,
     );
 
     Widget buildType123() {
@@ -174,7 +174,8 @@ extension ImageExt on ComicReadingPage {
           ImageProvider? imageProvider;
           if (index != 0 && index != logic.urls.length + 1) {
             if (_shouldUseOriginalLocalImageStrategy(logic)) {
-              imageProvider = createImageProvider(type, logic, index - 1, target);
+              imageProvider =
+                  createImageProvider(type, logic, index - 1, target);
             } else {
               imageProvider = _createReaderImageRequest(
                 context,
@@ -185,8 +186,9 @@ extension ImageExt on ComicReadingPage {
             }
           } else {
             return PhotoViewGalleryPageOptions.customChild(
-                scaleStateController: PhotoViewScaleStateController(),
-                child: const SizedBox(),);
+              scaleStateController: PhotoViewScaleStateController(),
+              child: const SizedBox(),
+            );
           }
 
           precacheComicImage(logic, context, index, target);
@@ -220,7 +222,10 @@ extension ImageExt on ComicReadingPage {
                         child: Center(
                           child: Text(
                             error.toString(),
-                            style: TextStyle(color: appdata.appSettings.useDarkBackground ? Colors.white : null),
+                            style: TextStyle(
+                                color: appdata.appSettings.useDarkBackground
+                                    ? Colors.white
+                                    : null),
                             maxLines: 3,
                           ),
                         ),
@@ -293,12 +298,11 @@ extension ImageExt on ComicReadingPage {
       );
     }
 
-    Widget buildComicImageOrEmpty({
-      required int imageIndex,
-      required BoxFit fit,
-      required Alignment alignment
-    }) {
-      if(imageIndex < 0 || imageIndex >= logic.urls.length){
+    Widget buildComicImageOrEmpty(
+        {required int imageIndex,
+        required BoxFit fit,
+        required Alignment alignment}) {
+      if (imageIndex < 0 || imageIndex >= logic.urls.length) {
         return const SizedBox();
       }
 
@@ -319,9 +323,9 @@ extension ImageExt on ComicReadingPage {
     Widget buildType56() {
       int calcItemCount() {
         int count = logic.urls.length ~/ 2;
-        if(logic.urls.length % 2 != 0) {
+        if (logic.urls.length % 2 != 0) {
           count++;
-        } else if(logic.singlePageForFirstScreen) {
+        } else if (logic.singlePageForFirstScreen) {
           count++;
         }
         return count + 2;
@@ -342,17 +346,14 @@ extension ImageExt on ComicReadingPage {
           logic.photoViewControllers[index] ??= PhotoViewController();
 
           int firstImage = index * 2 - 2;
-          if(firstImage % 2 != 0) {
+          if (firstImage % 2 != 0) {
             firstImage++;
           }
-          if(logic.singlePageForFirstScreen) {
+          if (logic.singlePageForFirstScreen) {
             firstImage--;
           }
-          var images = <int>[
-            firstImage,
-            firstImage+1
-          ];
-          if(logic.readingMethod == ReadingMethod.twoPageReversed) {
+          var images = <int>[firstImage, firstImage + 1];
+          if (logic.readingMethod == ReadingMethod.twoPageReversed) {
             images = images.reversed.toList();
           }
 
@@ -387,7 +388,8 @@ extension ImageExt on ComicReadingPage {
             logic.jumpToLastChapter();
           } else if (i == calcItemCount() - 1) {
             if (!logic.data.hasEp || logic.order == logic.data.eps?.length) {
-              logic.pageController.jumpByDeviceType(logic.pageController.page!.round() - 1);
+              logic.pageController
+                  .jumpByDeviceType(logic.pageController.page!.round() - 1);
               return;
             }
             logic.jumpToNextChapter();
@@ -451,7 +453,7 @@ extension ImageExt on ComicReadingPage {
             logic.photoViewController.updateMultiple(
                 position: logic.photoViewController.position -
                     Offset(0, pointerSignal.scrollDelta.dy));
-          } else if (!App.isMacOS){
+          } else if (!App.isMacOS) {
             logic.scrollController.smoothTo(pointerSignal.scrollDelta.dy);
           }
         }
@@ -502,8 +504,8 @@ extension ImageExt on ComicReadingPage {
   /// create a image provider
   ImageProvider createImageProvider(
       ReadingType type, ComicReadingPageLogic logic, int index, String target) {
-
-    return logic.data.createImageProvider(logic.order, index, logic.urls[index]);
+    return logic.data
+        .createImageProvider(logic.order, index, logic.urls[index]);
   }
 
   /// check current location of [PageView], update location when it is out of range.

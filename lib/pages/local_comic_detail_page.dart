@@ -255,7 +255,6 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
     }
     await App.openReader(
       () => _comic.createReadingPage(ep: ep, page: page),
-      context: context,
     );
     await Future<void>.delayed(const Duration(milliseconds: 50));
     if (mounted) {

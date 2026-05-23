@@ -220,7 +220,7 @@ extension ToolBar on ComicReadingPage {
                         message: "章节".tl,
                         child: IconButton(
                           icon: const Icon(Icons.format_list_numbered),
-                          onPressed: openEpsDrawer,
+                          onPressed: () => openEpsDrawer(context),
                         ),
                       ),
                     Tooltip(
@@ -357,7 +357,7 @@ extension ToolBar on ComicReadingPage {
         child: IconButton(
           iconSize: 24,
           icon: const Icon(Icons.close),
-          onPressed: () => App.globalBack(),
+          onPressed: () => unawaited(App.maybePopActiveRoute(context: context)),
         ),
       );
     }
@@ -368,13 +368,15 @@ extension ToolBar on ComicReadingPage {
       ComicReadingPageLogic comicReadingPageLogic, BuildContext context) {
     return Positioned(
       top: 0,
+      left: 0,
+      right: 0,
       child: StateBuilder<ComicReadingPageLogic>(
         id: "ToolBar",
         builder: (logic) => AnimatedSwitcher(
           duration: const Duration(milliseconds: 150),
           reverseDuration: const Duration(milliseconds: 150),
           switchInCurve: Curves.fastOutSlowIn,
-          child: comicReadingPageLogic.tools
+          child: logic.tools
               ? Material(
                   surfaceTintColor: Theme.of(context).colorScheme.surfaceTint,
                   elevation: 3,
@@ -383,7 +385,7 @@ extension ToolBar on ComicReadingPage {
                       .shadow
                       .withValues(alpha: 0.3),
                   child: SizedBox(
-                    width: MediaQuery.of(context).size.width,
+                    width: double.infinity,
                     child: Row(
                       children: [
                         Padding(
@@ -393,16 +395,14 @@ extension ToolBar on ComicReadingPage {
                             child: IconButton(
                               iconSize: 25,
                               icon: const Icon(Icons.arrow_back_outlined),
-                              onPressed: () => App.globalBack(),
+                              onPressed: () => unawaited(
+                                  App.maybePopActiveRoute(context: context)),
                             ),
                           ),
                         ),
                         Expanded(
-                          child: Container(
+                          child: SizedBox(
                             height: 50,
-                            constraints: BoxConstraints(
-                                maxWidth:
-                                    MediaQuery.of(context).size.width - 75),
                             child: Padding(
                               padding: const EdgeInsets.only(top: 10),
                               child: Text(

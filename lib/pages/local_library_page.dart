@@ -18,10 +18,13 @@ import 'package:picakeep/foundation/remote_library_event_channel.dart';
 import 'package:picakeep/foundation/remote_library_data_source.dart';
 import 'package:picakeep/foundation/service_data_source.dart';
 import 'package:picakeep/foundation/trash.dart';
+import 'package:picakeep/foundation/ui_mode.dart';
 import 'package:picakeep/pages/settings/settings_page.dart';
 import 'package:picakeep/tools/read_history_helper.dart';
 import 'package:picakeep/tools/translations.dart';
 
+import 'download_page.dart' show DownloadedComicInfoView, DownloadPageLogic;
+import 'package:picakeep/components/side_bar.dart' show showSideBar;
 import 'local_comic_detail_page.dart';
 
 String _formatLocalLibrarySize(double sizeMb) {
@@ -149,7 +152,8 @@ class _RemoteRootCollage extends StatelessWidget {
       ),
       itemCount: visibleUrls.length,
       itemBuilder: (context, index) {
-        final provider = item.client.coverImageProviderForUrl(visibleUrls[index]);
+        final provider =
+            item.client.coverImageProviderForUrl(visibleUrls[index]);
         return provider == null
             ? Container(
                 color: Theme.of(context).colorScheme.secondaryContainer,
@@ -164,32 +168,6 @@ class _RemoteRootCollage extends StatelessWidget {
                 ),
               );
       },
-    );
-  }
-}
-
-class _RemoteComicCover extends StatelessWidget {
-  const _RemoteComicCover({
-    required this.provider,
-    required this.width,
-    required this.height,
-  });
-
-  final ImageProvider<Object> provider;
-  final double width;
-  final double height;
-
-  @override
-  Widget build(BuildContext context) {
-    return Image(
-      image: provider,
-      fit: BoxFit.cover,
-      width: width,
-      height: height,
-      errorBuilder: (_, __, ___) => Container(
-        color: Theme.of(context).colorScheme.secondaryContainer,
-        child: const Icon(Icons.broken_image_outlined, size: 18),
-      ),
     );
   }
 }
@@ -397,18 +375,24 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
 
   bool get _showSourceSelector => _remoteAvailable && !_isRemoteRootPage;
 
-  bool get _enableRemoteMultiSelectDelete =>
-      _isRemoteRootPage && _view == _LocalLibraryView.remote;
-
   int get _selectedCount => _selectedItemIds.length;
 
-  List<RemoteLibraryComicItem> get _selectedRemoteItems => _items
-      .whereType<RemoteLibraryComicItem>()
-      .where((item) => _selectedItemIds.contains(item.id))
+  List<DownloadedItem> get _selectedDeleteItems => _items
+      .where(
+          (item) => _selectedItemIds.contains(item.id) && _canSelectItem(item))
       .toList(growable: false);
 
   bool _canSelectItem(DownloadedItem item) {
-    return _enableRemoteMultiSelectDelete && item is RemoteLibraryComicItem;
+    if (item is RemoteLibraryRootItem) {
+      return false;
+    }
+    if (item is RemoteLibraryComicItem) {
+      return true;
+    }
+    if (item is LocalLibraryComicItem) {
+      return item.fileSystemPath?.trim().isNotEmpty == true;
+    }
+    return item.canDelete;
   }
 
   bool get _isOperationRunning => _isDeleteOperationRunning;
@@ -461,7 +445,7 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
   }
 
   Future<String?> _runDeleteOperation(
-    List<RemoteLibraryComicItem> items,
+    List<DownloadedItem> items,
   ) async {
     if (_isDeleteOperationRunning || items.isEmpty) {
       return null;
@@ -851,227 +835,35 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
     App.pushInner(() => LocalComicDetailPage(comic: item));
   }
 
-  bool _shouldUseAlbumQuickActions(DownloadedItem item) {
-    return App.uiMode(context) == UiModes.m1 &&
-        _isAlbumOnly &&
-        item is! RemoteLibraryRootItem;
-  }
-
-  Future<void> _showAlbumQuickActions(DownloadedItem item) async {
-    final theme = Theme.of(context);
-    final author = item.subTitle.trim();
-    final tags = item.tags
-        .map((tag) => tag.trim())
-        .where((tag) => tag.isNotEmpty)
-        .toList(growable: false);
-    final eps = item.eps;
-    final coverFile = _coverFile(item);
-    final coverProvider = _coverImageProvider(item);
-    await showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      showDragHandle: false,
-      useSafeArea: false,
-      builder: (sheetContext) {
-        Widget buildCover() {
-          if (coverProvider != null) {
-            return ClipRRect(
-              borderRadius: BorderRadius.circular(18),
-              child: _RemoteComicCover(
-                provider: coverProvider,
-                width: 112,
-                height: 168,
-              ),
-            );
-          }
-          if (coverFile.path.isNotEmpty && coverFile.existsSync()) {
-            return ClipRRect(
-              borderRadius: BorderRadius.circular(18),
-              child: Image.file(
-                coverFile,
-                fit: BoxFit.cover,
-                width: 112,
-                height: 168,
-                errorBuilder: (_, __, ___) => _buildCoverFallback(),
-              ),
-            );
-          }
-          return _buildCoverFallback();
-        }
-
-        Widget buildActionButton({
-          required Widget child,
-          required VoidCallback onPressed,
-          required bool filled,
-        }) {
-          final style = FilledButton.styleFrom(
-            minimumSize: const Size.fromHeight(56),
-          );
-          if (filled) {
-            return FilledButton(
-              style: style,
-              onPressed: onPressed,
-              child: child,
-            );
-          }
-          return FilledButton.tonal(
-            style: style,
-            onPressed: onPressed,
-            child: child,
-          );
-        }
-
-        return SafeArea(
-          top: false,
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 0),
-            child: ConstrainedBox(
-              constraints: BoxConstraints(
-                maxHeight:
-                    MediaQuery.of(sheetContext).size.height -
-                    MediaQuery.of(sheetContext).padding.vertical -
-                    24,
-              ),
-              child: SingleChildScrollView(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const SizedBox(height: 4),
-                    Material(
-                      color: theme.colorScheme.surfaceContainerLow,
-                      surfaceTintColor: theme.colorScheme.surfaceTint,
-                      borderRadius: const BorderRadius.all(Radius.circular(20)),
-                      child: Padding(
-                        padding: const EdgeInsets.all(16),
-                        child: Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            buildCover(),
-                            const SizedBox(width: 14),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    item.name,
-                                    style: theme.textTheme.titleLarge,
-                                    maxLines: 2,
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                  if (author.isNotEmpty) ...[
-                                    const SizedBox(height: 8),
-                                    Text(
-                                      author,
-                                      style: theme.textTheme.bodyMedium,
-                                    ),
-                                  ],
-                                  const SizedBox(height: 6),
-                                  Text(
-                                    item.sourceDisplayName,
-                                    style: theme.textTheme.bodySmall?.copyWith(
-                                      color: theme.colorScheme.outline,
-                                    ),
-                                  ),
-                                  const SizedBox(height: 8),
-                                  Text(
-                                    '${eps.length} ${eps.length == 1 ? '章' : '章节'}',
-                                    style: theme.textTheme.bodySmall?.copyWith(
-                                      color: theme.colorScheme.outline,
-                                    ),
-                                  ),
-                                  if (tags.isNotEmpty) ...[
-                                    const SizedBox(height: 12),
-                                    Wrap(
-                                      spacing: 6,
-                                      runSpacing: 6,
-                                      children: [
-                                        for (final tag in tags)
-                                          Container(
-                                            padding: const EdgeInsets.symmetric(
-                                              horizontal: 8,
-                                              vertical: 4,
-                                            ),
-                                            decoration: BoxDecoration(
-                                              color: theme.colorScheme
-                                                  .secondaryContainer,
-                                              borderRadius:
-                                                  BorderRadius.circular(999),
-                                            ),
-                                            child: Text(
-                                              tag,
-                                              style:
-                                                  const TextStyle(fontSize: 12),
-                                            ),
-                                          ),
-                                      ],
-                                    ),
-                                  ],
-                                ],
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 20),
-                    SizedBox(
-                      height: 56,
-                      child: Row(
-                        children: [
-                          Expanded(
-                            child: buildActionButton(
-                              filled: false,
-                              onPressed: () {
-                                Navigator.of(sheetContext).pop();
-                                _openItem(item);
-                              },
-                              child: Text('查看详情'.tl),
-                            ),
-                          ),
-                          const SizedBox(width: 16),
-                          Expanded(
-                            child: buildActionButton(
-                              filled: true,
-                              onPressed: () async {
-                                Navigator.of(sheetContext).pop();
-                                await ensureHistoryBeforeRead(item);
-                                await App.pushInner(
-                                  () => item.createReadingPage(),
-                                );
-                              },
-                              child: Text('阅读'.tl),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    SizedBox(
-                      height: (MediaQuery.of(sheetContext).padding.bottom) + 12,
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-        );
-      },
-    );
-  }
-
-  Widget _buildCoverFallback() {
-    return Container(
-      width: 112,
-      height: 168,
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surfaceContainerHighest,
-        borderRadius: BorderRadius.circular(18),
-      ),
-      child: Icon(
-        Icons.menu_book_outlined,
-        size: 40,
-        color: Theme.of(context).colorScheme.outline,
-      ),
-    );
+  void _showItemInfo(DownloadedItem item) {
+    if (item is RemoteLibraryRootItem) {
+      _openItem(item);
+      return;
+    }
+    final logic = DownloadPageLogic(
+      pageTitle: _isAlbumOnly ? '图集'.tl : '资源库'.tl,
+    )
+      ..loading = false
+      ..baseComics = [item]
+      ..comics = [item]
+      ..selected = [false];
+    if (UiMode.m1(context)) {
+      showModalBottomSheet(
+        context: context,
+        isScrollControlled: true,
+        showDragHandle: false,
+        useSafeArea: false,
+        builder: (context) {
+          return DownloadedComicInfoView(item, logic);
+        },
+      );
+    } else {
+      showSideBar(
+        context,
+        DownloadedComicInfoView(item, logic),
+        useSurfaceTintColor: true,
+      );
+    }
   }
 
   Future<void> _showActions(DownloadedItem item) async {
@@ -1190,11 +982,7 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
       _toggleItemSelection(item);
       return;
     }
-    if (_shouldUseAlbumQuickActions(item)) {
-      _showAlbumQuickActions(item);
-      return;
-    }
-    _openItem(item);
+    _showItemInfo(item);
   }
 
   void _handleItemLongPress(DownloadedItem item) {
@@ -1244,7 +1032,7 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
       return;
     }
 
-    final error = await _runDeleteOperation(_selectedRemoteItems);
+    final error = await _runDeleteOperation(_selectedDeleteItems);
     if (error != null && mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(error)),
@@ -1543,14 +1331,12 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
   @override
   Widget build(BuildContext context) {
     final items = _filteredItems;
-    final isRemoteRefreshView =
-        (_view == _LocalLibraryView.remote ||
+    final isRemoteRefreshView = (_view == _LocalLibraryView.remote ||
             _view == _LocalLibraryView.aggregate) &&
         _remoteAvailable;
-    final refreshTooltip =
-        isRemoteRefreshView
-            ? (_isAlbumOnly ? '刷新远程图集'.tl : '刷新远程资源库'.tl)
-            : (_isAlbumOnly ? '刷新图集'.tl : '刷新资源库'.tl);
+    final refreshTooltip = isRemoteRefreshView
+        ? (_isAlbumOnly ? '刷新远程图集'.tl : '刷新远程资源库'.tl)
+        : (_isAlbumOnly ? '刷新图集'.tl : '刷新资源库'.tl);
     Widget page = Scaffold(
       body: _loading
           ? const Center(child: CircularProgressIndicator())
@@ -1892,7 +1678,8 @@ class _LocalLibraryFilesPageState extends State<LocalLibraryFilesPage> {
                           ),
                           const SizedBox(height: 8),
                           Text(
-                            '这里会打开与设置页一致的内置文件夹浏览器，支持安卓全部文件访问权限、Shizuku 授权或 Root 模式。'.tl,
+                            '这里会打开与设置页一致的内置文件夹浏览器，支持安卓全部文件访问权限、Shizuku 授权或 Root 模式。'
+                                .tl,
                           ),
                           const SizedBox(height: 12),
                           FilledButton.icon(
