@@ -1,15 +1,20 @@
-part of 'settings_page.dart';
+import 'package:flutter/material.dart';
+import 'package:picakeep/base.dart';
+import 'package:picakeep/foundation/app.dart';
+import 'package:picakeep/foundation/app_runtime_mode.dart';
+import 'package:picakeep/pages/settings/settings_common_widgets.dart';
+import 'package:picakeep/server/local_server_runtime_sync.dart';
+import 'package:picakeep/tools/translations.dart';
 
-class _AppServiceSettingsSection extends StatefulWidget {
-  const _AppServiceSettingsSection();
+class AppServiceSettingsSection extends StatefulWidget {
+  const AppServiceSettingsSection({super.key});
 
   @override
-  State<_AppServiceSettingsSection> createState() =>
+  State<AppServiceSettingsSection> createState() =>
       _AppServiceSettingsSectionState();
 }
 
-class _AppServiceSettingsSectionState
-    extends State<_AppServiceSettingsSection> {
+class _AppServiceSettingsSectionState extends State<AppServiceSettingsSection> {
   String _mode =
       normalizeAppRuntimeMode(appdata.settings[appRuntimeModeSettingIndex]);
 
@@ -100,9 +105,7 @@ class _AppServiceSettingsSectionState
           duration: const Duration(milliseconds: 160),
           height: 36,
           decoration: BoxDecoration(
-            color: selected
-                ? colorScheme.primaryContainer
-                : Colors.transparent,
+            color: selected ? colorScheme.primaryContainer : Colors.transparent,
             border: Border(
               left: isFirst
                   ? BorderSide.none

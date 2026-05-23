@@ -21,7 +21,7 @@ class _EpsViewState extends State<EpsView> {
       String title = data.eps!.values.elementAt(index);
       epsWidgets.add(InkWell(
         onTap: () {
-          Navigator.pop(App.globalContext!);
+          unawaited(App.maybePopActiveRoute(context: context));
           logic.jumpToChapter(index + 1);
         },
         child: SizedBox(

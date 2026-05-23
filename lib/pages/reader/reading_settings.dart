@@ -65,8 +65,7 @@ class _ReadingSettingsState extends State<ReadingSettings> {
               i = 1;
             }),
           ),
-          if (appdata.settings[9] == "5" ||
-              appdata.settings[9] == "6")
+          if (appdata.settings[9] == "5" || appdata.settings[9] == "6")
             ListTile(
               leading: const Icon(Icons.auto_awesome_motion),
               title: Text("首页显示单张图片".tl),
@@ -182,7 +181,7 @@ class _ReadingSettingsState extends State<ReadingSettings> {
                         divisions: 20,
                         value: int.parse(appdata.settings[33]).toDouble(),
                         overlayColor: WidgetStateColor.resolveWith(
-                                (states) => Colors.transparent),
+                            (states) => Colors.transparent),
                         onChanged: (v) {
                           if (v == 0) return;
                           appdata.settings[33] = v.toInt().toString();
@@ -235,7 +234,7 @@ class _ReadingSettingsState extends State<ReadingSettings> {
               },
             ),
           ),
-          if(App.isAndroid)
+          if (App.isAndroid)
             ListTile(
               leading: const Icon(Icons.screen_lock_rotation),
               title: Text("固定屏幕方向".tl),
@@ -277,7 +276,7 @@ class _ReadingSettingsState extends State<ReadingSettings> {
                 onChange: (int i) {
                   appdata.settings[41] = i.toString();
                   appdata.updateSettings();
-                  logic.photoViewController.resetWithNewBoxFit(switch(i){
+                  logic.photoViewController.resetWithNewBoxFit(switch (i) {
                     0 => BoxFit.contain,
                     1 => BoxFit.fitWidth,
                     2 => BoxFit.fitHeight,
@@ -381,7 +380,7 @@ class _ReadingSettingsState extends State<ReadingSettings> {
             child: FilledButton(
               child: Text("重启阅读器".tl),
               onPressed: () {
-                App.globalBack();
+                unawaited(App.maybePopActiveRoute(context: context));
                 logic.refresh_();
               },
             ),
@@ -425,7 +424,7 @@ class _ReadingSettingsState extends State<ReadingSettings> {
   }
 
   void setValue(int i) {
-    App.globalBack();
+    unawaited(App.maybePopActiveRoute(context: context));
     value = i;
     appdata.settings[9] = value.toString();
     appdata.writeData();

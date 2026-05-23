@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:picakeep/foundation/app_runtime_mode.dart';
 import 'package:picakeep/tools/translations.dart';
 
+import 'settings/runtime_service_settings.dart';
+
 class AppCapabilitiesPage extends StatelessWidget {
   const AppCapabilitiesPage({super.key});
 
@@ -25,13 +27,12 @@ List<Widget> buildAppCapabilitiesContent(
   bool includeOverview = true,
 }) {
   final children = <Widget>[];
-  final capabilities = serverPlatformCapabilityMatrix();
 
   if (includeOverview) {
     children.add(
       _CapabilityOverviewCard(
         title: 'PicaKeep – 云端/NAS 一体化扩展'.tl,
-        subtitle: '当前先作为规划入口，后续客户端 / 服务端能力会继续在这里落地'.tl,
+        subtitle: '集中管理客户端 / 服务端运行能力，并保留后续扩展规划入口'.tl,
         status: '规划中'.tl,
       ),
     );
@@ -39,6 +40,47 @@ List<Widget> buildAppCapabilitiesContent(
   }
 
   children.addAll([
+    const AppServiceSettingsSection(),
+    const SizedBox(height: 12),
+    ListTile(
+      leading: const Icon(Icons.pending_actions_outlined),
+      title: Text('APP能力-未来规划'.tl),
+      subtitle: Text('查看目标形态、技术骨架、阶段路线与后续规划'.tl),
+      trailing: const Icon(Icons.chevron_right),
+      onTap: () {
+        Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (_) => const AppCapabilityFuturePlanningPage(),
+          ),
+        );
+      },
+    ),
+  ]);
+
+  return children;
+}
+
+class AppCapabilityFuturePlanningPage extends StatelessWidget {
+  const AppCapabilityFuturePlanningPage({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final bottomPadding = MediaQuery.of(context).padding.bottom + 12;
+    return Scaffold(
+      appBar: AppBar(
+        title: Text('APP能力-未来规划'.tl),
+      ),
+      body: ListView(
+        padding: EdgeInsets.fromLTRB(12, 12, 12, bottomPadding),
+        children: buildAppCapabilityFuturePlanningContent(context),
+      ),
+    );
+  }
+}
+
+List<Widget> buildAppCapabilityFuturePlanningContent(BuildContext context) {
+  final capabilities = serverPlatformCapabilityMatrix();
+  return [
     _PlatformCapabilityMatrix(capabilities: capabilities),
     const SizedBox(height: 12),
     const _CapabilitySection(
@@ -46,7 +88,7 @@ List<Widget> buildAppCapabilitiesContent(
       title: '当前状态',
       items: [
         '已完成本地漫画 / 已下载 / 本地图集 / 收藏 / 历史等本地阅读链路',
-        '当前新增方向为云端/NAS 一体化扩展，目标是在同一套代码里支持客户端与分平台能力的服务端双模式',
+        '已建立 APP能力 集中入口，并将客户端 / 服务端运行能力配置归位到这里',
       ],
     ),
     const SizedBox(height: 12),
@@ -86,7 +128,7 @@ List<Widget> buildAppCapabilitiesContent(
       icon: Icons.timeline_outlined,
       title: '阶段路线',
       items: [
-        '第一阶段：先补设置入口、工具入口与 APP能力 页面，集中承载规划与后续配置',
+        '第一阶段：已补设置入口、工具入口与 APP能力 页面，并集中承载服务运行配置',
         '第二阶段：抽象 Local / Remote DataSource，打通客户端远程列表与详情接口',
         '第三阶段：补服务发现、管理后台，以及 Windows / Linux / macOS 服务端联调与部署',
         '第四阶段：补 Android 前台服务链路，并继续预留 Docker 化部署支持',
@@ -97,15 +139,13 @@ List<Widget> buildAppCapabilitiesContent(
       icon: Icons.pending_actions_outlined,
       title: '后续会继续放在这里的内容',
       items: [
-        '运行模式切换配置',
-        '服务地址与扫描入口',
-        '服务信息面板与连接状态',
-        '服务端管理入口与部署说明',
+        '局域网自动扫描与一键连接体验',
+        '真实认证与管理后台部署说明',
+        '远程图集阅读与资源状态同步',
+        '桌面端 / NAS / Android 服务端部署与保活细节',
       ],
     ),
-  ]);
-
-  return children;
+  ];
 }
 
 class _PlatformCapabilityMatrix extends StatelessWidget {

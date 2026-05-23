@@ -117,9 +117,9 @@ class TapController {
     fingers--;
   }
 
-  static void onTapDown(PointerDownEvent event) {
+  static void onTapDown(PointerDownEvent event, BuildContext context) {
     if (event.buttons == kSecondaryMouseButton) {
-      handleSecondaryTapUp(event);
+      handleSecondaryTapUp(event, context);
       return;
     }
     fingers++;
@@ -181,16 +181,17 @@ class TapController {
 
   static void Function(PointerUpEvent detail)? _doubleClickRecognizer;
 
-  static void handleSecondaryTapUp(PointerDownEvent detail) {
+  static void handleSecondaryTapUp(
+      PointerDownEvent detail, BuildContext context) {
     var logic = StateController.find<ComicReadingPageLogic>();
     showMenu(
-        context: App.globalContext!,
+        context: context,
         position: RelativeRect.fromLTRB(detail.position.dx, detail.position.dy,
             detail.position.dx, detail.position.dy),
         items: [
           PopupMenuItem(
             child: Text("设置".tl),
-            onTap: () => showSettings(App.globalContext!),
+            onTap: () => showSettings(context),
           ),
           if (App.isWindows)
             PopupMenuItem(
@@ -199,7 +200,7 @@ class TapController {
             ),
           PopupMenuItem(
             child: Text("退出".tl),
-            onTap: () => App.globalBack(),
+            onTap: () => unawaited(App.maybePopActiveRoute(context: context)),
           ),
           if (logic.data.hasEp)
             PopupMenuItem(
@@ -209,7 +210,7 @@ class TapController {
         ]);
   }
 
-  static void onTapUp(PointerUpEvent detail) async {
+  static void onTapUp(PointerUpEvent detail, BuildContext context) async {
     fingers--;
     if (onTapUpReplacement != null) {
       onTapUpReplacement!(detail);
@@ -235,6 +236,8 @@ class TapController {
       return;
     }
 
+    final screenSize = MediaQuery.sizeOf(context);
+
     if (appdata.settings[49] == "1") {
       if (_doubleClickRecognizer == null) {
         bool flag = false;
@@ -256,7 +259,7 @@ class TapController {
       }
     }
 
-    _handleClick(detail, logic, App.globalContext!);
+    _handleClick(detail, logic, screenSize);
   }
 
   static void onPointerMove(PointerMoveEvent event) {
@@ -272,8 +275,8 @@ class TapController {
     }
   }
 
-  static void _handleClick(PointerUpEvent detail, ComicReadingPageLogic logic,
-      BuildContext context) {
+  static void _handleClick(
+      PointerUpEvent detail, ComicReadingPageLogic logic, Size screenSize) {
     bool flag = false;
     bool flag2 = false;
     final range = int.parse(appdata.settings[40]) / 100;
@@ -288,35 +291,35 @@ class TapController {
       switch (appdata.settings[9]) {
         case "1":
         case "5":
-          detail.position.dx > MediaQuery.of(context).size.width * (1 - range)
+          detail.position.dx > screenSize.width * (1 - range)
               ? updatePageWithSetting(true)
               : flag = true;
-          detail.position.dx < MediaQuery.of(context).size.width * range
+          detail.position.dx < screenSize.width * range
               ? updatePageWithSetting(false)
               : flag2 = true;
           break;
         case "2":
         case "6":
-          detail.position.dx > MediaQuery.of(context).size.width * (1 - range)
+          detail.position.dx > screenSize.width * (1 - range)
               ? updatePageWithSetting(false)
               : flag = true;
-          detail.position.dx < MediaQuery.of(context).size.width * range
+          detail.position.dx < screenSize.width * range
               ? updatePageWithSetting(true)
               : flag2 = true;
           break;
         case "3":
-          detail.position.dy > MediaQuery.of(context).size.height * (1 - range)
+          detail.position.dy > screenSize.height * (1 - range)
               ? updatePageWithSetting(true)
               : flag = true;
-          detail.position.dy < MediaQuery.of(context).size.height * range
+          detail.position.dy < screenSize.height * range
               ? updatePageWithSetting(false)
               : flag2 = true;
           break;
         case "4":
-          detail.position.dy > MediaQuery.of(context).size.height * (1 - range)
+          detail.position.dy > screenSize.height * (1 - range)
               ? logic.jumpToNextPage()
               : flag = true;
-          detail.position.dy < MediaQuery.of(context).size.height * range
+          detail.position.dy < screenSize.height * range
               ? logic.jumpToLastPage()
               : flag2 = true;
           break;

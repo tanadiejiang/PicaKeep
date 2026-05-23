@@ -72,7 +72,7 @@ class ToolsPage extends StatelessWidget {
           _ToolCard(
             icon: Icons.cloud_sync_outlined,
             title: 'APP能力'.tl,
-            subtitle: '查看云端 / NAS 一体化扩展规划与后续入口'.tl,
+            subtitle: '管理客户端 / 服务端运行能力与未来规划'.tl,
             onTap: () {
               Navigator.of(context).push(
                 MaterialPageRoute(builder: (_) => const AppCapabilitiesPage()),

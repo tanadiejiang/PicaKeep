@@ -157,6 +157,9 @@ class _PicaKeepAppState extends State<PicaKeepApp> with WidgetsBindingObserver {
     App.serviceRuntimeVersion.addListener(_handleServiceStateSyncRequest);
     RemoteLibraryEventChannel.instance.start();
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+    if (!App.isMobile) {
+      HardwareKeyboard.instance.addHandler(_handleGlobalKeyEvent);
+    }
     if (appdata.settings[12] == '1') {
       blockScreenshot();
     }
@@ -170,6 +173,9 @@ class _PicaKeepAppState extends State<PicaKeepApp> with WidgetsBindingObserver {
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    if (!App.isMobile) {
+      HardwareKeyboard.instance.removeHandler(_handleGlobalKeyEvent);
+    }
     App.serviceConfigVersion.removeListener(_handleServiceStateSyncRequest);
     App.serviceRuntimeVersion.removeListener(_handleServiceStateSyncRequest);
     if (App.updater == _refreshApp) {
@@ -254,6 +260,16 @@ class _PicaKeepAppState extends State<PicaKeepApp> with WidgetsBindingObserver {
     }
   }
 
+  bool _handleGlobalKeyEvent(KeyEvent event) {
+    if (event is! KeyDownEvent ||
+        event.logicalKey != LogicalKeyboardKey.escape) {
+      return false;
+    }
+    final focusContext = FocusManager.instance.primaryFocus?.context;
+    unawaited(App.maybePopActiveRoute(context: focusContext));
+    return true;
+  }
+
   void _refreshApp() {
     if (mounted) {
       setState(() {});
@@ -335,10 +351,10 @@ class _PicaKeepAppState extends State<PicaKeepApp> with WidgetsBindingObserver {
         if (child == null) {
           return const SizedBox.shrink();
         }
-        if (App.isDesktop) {
-          return WindowFrame(child: child);
-        }
-        return _MobileSystemUiFrame(child: child);
+        final framedChild = App.isDesktop
+            ? WindowFrame(child: child)
+            : _MobileSystemUiFrame(child: child);
+        return framedChild;
       },
       theme: ThemeData(
         colorScheme: _buildLightScheme(_lightDynamicScheme),

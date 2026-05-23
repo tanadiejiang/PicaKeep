@@ -17,7 +17,8 @@ class AppStartupTrace {
   static int get elapsedMs => _stopwatch.elapsedMilliseconds;
 
   static void log(String stage) {
-    debugPrint('[PicaKeep][startup][${_stopwatch.elapsedMilliseconds}ms] $stage');
+    debugPrint(
+        '[PicaKeep][startup][${_stopwatch.elapsedMilliseconds}ms] $stage');
     LogManager.addLog(
       LogLevel.info,
       'Startup',
@@ -102,6 +103,27 @@ class App {
     if (Navigator.canPop(context)) {
       Navigator.of(context).pop();
     }
+  }
+
+  static Future<bool> maybePopActiveRoute({BuildContext? context}) async {
+    if (context != null) {
+      final navigator = Navigator.maybeOf(context);
+      if (navigator != null && await navigator.maybePop()) {
+        return true;
+      }
+    }
+
+    final mainState = mainNavigatorKey?.currentState;
+    if (mainState != null && await mainState.maybePop()) {
+      return true;
+    }
+
+    final rootState = navigatorKey.currentState;
+    if (rootState != null && await rootState.maybePop()) {
+      return true;
+    }
+
+    return false;
   }
 
   static globalBack() {

@@ -170,7 +170,7 @@ class ComicReadingPage extends StatelessWidget {
       }
       //进入阅读器时清除内存中的缓存, 并且增大限制
       logic.configureReaderCacheLimits();
-      logic.openEpsView = openEpsDrawer;
+      logic.openEpsView = () => openEpsDrawer(context);
       if (useDarkBackground) {
         Future.microtask(() =>
             StateController.findOrNull<WindowFrameController>()
@@ -273,8 +273,10 @@ class ComicReadingPage extends StatelessWidget {
 
                     var body = Listener(
                       onPointerMove: TapController.onPointerMove,
-                      onPointerUp: TapController.onTapUp,
-                      onPointerDown: TapController.onTapDown,
+                      onPointerUp: (event) =>
+                          TapController.onTapUp(event, context),
+                      onPointerDown: (event) =>
+                          TapController.onTapDown(event, context),
                       behavior: HitTestBehavior.translucent,
                       onPointerCancel: TapController.onTapCancel,
                       child: Stack(
@@ -475,8 +477,7 @@ class ComicReadingPage extends StatelessWidget {
     return EpsView(readingData);
   }
 
-  void openEpsDrawer() {
-    var context = App.globalContext!;
+  void openEpsDrawer(BuildContext context) {
     if (MediaQuery.of(context).size.width > 600) {
       showSideBar(
         context,
