@@ -353,6 +353,8 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
   int _deleteProgressTotal = 0;
   String _deleteProgressActionLabel = '';
   bool _forceRemoteRefreshOnNextLoad = false;
+  bool _localDataRefreshRunning = false;
+  bool _localDataRefreshRequested = false;
   DateTime? _lastManualRemoteRefreshAt;
   List<DownloadedItem> _items = const <DownloadedItem>[];
   late _LocalLibraryView _view = widget.preferRemoteView || _isRemoteRootPage
@@ -450,12 +452,20 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
     if (_isDeleteOperationRunning || items.isEmpty) {
       return null;
     }
+    final optimisticRemovedIds = items.map((item) => item.id).toSet();
     setState(() {
       _isDeleteOperationRunning = true;
       _deleteProgressCurrent = 0;
       _deleteProgressTotal = items.length;
       _deleteProgressActionLabel =
           TrashManager.instance.useTrashByDefault ? '正在放进回收站' : '正在删除';
+      _items = _items
+          .where((item) => !optimisticRemovedIds.contains(item.id))
+          .toList(growable: false);
+      _selectedItemIds.removeAll(optimisticRemovedIds);
+      if (_selectedItemIds.isEmpty) {
+        _selecting = false;
+      }
     });
     App.beginNavigationLock();
     App.temporaryDisablePopGesture = true;
@@ -493,7 +503,7 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
       errorText = _operationErrorText(e);
     } finally {
       try {
-        await _load();
+        await _load(forceLocalRefresh: true);
       } catch (e) {
         errorText ??= _operationErrorText(e);
       }
@@ -506,6 +516,9 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
           _deleteProgressTotal = 0;
           _deleteProgressActionLabel = '';
         });
+        if (_localDataRefreshRequested) {
+          unawaited(_reloadAfterLocalDataChanged());
+        }
       } else {
         _isDeleteOperationRunning = false;
         _deleteProgressCurrent = 0;
@@ -554,7 +567,28 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
   }
 
   void _handleLocalDataChanged() {
-    _load();
+    unawaited(_reloadAfterLocalDataChanged());
+  }
+
+  Future<void> _reloadAfterLocalDataChanged() async {
+    if (_isDeleteOperationRunning) {
+      _localDataRefreshRequested = true;
+      return;
+    }
+    if (_localDataRefreshRunning) {
+      _localDataRefreshRequested = true;
+      return;
+    }
+    _localDataRefreshRunning = true;
+    try {
+      do {
+        _localDataRefreshRequested = false;
+        await _load(forceLocalRefresh: true);
+      } while (_localDataRefreshRequested && mounted);
+    } finally {
+      _localDataRefreshRunning = false;
+      _localDataRefreshRequested = false;
+    }
   }
 
   void _handleServiceConfigChanged() {
@@ -595,7 +629,12 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
     }
   }
 
-  Future<List<DownloadedItem>> _loadLocalItems() async {
+  Future<List<DownloadedItem>> _loadLocalItems({
+    bool forceRefresh = false,
+  }) async {
+    if (forceRefresh) {
+      await _manager.refresh();
+    }
     final items = await _manager.getAll();
     final visibleItems = _isAlbumOnly
         ? items.where((item) => item.isAlbum).toList(growable: false)
@@ -622,7 +661,7 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
     return _sortItems(roots.cast<DownloadedItem>().toList());
   }
 
-  Future<void> _load() async {
+  Future<void> _load({bool forceLocalRefresh = false}) async {
     if (mounted) {
       setState(() {
         _loading = true;
@@ -638,7 +677,9 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
         appdata.settings[localLibraryViewSettingIndex] = 'local';
         await appdata.updateSettings();
       }
-      final localItems = await _loadLocalItems();
+      final localItems = await _loadLocalItems(
+        forceRefresh: forceLocalRefresh,
+      );
       List<DownloadedItem> items;
       switch (_view) {
         case _LocalLibraryView.local:

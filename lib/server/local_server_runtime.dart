@@ -117,16 +117,19 @@ class LocalServerRuntime {
   String get _trashIndexPath =>
       '${File(configPath).parent.path}${Platform.pathSeparator}library_trash.json';
 
-  Future<void> restoreTrashItem(String trashId) {
+  Future<LibraryTrashEntry> restoreTrashItem(String trashId) {
     return _runExclusive(() async {
       _invalidateStandaloneSnapshot();
       final server = _server;
+      final LibraryTrashEntry restored;
       if (server != null && server.isRunning) {
-        await server.restoreTrashItem(trashId);
+        restored = await server.restoreTrashItem(trashId);
       } else {
-        await LibraryTrashStore(_trashIndexPath).restoreItem(trashId);
+        restored =
+            await LibraryTrashStore(_trashIndexPath).restoreItem(trashId);
       }
       _notify();
+      return restored;
     });
   }
 
@@ -140,7 +143,8 @@ class LocalServerRuntime {
           throw StateError('trash item not found');
         }
       } else {
-        final deleted = await LibraryTrashStore(_trashIndexPath).purgeItem(trashId);
+        final deleted =
+            await LibraryTrashStore(_trashIndexPath).purgeItem(trashId);
         if (deleted == null) {
           throw StateError('trash item not found');
         }

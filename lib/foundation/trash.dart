@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -9,6 +10,7 @@ import 'package:picakeep/foundation/app_runtime_mode.dart';
 import 'package:picakeep/foundation/download.dart';
 import 'package:picakeep/foundation/download_model.dart';
 import 'package:picakeep/foundation/image_loader/base_image_provider.dart';
+import 'package:picakeep/foundation/image_loader/stream_image_provider.dart';
 import 'package:picakeep/foundation/local_library.dart';
 import 'package:picakeep/foundation/local_library_settings.dart';
 import 'package:picakeep/foundation/local_trash_store.dart';
@@ -849,7 +851,13 @@ class TrashManager {
 
   Future<void> restoreLocalItem(String recordId) async {
     if (_isServerTrashRecordId(recordId)) {
-      await LocalServerRuntime.instance.restoreTrashItem(recordId);
+      final restored =
+          await LocalServerRuntime.instance.restoreTrashItem(recordId);
+      await _evictRestoredLocalImageCachesForPath(
+        restored.originalPath,
+        coverRelativePath: restored.coverRelativePath,
+      );
+      App.notifyLocalDataChanged();
       return;
     }
     final storedRecord = await LocalTrashStore.instance.find(recordId);
@@ -938,7 +946,7 @@ class TrashManager {
     if (_isServerMode) {
       LocalServerRuntime.instance.markResourceStateDirty();
     }
-    _clearRestoredLocalImageCaches();
+    await _evictRestoredLocalImageCachesForRecord(record);
     App.notifyLocalDataChanged();
   }
 
@@ -1066,6 +1074,7 @@ class TrashManager {
     if (_isServerMode) {
       LocalServerRuntime.instance.markResourceStateDirty();
     }
+    await _evictRestoredLocalImageCachesForRecord(record);
     App.notifyLocalDataChanged();
   }
 
@@ -1235,11 +1244,67 @@ class TrashManager {
     }
   }
 
-  void _clearRestoredLocalImageCaches() {
-    BaseImageProvider.clearCache();
+  Future<void> _evictRestoredLocalImageCachesForRecord(
+    TrashItemRecord record,
+  ) {
+    return _evictRestoredLocalImageCachesForPath(
+      record.originalPath,
+      coverRelativePath: record.coverRelativePath,
+      coverPath: record.cover,
+    );
+  }
+
+  Future<void> _evictRestoredLocalImageCachesForPath(
+    String rootPath, {
+    String coverRelativePath = '',
+    String coverPath = '',
+  }) async {
+    final paths = <String>{};
+    final root = rootPath.trim();
+    final relative = coverRelativePath.trim();
+    if (root.isNotEmpty && relative.isNotEmpty) {
+      paths.add(_joinTrashRelativePath(root, relative));
+    }
+    final cover = coverPath.trim();
+    if (cover.isNotEmpty) {
+      paths.add(cover);
+    }
+    if (root.isNotEmpty) {
+      try {
+        final metadata =
+            await LocalLibraryManager.instance.buildRestoredFileMetadata(root);
+        final metadataCover = metadata.coverPath?.trim() ?? '';
+        if (metadataCover.isNotEmpty) {
+          paths.add(metadataCover);
+        }
+        for (final files in metadata.episodeFiles.values) {
+          for (final file in files) {
+            final path = file.trim();
+            if (path.isNotEmpty) {
+              paths.add(path);
+            }
+          }
+        }
+      } catch (_) {}
+    }
+    _evictLocalImageCachePaths(paths);
+  }
+
+  void _evictLocalImageCachePaths(Iterable<String> paths) {
     final imageCache = PaintingBinding.instance.imageCache;
-    imageCache.clear();
-    imageCache.clearLiveImages();
+    for (final rawPath in paths) {
+      final path = rawPath.trim();
+      if (path.isEmpty) {
+        continue;
+      }
+      BaseImageProvider.evictKey('local_file::$path');
+      final streamProvider = StreamImageProvider(
+        () => const Stream<List<int>>.empty(),
+        'local_file::$path',
+      );
+      imageCache.evict(streamProvider, includeLive: true);
+      imageCache.evict(FileImage(File(path)), includeLive: true);
+    }
   }
 
   Future<void> _restoreSourceDbRecord(TrashItemRecord record) async {

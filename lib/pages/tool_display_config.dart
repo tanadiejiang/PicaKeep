@@ -85,9 +85,9 @@ const List<ToolDisplayDefinition> allToolDisplayDefinitions = [
   ToolDisplayDefinition(
     id: clearCacheToolId,
     icon: Icons.delete_sweep,
-    title: '清理缓存',
-    subtitle: '清理本地缓存数据',
-    quickLabel: '清理缓存',
+    title: '缓存管理',
+    subtitle: '管理本地缓存数据',
+    quickLabel: '缓存管理',
   ),
 ];
 

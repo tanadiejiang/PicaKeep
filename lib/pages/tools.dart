@@ -1,7 +1,10 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_reorderable_grid_view/widgets/reorderable_builder.dart';
+import 'package:picakeep/base.dart' hide eraseCache;
+import 'package:picakeep/foundation/app.dart';
 import 'package:picakeep/pages/app_capabilities_page.dart';
 import 'package:picakeep/pages/local_library_page.dart';
 import 'package:picakeep/pages/service_info_page.dart';
@@ -23,6 +26,9 @@ class _ToolsPageState extends State<ToolsPage> {
   final ScrollController _scrollController = ScrollController();
 
   bool _customizingExternalTools = false;
+  bool _cacheManagementExpanded = false;
+  bool _loadingCacheSize = false;
+  int? _cacheSizeBytes;
   late List<String> _orderedExternalIds;
   late Set<String> _visibleExternalIds;
 
@@ -85,6 +91,115 @@ class _ToolsPageState extends State<ToolsPage> {
     );
   }
 
+  void _toggleCacheManagement() {
+    setState(() {
+      _cacheManagementExpanded = !_cacheManagementExpanded;
+    });
+    if (_cacheManagementExpanded) {
+      unawaited(_refreshCacheSize());
+    }
+  }
+
+  Future<void> _refreshCacheSize() async {
+    if (_loadingCacheSize) {
+      return;
+    }
+    setState(() {
+      _loadingCacheSize = true;
+    });
+    final size = await _calculateCacheSize();
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _cacheSizeBytes = size;
+      _loadingCacheSize = false;
+    });
+  }
+
+  Future<int> _calculateCacheSize() async {
+    var total = 0;
+    final cacheDirectories = <Directory>[
+      Directory(App.cachePath),
+      Directory('${App.dataPath}${Platform.pathSeparator}cache'),
+    ];
+    for (final cacheDirectory in cacheDirectories) {
+      if (!await cacheDirectory.exists()) {
+        continue;
+      }
+      await for (final entity in cacheDirectory.list(
+        recursive: true,
+        followLinks: false,
+      )) {
+        if (entity is File) {
+          try {
+            total += await entity.length();
+          } catch (_) {}
+        }
+      }
+    }
+    return total;
+  }
+
+  String get _cacheLimitText {
+    final current = _cacheSizeBytes == null
+        ? (_loadingCacheSize ? '计算中'.tl : '--')
+        : bytesLengthToReadableSize(_cacheSizeBytes!);
+    final limit =
+        bytesLengthToReadableSize(appdata.appSettings.cacheLimit * 1024 * 1024);
+    return '$current / $limit';
+  }
+
+  Future<void> _editCacheLimit(BuildContext context) async {
+    final controller =
+        TextEditingController(text: appdata.appSettings.cacheLimit.toString());
+    final value = await showDialog<int>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text('缓存大小限制'.tl),
+        content: TextField(
+          controller: controller,
+          keyboardType: TextInputType.number,
+          autofocus: true,
+          decoration: InputDecoration(
+            suffixText: 'MB',
+            hintText: '请输入缓存大小限制'.tl,
+          ),
+          onSubmitted: (raw) {
+            final parsed = int.tryParse(raw.trim());
+            if (parsed != null && parsed > 0) {
+              Navigator.of(dialogContext).pop(parsed);
+            }
+          },
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: Text('取消'.tl),
+          ),
+          FilledButton(
+            onPressed: () {
+              final parsed = int.tryParse(controller.text.trim());
+              if (parsed != null && parsed > 0) {
+                Navigator.of(dialogContext).pop(parsed);
+              }
+            },
+            child: Text('确定'.tl),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+    if (value == null) {
+      return;
+    }
+    appdata.appSettings.cacheLimit = value;
+    await appdata.updateSettings();
+    if (mounted) {
+      setState(() {});
+    }
+  }
+
   Future<void> _openTool(BuildContext context, String id) {
     switch (id) {
       case serviceInfoToolId:
@@ -142,6 +257,9 @@ class _ToolsPageState extends State<ToolsPage> {
     if (!context.mounted) {
       return;
     }
+    setState(() {
+      _cacheSizeBytes = 0;
+    });
     messenger.hideCurrentSnackBar();
     messenger.showSnackBar(
       SnackBar(
@@ -151,20 +269,73 @@ class _ToolsPageState extends State<ToolsPage> {
     );
   }
 
+  Widget _buildCacheManagementCard(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return Card.outlined(
+      margin: EdgeInsets.zero,
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        children: [
+          ListTile(
+            leading: const Icon(Icons.delete_sweep),
+            title: Text('缓存管理'.tl),
+            subtitle: Text('管理本地缓存数据'.tl),
+            trailing: AnimatedRotation(
+              turns: _cacheManagementExpanded ? 0.25 : 0,
+              duration: const Duration(milliseconds: 180),
+              child: const Icon(Icons.chevron_right),
+            ),
+            onTap: _toggleCacheManagement,
+            onLongPress: _enterCustomizeMode,
+          ),
+          AnimatedCrossFade(
+            firstChild: const SizedBox.shrink(),
+            secondChild: Column(
+              children: [
+                Divider(height: 1, color: colorScheme.outlineVariant),
+                ListTile(
+                  leading: const Icon(Icons.sd_storage_outlined),
+                  title: Text('缓存大小限制'.tl),
+                  subtitle: Text(_cacheLimitText),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () => _editCacheLimit(context),
+                ),
+                ListTile(
+                  leading: const Icon(Icons.delete_outline),
+                  title: Text('清除缓存'.tl),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () => _clearCache(context),
+                ),
+              ],
+            ),
+            crossFadeState: _cacheManagementExpanded
+                ? CrossFadeState.showSecond
+                : CrossFadeState.showFirst,
+            duration: const Duration(milliseconds: 180),
+          ),
+        ],
+      ),
+    );
+  }
+
   List<Widget> _buildRegularToolCards(BuildContext context) {
-    return allToolDisplayDefinitions
+    return _orderedExternalIds
+        .map((id) => toolDisplayDefinitionMap[id])
+        .whereType<ToolDisplayDefinition>()
         .map(
           (definition) => Padding(
             padding: const EdgeInsets.only(bottom: 12),
-            child: _ToolCard(
-              key: ValueKey('tool_${definition.id}'),
-              icon: definition.icon,
-              title: definition.title.tl,
-              subtitle: definition.subtitle.tl,
-              trailing: const Icon(Icons.chevron_right),
-              onTap: () => _openTool(context, definition.id),
-              onLongPress: _enterCustomizeMode,
-            ),
+            child: definition.id == clearCacheToolId
+                ? _buildCacheManagementCard(context)
+                : _ToolCard(
+                    key: ValueKey('tool_${definition.id}'),
+                    icon: definition.icon,
+                    title: definition.title.tl,
+                    subtitle: definition.subtitle.tl,
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: () => _openTool(context, definition.id),
+                    onLongPress: _enterCustomizeMode,
+                  ),
           ),
         )
         .toList(growable: false);
@@ -182,18 +353,7 @@ class _ToolsPageState extends State<ToolsPage> {
               icon: definition.icon,
               title: definition.title.tl,
               subtitle: definition.subtitle.tl,
-              trailing: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(
-                    _visibleExternalIds.contains(definition.id)
-                        ? Icons.visibility
-                        : Icons.visibility_off_outlined,
-                  ),
-                  const SizedBox(width: 8),
-                  const Icon(Icons.drag_indicator),
-                ],
-              ),
+              trailing: const Icon(Icons.menu),
               selected: _visibleExternalIds.contains(definition.id),
               onTap: () => _toggleExternalToolVisibility(definition.id),
             ),
@@ -212,7 +372,7 @@ class _ToolsPageState extends State<ToolsPage> {
   Widget _buildCustomizeBody(BuildContext context) {
     return ReorderableBuilder(
       scrollController: _scrollController,
-      longPressDelay: const Duration(milliseconds: 800),
+      longPressDelay: const Duration(milliseconds: 500),
       onReorder: (reorderFunc) {
         setState(() {
           _orderedExternalIds = List<String>.from(
