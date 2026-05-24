@@ -33,6 +33,21 @@ class ServerResourceRootSummary {
       };
 }
 
+class ServerResourceImageSize {
+  const ServerResourceImageSize({
+    required this.width,
+    required this.height,
+  });
+
+  final int width;
+  final int height;
+
+  Map<String, dynamic> toJson() => {
+        'width': width,
+        'height': height,
+      };
+}
+
 class ServerResourceEpisodeSummary {
   const ServerResourceEpisodeSummary({
     required this.index,
@@ -42,6 +57,7 @@ class ServerResourceEpisodeSummary {
     required this.totalBytes,
     required this.coverPath,
     required this.imagePaths,
+    required this.imageSizes,
   });
 
   final int index;
@@ -51,6 +67,7 @@ class ServerResourceEpisodeSummary {
   final int totalBytes;
   final String? coverPath;
   final List<String> imagePaths;
+  final List<ServerResourceImageSize?> imageSizes;
 
   Map<String, dynamic> toJson() => {
         'index': index,
@@ -908,6 +925,7 @@ class LocalResourceScanner {
           totalBytes: episodes[i].totalBytes,
           coverPath: episodes[i].coverPath,
           imagePaths: episodes[i].imagePaths,
+          imageSizes: episodes[i].imageSizes,
         ),
     ];
   }
@@ -966,8 +984,142 @@ class LocalResourceScanner {
       totalBytes: await _calculateTotalBytes(images),
       coverPath: _resolveEpisodeCoverPath(directory, images),
       imagePaths: images.map((e) => e.path).toList(growable: false),
+      imageSizes: images.map(_readImageSize).toList(growable: false),
     );
   }
+
+  ServerResourceImageSize? _readImageSize(File file) {
+    try {
+      final bytes = file.openSync(mode: FileMode.read);
+      try {
+        final length = bytes.lengthSync();
+        final headerLength = length < 512 ? length : 512;
+        final header = bytes.readSync(headerLength);
+        return _readPngSize(header) ??
+            _readJpegSize(file) ??
+            _readWebpSize(header);
+      } finally {
+        bytes.closeSync();
+      }
+    } catch (_) {
+      return null;
+    }
+  }
+
+  ServerResourceImageSize? _readPngSize(List<int> bytes) {
+    if (bytes.length < 24 ||
+        bytes[0] != 0x89 ||
+        bytes[1] != 0x50 ||
+        bytes[2] != 0x4E ||
+        bytes[3] != 0x47) {
+      return null;
+    }
+    final width = _readUint32BigEndian(bytes, 16);
+    final height = _readUint32BigEndian(bytes, 20);
+    return width > 0 && height > 0
+        ? ServerResourceImageSize(width: width, height: height)
+        : null;
+  }
+
+  ServerResourceImageSize? _readJpegSize(File file) {
+    final raf = file.openSync(mode: FileMode.read);
+    try {
+      if (raf.lengthSync() < 4 || raf.readByteSync() != 0xFF || raf.readByteSync() != 0xD8) {
+        return null;
+      }
+      while (raf.positionSync() < raf.lengthSync()) {
+        var markerPrefix = raf.readByteSync();
+        while (markerPrefix != 0xFF && raf.positionSync() < raf.lengthSync()) {
+          markerPrefix = raf.readByteSync();
+        }
+        var marker = raf.readByteSync();
+        while (marker == 0xFF && raf.positionSync() < raf.lengthSync()) {
+          marker = raf.readByteSync();
+        }
+        if (marker == 0xD9 || marker == 0xDA) {
+          return null;
+        }
+        final lengthBytes = raf.readSync(2);
+        if (lengthBytes.length < 2) {
+          return null;
+        }
+        final segmentLength = _readUint16BigEndian(lengthBytes, 0);
+        if (segmentLength < 2) {
+          return null;
+        }
+        final isSizeMarker = (marker >= 0xC0 && marker <= 0xCF) &&
+            marker != 0xC4 &&
+            marker != 0xC8 &&
+            marker != 0xCC;
+        if (isSizeMarker) {
+          final segment = raf.readSync(segmentLength - 2);
+          if (segment.length < 5) {
+            return null;
+          }
+          final height = _readUint16BigEndian(segment, 1);
+          final width = _readUint16BigEndian(segment, 3);
+          return width > 0 && height > 0
+              ? ServerResourceImageSize(width: width, height: height)
+              : null;
+        }
+        raf.setPositionSync(raf.positionSync() + segmentLength - 2);
+      }
+    } catch (_) {
+      return null;
+    } finally {
+      raf.closeSync();
+    }
+    return null;
+  }
+
+  ServerResourceImageSize? _readWebpSize(List<int> bytes) {
+    if (bytes.length < 30 ||
+        _ascii(bytes, 0, 4) != 'RIFF' ||
+        _ascii(bytes, 8, 4) != 'WEBP') {
+      return null;
+    }
+    final chunk = _ascii(bytes, 12, 4);
+    if (chunk == 'VP8X' && bytes.length >= 30) {
+      final width = 1 + _readUint24LittleEndian(bytes, 24);
+      final height = 1 + _readUint24LittleEndian(bytes, 27);
+      return ServerResourceImageSize(width: width, height: height);
+    }
+    if (chunk == 'VP8 ' && bytes.length >= 30) {
+      final width = _readUint16LittleEndian(bytes, 26) & 0x3FFF;
+      final height = _readUint16LittleEndian(bytes, 28) & 0x3FFF;
+      return width > 0 && height > 0
+          ? ServerResourceImageSize(width: width, height: height)
+          : null;
+    }
+    if (chunk == 'VP8L' && bytes.length >= 25) {
+      final b0 = bytes[21];
+      final b1 = bytes[22];
+      final b2 = bytes[23];
+      final b3 = bytes[24];
+      final width = 1 + (((b1 & 0x3F) << 8) | b0);
+      final height = 1 + ((b3 << 6) | (b2 >> 2) | ((b1 & 0xC0) << 6));
+      return ServerResourceImageSize(width: width, height: height);
+    }
+    return null;
+  }
+
+  int _readUint16BigEndian(List<int> bytes, int offset) =>
+      (bytes[offset] << 8) | bytes[offset + 1];
+
+  int _readUint32BigEndian(List<int> bytes, int offset) =>
+      (bytes[offset] << 24) |
+      (bytes[offset + 1] << 16) |
+      (bytes[offset + 2] << 8) |
+      bytes[offset + 3];
+
+  int _readUint16LittleEndian(List<int> bytes, int offset) =>
+      bytes[offset] | (bytes[offset + 1] << 8);
+
+  int _readUint24LittleEndian(List<int> bytes, int offset) =>
+      bytes[offset] | (bytes[offset + 1] << 8) | (bytes[offset + 2] << 16);
+
+  String _ascii(List<int> bytes, int offset, int length) =>
+      String.fromCharCodes(bytes.skip(offset).take(length));
 
   String _extractCoverPath(
     Map<String, dynamic>? data,

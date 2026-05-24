@@ -13,6 +13,7 @@ class DownloadedComicTile extends StatelessWidget {
     this.imageProvider,
     this.readingHistoryOverride,
     this.isFavoriteOverride,
+    this.optimizeCoverDecode = false,
     required this.type,
     required this.tag,
     required this.size,
@@ -26,6 +27,7 @@ class DownloadedComicTile extends StatelessWidget {
   final ImageProvider<Object>? imageProvider;
   final History? readingHistoryOverride;
   final bool? isFavoriteOverride;
+  final bool optimizeCoverDecode;
   final String author;
   final String name;
   final void Function() onTap;
@@ -279,14 +281,40 @@ class DownloadedComicTile extends StatelessWidget {
     if (resolvedProvider == null) {
       return const Center(child: Icon(Icons.image_not_supported));
     }
-    return Image(
-      image: resolvedProvider,
-      fit: BoxFit.cover,
-      height: double.infinity,
-      gaplessPlayback: false,
-      filterQuality: FilterQuality.medium,
-      errorBuilder: (_, __, ___) =>
-          const Center(child: Icon(Icons.image_not_supported)),
+    if (!optimizeCoverDecode) {
+      return Image(
+        image: resolvedProvider,
+        fit: BoxFit.cover,
+        height: double.infinity,
+        gaplessPlayback: false,
+        filterQuality: FilterQuality.medium,
+        errorBuilder: (_, __, ___) =>
+            const Center(child: Icon(Icons.image_not_supported)),
+      );
+    }
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final devicePixelRatio =
+            MediaQuery.of(context).devicePixelRatio.clamp(1.0, 3.0).toDouble();
+        const qualityScale = 1.35;
+        final cacheWidth = constraints.maxWidth.isFinite
+            ? (constraints.maxWidth * devicePixelRatio * qualityScale).round()
+            : null;
+        final displayProvider = ResizeImage.resizeIfNeeded(
+          cacheWidth,
+          null,
+          resolvedProvider,
+        );
+        return Image(
+          image: displayProvider,
+          fit: BoxFit.cover,
+          height: double.infinity,
+          gaplessPlayback: true,
+          filterQuality: FilterQuality.medium,
+          errorBuilder: (_, __, ___) =>
+              const Center(child: Icon(Icons.image_not_supported)),
+        );
+      },
     );
   }
 }
