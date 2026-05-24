@@ -461,18 +461,32 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
     App.temporaryDisablePopGesture = true;
     String? errorText;
     try {
-      for (int i = 0; i < items.length; i++) {
+      final remoteTargets = items.whereType<RemoteLibraryComicItem>().toList();
+      final canUseRemoteBatch =
+          remoteTargets.length == items.length && remoteTargets.length > 1;
+      if (canUseRemoteBatch) {
         if (mounted) {
           setState(() {
-            _deleteProgressCurrent = i + 1;
+            _deleteProgressCurrent = items.length;
           });
         } else {
-          _deleteProgressCurrent = i + 1;
+          _deleteProgressCurrent = items.length;
         }
-        final result = await TrashManager.instance.deleteItem(items[i]);
-        if (!result.ok) {
-          errorText = deleteFailureMessage(result.error).tl;
-          break;
+        await TrashManager.instance.deleteRemoteItems(remoteTargets);
+      } else {
+        for (int i = 0; i < items.length; i++) {
+          if (mounted) {
+            setState(() {
+              _deleteProgressCurrent = i + 1;
+            });
+          } else {
+            _deleteProgressCurrent = i + 1;
+          }
+          final result = await TrashManager.instance.deleteItem(items[i]);
+          if (!result.ok) {
+            errorText = deleteFailureMessage(result.error).tl;
+            break;
+          }
         }
       }
     } catch (e) {
@@ -1047,36 +1061,45 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
     if (!_canSelectItem(item)) {
       return child;
     }
-    final selected = _isItemSelected(item);
-    if (!selected) {
-      return child;
-    }
     final colorScheme = Theme.of(context).colorScheme;
-    return Stack(
-      children: [
-        child,
-        Positioned.fill(
-          child: IgnorePointer(
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(
-                  color: colorScheme.primary,
-                  width: 1.5,
-                ),
-                gradient: LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: [
-                    colorScheme.primary.withValues(alpha: 0.08),
-                    colorScheme.primary.withValues(alpha: 0.20),
-                  ],
+    final selected = _isItemSelected(item);
+    return Padding(
+      padding: const EdgeInsets.all(2),
+      child: ClipRRect(
+        borderRadius: const BorderRadius.all(Radius.circular(16)),
+        child: Stack(
+          children: [
+            Positioned.fill(child: child),
+            if (selected)
+              Positioned.fill(
+                child: IgnorePointer(
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: colorScheme.primary.withValues(alpha: 0.22),
+                      border: Border.all(
+                        color: colorScheme.primary,
+                        width: 1.6,
+                      ),
+                      borderRadius: const BorderRadius.all(Radius.circular(16)),
+                    ),
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          begin: Alignment.topCenter,
+                          end: Alignment.bottomCenter,
+                          colors: [
+                            colorScheme.primary.withValues(alpha: 0.14),
+                            colorScheme.primary.withValues(alpha: 0.28),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
                 ),
               ),
-            ),
-          ),
+          ],
         ),
-      ],
+      ),
     );
   }
 
@@ -1095,24 +1118,21 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
         ),
       );
     }
-    final tile = Padding(
-      padding: const EdgeInsets.all(2),
-      child: _LocalLibraryComicTile(
-        comicId: item.id,
-        enableLongPress: true,
-        name: item.name,
-        author: item.subTitle,
-        imagePath: _coverFile(item),
-        imageProvider: _coverImageProvider(item),
-        type: item.sourceDisplayName,
-        tag: item.tags,
-        size: item.comicSize == null
-            ? '未知大小'.tl
-            : _formatLocalLibrarySize(item.comicSize!),
-        onTap: () => _handleItemTap(item),
-        onLongTap: () => _handleItemLongPress(item),
-        onSecondaryTap: (details) => _handleItemSecondaryTap(item, details),
-      ),
+    final tile = _LocalLibraryComicTile(
+      comicId: item.id,
+      enableLongPress: true,
+      name: item.name,
+      author: item.subTitle,
+      imagePath: _coverFile(item),
+      imageProvider: _coverImageProvider(item),
+      type: item.sourceDisplayName,
+      tag: item.tags,
+      size: item.comicSize == null
+          ? '未知大小'.tl
+          : _formatLocalLibrarySize(item.comicSize!),
+      onTap: () => _handleItemTap(item),
+      onLongTap: () => _handleItemLongPress(item),
+      onSecondaryTap: (details) => _handleItemSecondaryTap(item, details),
     );
     return _buildSelectionFrame(item: item, child: tile);
   }
@@ -1328,6 +1348,32 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
     );
   }
 
+  Widget? _buildMultiSelectFab(List<DownloadedItem> items) {
+    if (items.where(_canSelectItem).isEmpty) {
+      return null;
+    }
+    return FloatingActionButton(
+      enableFeedback: true,
+      onPressed: _isOperationRunning
+          ? null
+          : () {
+              if (!_selecting) {
+                setState(() {
+                  _selecting = true;
+                });
+                return;
+              }
+              if (_selectedCount == 0) {
+                return;
+              }
+              _deleteSelectedItems();
+            },
+      child: _selecting
+          ? const Icon(Icons.delete_forever_outlined)
+          : const Icon(Icons.checklist_outlined),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final items = _filteredItems;
@@ -1338,6 +1384,7 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
         ? (_isAlbumOnly ? '刷新远程图集'.tl : '刷新远程资源库'.tl)
         : (_isAlbumOnly ? '刷新图集'.tl : '刷新资源库'.tl);
     Widget page = Scaffold(
+      floatingActionButton: _buildMultiSelectFab(items),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : SmoothCustomScrollView(
@@ -1409,15 +1456,18 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
                 if (items.isEmpty)
                   _buildEmptyState()
                 else
-                  SliverGrid(
-                    delegate: SliverChildBuilderDelegate(
-                      (context, index) {
-                        final item = items[index];
-                        return _buildItem(item);
-                      },
-                      childCount: items.length,
+                  SliverPadding(
+                    padding: const EdgeInsets.fromLTRB(2, 0, 2, 24),
+                    sliver: SliverGrid(
+                      delegate: SliverChildBuilderDelegate(
+                        (context, index) {
+                          final item = items[index];
+                          return _buildItem(item);
+                        },
+                        childCount: items.length,
+                      ),
+                      gridDelegate: SliverGridDelegateWithComics(),
                     ),
-                    gridDelegate: SliverGridDelegateWithComics(),
                   ),
               ],
             ),

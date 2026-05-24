@@ -23,14 +23,12 @@ class TrashPage extends StatefulWidget {
   State<TrashPage> createState() => _TrashPageState();
 }
 
-class _TrashPageState extends State<TrashPage>
-    with WidgetsBindingObserver {
+class _TrashPageState extends State<TrashPage> with WidgetsBindingObserver {
   _TrashPageView _view = _TrashPageView.local;
   _TrashItemKindView _kindView = _TrashItemKindView.comic;
   late Future<void> _loadTask = _reload();
   List<TrashItemRecord> _localItems = const <TrashItemRecord>[];
-  List<RemoteLibraryTrashItem> _remoteItems =
-      const <RemoteLibraryTrashItem>[];
+  List<RemoteLibraryTrashItem> _remoteItems = const <RemoteLibraryTrashItem>[];
   final Set<String> _selectedKeys = <String>{};
   bool _selecting = false;
   String? _errorText;
@@ -81,9 +79,7 @@ class _TrashPageState extends State<TrashPage>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed &&
-        mounted &&
-        !_isOperationRunning) {
+    if (state == AppLifecycleState.resumed && mounted && !_isOperationRunning) {
       setState(() {
         _loadTask = _reload();
       });
@@ -276,6 +272,68 @@ class _TrashPageState extends State<TrashPage>
     }
   }
 
+  Future<void> _runBatchOperation<T>({
+    required String actionLabel,
+    required List<T> items,
+    required Future<void> Function(List<T> items) action,
+  }) async {
+    if (_isOperationRunning || items.isEmpty) {
+      return;
+    }
+    setState(() {
+      _isOperationRunning = true;
+      _operationProgressCurrent = 0;
+      _operationProgressTotal = items.length;
+      _operationActionLabel = actionLabel;
+    });
+    App.beginNavigationLock();
+    App.temporaryDisablePopGesture = true;
+    String? errorText;
+    try {
+      if (mounted) {
+        setState(() {
+          _operationProgressCurrent = items.length;
+        });
+      } else {
+        _operationProgressCurrent = items.length;
+      }
+      await action(items);
+    } catch (e) {
+      errorText = _operationErrorText(e);
+    } finally {
+      try {
+        await _reload();
+        if (mounted) {
+          setState(() {
+            _loadTask = Future<void>.value();
+          });
+        }
+      } catch (e) {
+        errorText ??= _operationErrorText(e);
+      }
+      App.temporaryDisablePopGesture = false;
+      App.endNavigationLock();
+      if (mounted) {
+        setState(() {
+          _isOperationRunning = false;
+          _operationProgressCurrent = 0;
+          _operationProgressTotal = 0;
+          _operationActionLabel = '';
+        });
+      } else {
+        _isOperationRunning = false;
+        _operationProgressCurrent = 0;
+        _operationProgressTotal = 0;
+        _operationActionLabel = '';
+      }
+      if (errorText != null && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(errorText)),
+        );
+      }
+    }
+  }
+
   Future<void> _confirmAndRun({
     required String title,
     required String content,
@@ -315,10 +373,12 @@ class _TrashPageState extends State<TrashPage>
       );
       return;
     }
-    await _runItemsOperation<RemoteLibraryTrashItem>(
+    await _runBatchOperation<RemoteLibraryTrashItem>(
       actionLabel: '正在恢复',
       items: _selectedRemoteItems,
-      onItem: (item) => TrashManager.instance.restoreRemoteItem(item.id),
+      action: (items) => TrashManager.instance.restoreRemoteItems(
+        items.map((item) => item.id),
+      ),
     );
   }
 
@@ -339,11 +399,12 @@ class _TrashPageState extends State<TrashPage>
           );
           return;
         }
-        await _runItemsOperation<RemoteLibraryTrashItem>(
-          actionLabel: '正在删除',
+        await _runBatchOperation<RemoteLibraryTrashItem>(
+          actionLabel: '正在彻底删除',
           items: _selectedRemoteItems,
-          onItem: (item) =>
-              TrashManager.instance.permanentlyDeleteRemoteItem(item.id),
+          action: (items) => TrashManager.instance.permanentlyDeleteRemoteItems(
+            items.map((item) => item.id),
+          ),
         );
       },
     );
@@ -618,7 +679,13 @@ class _TrashPageState extends State<TrashPage>
           title: item.title,
           subtitle: item.subtitle,
           path: item.originalPath,
-          cover: _buildLocalCover(item.cover),
+          cover: _buildLocalCover(
+            resolveLocalTrashCoverPath(
+              trashedPath: item.trashedPath,
+              coverRelativePath: item.coverRelativePath,
+              cover: item.cover,
+            ),
+          ),
           selected: _isLocalSelected(item),
           onTap: _selecting ? () => _toggleLocalSelection(item) : null,
           onLongPress: () => _toggleLocalSelection(item),
@@ -786,7 +853,8 @@ class _TrashPageState extends State<TrashPage>
     );
   }
 
-  Widget _coverPlaceholder({IconData icon = Icons.image_not_supported_outlined}) {
+  Widget _coverPlaceholder(
+      {IconData icon = Icons.image_not_supported_outlined}) {
     return Container(
       width: 72,
       height: 104,

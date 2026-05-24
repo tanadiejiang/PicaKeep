@@ -10,6 +10,8 @@ const localLibraryShowAllDatabaseRecordsSettingIndex = 96;
 const downloadedLibraryViewSettingIndex = 103;
 const localLibraryViewSettingIndex = 104;
 const deleteBehaviorSettingIndex = 105;
+const externalToolOrderSettingIndex = 106;
+const externalToolVisibilitySettingIndex = 107;
 const androidRootModeSettingIndex = 101;
 const androidShizukuModeSettingIndex = 102;
 
@@ -90,6 +92,20 @@ String normalizeAndroidShizukuMode(String? value) {
 
 String normalizeDeleteBehavior(String? value) {
   return value == 'permanent' ? 'permanent' : 'trash';
+}
+
+String normalizeExternalToolOrderSetting(String? value) {
+  if (value == null || value.trim().isEmpty) {
+    return '["service_info","local_files","albums","app_capabilities"]';
+  }
+  return value;
+}
+
+String normalizeExternalToolVisibilitySetting(String? value) {
+  if (value == null || value.trim().isEmpty) {
+    return '["service_info","local_files","albums","app_capabilities"]';
+  }
+  return value;
 }
 
 List<String> decodeLocalComicPathList(String? raw) {

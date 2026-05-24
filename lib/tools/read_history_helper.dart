@@ -54,7 +54,9 @@ String _firstEpisodeCoverPath(LocalLibraryComicItem item) {
 String resolveLocalComicCoverPath(DownloadedItem comic,
     {Iterable<String> legacyTargets = const <String>[]}) {
   final directPath = comic.localCoverPath?.trim();
-  if (directPath != null && directPath.isNotEmpty) {
+  if (directPath != null &&
+      directPath.isNotEmpty &&
+      File(directPath).existsSync()) {
     return directPath;
   }
 
@@ -69,7 +71,9 @@ String resolveLocalComicCoverPath(DownloadedItem comic,
     final localItem = LocalLibraryManager()
         .findCachedByCandidates([comic.id, ...legacyTargets]);
     final coverPath = localItem?.localCoverPath?.trim();
-    if (coverPath != null && coverPath.isNotEmpty) {
+    if (coverPath != null &&
+        coverPath.isNotEmpty &&
+        File(coverPath).existsSync()) {
       return coverPath;
     }
     if (localItem != null) {

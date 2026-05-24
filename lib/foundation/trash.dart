@@ -1,18 +1,21 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/painting.dart';
 import 'package:flutter/services.dart';
 import 'package:picakeep/base.dart';
 import 'package:picakeep/foundation/app.dart';
 import 'package:picakeep/foundation/app_runtime_mode.dart';
 import 'package:picakeep/foundation/download.dart';
 import 'package:picakeep/foundation/download_model.dart';
+import 'package:picakeep/foundation/image_loader/base_image_provider.dart';
 import 'package:picakeep/foundation/local_library.dart';
 import 'package:picakeep/foundation/local_library_settings.dart';
 import 'package:picakeep/foundation/local_trash_store.dart';
 import 'package:picakeep/foundation/remote_library_data_source.dart';
 import 'package:picakeep/server/library_trash_store.dart';
 import 'package:picakeep/server/local_server_runtime.dart';
+import 'package:picakeep/tools/read_history_helper.dart';
 import 'package:sqlite3/sqlite3.dart';
 
 const deleteBehaviorTrash = 'trash';
@@ -33,6 +36,121 @@ enum _PrivilegedWriteMode {
 
 String _joinTrashPath(String parent, String child) {
   return '$parent${Platform.pathSeparator}$child';
+}
+
+bool _isImageTrashPath(String path) {
+  final lower = path.toLowerCase();
+  return lower.endsWith('.jpg') ||
+      lower.endsWith('.jpeg') ||
+      lower.endsWith('.png') ||
+      lower.endsWith('.webp') ||
+      lower.endsWith('.gif') ||
+      lower.endsWith('.bmp');
+}
+
+String _relativeTrashPathIfInside(String rootPath, String filePath) {
+  final root = rootPath.trim();
+  final file = filePath.trim();
+  if (root.isEmpty || file.isEmpty) {
+    return '';
+  }
+  final normalizedRoot = _normalizeAndroidStoragePath(root);
+  final normalizedFile = _normalizeAndroidStoragePath(file);
+  final lowerRoot = normalizedRoot.toLowerCase();
+  final lowerFile = normalizedFile.toLowerCase();
+  if (lowerFile == lowerRoot) {
+    return '';
+  }
+  final prefix = '$lowerRoot/';
+  if (!lowerFile.startsWith(prefix)) {
+    return '';
+  }
+  return normalizedFile.substring(normalizedRoot.length + 1);
+}
+
+String _joinTrashRelativePath(String rootPath, String relativePath) {
+  final parts = relativePath
+      .replaceAll('\\', '/')
+      .split('/')
+      .map((entry) => entry.trim())
+      .where((entry) => entry.isNotEmpty)
+      .toList(growable: false);
+  var current = rootPath;
+  for (final part in parts) {
+    current = _joinTrashPath(current, part);
+  }
+  return current;
+}
+
+String _firstImageInTrashDirectory(String rootPath) {
+  final root = Directory(rootPath);
+  if (!root.existsSync()) {
+    return '';
+  }
+  try {
+    final entities = root.listSync(recursive: true, followLinks: false)
+      ..sort((a, b) => a.path.compareTo(b.path));
+    for (final entity in entities) {
+      if (entity is File && _isImageTrashPath(entity.path)) {
+        return entity.path;
+      }
+    }
+  } catch (_) {}
+  return '';
+}
+
+String resolveLocalTrashCoverPath({
+  required String trashedPath,
+  required String coverRelativePath,
+  required String cover,
+}) {
+  final root = trashedPath.trim();
+  final relative = coverRelativePath.trim();
+  if (root.isNotEmpty && relative.isNotEmpty) {
+    final file = File(_joinTrashRelativePath(root, relative));
+    if (file.existsSync()) {
+      return file.path;
+    }
+  }
+
+  final fallback = cover.trim();
+  if (fallback.isNotEmpty) {
+    final file = File(fallback);
+    if (file.existsSync()) {
+      return file.path;
+    }
+    if (root.isNotEmpty) {
+      final relativeFromFallback = _relativeTrashPathIfInside(root, fallback);
+      if (relativeFromFallback.isNotEmpty) {
+        final remapped =
+            File(_joinTrashRelativePath(root, relativeFromFallback));
+        if (remapped.existsSync()) {
+          return remapped.path;
+        }
+      }
+      final byName = File(_joinTrashPath(root, _basenameTrashPath(fallback)));
+      if (byName.existsSync()) {
+        return byName.path;
+      }
+    }
+  }
+
+  if (root.isNotEmpty) {
+    for (final name in const [
+      'cover.jpg',
+      'cover.jpeg',
+      'cover.png',
+      'cover.webp',
+    ]) {
+      final file = File(_joinTrashPath(root, name));
+      if (file.existsSync()) {
+        return file.path;
+      }
+    }
+    return _firstImageInTrashDirectory(root);
+  }
+
+  return '';
 }
 
 String _basenameTrashPath(String path) {
@@ -343,6 +461,7 @@ class TrashItemRecord {
     required this.title,
     required this.subtitle,
     required this.cover,
+    this.coverRelativePath = '',
     required this.sourceLabel,
     required this.originalPath,
     required this.trashedPath,
@@ -367,6 +486,7 @@ class TrashItemRecord {
   final String title;
   final String subtitle;
   final String cover;
+  final String coverRelativePath;
   final String sourceLabel;
   final String originalPath;
   final String trashedPath;
@@ -395,6 +515,7 @@ class TrashItemRecord {
         'title': title,
         'subtitle': subtitle,
         'cover': cover,
+        'coverRelativePath': coverRelativePath,
         'sourceLabel': sourceLabel,
         'originalPath': originalPath,
         'trashedPath': trashedPath,
@@ -425,6 +546,9 @@ class TrashItemRecord {
       title: (json['title'] as String? ?? '').trim(),
       subtitle: (json['subtitle'] as String? ?? '').trim(),
       cover: (json['cover'] as String? ?? '').trim(),
+      coverRelativePath: (json['coverRelativePath'] as String? ??
+              (json['cover_relative_path'] as String? ?? ''))
+          .trim(),
       sourceLabel: (json['sourceLabel'] as String? ?? '').trim(),
       originalPath: (json['originalPath'] as String? ?? '').trim(),
       trashedPath: (json['trashedPath'] as String? ?? '').trim(),
@@ -457,6 +581,7 @@ class TrashItemRecord {
       title: data.title,
       subtitle: data.subtitle,
       cover: data.cover,
+      coverRelativePath: data.coverRelativePath,
       sourceLabel: data.sourceLabel,
       originalPath: data.originalPath,
       trashedPath: data.trashedPath,
@@ -485,6 +610,7 @@ class TrashItemRecord {
       title: title,
       subtitle: subtitle,
       cover: cover,
+      coverRelativePath: coverRelativePath,
       sourceLabel: sourceLabel,
       originalPath: originalPath,
       trashedPath: trashedPath,
@@ -667,6 +793,54 @@ class TrashManager {
     App.notifyServiceRuntimeChanged();
   }
 
+  Future<RemoteLibraryBatchResult> deleteRemoteItems(
+    Iterable<RemoteLibraryComicItem> items,
+  ) async {
+    final targets = items.toList(growable: false);
+    if (targets.isEmpty) {
+      return RemoteLibraryBatchResult.allSucceeded(0);
+    }
+    final client = targets.first.client;
+    final result = useTrashByDefault
+        ? await client.trashItems(targets.map((item) => item.id))
+        : await client.deleteItemsPermanently(targets.map((item) => item.id));
+    App.notifyServiceRuntimeChanged();
+    _throwIfRemoteBatchFailed(result);
+    return result;
+  }
+
+  Future<RemoteLibraryBatchResult> restoreRemoteItems(
+    Iterable<String> trashIds,
+  ) async {
+    final ids = trashIds.toList(growable: false);
+    final client = RemoteLibraryClient.fromCurrentSettings();
+    final result = await client.restoreTrashItems(ids);
+    App.notifyServiceRuntimeChanged();
+    _throwIfRemoteBatchFailed(result);
+    return result;
+  }
+
+  Future<RemoteLibraryBatchResult> permanentlyDeleteRemoteItems(
+    Iterable<String> trashIds,
+  ) async {
+    final ids = trashIds.toList(growable: false);
+    final client = RemoteLibraryClient.fromCurrentSettings();
+    final result = await client.purgeTrashItems(ids);
+    App.notifyServiceRuntimeChanged();
+    _throwIfRemoteBatchFailed(result);
+    return result;
+  }
+
+  void _throwIfRemoteBatchFailed(RemoteLibraryBatchResult result) {
+    if (result.ok) {
+      return;
+    }
+    final firstError = result.failed.isEmpty
+        ? '远程批量操作部分失败'
+        : (result.failed.first['error'] ?? '远程批量操作部分失败');
+    throw StateError(firstError);
+  }
+
   Future<void> permanentlyDeleteRemoteItem(String trashId) async {
     final client = RemoteLibraryClient.fromCurrentSettings();
     await client.purgeTrashItem(trashId);
@@ -730,16 +904,28 @@ class TrashManager {
       );
     }
 
+    final directory = record.sourceDirectory.trim().isNotEmpty
+        ? record.sourceDirectory.trim()
+        : _basenameTrashPath(record.originalPath);
+    final sourceDbId = record.sourceDbId.trim().isNotEmpty
+        ? record.sourceDbId.trim()
+        : record.itemId.trim();
+    final repairedSnapshotJson = await _repairRestoredSnapshotJson(
+      record,
+      directory: directory,
+      sourceDbId: sourceDbId,
+    );
     final restored = parseDownloadedItemRecordJson(
-      record.itemId,
-      record.snapshotJson,
+      sourceDbId,
+      repairedSnapshotJson,
+      directory: directory,
     );
     if (restored != null && !record.itemId.startsWith('local_')) {
       final manager = DownloadManager();
       await manager.init();
       manager.upsertDbRecordOnly(
         restored,
-        _basenameTrashPath(record.originalPath),
+        directory,
         record.sourceDbTimeMillis > 0
             ? DateTime.fromMillisecondsSinceEpoch(record.sourceDbTimeMillis)
             : record.deletedAt,
@@ -752,6 +938,7 @@ class TrashManager {
     if (_isServerMode) {
       LocalServerRuntime.instance.markResourceStateDirty();
     }
+    _clearRestoredLocalImageCaches();
     App.notifyLocalDataChanged();
   }
 
@@ -1048,6 +1235,13 @@ class TrashManager {
     }
   }
 
+  void _clearRestoredLocalImageCaches() {
+    BaseImageProvider.clearCache();
+    final imageCache = PaintingBinding.instance.imageCache;
+    imageCache.clear();
+    imageCache.clearLiveImages();
+  }
+
   Future<void> _restoreSourceDbRecord(TrashItemRecord record) async {
     final sourceDbPath = record.sourceDbPath.trim();
     final sourceDbId = record.sourceDbId.trim().isNotEmpty
@@ -1059,9 +1253,14 @@ class TrashManager {
     if (sourceDbPath.isEmpty || sourceDbId.isEmpty || directory.isEmpty) {
       return;
     }
+    final repairedSnapshotJson = await _repairRestoredSnapshotJson(
+      record,
+      directory: directory,
+      sourceDbId: sourceDbId,
+    );
     final restored = parseDownloadedItemRecordJson(
       sourceDbId,
-      record.snapshotJson,
+      repairedSnapshotJson,
       directory: directory,
     );
     if (restored == null) {
@@ -1100,7 +1299,7 @@ class TrashManager {
             restoreTimeMillis,
             directory,
             restored.comicSize,
-            record.snapshotJson,
+            repairedSnapshotJson,
             sourceDbId,
           ]);
           return;
@@ -1136,7 +1335,7 @@ class TrashManager {
               restoreTimeMillis,
               directory,
               restored.comicSize,
-              record.snapshotJson,
+              repairedSnapshotJson,
             ]);
             return;
           }
@@ -1159,10 +1358,173 @@ class TrashManager {
           restoreTimeMillis,
           directory,
           restored.comicSize,
-          record.snapshotJson,
+          repairedSnapshotJson,
         ]);
       },
     );
+  }
+
+  Future<String> _repairRestoredSnapshotJson(
+    TrashItemRecord record, {
+    required String directory,
+    required String sourceDbId,
+  }) async {
+    dynamic decoded;
+    try {
+      decoded = jsonDecode(record.snapshotJson);
+    } catch (_) {
+      return record.snapshotJson;
+    }
+    if (decoded is! Map) {
+      return record.snapshotJson;
+    }
+    final json = decoded.map((key, value) => MapEntry(key.toString(), value));
+    final originalPath = record.originalPath.trim();
+    final trashedPath = record.trashedPath.trim();
+    String remapPath(String value) {
+      final path = value.trim();
+      if (path.isEmpty || originalPath.isEmpty) {
+        return path;
+      }
+      if (trashedPath.isNotEmpty) {
+        final relativeFromTrash = _relativeTrashPathIfInside(trashedPath, path);
+        if (relativeFromTrash.isNotEmpty) {
+          return _joinTrashRelativePath(originalPath, relativeFromTrash);
+        }
+        if (_sameNormalizedPath(path, trashedPath)) {
+          return originalPath;
+        }
+      }
+      return path;
+    }
+
+    Object? remapValue(Object? value) {
+      if (value is String) {
+        return remapPath(value);
+      }
+      if (value is List) {
+        return value.map(remapValue).toList(growable: false);
+      }
+      if (value is Map) {
+        return value
+            .map((key, entry) => MapEntry(key.toString(), remapValue(entry)));
+      }
+      return value;
+    }
+
+    LocalLibraryRestoredFileMetadata? metadata;
+    if (originalPath.isNotEmpty) {
+      metadata = await LocalLibraryManager.instance
+          .buildRestoredFileMetadata(originalPath);
+    }
+    final rebuiltEpisodeFiles =
+        metadata?.episodeFiles ?? const <int, List<String>>{};
+    final orderedImages = <String>[
+      for (final entry
+          in rebuiltEpisodeFiles.entries.toList()
+            ..sort((a, b) => a.key.compareTo(b.key)))
+        ...entry.value,
+    ];
+    final rebuiltCoverPath = metadata?.coverPath?.trim() ?? '';
+
+    json['fileSystemPath'] = originalPath;
+    json['sourceDirectory'] = directory;
+    json['sourceDbId'] = sourceDbId;
+    if (record.sourceDbPath.trim().isNotEmpty) {
+      json['sourceDbPath'] = record.sourceDbPath.trim();
+    }
+    if (record.sourceDbRowId > 0) {
+      json['sourceDbRowId'] = record.sourceDbRowId;
+    }
+    if (record.sourceDbTimeMillis > 0) {
+      json['sourceRowTimeMillis'] = record.sourceDbTimeMillis;
+    }
+
+    if (rebuiltEpisodeFiles.isNotEmpty) {
+      json['episodeFiles'] = {
+        for (final entry in rebuiltEpisodeFiles.entries)
+          entry.key.toString(): List<String>.from(entry.value),
+      };
+      json['downloadedEps'] = metadata!.downloadedEps;
+      json['eps'] = metadata.eps;
+      json['comicSize'] = metadata.sizeMb;
+      json['size'] = metadata.sizeMb;
+      for (final key in const [
+        'pages',
+        'imagePaths',
+        'images',
+        'files',
+        'downloadedFiles',
+      ]) {
+        if (json.containsKey(key)) {
+          json[key] = List<String>.from(orderedImages);
+        }
+      }
+    } else {
+      if (json.containsKey('episodeFiles')) {
+        json['episodeFiles'] = remapValue(json['episodeFiles']);
+      }
+      for (final key in const [
+        'pages',
+        'imagePaths',
+        'images',
+        'files',
+        'downloadedFiles',
+      ]) {
+        if (json.containsKey(key)) {
+          json[key] = remapValue(json[key]);
+        }
+      }
+    }
+
+    if (rebuiltCoverPath.isNotEmpty && File(rebuiltCoverPath).existsSync()) {
+      json['localCoverPath'] = rebuiltCoverPath;
+      if (json.containsKey('coverPath')) {
+        json['coverPath'] = rebuiltCoverPath;
+      }
+      if (json.containsKey('cover')) {
+        json['cover'] = rebuiltCoverPath;
+      }
+      final gallery = json['gallery'];
+      if (gallery is Map) {
+        final galleryData = gallery.map(
+          (key, value) => MapEntry(key.toString(), value),
+        );
+        if (galleryData.containsKey('cover')) {
+          galleryData['cover'] = rebuiltCoverPath;
+        }
+        if (galleryData.containsKey('coverPath')) {
+          galleryData['coverPath'] = rebuiltCoverPath;
+        }
+        json['gallery'] = galleryData;
+      }
+    } else {
+      final localCoverPath =
+          remapPath((json['localCoverPath'] as String? ?? '').trim());
+      if (localCoverPath.isNotEmpty && File(localCoverPath).existsSync()) {
+        json['localCoverPath'] = localCoverPath;
+      } else {
+        final coverPath = resolveLocalTrashCoverPath(
+          trashedPath: originalPath,
+          coverRelativePath: record.coverRelativePath,
+          cover: record.cover,
+        );
+        json['localCoverPath'] = coverPath;
+      }
+    }
+
+    if (metadata != null &&
+        record.sourceDbPath.trim().isNotEmpty &&
+        sourceDbId.trim().isNotEmpty) {
+      await LocalLibraryManager.instance.persistRestoredFileMetadataCache(
+        sourceDbPath: record.sourceDbPath.trim(),
+        sourceDbId: sourceDbId.trim(),
+        itemDirectory: originalPath,
+        metadata: metadata,
+      );
+    }
+
+    return jsonEncode(json);
   }
 
   Future<DeleteItemResult> _moveLocalItemToTrash(DownloadedItem item) async {
@@ -1443,7 +1805,23 @@ class TrashManager {
     required int sourceDbRowId,
     required int sourceDbTimeMillis,
     required bool sourceDbRecordRemoved,
+    String? coverPathOverride,
+    String? coverRelativePathOverride,
   }) {
+    final coverPath = coverPathOverride ??
+        resolveLocalComicCoverPath(
+          item,
+          legacyTargets: [
+            snapshot.itemId,
+            sourceDbId,
+            sourceDirectory,
+            originalPath,
+          ],
+        ).trim();
+    final coverRelativePath = coverRelativePathOverride ??
+        (coverPath.isEmpty
+            ? ''
+            : _relativeTrashPathIfInside(originalPath, coverPath));
     return TrashItemRecord(
       id: id,
       scope: TrashItemScope.local,
@@ -1453,7 +1831,8 @@ class TrashManager {
       itemId: snapshot.itemId,
       title: item.name,
       subtitle: item.subTitle,
-      cover: item.localCoverPath?.trim() ?? '',
+      cover: coverPath,
+      coverRelativePath: coverRelativePath,
       sourceLabel: item.sourceDisplayName,
       originalPath: originalPath,
       trashedPath: trashedPath,
@@ -1535,6 +1914,7 @@ class TrashManager {
               title: entry.title,
               subtitle: entry.subtitle,
               cover: _serverTrashStore.coverFileFor(entry).path,
+              coverRelativePath: entry.coverRelativePath,
               sourceLabel: entry.sourceDisplayName,
               originalPath: entry.originalPath,
               trashedPath: entry.trashedPath,

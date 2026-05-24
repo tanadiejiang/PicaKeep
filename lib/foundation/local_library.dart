@@ -179,6 +179,22 @@ class _LocalLibrarySourceCache {
   }
 }
 
+class LocalLibraryRestoredFileMetadata {
+  const LocalLibraryRestoredFileMetadata({
+    required this.episodeFiles,
+    required this.coverPath,
+    required this.sizeMb,
+    required this.downloadedEps,
+    required this.eps,
+  });
+
+  final Map<int, List<String>> episodeFiles;
+  final String? coverPath;
+  final double sizeMb;
+  final List<int> downloadedEps;
+  final List<String> eps;
+}
+
 class LocalLibraryComicItem extends DownloadedItem {
   LocalLibraryComicItem({
     required this.itemId,
@@ -742,6 +758,73 @@ class LocalLibraryManager {
       }
     }
     return null;
+  }
+
+  Future<LocalLibraryRestoredFileMetadata> buildRestoredFileMetadata(
+    String itemDirectory,
+  ) async {
+    final episodeFiles =
+        await _buildDownloadedEpisodeFiles(itemDirectory, null);
+    final orderedEpisodes = episodeFiles.entries.toList()
+      ..sort((a, b) => a.key.compareTo(b.key));
+    final coverPath = await _pickCoverPath(
+      itemDirectory,
+      orderedEpisodes.isEmpty ? const <String>[] : orderedEpisodes.first.value,
+    );
+    final sizeMb = await _computeDirectorySizeMbForPath(itemDirectory);
+    return LocalLibraryRestoredFileMetadata(
+      episodeFiles: episodeFiles,
+      coverPath: coverPath,
+      sizeMb: sizeMb,
+      downloadedEps: List<int>.from(orderedEpisodes.map((entry) => entry.key)),
+      eps: _buildLocalEpisodeNames(episodeFiles.length),
+    );
+  }
+
+  Future<void> persistRestoredFileMetadataCache({
+    required String sourceDbPath,
+    required String sourceDbId,
+    required String itemDirectory,
+    required LocalLibraryRestoredFileMetadata metadata,
+  }) async {
+    final normalizedDbPath = sourceDbPath.trim();
+    final normalizedId = sourceDbId.trim();
+    final normalizedDirectory = itemDirectory.trim();
+    if (normalizedDbPath.isEmpty ||
+        normalizedId.isEmpty ||
+        normalizedDirectory.isEmpty) {
+      return;
+    }
+
+    final normalizedTargetDbPath =
+        normalizedDbPath.replaceAll('\\', '/').toLowerCase();
+    LocalLibrarySource? source;
+    for (final candidate in await _buildSources()) {
+      if (!candidate.isManagedDownload) {
+        continue;
+      }
+      final candidateDbPath = _joinPath(candidate.path, 'download.db')
+          .replaceAll('\\', '/')
+          .toLowerCase();
+      if (candidateDbPath == normalizedTargetDbPath) {
+        source = candidate;
+        break;
+      }
+    }
+    if (source == null) {
+      return;
+    }
+
+    final cache = await _loadSourceCache(source);
+    cache.setItem(
+      normalizedId,
+      normalizedDirectory,
+      _LocalLibraryCachedItem(
+        coverPath: metadata.coverPath,
+        episodeFiles: metadata.episodeFiles,
+      ),
+    );
+    await cache.save();
   }
 
   static DateTime? _coverCachePausedUntil;

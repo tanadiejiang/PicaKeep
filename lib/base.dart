@@ -133,6 +133,8 @@ class Appdata {
     "local", //103 已下载页来源视图
     "local", //104 资源库页来源视图
     "trash", //105 删除行为
+    '["service_info","local_files","app_capabilities","trash"]', //106 外显工具顺序
+    '["service_info","local_files","app_capabilities","trash"]', //107 外显工具显示
   ];
 
   List<String> implicitData = [
@@ -222,7 +224,8 @@ class Appdata {
         normalizeLocalLibraryShowAllDatabaseRecords(
             settings[localLibraryShowAllDatabaseRecordsSettingIndex]);
     settings[downloadedLibraryViewSettingIndex] =
-        normalizeDownloadedLibraryView(settings[downloadedLibraryViewSettingIndex]);
+        normalizeDownloadedLibraryView(
+            settings[downloadedLibraryViewSettingIndex]);
     settings[localLibraryViewSettingIndex] =
         normalizeLocalLibraryView(settings[localLibraryViewSettingIndex]);
     settings[appRuntimeModeSettingIndex] =
@@ -239,6 +242,11 @@ class Appdata {
         normalizeAndroidShizukuMode(settings[androidShizukuModeSettingIndex]);
     settings[deleteBehaviorSettingIndex] =
         normalizeDeleteBehavior(settings[deleteBehaviorSettingIndex]);
+    settings[externalToolOrderSettingIndex] = normalizeExternalToolOrderSetting(
+        settings[externalToolOrderSettingIndex]);
+    settings[externalToolVisibilitySettingIndex] =
+        normalizeExternalToolVisibilitySetting(
+            settings[externalToolVisibilitySettingIndex]);
     setManagedDataSourceMode(settings[managedDataSourceModeSettingIndex]);
   }
 
@@ -346,6 +354,14 @@ class Appdata {
               settings[downloadedLibraryViewSettingIndex]);
       settings[localLibraryViewSettingIndex] =
           normalizeLocalLibraryView(settings[localLibraryViewSettingIndex]);
+      settings[deleteBehaviorSettingIndex] =
+          normalizeDeleteBehavior(settings[deleteBehaviorSettingIndex]);
+      settings[externalToolOrderSettingIndex] =
+          normalizeExternalToolOrderSetting(
+              settings[externalToolOrderSettingIndex]);
+      settings[externalToolVisibilitySettingIndex] =
+          normalizeExternalToolVisibilitySetting(
+              settings[externalToolVisibilitySettingIndex]);
       setManagedDataSourceMode(settings[managedDataSourceModeSettingIndex]);
       settings[22] = downloadPath;
       settings[13] = authRequired;

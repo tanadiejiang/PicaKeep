@@ -49,6 +49,10 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
   bool _reverseEpsOrder = false;
   bool _showFullEps = false;
   bool _showAppbarTitle = false;
+  bool _isDeleteOperationRunning = false;
+  int _deleteProgressCurrent = 0;
+  int _deleteProgressTotal = 0;
+  String _deleteProgressActionLabel = '';
   int _recommendationPage = 0;
   double _bottomPullDistance = 0;
 
@@ -289,13 +293,69 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
       ),
     );
     if (confirmed == true) {
-      final result = await TrashManager.instance.deleteItem(_comic);
-      if (!result.ok) {
-        _showMessage(deleteFailureMessage(result.error).tl);
+      final error = await _runDeleteOperation();
+      if (error != null) {
+        _showMessage(error);
         return;
       }
       if (mounted) Navigator.of(context).pop();
     }
+  }
+
+  Future<String?> _runDeleteOperation() async {
+    if (_isDeleteOperationRunning) {
+      return null;
+    }
+    setState(() {
+      _isDeleteOperationRunning = true;
+      _deleteProgressCurrent = 1;
+      _deleteProgressTotal = 1;
+      _deleteProgressActionLabel =
+          TrashManager.instance.useTrashByDefault ? '正在放进回收站' : '正在删除';
+    });
+    App.beginNavigationLock();
+    App.temporaryDisablePopGesture = true;
+    String? errorText;
+    try {
+      final comic = _comic;
+      if (comic is RemoteLibraryComicItem) {
+        await TrashManager.instance.deleteRemoteItems([comic]);
+      } else {
+        final result = await TrashManager.instance.deleteItem(comic);
+        if (!result.ok) {
+          errorText = deleteFailureMessage(result.error).tl;
+        }
+      }
+    } catch (e) {
+      final message = e is StateError
+          ? e.message.toString()
+          : e.toString().replaceFirst('Exception: ', '');
+      if (message.contains(deleteFailurePermissionDenied) ||
+          message.toLowerCase().contains('permission denied')) {
+        errorText = deleteFailureMessage(deleteFailurePermissionDenied).tl;
+      } else if (message.contains(deleteFailureLocalPathNotFound)) {
+        errorText = deleteFailureMessage(deleteFailureLocalPathNotFound).tl;
+      } else {
+        errorText = message.replaceFirst('Bad state: ', '');
+      }
+    } finally {
+      App.temporaryDisablePopGesture = false;
+      App.endNavigationLock();
+      if (mounted) {
+        setState(() {
+          _isDeleteOperationRunning = false;
+          _deleteProgressCurrent = 0;
+          _deleteProgressTotal = 0;
+          _deleteProgressActionLabel = '';
+        });
+      } else {
+        _isDeleteOperationRunning = false;
+        _deleteProgressCurrent = 0;
+        _deleteProgressTotal = 0;
+        _deleteProgressActionLabel = '';
+      }
+    }
+    return errorText;
   }
 
   Future<void> _onDeleteEpisode(int ep) async {
@@ -328,6 +388,103 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text(message)),
+    );
+  }
+
+  Widget _buildDeleteProgressOverlay() {
+    final theme = Theme.of(context);
+    final progressText = '$_deleteProgressCurrent/$_deleteProgressTotal';
+    final isDesktop = App.isDesktop;
+    final barrierColor = Color.alphaBlend(
+      theme.colorScheme.primary.withValues(alpha: 0.06),
+      Colors.white.withValues(alpha: 0.76),
+    );
+    final panelColor = Color.alphaBlend(
+      theme.colorScheme.primary.withValues(alpha: 0.04),
+      theme.colorScheme.surface.withValues(alpha: 0.97),
+    );
+    return Stack(
+      children: [
+        ModalBarrier(
+          dismissible: false,
+          color: barrierColor,
+        ),
+        Center(
+          child: ConstrainedBox(
+            constraints: BoxConstraints(
+              maxWidth: isDesktop ? 440 : 300,
+              minWidth: isDesktop ? 340 : 260,
+            ),
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                color: panelColor,
+                borderRadius: BorderRadius.circular(24),
+                boxShadow: [
+                  BoxShadow(
+                    color: theme.colorScheme.shadow.withValues(alpha: 0.08),
+                    blurRadius: 24,
+                    offset: const Offset(0, 10),
+                  ),
+                ],
+                border: Border.all(
+                  color:
+                      theme.colorScheme.outlineVariant.withValues(alpha: 0.45),
+                ),
+              ),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 24,
+                  vertical: 22,
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    SizedBox(
+                      width: 36,
+                      height: 36,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 3.2,
+                        color: theme.colorScheme.primary,
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    Text(
+                      isDesktop
+                          ? '$_deleteProgressActionLabel $progressText'
+                          : _deleteProgressActionLabel,
+                      textAlign: TextAlign.center,
+                      style: theme.textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.w700,
+                        color: theme.colorScheme.onSurface,
+                      ),
+                    ),
+                    if (!isDesktop) ...[
+                      const SizedBox(height: 6),
+                      Text(
+                        progressText,
+                        textAlign: TextAlign.center,
+                        style: theme.textTheme.titleSmall?.copyWith(
+                          fontWeight: FontWeight.w600,
+                          color: theme.colorScheme.primary,
+                        ),
+                      ),
+                    ],
+                    const SizedBox(height: 12),
+                    Text(
+                      '请不要退出，强制退出可能导致操作异常'.tl,
+                      textAlign: TextAlign.center,
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                        height: 1.35,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
     );
   }
 
@@ -1038,7 +1195,7 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
     final pageRecommendations =
         recommendations.skip(start).take(_recommendationPageSize).toList();
 
-    return Scaffold(
+    Widget page = Scaffold(
       body: NotificationListener<OverscrollNotification>(
         onNotification: (notification) => _handleRecommendationOverscroll(
           notification,
@@ -1103,6 +1260,19 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
           ],
         ),
       ),
+    );
+    if (_isDeleteOperationRunning) {
+      page = Stack(
+        fit: StackFit.expand,
+        children: [
+          page,
+          Positioned.fill(child: _buildDeleteProgressOverlay()),
+        ],
+      );
+    }
+    return PopScope(
+      canPop: !_isDeleteOperationRunning,
+      child: page,
     );
   }
 

@@ -43,6 +43,7 @@ class LocalTrashRecordData {
     required this.deletedAtMillis,
     required this.sizeBytes,
     required this.snapshotJson,
+    this.coverRelativePath = '',
     this.rootId = '',
     this.remotePath = '',
     this.detailUrl = '',
@@ -67,6 +68,7 @@ class LocalTrashRecordData {
   final int deletedAtMillis;
   final int sizeBytes;
   final String snapshotJson;
+  final String coverRelativePath;
   final String rootId;
   final String remotePath;
   final String detailUrl;
@@ -92,6 +94,7 @@ class LocalTrashRecordData {
       deletedAtMillis: (row['deleted_at'] as int?) ?? 0,
       sizeBytes: (row['size_bytes'] as int?) ?? 0,
       snapshotJson: row['snapshot_json'] as String? ?? '{}',
+      coverRelativePath: row['cover_relative_path'] as String? ?? '',
       rootId: row['root_id'] as String? ?? '',
       remotePath: row['remote_path'] as String? ?? '',
       detailUrl: row['detail_url'] as String? ?? '',
@@ -202,6 +205,7 @@ class LocalTrashStore {
         deleted_at,
         size_bytes,
         snapshot_json,
+        cover_relative_path,
         root_id,
         remote_path,
         detail_url,
@@ -211,7 +215,7 @@ class LocalTrashStore {
         source_db_rowid,
         source_db_time,
         source_db_record_removed
-      ) values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+      ) values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     ''', [
       record.id,
       record.state,
@@ -226,6 +230,7 @@ class LocalTrashStore {
       record.deletedAtMillis,
       record.sizeBytes,
       record.snapshotJson,
+      record.coverRelativePath,
       record.rootId,
       record.remotePath,
       record.detailUrl,
@@ -333,6 +338,7 @@ class LocalTrashStore {
         deleted_at integer,
         size_bytes integer,
         snapshot_json text,
+        cover_relative_path text,
         root_id text,
         remote_path text,
         detail_url text,
@@ -367,6 +373,12 @@ class LocalTrashStore {
       db.execute('''
         alter table local_trash
         add column source_db_rowid integer not null default 0
+      ''');
+    }
+    if (!columns.contains('cover_relative_path')) {
+      db.execute('''
+        alter table local_trash
+        add column cover_relative_path text
       ''');
     }
   }
