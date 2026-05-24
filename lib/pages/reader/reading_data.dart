@@ -75,6 +75,8 @@ abstract class ReadingData {
     }
   }
 
+  Size? imageSize(int ep, int page, String url) => null;
+
   String buildImageKey(int ep, int page, String url) => url;
 
   Future<List<String>> loadEpNetwork(int ep);

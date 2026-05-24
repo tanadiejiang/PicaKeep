@@ -10,6 +10,7 @@ import 'package:picakeep/foundation/app.dart';
 import 'package:picakeep/foundation/app_runtime_mode.dart';
 import 'package:picakeep/foundation/download_model.dart';
 import 'package:picakeep/foundation/image_loader/base_image_provider.dart';
+import 'package:picakeep/foundation/image_loader/stream_image_provider.dart';
 import 'package:picakeep/foundation/local_favorites.dart';
 import 'package:picakeep/pages/reader/comic_reading_page.dart';
 
@@ -79,6 +80,7 @@ class RemoteLibraryEpisode {
     required this.totalBytes,
     required this.coverUrl,
     required this.pages,
+    this.pageSizes = const <Size?>[],
   });
 
   final int index;
@@ -88,12 +90,14 @@ class RemoteLibraryEpisode {
   final int totalBytes;
   final String coverUrl;
   final List<String> pages;
+  final List<Size?> pageSizes;
 
   bool get hasPages => pages.isNotEmpty;
 
   RemoteLibraryEpisode copyWith({
     String? coverUrl,
     List<String>? pages,
+    List<Size?>? pageSizes,
   }) {
     return RemoteLibraryEpisode(
       index: index,
@@ -103,6 +107,7 @@ class RemoteLibraryEpisode {
       totalBytes: totalBytes,
       coverUrl: coverUrl ?? this.coverUrl,
       pages: pages ?? this.pages,
+      pageSizes: pageSizes ?? this.pageSizes,
     );
   }
 
@@ -121,6 +126,7 @@ class RemoteLibraryEpisode {
           .map(client.resolveUrlString)
           .where((e) => e.isNotEmpty)
           .toList(growable: false),
+      pageSizes: _readPageSizes(json['pageSizes']),
     );
   }
 
@@ -132,6 +138,14 @@ class RemoteLibraryEpisode {
         'totalBytes': totalBytes,
         'coverUrl': coverUrl,
         'pages': pages,
+        'pageSizes': pageSizes
+            .map((size) => size == null
+                ? null
+                : {
+                    'width': size.width.round(),
+                    'height': size.height.round(),
+                  })
+            .toList(growable: false),
       };
 }
 
@@ -746,6 +760,23 @@ class RemoteLibraryReadingData extends ReadingData {
   @override
   Stream<List<int>> loadImageNetwork(int ep, int page, String url) async* {
     yield* item.client.loadImage(url);
+  }
+
+  @override
+  ImageProvider createImageProvider(int ep, int page, String url) {
+    return StreamImageProvider.withProgress(
+      () => item.client.loadImageWithProgress(url),
+      buildImageKey(ep, page, url),
+    );
+  }
+
+  @override
+  Size? imageSize(int ep, int page, String url) {
+    final episode = item.episodeForReading(ep);
+    if (episode == null || page < 0 || page >= episode.pageSizes.length) {
+      return null;
+    }
+    return episode.pageSizes[page];
   }
 
   @override
@@ -1539,7 +1570,7 @@ class RemoteLibraryClient {
     return detail;
   }
 
-  Stream<List<int>> loadImage(String url) async* {
+  Future<StreamImageLoadResult> loadImageWithProgress(String url) async {
     try {
       final request = await _httpClient.getUrl(resolveUri(url)).timeout(
             const Duration(seconds: 5),
@@ -1552,10 +1583,19 @@ class RemoteLibraryClient {
           '远程图片请求失败：${response.statusCode}',
         );
       }
-      yield* response;
+      return StreamImageLoadResult(
+        stream: response,
+        expectedTotalBytes:
+            response.contentLength >= 0 ? response.contentLength : null,
+      );
     } on SocketException {
       throw const RemoteLibraryDataSourceException('无法连接远程图片资源');
     }
+  }
+
+  Stream<List<int>> loadImage(String url) async* {
+    final result = await loadImageWithProgress(url);
+    yield* result.stream;
   }
 
   Uri resolveUri(String value) {
@@ -1654,6 +1694,23 @@ List<String> _readStringList(Object? value) {
         .toList(growable: false);
   }
   return const [];
+}
+
+List<Size?> _readPageSizes(Object? value) {
+  if (value is! List) {
+    return const <Size?>[];
+  }
+  return value.map((entry) {
+    if (entry is! Map) {
+      return null;
+    }
+    final width = _readInt(entry['width']);
+    final height = _readInt(entry['height']);
+    if (width == null || height == null || width <= 0 || height <= 0) {
+      return null;
+    }
+    return Size(width.toDouble(), height.toDouble());
+  }).toList(growable: false);
 }
 
 Map<String, dynamic> _readNestedMap(Object? value) {

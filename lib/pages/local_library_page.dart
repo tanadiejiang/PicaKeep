@@ -114,6 +114,7 @@ class _LocalLibraryComicTile extends DownloadedComicTile {
     required super.onTap,
     required super.onLongTap,
     required super.onSecondaryTap,
+    super.optimizeCoverDecode,
   });
 
   final String comicId;
@@ -162,6 +163,7 @@ class _RemoteRootCollage extends StatelessWidget {
             : Image(
                 image: provider,
                 fit: BoxFit.cover,
+                gaplessPlayback: true,
                 errorBuilder: (_, __, ___) => Container(
                   color: Theme.of(context).colorScheme.secondaryContainer,
                   child: const Icon(Icons.broken_image_outlined, size: 18),
@@ -1166,6 +1168,7 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
       author: item.subTitle,
       imagePath: _coverFile(item),
       imageProvider: _coverImageProvider(item),
+      optimizeCoverDecode: true,
       type: item.sourceDisplayName,
       tag: item.tags,
       size: item.comicSize == null
@@ -1429,6 +1432,7 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : SmoothCustomScrollView(
+              cacheExtent: MediaQuery.of(context).size.height,
               slivers: [
                 SliverAppbar(
                   title: _buildTitle(),

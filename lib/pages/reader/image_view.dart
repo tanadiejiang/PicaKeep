@@ -132,6 +132,11 @@ extension ImageExt on ComicReadingPage {
                 return ComicImage(
                   filterQuality: FilterQuality.medium,
                   image: createImageProvider(type, logic, index, target),
+                  knownImageSize: logic.data.imageSize(
+                    logic.order,
+                    index,
+                    logic.urls[index],
+                  ),
                   width: imageWidth,
                   fit: BoxFit.contain,
                 );
@@ -147,6 +152,11 @@ extension ImageExt on ComicReadingPage {
               return ComicImage(
                 filterQuality: FilterQuality.medium,
                 image: imageRequest.provider,
+                knownImageSize: logic.data.imageSize(
+                  logic.order,
+                  index,
+                  logic.urls[index],
+                ),
                 width: imageWidth,
                 fit: BoxFit.contain,
               );
@@ -315,6 +325,11 @@ extension ImageExt on ComicReadingPage {
       return ComicImage(
         key: ValueKey(imageIndex),
         image: imageRequest.provider,
+        knownImageSize: logic.data.imageSize(
+          logic.order,
+          imageIndex,
+          logic.urls[imageIndex],
+        ),
         fit: fit,
         alignment: alignment,
       );

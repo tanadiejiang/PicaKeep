@@ -21,6 +21,7 @@ class ComicImage extends StatefulWidget {
         this.gaplessPlayback = false,
         this.filterQuality = FilterQuality.medium,
         this.isAntiAlias = false,
+        this.knownImageSize,
         Map<String, String>? headers,
         int? cacheWidth,
         int? cacheHeight,
@@ -61,6 +62,8 @@ class ComicImage extends StatefulWidget {
 
   final bool isAntiAlias;
 
+  final Size? knownImageSize;
+
   static void clear() => _ComicImageState.clear();
 
   @override
@@ -82,8 +85,12 @@ class _ComicImageState extends State<ComicImage> with WidgetsBindingObserver {
   DateTime? _lastChunkUpdateAt;
 
   static final Map<int, Size> _cache = {};
+  static double? _lastKnownHeightToWidthRatio;
 
-  static clear() => _cache.clear();
+  static clear() {
+    _cache.clear();
+    _lastKnownHeightToWidthRatio = null;
+  }
 
   @override
   void initState() {
@@ -324,11 +331,15 @@ class _ComicImageState extends State<ComicImage> with WidgetsBindingObserver {
     var width = widget.width??MediaQuery.of(context).size.width;
     double? height = widget.height;
 
-    Size? cacheSize = _cache[widget.image.hashCode];
+    Size? cacheSize = widget.knownImageSize ?? _cache[widget.image.hashCode];
     if(cacheSize != null){
       height = cacheSize.height * (width / cacheSize.width);
       height = _snapLogicalDimension(height, devicePixelRatio);
     }
+    height ??= _snapLogicalDimension(
+      width * (_lastKnownHeightToWidthRatio ?? 1.45),
+      devicePixelRatio,
+    );
 
     var brightness = Theme.of(context).brightness;
     if(appdata.appSettings.useDarkBackground) {
@@ -342,6 +353,7 @@ class _ComicImageState extends State<ComicImage> with WidgetsBindingObserver {
       );
       _cache[widget.image.hashCode] = imageSize;
       if (imageSize.width > 0) {
+        _lastKnownHeightToWidthRatio = imageSize.height / imageSize.width;
         height = imageSize.height * (width / imageSize.width);
         height = _snapLogicalDimension(height, devicePixelRatio);
       }
@@ -383,24 +395,25 @@ class _ComicImageState extends State<ComicImage> with WidgetsBindingObserver {
       );
       return result;
     } else {
-      // build progress
+      final progressValue = (_loadingProgress != null &&
+              _loadingProgress!.expectedTotalBytes != null &&
+              _loadingProgress!.expectedTotalBytes! > 0)
+          ? _loadingProgress!.cumulativeBytesLoaded /
+              _loadingProgress!.expectedTotalBytes!
+          : null;
+
       return SizedBox(
         width: width,
-        height: height??300,
+        height: height,
         child: Center(
-          child: SizedBox(
-            width: 24,
-            height: 24,
+          child: SizedBox.square(
+            dimension: 24,
             child: CircularProgressIndicator(
               backgroundColor: brightness == Brightness.dark
                   ? Colors.white24
                   : Colors.black12,
-              strokeWidth: 3,
-              value: (_loadingProgress != null &&
-                  _loadingProgress!.expectedTotalBytes!=null &&
-                  _loadingProgress!.expectedTotalBytes! != 0)
-                  ?_loadingProgress!.cumulativeBytesLoaded / _loadingProgress!.expectedTotalBytes!
-                  :0,
+              strokeWidth: 2,
+              value: progressValue,
             ),
           ),
         ),

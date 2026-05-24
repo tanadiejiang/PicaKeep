@@ -220,6 +220,7 @@ class _HistoryPageState extends State<HistoryPage> {
               HistoryManager().clearHistory();
               setState(() {
                 comics.clear();
+                results.clear();
               });
               Navigator.of(dialogContext).pop();
             },
@@ -361,6 +362,8 @@ class _HistoryPageState extends State<HistoryPage> {
                                   HistoryManager().remove(comic.target);
                                   setState(() {
                                     comics.removeWhere(
+                                        (e) => e.target == comic.target);
+                                    results.removeWhere(
                                         (e) => e.target == comic.target);
                                   });
                                   Navigator.of(ctx).pop();

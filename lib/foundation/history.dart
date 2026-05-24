@@ -636,11 +636,18 @@ class HistoryManager {
     }
   }
 
+  void _notifyHistoryChanged() {
+    Future.microtask(() {
+      StateController.findOrNull<SimpleController>(tag: "me_page")?.update();
+    });
+  }
+
   void clearHistory() {
     for (final db in databases) {
       db.execute("delete from history;");
     }
     _cachedHistory = null;
+    _notifyHistoryChanged();
   }
 
   void remove(String id) {
@@ -651,6 +658,7 @@ class HistoryManager {
       """, [id]);
     }
     _cachedHistory = null;
+    _notifyHistoryChanged();
   }
 
   History? findSync(String target) {

@@ -1022,11 +1022,15 @@ class PicaKeepAdminServer {
       'imageCount': episode.imageCount,
       'totalBytes': episode.totalBytes,
       'coverUrl': coverUrl,
-      if (includePages)
+      if (includePages) ...{
         'pages': [
           for (var i = 0; i < episode.imagePaths.length; i++)
             '/api/library/items/$encodedId/images/${episode.index}/$i',
         ],
+        'pageSizes': [
+          for (final size in episode.imageSizes) size?.toJson(),
+        ],
+      },
     };
   }
 
