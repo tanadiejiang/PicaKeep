@@ -51,6 +51,8 @@ class App {
 
   static final ValueNotifier<int> serviceRuntimeVersion = ValueNotifier(0);
 
+  static final ValueNotifier<int> toolDisplayConfigVersion = ValueNotifier(0);
+
   static final ValueNotifier<bool> isReadingActive = ValueNotifier(false);
 
   static void notifyLocalDataChanged() {
@@ -69,6 +71,15 @@ class App {
 
   static void notifyServiceRuntimeChanged() {
     serviceRuntimeVersion.value++;
+  }
+
+  static void notifyToolDisplayConfigChanged() {
+    toolDisplayConfigVersion.value++;
+    updater?.call();
+    Future.microtask(
+      () => StateController.findOrNull<SimpleController>(tag: 'me_page')
+          ?.update(),
+    );
   }
 
   static void setReadingActive(bool active) {

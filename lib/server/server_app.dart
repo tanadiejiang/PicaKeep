@@ -142,7 +142,155 @@ class PicaKeepAdminServer {
     return deleted;
   }
 
-  bool _isServerTrashId(String trashId) => trashId.trim().startsWith('srvtrash_');
+  Future<Map<String, dynamic>> batchRestoreTrashItems(
+    Iterable<String> trashIds,
+  ) async {
+    final ids = _normalizedIdList(trashIds);
+    final succeeded = <String>[];
+    final failed = <Map<String, String>>[];
+    for (final trashId in ids) {
+      try {
+        if (_isServerTrashId(trashId)) {
+          await _trashStore.restoreItem(trashId);
+        } else {
+          final record = await LocalTrashStore.instance.find(trashId);
+          if (record == null || !_shouldExposeLocalTrashRecord(record)) {
+            throw StateError('trash item not found');
+          }
+          await TrashManager.instance.restoreLocalItem(trashId);
+        }
+        succeeded.add(trashId);
+      } catch (e) {
+        failed.add({'id': trashId, 'error': e.toString()});
+      }
+    }
+    if (succeeded.isNotEmpty) {
+      await rescanResources();
+      _state.addLog('trash', '批量恢复 ${succeeded.length} 项');
+    }
+    return _buildBatchResult(ids, succeeded, failed);
+  }
+
+  Future<Map<String, dynamic>> batchPurgeTrashItems(
+    Iterable<String> trashIds,
+  ) async {
+    final ids = _normalizedIdList(trashIds);
+    final succeeded = <String>[];
+    final failed = <Map<String, String>>[];
+    for (final trashId in ids) {
+      try {
+        if (_isServerTrashId(trashId)) {
+          final deleted = await _trashStore.purgeItem(trashId);
+          if (deleted == null) {
+            throw StateError('trash item not found');
+          }
+        } else {
+          final record = await LocalTrashStore.instance.find(trashId);
+          if (record == null || !_shouldExposeLocalTrashRecord(record)) {
+            throw StateError('trash item not found');
+          }
+          await TrashManager.instance.permanentlyDeleteTrashItem(trashId);
+        }
+        succeeded.add(trashId);
+      } catch (e) {
+        failed.add({'id': trashId, 'error': e.toString()});
+      }
+    }
+    if (succeeded.isNotEmpty) {
+      await rescanResources();
+      _state.addLog('trash', '批量彻底删除 ${succeeded.length} 项');
+    }
+    return _buildBatchResult(ids, succeeded, failed);
+  }
+
+  Future<Map<String, dynamic>> batchTrashItems(Iterable<String> itemIds) async {
+    final ids = _normalizedIdList(itemIds);
+    final snapshot = await _currentSnapshot();
+    final succeeded = <String>[];
+    final failed = <Map<String, String>>[];
+    for (final itemId in ids) {
+      try {
+        final item = snapshot.findItemById(itemId);
+        if (item == null) {
+          throw StateError('item not found');
+        }
+        final rootPath = _rootPathForRootId(item.rootId);
+        if (rootPath == null || rootPath.trim().isEmpty) {
+          throw StateError('root path not found');
+        }
+        await _trashStore.moveItemToTrash(item: item, rootPath: rootPath);
+        await _deleteManagedDownloadDbRow(item);
+        succeeded.add(itemId);
+      } catch (e) {
+        failed.add({'id': itemId, 'error': e.toString()});
+      }
+    }
+    if (succeeded.isNotEmpty) {
+      await rescanResources();
+      _state.addLog('trash', '批量移入回收站 ${succeeded.length} 项');
+    }
+    return _buildBatchResult(ids, succeeded, failed);
+  }
+
+  Future<Map<String, dynamic>> batchDeleteItemsPermanently(
+    Iterable<String> itemIds,
+  ) async {
+    final ids = _normalizedIdList(itemIds);
+    final snapshot = await _currentSnapshot();
+    final succeeded = <String>[];
+    final failed = <Map<String, String>>[];
+    for (final itemId in ids) {
+      try {
+        final item = snapshot.findItemById(itemId);
+        if (item == null) {
+          throw StateError('item not found');
+        }
+        final dir = Directory(item.path);
+        if (dir.existsSync()) {
+          await dir.delete(recursive: true);
+        }
+        await _deleteManagedDownloadDbRow(item);
+        succeeded.add(itemId);
+      } catch (e) {
+        failed.add({'id': itemId, 'error': e.toString()});
+      }
+    }
+    if (succeeded.isNotEmpty) {
+      await rescanResources();
+      _state.addLog('trash', '批量直接删除 ${succeeded.length} 项');
+    }
+    return _buildBatchResult(ids, succeeded, failed);
+  }
+
+  List<String> _normalizedIdList(Iterable<String> ids) {
+    final result = <String>[];
+    final seen = <String>{};
+    for (final id in ids) {
+      final normalized = id.trim();
+      if (normalized.isEmpty || !seen.add(normalized)) {
+        continue;
+      }
+      result.add(normalized);
+    }
+    return result;
+  }
+
+  Map<String, dynamic> _buildBatchResult(
+    List<String> requested,
+    List<String> succeeded,
+    List<Map<String, String>> failed,
+  ) {
+    return {
+      'ok': failed.isEmpty,
+      'requested': requested.length,
+      'succeeded': succeeded.length,
+      'succeededIds': succeeded,
+      'failed': failed,
+    };
+  }
+
+  bool _isServerTrashId(String trashId) =>
+      trashId.trim().startsWith('srvtrash_');
 
   String _normalizePath(String path) {
     final normalized = path.trim().replaceAll('\\', '/');
@@ -233,7 +381,8 @@ class PicaKeepAdminServer {
     return combined.map((entry) => entry.payload).toList(growable: false);
   }
 
-  Map<String, dynamic> _buildLocalTrashItemPayload(LocalTrashRecordData record) {
+  Map<String, dynamic> _buildLocalTrashItemPayload(
+      LocalTrashRecordData record) {
     final encodedId = Uri.encodeComponent(record.id);
     return {
       'id': record.id,
@@ -266,15 +415,20 @@ class PicaKeepAdminServer {
     if (record == null) {
       return null;
     }
-    final coverPath = record.cover.trim();
-    if (coverPath.isEmpty) {
+    final coverPath = resolveLocalTrashCoverPath(
+      trashedPath: record.trashedPath,
+      coverRelativePath: record.coverRelativePath,
+      cover: record.cover,
+    );
+    if (coverPath.trim().isEmpty) {
       return null;
     }
     final file = File(coverPath);
     return file.existsSync() ? file : null;
   }
 
-  Future<void> _deleteManagedDownloadDbRow(ServerResourceItemSummary item) async {
+  Future<void> _deleteManagedDownloadDbRow(
+      ServerResourceItemSummary item) async {
     if (!_isManagedRootId(item.rootId)) {
       return;
     }
@@ -286,29 +440,27 @@ class PicaKeepAdminServer {
     if (!dbFile.existsSync()) {
       return;
     }
-    final relativeDirectory = _relativeManagedDirectoryPath(rootPath, item.path);
+    final relativeDirectory =
+        _relativeManagedDirectoryPath(rootPath, item.path);
     Database? db;
     try {
       db = sqlite3.open(dbFile.path);
       var deletedAny = false;
       if (relativeDirectory.isNotEmpty) {
-        deletedAny = db
-            .select(
-              'select 1 from download where directory = ? limit 1',
-              [relativeDirectory],
-            )
-            .isNotEmpty;
+        deletedAny = db.select(
+          'select 1 from download where directory = ? limit 1',
+          [relativeDirectory],
+        ).isNotEmpty;
         if (deletedAny) {
-          db.execute('delete from download where directory = ?', [relativeDirectory]);
+          db.execute(
+              'delete from download where directory = ?', [relativeDirectory]);
         }
       }
       if (!deletedAny) {
-        deletedAny = db
-            .select(
-              'select 1 from download where directory = ? limit 1',
-              [item.path],
-            )
-            .isNotEmpty;
+        deletedAny = db.select(
+          'select 1 from download where directory = ? limit 1',
+          [item.path],
+        ).isNotEmpty;
         if (deletedAny) {
           db.execute('delete from download where directory = ?', [item.path]);
         }
@@ -381,7 +533,8 @@ class PicaKeepAdminServer {
     }
     if (path == 'api/admin/config') {
       if (request.method == 'GET') {
-        return _jsonResponse((_config ?? PicaKeepServerConfig.defaults()).toJson());
+        return _jsonResponse(
+            (_config ?? PicaKeepServerConfig.defaults()).toJson());
       }
       if (request.method == 'PUT') {
         final body = await request.readAsString();
@@ -436,6 +589,22 @@ class PicaKeepAdminServer {
       });
     }
 
+    if (segments.length == 4 && segments[3] == 'batch-restore') {
+      if (request.method != 'POST') {
+        return _jsonResponse({'error': 'method not allowed'}, statusCode: 405);
+      }
+      final ids = await _readStringListFromBody(request, 'trashIds');
+      return _jsonResponse(await batchRestoreTrashItems(ids));
+    }
+
+    if (segments.length == 4 && segments[3] == 'batch-purge') {
+      if (request.method != 'POST') {
+        return _jsonResponse({'error': 'method not allowed'}, statusCode: 405);
+      }
+      final ids = await _readStringListFromBody(request, 'trashIds');
+      return _jsonResponse(await batchPurgeTrashItems(ids));
+    }
+
     final trashId = Uri.decodeComponent(segments[3]);
 
     if (segments.length == 5 && segments[4] == 'cover') {
@@ -462,7 +631,8 @@ class PicaKeepAdminServer {
       }
       final record = await LocalTrashStore.instance.find(trashId);
       if (record == null || !_shouldExposeLocalTrashRecord(record)) {
-        return _jsonResponse({'error': 'trash item not found'}, statusCode: 404);
+        return _jsonResponse({'error': 'trash item not found'},
+            statusCode: 404);
       }
       await TrashManager.instance.restoreLocalItem(trashId);
       await rescanResources();
@@ -473,13 +643,15 @@ class PicaKeepAdminServer {
       if (_isServerTrashId(trashId)) {
         final deleted = await purgeTrashItem(trashId);
         if (deleted == null) {
-          return _jsonResponse({'error': 'trash item not found'}, statusCode: 404);
+          return _jsonResponse({'error': 'trash item not found'},
+              statusCode: 404);
         }
         return _jsonResponse({'ok': true});
       }
       final record = await LocalTrashStore.instance.find(trashId);
       if (record == null || !_shouldExposeLocalTrashRecord(record)) {
-        return _jsonResponse({'error': 'trash item not found'}, statusCode: 404);
+        return _jsonResponse({'error': 'trash item not found'},
+            statusCode: 404);
       }
       await TrashManager.instance.permanentlyDeleteTrashItem(trashId);
       await rescanResources();
@@ -533,6 +705,22 @@ class PicaKeepAdminServer {
       });
     }
 
+    if (segments.length == 4 && segments[3] == 'batch-trash') {
+      if (request.method != 'POST') {
+        return _jsonResponse({'error': 'method not allowed'}, statusCode: 405);
+      }
+      final ids = await _readStringListFromBody(request, 'itemIds');
+      return _jsonResponse(await batchTrashItems(ids));
+    }
+
+    if (segments.length == 4 && segments[3] == 'batch-delete') {
+      if (request.method != 'POST') {
+        return _jsonResponse({'error': 'method not allowed'}, statusCode: 405);
+      }
+      final ids = await _readStringListFromBody(request, 'itemIds');
+      return _jsonResponse(await batchDeleteItemsPermanently(ids));
+    }
+
     final itemId = Uri.decodeComponent(segments[3]);
     final item = snapshot.findItemById(itemId);
     if (item == null) {
@@ -547,7 +735,8 @@ class PicaKeepAdminServer {
       if (rootPath == null || rootPath.trim().isEmpty) {
         return _jsonResponse({'error': 'root path not found'}, statusCode: 404);
       }
-      final entry = await _trashStore.moveItemToTrash(item: item, rootPath: rootPath);
+      final entry =
+          await _trashStore.moveItemToTrash(item: item, rootPath: rootPath);
       await _deleteManagedDownloadDbRow(item);
       await rescanResources();
       _state.addLog('trash', '已移入回收站 ${item.title}');
@@ -610,7 +799,8 @@ class PicaKeepAdminServer {
       final episodeIndex = int.tryParse(segments[5]);
       final pageIndex = int.tryParse(segments[6]);
       if (episodeIndex == null || pageIndex == null) {
-        return _jsonResponse({'error': 'invalid image target'}, statusCode: 400);
+        return _jsonResponse({'error': 'invalid image target'},
+            statusCode: 400);
       }
       final episode = _findEpisode(item, episodeIndex);
       if (episode == null) {
@@ -862,7 +1052,8 @@ class PicaKeepAdminServer {
 
   String _basename(String path) {
     final normalized = path.replaceAll('\\', '/');
-    final parts = normalized.split('/').where((entry) => entry.isNotEmpty).toList();
+    final parts =
+        normalized.split('/').where((entry) => entry.isNotEmpty).toList();
     return parts.isEmpty ? normalized : parts.last;
   }
 
@@ -992,8 +1183,7 @@ class PicaKeepAdminServer {
     buffer
       ..writeln(config.currentDownloadRoot.trim())
       ..writeln(config.originalDownloadRoot.trim());
-    for (final root in [...snapshot.roots]
-      ..sort((a, b) {
+    for (final root in [...snapshot.roots]..sort((a, b) {
         final idCompare = a.id.compareTo(b.id);
         if (idCompare != 0) {
           return idCompare;
@@ -1125,5 +1315,27 @@ class PicaKeepAdminServer {
       body: const JsonEncoder.withIndent('  ').convert(body),
       headers: {'content-type': 'application/json; charset=utf-8'},
     );
+  }
+
+  Future<List<String>> _readStringListFromBody(
+    Request request,
+    String key,
+  ) async {
+    final body = await request.readAsString();
+    if (body.trim().isEmpty) {
+      return const <String>[];
+    }
+    final decoded = jsonDecode(body);
+    if (decoded is! Map) {
+      return const <String>[];
+    }
+    final value = decoded[key];
+    if (value is! List) {
+      return const <String>[];
+    }
+    return value
+        .map((entry) => entry.toString().trim())
+        .where((entry) => entry.isNotEmpty)
+        .toList(growable: false);
   }
 }

@@ -15,10 +15,12 @@ import 'package:picakeep/foundation/service_data_source.dart';
 import 'package:picakeep/tools/translations.dart';
 import 'package:picakeep/tools/read_history_helper.dart';
 import 'package:picakeep/foundation/image_favorites.dart';
+import 'tool_display_config.dart';
 import 'history_page.dart';
 import 'image_favorites.dart';
 import 'app_capabilities_page.dart';
 import 'service_info_page.dart';
+import 'trash_page.dart';
 import 'tools.dart';
 import 'download_page.dart';
 import 'local_library_page.dart';
@@ -60,6 +62,9 @@ class _MePageState extends State<MePage> {
   static const Duration _localLibraryLoadDelay = Duration(milliseconds: 1500);
   static const Duration _imageFavoriteLoadDelay = Duration(milliseconds: 2100);
   static const Duration _remoteSummaryLoadDelay = Duration(milliseconds: 3200);
+  static const double _toolsQuickActionHeight = 36;
+  static const double _toolsQuickActionBottomInset = 14;
+  static const double _toolsBottomSpacerHeight = 56;
 
   static _MePageCachedState? _cachedState;
 
@@ -97,6 +102,7 @@ class _MePageState extends State<MePage> {
     App.localDataVersion.addListener(_handleLocalDataChanged);
     App.serviceConfigVersion.addListener(_handleServiceStateChanged);
     App.serviceRuntimeVersion.addListener(_handleServiceStateChanged);
+    App.toolDisplayConfigVersion.addListener(_handleToolDisplayConfigChanged);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       AppStartupTrace.log('MePage.firstPostFrame');
       if (!mounted) {
@@ -114,6 +120,8 @@ class _MePageState extends State<MePage> {
     App.localDataVersion.removeListener(_handleLocalDataChanged);
     App.serviceConfigVersion.removeListener(_handleServiceStateChanged);
     App.serviceRuntimeVersion.removeListener(_handleServiceStateChanged);
+    App.toolDisplayConfigVersion
+        .removeListener(_handleToolDisplayConfigChanged);
     StateController.remove<SimpleController>("me_page");
     super.dispose();
   }
@@ -218,6 +226,13 @@ class _MePageState extends State<MePage> {
       const Duration(milliseconds: 900),
       _loadRemoteLibrarySummary,
     );
+  }
+
+  void _handleToolDisplayConfigChanged() {
+    if (!mounted) {
+      return;
+    }
+    setState(() {});
   }
 
   Future<void> _loadHistoryPreview() async {
@@ -421,9 +436,22 @@ class _MePageState extends State<MePage> {
     );
   }
 
-  Future<void> _openToolsPage(BuildContext context) {
+  Future<void> _openLocalFilesPage(BuildContext context) {
     return Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => const ToolsPage()),
+      MaterialPageRoute(
+        builder: (_) => const LocalLibraryFilesPage(),
+      ),
+    );
+  }
+
+  Future<void> _openToolsPage(
+    BuildContext context, {
+    bool startInCustomizeMode = false,
+  }) {
+    return Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => ToolsPage(startInCustomizeMode: startInCustomizeMode),
+      ),
     );
   }
 
@@ -646,6 +674,9 @@ class _MePageState extends State<MePage> {
                             _buildImageFavoriteCard(context),
                             const SizedBox(height: 12),
                             _buildToolsCard(context),
+                            const SizedBox(
+                                height: _toolsQuickActionHeight +
+                                    _toolsBottomSpacerHeight),
                           ],
                         ),
                       ),
@@ -663,6 +694,9 @@ class _MePageState extends State<MePage> {
                   _buildImageFavoriteCard(context),
                   const SizedBox(height: 12),
                   _buildToolsCard(context),
+                  const SizedBox(
+                      height:
+                          _toolsQuickActionHeight + _toolsBottomSpacerHeight),
                 ],
               ],
             ),
@@ -713,8 +747,8 @@ class _MePageState extends State<MePage> {
                                 child: Container(
                                   width: 96,
                                   height: 128,
-                                  margin: const EdgeInsets.symmetric(
-                                      horizontal: 8),
+                                  margin:
+                                      const EdgeInsets.symmetric(horizontal: 8),
                                   decoration: BoxDecoration(
                                     borderRadius: BorderRadius.circular(8),
                                     color: Theme.of(context)
@@ -790,8 +824,8 @@ class _MePageState extends State<MePage> {
           await localLibraryManager.shouldUseDirectCurrentDownloadManager()) {
         final dm = DownloadManager();
         await dm.init();
-        comic =
-            await dm.getComicOrNullFromCandidates(history.candidateDownloadIds());
+        comic = await dm
+            .getComicOrNullFromCandidates(history.candidateDownloadIds());
       }
       comic ??= await const RemoteLibraryDataSource()
           .findByCandidates(history.candidateDownloadIds());
@@ -919,62 +953,165 @@ class _MePageState extends State<MePage> {
   }
 
   Widget _buildToolsCard(BuildContext context) {
-    final quickActions = [
-      _QuickToolAction(
-        label: '服务信息'.tl,
-        icon: Icons.router_outlined,
-        onTap: () => _openServiceInfoPage(context),
-      ),
-      _QuickToolAction(
-        label: '本地文件'.tl,
-        icon: Icons.folder_open,
-        onTap: () => _openToolsPage(context),
-      ),
-      _QuickToolAction(
-        label: '图集'.tl,
-        icon: Icons.photo_library,
-        onTap: () => _openLocalLibraryPage(context),
-      ),
-      _QuickToolAction(
-        label: 'APP能力'.tl,
-        icon: Icons.cloud_sync_outlined,
-        onTap: () => _openAppCapabilitiesPage(context),
-      ),
-    ];
+    final theme = Theme.of(context);
+    final textTheme = theme.textTheme;
+    final visibleDefinitions = resolveVisibleExternalToolDefinitions();
+
+    VoidCallback? actionForTool(String id) {
+      switch (id) {
+        case serviceInfoToolId:
+          return () => _openServiceInfoPage(context);
+        case localFilesToolId:
+          return () => _openLocalFilesPage(context);
+        case localStorageToolId:
+          return () => Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => const LocalLibraryStoragePage(),
+                ),
+              );
+        case albumsToolId:
+          return () => _openLocalLibraryPage(context);
+        case appCapabilitiesToolId:
+          return () => _openAppCapabilitiesPage(context);
+        case trashToolId:
+          return () => Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const TrashPage()),
+              );
+        case clearCacheToolId:
+          return () {
+            unawaited(eraseCache().then((_) {
+              if (!context.mounted) {
+                return;
+              }
+              final messenger = ScaffoldMessenger.of(context);
+              messenger.hideCurrentSnackBar();
+              messenger.showSnackBar(
+                SnackBar(
+                  content: Text('缓存已清理'.tl),
+                  duration: const Duration(seconds: 1),
+                ),
+              );
+            }));
+            final messenger = ScaffoldMessenger.of(context);
+            messenger.hideCurrentSnackBar();
+            messenger.showSnackBar(
+              SnackBar(
+                content: Text('正在清理缓存'.tl),
+                duration: const Duration(seconds: 10),
+              ),
+            );
+          };
+        default:
+          return null;
+      }
+    }
+
+    final quickActions = visibleDefinitions
+        .map(
+          (definition) => _QuickToolAction(
+            label: definition.quickLabel.tl,
+            icon: definition.icon,
+            onTap: actionForTool(definition.id),
+          ),
+        )
+        .whereType<_QuickToolAction>()
+        .toList(growable: false);
 
     return Card.outlined(
       margin: EdgeInsets.zero,
       color: Colors.transparent,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      clipBehavior: Clip.antiAlias,
+      child: Stack(
         children: [
-          ListTile(
-            leading: const Icon(Icons.build_circle),
-            title: Text("工具".tl),
-            subtitle: Text("使用工具发现更多漫画".tl),
-            trailing: const Icon(Icons.chevron_right),
+          InkWell(
             mouseCursor: SystemMouseCursors.click,
             onTap: () => _openToolsPage(context),
-          ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-            child: Material(
-              color: Colors.transparent,
-              child: InkWell(
-                borderRadius: BorderRadius.circular(12),
-                mouseCursor: SystemMouseCursors.click,
-                onTap: () => _openToolsPage(context),
-                child: SizedBox(
-                  width: double.infinity,
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 2),
-                    child: Wrap(
-                      spacing: 8,
-                      runSpacing: 8,
-                      children: quickActions,
+            onLongPress: () => _openToolsPage(
+              context,
+              startInCustomizeMode: true,
+            ),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 14, 16, 74),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Padding(
+                    padding: EdgeInsets.only(top: 2),
+                    child: Icon(Icons.build_circle),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          '工具'.tl,
+                          style: textTheme.titleMedium,
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          '使用工具发现更多漫画'.tl,
+                          style: textTheme.bodyMedium?.copyWith(
+                            color: theme.colorScheme.onSurfaceVariant,
+                          ),
+                        ),
+                      ],
                     ),
                   ),
-                ),
+                  const SizedBox(width: 12),
+                  const Padding(
+                    padding: EdgeInsets.only(top: 2),
+                    child: Icon(Icons.chevron_right),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          Positioned(
+            left: 16,
+            right: 16,
+            bottom: _toolsQuickActionBottomInset,
+            child: SizedBox(
+              height: _toolsQuickActionHeight,
+              child: Stack(
+                children: [
+                  SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    physics: const BouncingScrollPhysics(),
+                    child: Row(
+                      children: [
+                        for (int index = 0;
+                            index < quickActions.length;
+                            index++) ...[
+                          quickActions[index],
+                          if (index != quickActions.length - 1)
+                            const SizedBox(width: 8),
+                        ],
+                      ],
+                    ),
+                  ),
+                  Positioned(
+                    top: 0,
+                    right: 0,
+                    bottom: 0,
+                    child: IgnorePointer(
+                      child: Container(
+                        width: 36,
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            begin: Alignment.centerLeft,
+                            end: Alignment.centerRight,
+                            colors: [
+                              theme.colorScheme.surface.withValues(alpha: 0),
+                              theme.colorScheme.surface.withValues(alpha: 0.96),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ),
           ),
@@ -988,18 +1125,20 @@ class _QuickToolAction extends StatelessWidget {
   const _QuickToolAction({
     required this.label,
     required this.icon,
-    required this.onTap,
+    this.onTap,
   });
 
   final String label;
   final IconData icon;
-  final VoidCallback onTap;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
     return Material(
-      color: colorScheme.secondaryContainer.withValues(alpha: 0.72),
+      elevation: 1,
+      shadowColor: colorScheme.shadow.withValues(alpha: 0.12),
+      color: colorScheme.secondaryContainer.withValues(alpha: 0.92),
       borderRadius: BorderRadius.circular(999),
       child: InkWell(
         borderRadius: BorderRadius.circular(999),
@@ -1076,7 +1215,8 @@ class _MePageCard extends StatelessWidget {
                     : SystemMouseCursors.basic,
               ),
               Padding(
-                padding: const EdgeInsets.only(left: 16, right: 16, bottom: 16, top: 8),
+                padding: const EdgeInsets.only(
+                    left: 16, right: 16, bottom: 16, top: 8),
                 child: SizedBox(
                   height: 20,
                   child: Align(

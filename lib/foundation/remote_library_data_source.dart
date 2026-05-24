@@ -22,6 +22,54 @@ class RemoteLibraryDataSourceException implements Exception {
   String toString() => message;
 }
 
+class RemoteLibraryRequestException extends RemoteLibraryDataSourceException {
+  const RemoteLibraryRequestException(super.message, this.statusCode);
+
+  final int statusCode;
+}
+
+class RemoteLibraryBatchResult {
+  const RemoteLibraryBatchResult({
+    required this.ok,
+    required this.requested,
+    required this.succeeded,
+    required this.failed,
+  });
+
+  final bool ok;
+  final int requested;
+  final int succeeded;
+  final List<Map<String, String>> failed;
+
+  factory RemoteLibraryBatchResult.fromJson(Map<String, dynamic> json) {
+    final failedValue = json['failed'];
+    return RemoteLibraryBatchResult(
+      ok: json['ok'] == true,
+      requested: _readInt(json['requested']) ?? 0,
+      succeeded: _readInt(json['succeeded']) ?? 0,
+      failed: failedValue is! List
+          ? const <Map<String, String>>[]
+          : failedValue
+              .whereType<Map>()
+              .map(
+                (entry) => entry.map(
+                  (key, value) => MapEntry(key.toString(), value.toString()),
+                ),
+              )
+              .toList(growable: false),
+    );
+  }
+
+  static RemoteLibraryBatchResult allSucceeded(int count) {
+    return RemoteLibraryBatchResult(
+      ok: true,
+      requested: count,
+      succeeded: count,
+      failed: const <Map<String, String>>[],
+    );
+  }
+}
+
 class RemoteLibraryEpisode {
   const RemoteLibraryEpisode({
     required this.index,
@@ -327,10 +375,10 @@ class RemoteLibraryComicItem extends DownloadedItem {
 
   bool get hasMultipleEpisodes => episodesData.length > 1;
 
-  bool get hasCompletePages => episodesData.every((episode) => episode.hasPages);
+  bool get hasCompletePages =>
+      episodesData.every((episode) => episode.hasPages);
 
-  bool get hasMetadataTags =>
-      metadataTags.any((tag) => tag.trim().isNotEmpty);
+  bool get hasMetadataTags => metadataTags.any((tag) => tag.trim().isNotEmpty);
 
   bool get hasMeaningfulEpisodeTitles {
     if (episodesData.isEmpty) {
@@ -539,7 +587,9 @@ class RemoteLibraryComicItem extends DownloadedItem {
     if (label.isNotEmpty) {
       return label;
     }
-    return hasMultipleEpisodes ? '${episodesData.length} 个章节' : '$imageCount 张图片';
+    return hasMultipleEpisodes
+        ? '${episodesData.length} 个章节'
+        : '$imageCount 张图片';
   }
 
   @override
@@ -798,7 +848,14 @@ class _RemoteLibraryCoverDiskCache {
 
   static String _normalizedExtension(String path) {
     final lower = path.toLowerCase();
-    for (final ext in const ['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp']) {
+    for (final ext in const [
+      '.jpg',
+      '.jpeg',
+      '.png',
+      '.webp',
+      '.gif',
+      '.bmp'
+    ]) {
       if (lower.endsWith(ext)) {
         return ext;
       }
@@ -979,7 +1036,8 @@ class RemoteLibraryClient {
     );
   }
 
-  Future<List<RemoteLibraryComicItem>> fetchItems({bool forceRefresh = false}) async {
+  Future<List<RemoteLibraryComicItem>> fetchItems(
+      {bool forceRefresh = false}) async {
     return (await _fetchSnapshot(forceRefresh: forceRefresh)).items;
   }
 
@@ -1080,6 +1138,107 @@ class RemoteLibraryClient {
     _clearCaches();
   }
 
+  Future<RemoteLibraryBatchResult> trashItems(Iterable<String> itemIds) async {
+    return _batchIdOperation(
+      ids: itemIds,
+      batchPath: '/api/library/items/batch-trash',
+      bodyKey: 'itemIds',
+      fallback: (id) => _sendRequest(
+        'POST',
+        '/api/library/items/${Uri.encodeComponent(id)}/trash',
+      ),
+    );
+  }
+
+  Future<RemoteLibraryBatchResult> deleteItemsPermanently(
+    Iterable<String> itemIds,
+  ) async {
+    return _batchIdOperation(
+      ids: itemIds,
+      batchPath: '/api/library/items/batch-delete',
+      bodyKey: 'itemIds',
+      fallback: (id) => _sendRequest(
+        'DELETE',
+        '/api/library/items/${Uri.encodeComponent(id)}',
+      ),
+    );
+  }
+
+  Future<RemoteLibraryBatchResult> restoreTrashItems(
+    Iterable<String> trashIds,
+  ) async {
+    return _batchIdOperation(
+      ids: trashIds,
+      batchPath: '/api/library/trash/batch-restore',
+      bodyKey: 'trashIds',
+      fallback: (id) => _sendRequest(
+        'POST',
+        '/api/library/trash/${Uri.encodeComponent(id)}/restore',
+      ),
+    );
+  }
+
+  Future<RemoteLibraryBatchResult> purgeTrashItems(
+    Iterable<String> trashIds,
+  ) async {
+    return _batchIdOperation(
+      ids: trashIds,
+      batchPath: '/api/library/trash/batch-purge',
+      bodyKey: 'trashIds',
+      fallback: (id) => _sendRequest(
+        'DELETE',
+        '/api/library/trash/${Uri.encodeComponent(id)}',
+      ),
+    );
+  }
+
+  Future<RemoteLibraryBatchResult> _batchIdOperation({
+    required Iterable<String> ids,
+    required String batchPath,
+    required String bodyKey,
+    required Future<void> Function(String id) fallback,
+  }) async {
+    final normalizedIds = ids
+        .map((id) => id.trim())
+        .where((id) => id.isNotEmpty)
+        .toSet()
+        .toList(growable: false);
+    if (normalizedIds.isEmpty) {
+      return RemoteLibraryBatchResult.allSucceeded(0);
+    }
+    try {
+      final payload = await _sendRequest(
+        'POST',
+        batchPath,
+        body: {bodyKey: normalizedIds},
+      );
+      _clearCaches();
+      return RemoteLibraryBatchResult.fromJson(payload);
+    } on RemoteLibraryRequestException catch (e) {
+      if (e.statusCode != 404 && e.statusCode != 405) {
+        rethrow;
+      }
+    }
+
+    final failed = <Map<String, String>>[];
+    var succeeded = 0;
+    for (final id in normalizedIds) {
+      try {
+        await fallback(id);
+        succeeded += 1;
+      } catch (e) {
+        failed.add({'id': id, 'error': e.toString()});
+      }
+    }
+    _clearCaches();
+    return RemoteLibraryBatchResult(
+      ok: failed.isEmpty,
+      requested: normalizedIds.length,
+      succeeded: succeeded,
+      failed: failed,
+    );
+  }
+
   Future<_RemoteLibrarySnapshot> _fetchSnapshot({
     bool forceRefresh = false,
   }) async {
@@ -1164,7 +1323,8 @@ class RemoteLibraryClient {
         final value = item.coverUrl.trim();
         if (value.isNotEmpty) {
           coverUrl ??= value;
-          if (!previewCoverUrls.contains(value) && previewCoverUrls.length < 4) {
+          if (!previewCoverUrls.contains(value) &&
+              previewCoverUrls.length < 4) {
             previewCoverUrls.add(value);
           }
         }
@@ -1211,7 +1371,9 @@ class RemoteLibraryClient {
   ) {
     final grouped = <String, List<RemoteLibraryComicItem>>{};
     for (final item in items) {
-      grouped.putIfAbsent(item.rootId, () => <RemoteLibraryComicItem>[]).add(item);
+      grouped
+          .putIfAbsent(item.rootId, () => <RemoteLibraryComicItem>[])
+          .add(item);
     }
     final roots = <RemoteLibraryRootSummary>[];
     grouped.forEach((rootId, groupItems) {
@@ -1289,7 +1451,8 @@ class RemoteLibraryClient {
     }
   }
 
-  Future<RemoteLibraryComicItem> _fetchItemDetailFromNetwork(String itemId) async {
+  Future<RemoteLibraryComicItem> _fetchItemDetailFromNetwork(
+      String itemId) async {
     final payload = await _getJsonMap(
       '/api/library/items/${Uri.encodeComponent(itemId)}',
     );
@@ -1353,8 +1516,8 @@ class RemoteLibraryClient {
           .timeout(const Duration(seconds: 5));
       request.headers.set(HttpHeaders.acceptHeader, 'application/json');
       if (body != null) {
-        request.headers
-            .set(HttpHeaders.contentTypeHeader, 'application/json; charset=utf-8');
+        request.headers.set(
+            HttpHeaders.contentTypeHeader, 'application/json; charset=utf-8');
         request.write(jsonEncode(body));
       }
       final response = await request.close().timeout(
@@ -1364,8 +1527,9 @@ class RemoteLibraryClient {
             const Duration(seconds: 8),
           );
       if (response.statusCode < 200 || response.statusCode >= 300) {
-        throw RemoteLibraryDataSourceException(
+        throw RemoteLibraryRequestException(
           '远程资源请求失败：${response.statusCode}',
+          response.statusCode,
         );
       }
       if (bodyText.trim().isEmpty) {
