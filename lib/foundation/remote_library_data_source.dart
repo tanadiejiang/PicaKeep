@@ -824,6 +824,7 @@ class _RemoteLibraryCoverDiskCache {
         await target.delete();
       }
       await temp.rename(target.path);
+      await _trimToLimit(protectedPath: target.path);
       return target;
     } catch (_) {
       try {
@@ -836,6 +837,83 @@ class _RemoteLibraryCoverDiskCache {
       } catch (_) {}
       rethrow;
     }
+  }
+
+  static Future<void> _trimToLimit({required String protectedPath}) async {
+    final limitBytes = appdata.appSettings.cacheLimit * 1024 * 1024;
+    if (limitBytes <= 0 || !await _cacheDirectory.exists()) {
+      return;
+    }
+    final files = <File>[];
+    var totalBytes = await _directorySize(Directory(App.cachePath));
+    totalBytes += await _directorySize(
+      Directory('${App.dataPath}${Platform.pathSeparator}cache'),
+      collectFilesUnder: _cacheDirectory.path,
+      collectedFiles: files,
+    );
+    if (totalBytes <= limitBytes || files.isEmpty) {
+      return;
+    }
+
+    final normalizedProtected = _normalizePath(protectedPath);
+    final removableFiles = <({File file, DateTime modified, int size})>[];
+    for (final file in files) {
+      try {
+        if (_normalizePath(file.path) == normalizedProtected) {
+          continue;
+        }
+        final stat = await file.stat();
+        if (stat.type == FileSystemEntityType.file && stat.size > 0) {
+          removableFiles
+              .add((file: file, modified: stat.modified, size: stat.size));
+        }
+      } catch (_) {}
+    }
+    removableFiles.sort((a, b) => a.modified.compareTo(b.modified));
+    for (final entry in removableFiles) {
+      if (totalBytes <= limitBytes) {
+        break;
+      }
+      try {
+        await entry.file.delete();
+        totalBytes -= entry.size;
+      } catch (_) {}
+    }
+  }
+
+  static Future<int> _directorySize(
+    Directory directory, {
+    String? collectFilesUnder,
+    List<File>? collectedFiles,
+  }) async {
+    if (!await directory.exists()) {
+      return 0;
+    }
+    final normalizedCollectRoot = collectFilesUnder == null
+        ? null
+        : '${_normalizePath(collectFilesUnder)}${Platform.pathSeparator}';
+    var totalBytes = 0;
+    await for (final entity in directory.list(
+      recursive: true,
+      followLinks: false,
+    )) {
+      if (entity is! File) {
+        continue;
+      }
+      try {
+        totalBytes += await entity.length();
+        if (normalizedCollectRoot != null &&
+            '${_normalizePath(entity.parent.path)}${Platform.pathSeparator}'
+                .startsWith(normalizedCollectRoot)) {
+          collectedFiles?.add(entity);
+        }
+      } catch (_) {}
+    }
+    return totalBytes;
+  }
+
+  static String _normalizePath(String path) {
+    return path.trim().replaceAll('\\', Platform.pathSeparator);
   }
 
   static Future<bool> _isUsable(File file) async {

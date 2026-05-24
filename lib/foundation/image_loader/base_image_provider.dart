@@ -1,4 +1,4 @@
-﻿import 'dart:async';
+import 'dart:async';
 import 'dart:ui' as ui;
 import 'dart:typed_data' show Uint8List;
 import 'package:flutter/foundation.dart';
@@ -26,15 +26,23 @@ abstract class BaseImageProvider<T extends BaseImageProvider<T>>
     try {
       Uint8List? data;
       final cacheKey = key.key;
-      if (_cache.containsKey(cacheKey)) {
-        data = _cache[cacheKey];
+      final cachedData = _cache[cacheKey];
+      if (cachedData != null && cachedData.isNotEmpty) {
+        data = cachedData;
       } else {
+        if (cachedData != null) {
+          _cache.remove(cacheKey);
+        }
         data = await load(chunkEvents);
+        if (data.isEmpty) {
+          throw Exception('Empty image data');
+        }
         _checkCacheSize();
         _cache[cacheKey] = data;
         _cacheSize += data.length;
       }
-      if (data == null || data.isEmpty) {
+      if (data.isEmpty) {
+        _cache.remove(cacheKey);
         throw Exception('Empty image data');
       }
       final buffer = await ui.ImmutableBuffer.fromUint8List(data);
@@ -60,6 +68,17 @@ abstract class BaseImageProvider<T extends BaseImageProvider<T>>
       final firstKey = _cache.keys.first;
       _cacheSize -= _cache[firstKey]!.length;
       _cache.remove(firstKey);
+    }
+  }
+
+  static void evictKey(String key) {
+    final data = _cache.remove(key);
+    if (data == null) {
+      return;
+    }
+    _cacheSize -= data.length;
+    if (_cacheSize < 0) {
+      _cacheSize = 0;
     }
   }
 
