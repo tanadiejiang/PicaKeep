@@ -18,6 +18,7 @@ import 'package:picakeep/components/window_frame.dart';
 import 'package:picakeep/foundation/image_loader/base_image_provider.dart';
 import 'package:picakeep/foundation/image_loader/file_image_loader.dart';
 import 'package:picakeep/foundation/image_loader/stream_image_provider.dart';
+import 'package:picakeep/foundation/archive/archive_reading_service.dart';
 import 'package:picakeep/foundation/image_favorites.dart';
 import 'package:picakeep/foundation/local_favorites.dart';
 import 'package:picakeep/base.dart';
@@ -212,6 +213,11 @@ class ComicReadingPage extends StatelessWidget {
             StateController.findOrNull<WindowFrameController>()?.resetTheme());
       }
       App.setReadingActive(false);
+      // Dispose archive reading session if applicable
+      if (readingData.id.startsWith('local_archive::')) {
+        final archivePath = readingData.id.substring('local_archive::'.length);
+        ArchiveReadingService.instance.disposeReadingSession(archivePath);
+      }
     }, builder: (logic) {
       _syncReaderSystemUi(
         useDarkBackground: useDarkBackground,
@@ -238,6 +244,7 @@ class ComicReadingPage extends StatelessWidget {
                 ),
                 floatingActionButton: buildEpChangeButton(logic),
                 body: StateBuilder<ComicReadingPageLogic>(builder: (logic) {
+                  print('[PicaKeep][build] isLoading=${logic.isLoading} urls=${logic.urls.length} errorMessage=${logic.errorMessage}');
                   if (logic.isLoading) {
                     history?.readEpisode.add(logic.order);
                     loadInfo(logic);
@@ -453,6 +460,7 @@ class ComicReadingPage extends StatelessWidget {
       }
       logic.urls = urls;
       logic.isLoading = false;
+      print('[PicaKeep][loadInfo] set urls=${urls.length} requestId=$requestId chapterLoadRequestId=${logic.chapterLoadRequestId} order=$order logicOrder=${logic.order}');
       logic.update();
     } catch (e) {
       if (StateController.findOrNull<ComicReadingPageLogic>() != logic ||

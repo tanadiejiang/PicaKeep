@@ -135,6 +135,10 @@ class Appdata {
     "trash", //105 删除行为
     '["service_info","local_files","app_capabilities","trash"]', //106 外显工具顺序
     '["service_info","local_files","app_capabilities","trash"]', //107 外显工具显示
+    '[]', //108 压缩包默认密码列表
+    '1', //109 压缩包自动解密开关
+    '32', //110 压缩包阅读缓存上限 MB
+    '0', //111 压缩包章节使用序号
   ];
 
   List<String> implicitData = [

@@ -11,6 +11,7 @@ import 'package:picakeep/components/layout.dart';
 import 'package:picakeep/components/scrollable.dart';
 import 'package:picakeep/foundation/app.dart';
 import 'package:picakeep/foundation/app_runtime_mode.dart';
+import 'package:picakeep/foundation/archive/archive_password_store.dart';
 import 'package:picakeep/foundation/download_model.dart';
 import 'package:picakeep/foundation/local_library.dart';
 import 'package:picakeep/foundation/local_library_settings.dart';
@@ -24,6 +25,7 @@ import 'package:picakeep/tools/read_history_helper.dart';
 import 'package:picakeep/tools/translations.dart';
 
 import 'download_page.dart' show DownloadedComicInfoView, DownloadPageLogic;
+import 'package:picakeep/components/archive_password_dialog.dart';
 import 'package:picakeep/components/side_bar.dart' show showSideBar;
 import 'local_comic_detail_page.dart';
 
@@ -1039,6 +1041,29 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
       _toggleItemSelection(item);
       return;
     }
+    if (item is LocalLibraryComicItem && item.needsArchivePassword) {
+      _handleArchivePasswordTap(item);
+      return;
+    }
+    _showItemInfo(item);
+  }
+
+  Future<void> _handleArchivePasswordTap(LocalLibraryComicItem item) async {
+    final archivePath = item.fileSystemPath ?? '';
+    if (archivePath.isEmpty) return;
+    final result = await showArchivePasswordDialog(
+      context: context,
+      archivePath: archivePath,
+      archiveFileName: item.name,
+      format: item.archiveFormat,
+    );
+    if (result == null) return;
+    item.markArchiveUnlocked(result.password);
+    if (result.addToDefaults) {
+      await ArchivePasswordStore.instance.addDefaultPassword(result.password);
+    }
+    await LocalLibraryManager.instance.refreshArchiveCoverFor(item);
+    if (mounted) setState(() {});
     _showItemInfo(item);
   }
 
