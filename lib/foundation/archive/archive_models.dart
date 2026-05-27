@@ -20,12 +20,16 @@ class ArchiveEntry {
     required this.size,
     required this.isEncrypted,
     required this.isDirectory,
+    this.isAesEncrypted = false,
+    this.compressionMethod = 0,
   });
 
   final String path;
   final int size;
   final bool isEncrypted;
   final bool isDirectory;
+  final bool isAesEncrypted;
+  final int compressionMethod;
 
   String get name {
     final idx = path.lastIndexOf('/');

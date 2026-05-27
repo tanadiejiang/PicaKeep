@@ -12,6 +12,7 @@ import 'package:picakeep/foundation/app_runtime_mode.dart';
 import 'package:picakeep/foundation/download.dart';
 import 'package:picakeep/foundation/download_model.dart';
 import 'package:picakeep/foundation/history.dart';
+import 'package:picakeep/foundation/archive/archive_password_store.dart';
 import 'package:picakeep/foundation/local_data_source.dart';
 import 'package:picakeep/foundation/local_favorites.dart';
 import 'package:picakeep/foundation/local_library.dart';
@@ -2509,11 +2510,34 @@ class _DownloadedComicInfoViewState extends State<DownloadedComicInfoView> {
                             ],
                             if (source.isNotEmpty) ...[
                               const SizedBox(height: 6),
-                              Text(
-                                source,
-                                style: theme.textTheme.bodySmall?.copyWith(
-                                  color: theme.colorScheme.outline,
-                                ),
+                              Row(
+                                children: [
+                                  Flexible(
+                                    child: Text(
+                                      source,
+                                      style:
+                                          theme.textTheme.bodySmall?.copyWith(
+                                        color: theme.colorScheme.outline,
+                                      ),
+                                    ),
+                                  ),
+                                  if (_canForgetArchivePassword()) ...[
+                                    const SizedBox(width: 6),
+                                    IconButton(
+                                      onPressed: _forgetArchivePassword,
+                                      icon: const Icon(Icons.lock_reset),
+                                      iconSize: 18,
+                                      visualDensity: VisualDensity.compact,
+                                      padding: EdgeInsets.zero,
+                                      constraints: const BoxConstraints(
+                                        minWidth: 28,
+                                        minHeight: 28,
+                                      ),
+                                      tooltip: '忘记密码'.tl,
+                                      color: theme.colorScheme.primary,
+                                    ),
+                                  ],
+                                ],
                               ),
                             ],
                             const SizedBox(height: 8),
@@ -2779,5 +2803,25 @@ class _DownloadedComicInfoViewState extends State<DownloadedComicInfoView> {
 
   void readSpecifiedEps(int i) {
     _comic.read(ep: i + 1);
+  }
+
+  bool _canForgetArchivePassword() {
+    final comic = _comic;
+    if (comic is! LocalLibraryComicItem) return false;
+    if (!comic.isArchiveItem || !comic.archiveEncrypted) return false;
+    final path = comic.fileSystemPath ?? '';
+    if (path.isEmpty) return false;
+    return ArchivePasswordStore.instance.getSessionPassword(path) != null;
+  }
+
+  Future<void> _forgetArchivePassword() async {
+    final comic = _comic;
+    if (comic is! LocalLibraryComicItem) return;
+    final path = comic.fileSystemPath ?? '';
+    if (path.isEmpty) return;
+    ArchivePasswordStore.instance.forget(path);
+    comic.markArchiveLocked();
+    App.notifyLocalDataChanged();
+    if (mounted) Navigator.of(context).maybePop();
   }
 }

@@ -30,7 +30,7 @@ class _ArchiveSettingsPageState extends State<ArchiveSettingsPage> {
 
   @override
   Widget build(BuildContext context) {
-    final passwordCount = _store.defaultPasswords.length;
+    final passwords = _store.defaultPasswords;
     return Scaffold(
       appBar: AppBar(title: Text('压缩包设置'.tl)),
       body: ListView(
@@ -41,15 +41,27 @@ class _ArchiveSettingsPageState extends State<ArchiveSettingsPage> {
             value: _store.autoUnlockEnabled,
             onChanged: (v) => _store.setAutoUnlockEnabled(v),
           ),
-          ListTile(
+          ExpansionTile(
             title: Text('自动解密密码'.tl),
-            subtitle: Text('已保存 $passwordCount 个密码'),
-            trailing: const Icon(Icons.chevron_right),
-            onTap: () => Navigator.of(context).push(
-              MaterialPageRoute(
-                builder: (_) => const ArchivePasswordListPage(),
+            subtitle: Text('已保存 ${passwords.length} 个密码'),
+            childrenPadding: const EdgeInsets.only(bottom: 8),
+            children: [
+              for (final password in passwords)
+                ListTile(
+                  dense: true,
+                  title: Text(password),
+                  trailing: IconButton(
+                    icon: const Icon(Icons.delete_outline),
+                    onPressed: () => _store.removeDefaultPassword(password),
+                  ),
+                ),
+              ListTile(
+                dense: true,
+                leading: const Icon(Icons.add),
+                title: Text('添加密码'.tl),
+                onTap: () => _addPassword(context),
               ),
-            ),
+            ],
           ),
           ListTile(
             title: Text('清空全部自动解密密码'.tl),
@@ -82,62 +94,6 @@ class _ArchiveSettingsPageState extends State<ArchiveSettingsPage> {
     if (confirmed == true) {
       await _store.clearDefaultPasswords();
     }
-  }
-}
-
-class ArchivePasswordListPage extends StatefulWidget {
-  const ArchivePasswordListPage({super.key});
-
-  @override
-  State<ArchivePasswordListPage> createState() =>
-      _ArchivePasswordListPageState();
-}
-
-class _ArchivePasswordListPageState extends State<ArchivePasswordListPage> {
-  final _store = ArchivePasswordStore.instance;
-
-  @override
-  void initState() {
-    super.initState();
-    _store.addListener(_onStoreChanged);
-  }
-
-  @override
-  void dispose() {
-    _store.removeListener(_onStoreChanged);
-    super.dispose();
-  }
-
-  void _onStoreChanged() {
-    if (mounted) setState(() {});
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final passwords = _store.defaultPasswords;
-    return Scaffold(
-      appBar: AppBar(
-        title: Text('自动解密密码'.tl),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.add),
-            onPressed: () => _addPassword(context),
-          ),
-        ],
-      ),
-      body: passwords.isEmpty
-          ? Center(child: Text('暂无密码'.tl))
-          : ListView.builder(
-              itemCount: passwords.length,
-              itemBuilder: (ctx, i) => ListTile(
-                title: Text('密码 #${i + 1}'),
-                trailing: IconButton(
-                  icon: const Icon(Icons.delete_outline),
-                  onPressed: () => _store.removeDefaultPassword(passwords[i]),
-                ),
-              ),
-            ),
-    );
   }
 
   Future<void> _addPassword(BuildContext context) async {

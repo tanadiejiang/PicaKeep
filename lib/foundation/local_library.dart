@@ -246,7 +246,7 @@ class LocalLibraryComicItem extends DownloadedItem {
   final Map<int, List<String>> episodeFiles;
   final List<int> _downloadedEps;
   final List<String> _eps;
-  final String? _localCoverPath;
+  String? _localCoverPath;
   final bool _localStorageExists;
   final bool _canDelete;
   final List<String> aliases;
@@ -343,6 +343,7 @@ class LocalLibraryComicItem extends DownloadedItem {
 
   void markArchiveLocked() {
     _archivePasswordMatched = false;
+    _localCoverPath = null;
   }
 
   bool get isManagedDownloadItem =>
@@ -2112,7 +2113,9 @@ class LocalLibraryManager {
       final itemId = 'local_archive::${entry.path}';
 
       String? coverPath;
-      if (!isEncrypted) {
+      final hasSessionPassword = isEncrypted &&
+          ArchivePasswordStore.instance.getSessionPassword(entry.path) != null;
+      if (!isEncrypted || hasSessionPassword) {
         final coverEntry = _pickArchiveCoverEntry(probe);
         if (coverEntry != null) {
           coverPath = await ArchiveReadingService.instance.extractCoverToCache(
@@ -2159,6 +2162,7 @@ class LocalLibraryManager {
         sourceDisplayName: item.sourceDisplayName,
       ));
     } catch (e) {
+      // Ignore malformed archive entries and keep indexing the rest.
     }
   }
 
@@ -2318,10 +2322,11 @@ class LocalLibraryManager {
           .getIndex(archivePath, forceRefresh: true);
       final coverEntry = _pickArchiveCoverEntry(index);
       if (coverEntry != null) {
-        await ArchiveReadingService.instance.extractCoverToCache(
-          archivePath,
-          coverEntry,
-        );
+        final newCoverPath = await ArchiveReadingService.instance
+            .extractCoverToCache(archivePath, coverEntry);
+        if (newCoverPath != null && newCoverPath.isNotEmpty) {
+          item._localCoverPath = newCoverPath;
+        }
       }
     } catch (_) {}
   }
