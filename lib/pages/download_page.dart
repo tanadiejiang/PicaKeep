@@ -2367,6 +2367,17 @@ class _DownloadedComicInfoViewState extends State<DownloadedComicInfoView> {
   List<String> tags = const <String>[];
   List<String> eps = [];
   List<int> downloadedEps = [];
+
+  bool get _isArchive => _comic is LocalLibraryComicItem &&
+      (_comic as LocalLibraryComicItem).isArchiveItem;
+
+  List<String> get _displayNames {
+    final comic = _comic;
+    if (comic is LocalLibraryComicItem && comic.isArchiveItem) {
+      return LocalLibraryManager.archiveDisplayChapterNames(comic);
+    }
+    return eps;
+  }
   late final ScrollController _scrollController;
   late DownloadedItem _comic;
   String? _resolvedCoverPath;
@@ -2459,198 +2470,203 @@ class _DownloadedComicInfoViewState extends State<DownloadedComicInfoView> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final mediaQuery = MediaQuery.of(context);
+    final sheetMaxHeight =
+        mediaQuery.size.height - mediaQuery.padding.vertical - 24;
     return SafeArea(
       top: false,
       child: Padding(
         padding: const EdgeInsets.fromLTRB(16, 0, 16, 0),
         child: ConstrainedBox(
-          constraints: BoxConstraints(
-            maxHeight:
-                mediaQuery.size.height - mediaQuery.padding.vertical - 24,
-          ),
-          child: Scrollbar(
-            controller: _scrollController,
-            thumbVisibility: true,
-            child: SingleChildScrollView(
-              controller: _scrollController,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const SizedBox(height: 4),
-                  Material(
-                    color: theme.colorScheme.surfaceContainerLow,
-                    surfaceTintColor: theme.colorScheme.surfaceTint,
-                    borderRadius: const BorderRadius.all(Radius.circular(20)),
-                    child: Padding(
-                      padding: const EdgeInsets.all(16),
-                      child: Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          _buildCover(theme),
-                          const SizedBox(width: 14),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  name,
-                                  style: theme.textTheme.titleLarge,
-                                  maxLines: 2,
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                                if (author.isNotEmpty) ...[
-                                  const SizedBox(height: 8),
-                                  Text(author,
-                                      style: theme.textTheme.bodyMedium),
-                                ],
-                                if (source.isNotEmpty) ...[
-                                  const SizedBox(height: 6),
-                                  Text(
-                                    source,
-                                    style: theme.textTheme.bodySmall?.copyWith(
-                                      color: theme.colorScheme.outline,
-                                    ),
-                                  ),
-                                ],
-                                const SizedBox(height: 8),
-                                Text(
-                                  '${eps.length} ${eps.length == 1 ? '章' : '章节'}',
-                                  style: theme.textTheme.bodySmall?.copyWith(
-                                    color: theme.colorScheme.outline,
-                                  ),
-                                ),
-                                if (tags.isNotEmpty) ...[
-                                  const SizedBox(height: 12),
-                                  Wrap(
-                                    spacing: 6,
-                                    runSpacing: 6,
-                                    children: [
-                                      for (final tag in tags)
-                                        Container(
-                                          padding: const EdgeInsets.symmetric(
-                                            horizontal: 8,
-                                            vertical: 4,
-                                          ),
-                                          decoration: BoxDecoration(
-                                            color: theme
-                                                .colorScheme.secondaryContainer,
-                                            borderRadius:
-                                                BorderRadius.circular(999),
-                                          ),
-                                          child: Text(
-                                            _translateDownloadedTag(tag),
-                                            style:
-                                                const TextStyle(fontSize: 12),
-                                          ),
-                                        ),
-                                    ],
-                                  ),
-                                ],
-                              ],
+          constraints: BoxConstraints(maxHeight: sheetMaxHeight),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const SizedBox(height: 4),
+              Material(
+                color: theme.colorScheme.surfaceContainerLow,
+                surfaceTintColor: theme.colorScheme.surfaceTint,
+                borderRadius: const BorderRadius.all(Radius.circular(20)),
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      _buildCover(theme),
+                      const SizedBox(width: 14),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              name,
+                              style: theme.textTheme.titleLarge,
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
                             ),
-                          ),
-                        ],
+                            if (author.isNotEmpty) ...[
+                              const SizedBox(height: 8),
+                              Text(author, style: theme.textTheme.bodyMedium),
+                            ],
+                            if (source.isNotEmpty) ...[
+                              const SizedBox(height: 6),
+                              Text(
+                                source,
+                                style: theme.textTheme.bodySmall?.copyWith(
+                                  color: theme.colorScheme.outline,
+                                ),
+                              ),
+                            ],
+                            const SizedBox(height: 8),
+                            Text(
+                              '${eps.length} ${eps.length == 1 ? '章' : '章节'}',
+                              style: theme.textTheme.bodySmall?.copyWith(
+                                color: theme.colorScheme.outline,
+                              ),
+                            ),
+                            if (tags.isNotEmpty) ...[
+                              const SizedBox(height: 12),
+                              Wrap(
+                                spacing: 6,
+                                runSpacing: 6,
+                                children: [
+                                  for (final tag in tags)
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 8,
+                                        vertical: 4,
+                                      ),
+                                      decoration: BoxDecoration(
+                                        color: theme
+                                            .colorScheme.secondaryContainer,
+                                        borderRadius: BorderRadius.circular(999),
+                                      ),
+                                      child: Text(
+                                        _translateDownloadedTag(tag),
+                                        style: const TextStyle(fontSize: 12),
+                                      ),
+                                    ),
+                                ],
+                              ),
+                            ],
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              if (_loadingRemoteDetail)
+                const Padding(
+                  padding: EdgeInsets.only(top: 10),
+                  child: LinearProgressIndicator(minHeight: 2),
+                ),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Text('章节'.tl, style: theme.textTheme.titleMedium),
+                  const Spacer(),
+                  if (_isArchive) ...[
+                    Text('序号', style: theme.textTheme.bodySmall),
+                    Transform.scale(
+                      scale: 0.8,
+                      child: Switch(
+                        value: readArchiveUseChapterNumber(),
+                        onChanged: (v) async {
+                          await writeArchiveUseChapterNumber(v);
+                          setState(() {});
+                        },
                       ),
                     ),
-                  ),
-                  if (_loadingRemoteDetail)
-                    const Padding(
-                      padding: EdgeInsets.only(top: 10),
-                      child: LinearProgressIndicator(minHeight: 2),
-                    ),
-                  const SizedBox(height: 12),
-                  Align(
-                    alignment: Alignment.centerLeft,
-                    child: Text(
-                      '章节'.tl,
-                      style: theme.textTheme.titleMedium,
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  GridView.builder(
-                    shrinkWrap: true,
-                    physics: const NeverScrollableScrollPhysics(),
-                    padding: const EdgeInsets.only(bottom: 12),
-                    gridDelegate:
-                        const SliverGridDelegateWithMaxCrossAxisExtent(
-                      maxCrossAxisExtent: 300,
-                      childAspectRatio: 4,
-                    ),
-                    itemBuilder: (BuildContext context, int i) {
-                      final isDownloaded = downloadedEps.contains(i);
-                      return Padding(
-                        padding: const EdgeInsets.all(4),
-                        child: InkWell(
-                          borderRadius:
-                              const BorderRadius.all(Radius.circular(16)),
-                          child: Material(
-                            color: isDownloaded
-                                ? theme.colorScheme.primaryContainer
-                                : theme.colorScheme.surfaceContainerHighest,
-                            surfaceTintColor: theme.colorScheme.surfaceTint,
-                            borderRadius:
-                                const BorderRadius.all(Radius.circular(16)),
-                            child: Row(
-                              children: [
-                                const SizedBox(width: 16),
-                                Expanded(
-                                  child: Text(
-                                    eps[i],
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                ),
-                                const SizedBox(width: 4),
-                                if (isDownloaded)
-                                  const Icon(Icons.download_done_outlined),
-                                const SizedBox(width: 16),
-                              ],
-                            ),
-                          ),
-                          onTap: () => readSpecifiedEps(i),
-                          onLongPress: () => deleteEpisode(i),
-                          onSecondaryTapDown: (_) => deleteEpisode(i),
-                        ),
-                      );
-                    },
-                    itemCount: eps.length,
-                  ),
-                  const SizedBox(height: 12),
-                  SizedBox(
-                    height: 56,
-                    child: Row(
-                      children: [
-                        Expanded(
-                          child: FilledButton.tonal(
-                            style: FilledButton.styleFrom(
-                              minimumSize: const Size.fromHeight(56),
-                            ),
-                            onPressed: () {
-                              Navigator.of(context).pop();
-                              _toComicInfoPage(_comic);
-                            },
-                            child: Text("查看详情".tl),
-                          ),
-                        ),
-                        const SizedBox(width: 16),
-                        Expanded(
-                          child: FilledButton(
-                            style: FilledButton.styleFrom(
-                              minimumSize: const Size.fromHeight(56),
-                            ),
-                            onPressed: read,
-                            child: Text("阅读".tl),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  SizedBox(
-                    height: math.max(mediaQuery.padding.bottom, 12) + 28,
-                  ),
+                  ],
                 ],
               ),
-            ),
+              const SizedBox(height: 8),
+              Expanded(
+                child: GridView.builder(
+                  controller: _scrollController,
+                  padding: const EdgeInsets.only(bottom: 12),
+                  gridDelegate:
+                      const SliverGridDelegateWithMaxCrossAxisExtent(
+                    maxCrossAxisExtent: 300,
+                    childAspectRatio: 4,
+                  ),
+                  itemCount: eps.length,
+                  itemBuilder: (BuildContext context, int i) {
+                    final isDownloaded = _isArchive || downloadedEps.contains(i);
+                    final displayNames = _displayNames;
+                    return Padding(
+                      padding: const EdgeInsets.all(4),
+                      child: InkWell(
+                        borderRadius:
+                            const BorderRadius.all(Radius.circular(16)),
+                        onTap: () => readSpecifiedEps(i),
+                        onLongPress: () => deleteEpisode(i),
+                        onSecondaryTapDown: (_) => deleteEpisode(i),
+                        child: Material(
+                          color: isDownloaded
+                              ? theme.colorScheme.primaryContainer
+                              : theme.colorScheme.surfaceContainerHighest,
+                          surfaceTintColor: theme.colorScheme.surfaceTint,
+                          borderRadius:
+                              const BorderRadius.all(Radius.circular(16)),
+                          child: Row(
+                            children: [
+                              const SizedBox(width: 16),
+                              Expanded(
+                                child: Text(
+                                  i < displayNames.length
+                                      ? displayNames[i]
+                                      : eps[i],
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                              const SizedBox(width: 4),
+                              if (!_isArchive && isDownloaded)
+                                const Icon(Icons.download_done_outlined),
+                              const SizedBox(width: 16),
+                            ],
+                          ),
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ),
+              const SizedBox(height: 12),
+              SizedBox(
+                height: 56,
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: FilledButton.tonal(
+                        style: FilledButton.styleFrom(
+                          minimumSize: const Size.fromHeight(56),
+                        ),
+                        onPressed: () {
+                          Navigator.of(context).pop();
+                          _toComicInfoPage(_comic);
+                        },
+                        child: Text("查看详情".tl),
+                      ),
+                    ),
+                    const SizedBox(width: 16),
+                    Expanded(
+                      child: FilledButton(
+                        style: FilledButton.styleFrom(
+                          minimumSize: const Size.fromHeight(56),
+                        ),
+                        onPressed: read,
+                        child: Text("阅读".tl),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              SizedBox(
+                height: math.max(mediaQuery.padding.bottom, 12) + 28,
+              ),
+            ],
           ),
         ),
       ),
