@@ -70,14 +70,34 @@ class ArchiveReadingService {
     return index;
   }
 
-  ({int fileSize, int mtimeMillis})? fingerprintCachedFor(
-      String archivePath) =>
+  ({int fileSize, int mtimeMillis})? fingerprintCachedFor(String archivePath) =>
       _fingerprints[archivePath];
 
   Future<bool> tryUnlock(String archivePath, String password) async {
     final backend = _registry.backendForOrThrow(archivePath);
     try {
       final index = await backend.openIndex(archivePath, password: password);
+      final encryptedEntries = index.entries
+          .where((e) => e.isEncrypted && !e.isDirectory && e.size > 0)
+          .toList();
+      encryptedEntries.sort((a, b) {
+        final imageCompare = (_isImageEntry(b.path) ? 1 : 0)
+            .compareTo(_isImageEntry(a.path) ? 1 : 0);
+        if (imageCompare != 0) return imageCompare;
+        return a.size.compareTo(b.size);
+      });
+
+      if (encryptedEntries.isNotEmpty) {
+        await backend.readEntry(
+          archivePath,
+          encryptedEntries.first.path,
+          password: password,
+        );
+        _passwords.setSessionPassword(archivePath, password);
+        _cache.evictIndex(archivePath);
+        return true;
+      }
+
       if (index.imageEntries.isNotEmpty ||
           index.entries.any((e) => !e.isDirectory)) {
         _passwords.setSessionPassword(archivePath, password);
@@ -239,5 +259,13 @@ class ArchiveReadingService {
       if (lower.endsWith(ext)) return ext;
     }
     return '.img';
+  }
+
+  bool _isImageEntry(String path) {
+    final lower = path.toLowerCase();
+    return lower.endsWith('.jpg') ||
+        lower.endsWith('.jpeg') ||
+        lower.endsWith('.png') ||
+        lower.endsWith('.webp');
   }
 }

@@ -37,8 +37,9 @@ dependencies:
   shelf: ^1.4.2
   shelf_web_socket: ^2.0.0
   web_socket_channel: ^2.4.5
-  archive: ^3.6.1
+  archive: ^4.0.9
   charset: ^2.0.1
+  pointycastle: ^3.9.1
 
 dependency_overrides:
   local_auth_windows:

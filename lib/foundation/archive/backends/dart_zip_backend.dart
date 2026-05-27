@@ -2,8 +2,8 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:archive/archive_io.dart';
 import 'package:charset/charset.dart';
+import 'package:pointycastle/export.dart' as pc;
 
 import '../archive_backend.dart';
 import '../archive_errors.dart';
@@ -14,10 +14,11 @@ class DartZipBackend implements ArchiveBackend {
   String get id => 'dart_zip';
 
   @override
-  ArchiveBackendCapabilities get capabilities => const ArchiveBackendCapabilities(
+  ArchiveBackendCapabilities get capabilities =>
+      const ArchiveBackendCapabilities(
         supportsZip: true,
         supportsZipCrypto: true,
-        supportsAesZip: false,
+        supportsAesZip: true,
         canListEntriesWithoutPassword: true,
         canReadEntryStreaming: false,
       );
@@ -104,52 +105,318 @@ class DartZipBackend implements ArchiveBackend {
       );
     }
     final normalizedTarget = entryPath.replaceAll('\\', '/');
+    late final List<_CdEntry> cdEntries;
+    late final List<_CdEntry> fileEntries;
+    late final _CdEntry match;
+    late final int matchIndex;
     try {
-      final cdEntries = await _parseCentralDirectoryWithOffsets(archivePath);
-      final fileEntries = cdEntries.where((e) => !e.isDirectory).toList();
-      final matchIndex = fileEntries.indexWhere((e) => e.path == normalizedTarget);
+      cdEntries = await _parseCentralDirectoryWithOffsets(archivePath);
+      fileEntries = cdEntries.where((e) => !e.isDirectory).toList();
+      matchIndex = fileEntries.indexWhere((e) => e.path == normalizedTarget);
       if (matchIndex < 0) {
         throw ArchiveFailure(
           code: ArchiveErrorCode.entryNotFound,
           debugMessage: 'Entry not found: $entryPath in $archivePath',
         );
       }
-      final match = fileEntries[matchIndex];
-
-      final stream = InputFileStream(archivePath);
-      try {
-        final archive = ZipDecoder().decodeBuffer(
-          stream,
-          verify: false,
-          password: password,
-        );
-        try {
-          final files = archive.files.where((file) => file.isFile).toList();
-          final directMatch = files
-              .where(
-                (file) => file.name.replaceAll('\\', '/') == normalizedTarget,
-              )
-              .firstOrNull;
-          final targetFile = directMatch ??
-              (matchIndex < files.length ? files[matchIndex] : null);
-          if (targetFile != null) {
-            final content = targetFile.content;
-            if (content is Uint8List) return content;
-            return Uint8List.fromList(content as List<int>);
-          }
-          return _readEntryFallback(archivePath, match.path);
-        } finally {
-          archive.clear();
-        }
-      } finally {
-        stream.closeSync();
-      }
-    } on ArchiveFailure catch (f) {
-      if (f.code == ArchiveErrorCode.entryNotFound) rethrow;
-      return _readEntryFallback(archivePath, normalizedTarget);
-    } catch (_) {
-      return _readEntryFallback(archivePath, normalizedTarget);
+      match = fileEntries[matchIndex];
+    } on ArchiveFailure {
+      rethrow;
+    } catch (e) {
+      throw ArchiveFailure(
+        code: ArchiveErrorCode.corruptedArchive,
+        debugMessage: 'Failed to parse central directory for $archivePath: $e',
+        cause: e,
+      );
     }
+
+    try {
+      if (match.isEncrypted) {
+        if (password == null || password.isEmpty) {
+          throw ArchiveFailure(
+            code: ArchiveErrorCode.passwordRequired,
+            debugMessage: 'Password required for $entryPath',
+          );
+        }
+        if (match.isAesEncrypted) {
+          return await _readAesEntry(archivePath, match, password);
+        }
+        return await _readZipCryptoEntry(archivePath, match, password);
+      }
+      return await _readEntryFallback(archivePath, normalizedTarget);
+    } on ArchiveFailure {
+      rethrow;
+    } catch (e) {
+      throw ArchiveFailure(
+        code: ArchiveErrorCode.corruptedArchive,
+        debugMessage: 'Failed to read $entryPath in $archivePath: $e',
+        cause: e,
+      );
+    }
+  }
+
+  Future<Uint8List> _readZipCryptoEntry(
+    String archivePath,
+    _CdEntry match,
+    String password,
+  ) async {
+    final f = await File(archivePath).open();
+    Uint8List encrypted;
+    int flags;
+    int lastModTime;
+    int localCrc32;
+    try {
+      await f.setPosition(match.localHeaderOffset);
+      final lhFixed = await f.read(30);
+      if (lhFixed[0] != 0x50 ||
+          lhFixed[1] != 0x4b ||
+          lhFixed[2] != 0x03 ||
+          lhFixed[3] != 0x04) {
+        throw ArchiveFailure(
+          code: ArchiveErrorCode.corruptedArchive,
+          debugMessage:
+              'Invalid local file header at ${match.localHeaderOffset}',
+        );
+      }
+      flags = _u16(lhFixed, 6);
+      lastModTime = _u16(lhFixed, 10);
+      localCrc32 = _u32(lhFixed, 14);
+      final fnLen = _u16(lhFixed, 26);
+      final extraLen = _u16(lhFixed, 28);
+      await f.setPosition(match.localHeaderOffset + 30 + fnLen + extraLen);
+      encrypted = Uint8List.fromList(await f.read(match.compressedSize));
+    } finally {
+      await f.close();
+    }
+
+    if (encrypted.length < 12) {
+      throw ArchiveFailure(
+        code: ArchiveErrorCode.corruptedArchive,
+        debugMessage: 'ZipCrypto payload too small for ${match.path}',
+      );
+    }
+
+    final keys = _zipCryptoInitKeys(password);
+    final header = Uint8List(12);
+    for (var i = 0; i < 12; i++) {
+      final c = encrypted[i] ^ _zipCryptoDecryptByte(keys);
+      _zipCryptoUpdateKeys(keys, c);
+      header[i] = c;
+    }
+
+    final checkByte =
+        (flags & 0x08) != 0 ? (lastModTime >> 8) & 0xFF : (localCrc32 >> 24) & 0xFF;
+    if (header[11] != checkByte) {
+      throw ArchiveFailure(
+        code: ArchiveErrorCode.wrongPassword,
+        debugMessage: 'ZipCrypto password verification failed for ${match.path}',
+      );
+    }
+
+    final body = Uint8List(encrypted.length - 12);
+    for (var i = 0; i < body.length; i++) {
+      final c = encrypted[12 + i] ^ _zipCryptoDecryptByte(keys);
+      _zipCryptoUpdateKeys(keys, c);
+      body[i] = c;
+    }
+
+    final method = match.compressionMethod;
+    if (method == 0) {
+      return body;
+    } else if (method == 8) {
+      return _inflateRaw(body);
+    } else {
+      throw ArchiveFailure(
+        code: ArchiveErrorCode.unsupportedFormat,
+        debugMessage:
+            'Unsupported ZipCrypto inner method $method for ${match.path}',
+      );
+    }
+  }
+
+  static List<int> _zipCryptoInitKeys(String password) {
+    final keys = <int>[305419896, 591751049, 878082192];
+    for (final c in password.codeUnits) {
+      _zipCryptoUpdateKeys(keys, c);
+    }
+    return keys;
+  }
+
+  static void _zipCryptoUpdateKeys(List<int> keys, int c) {
+    keys[0] = _zipCryptoCrc32Update(keys[0], c);
+    keys[1] = (keys[1] + (keys[0] & 0xFF)) & 0xFFFFFFFF;
+    keys[1] = (keys[1] * 134775813 + 1) & 0xFFFFFFFF;
+    keys[2] = _zipCryptoCrc32Update(keys[2], (keys[1] >> 24) & 0xFF);
+  }
+
+  static int _zipCryptoDecryptByte(List<int> keys) {
+    final temp = (keys[2] & 0xFFFF) | 2;
+    return ((temp * (temp ^ 1)) >> 8) & 0xFF;
+  }
+
+  static int _zipCryptoCrc32Update(int crc, int b) {
+    var c = crc ^ b;
+    for (var i = 0; i < 8; i++) {
+      c = ((c >> 1) & 0x7FFFFFFF) ^ (((c & 1) != 0) ? 0xEDB88320 : 0);
+    }
+    return c;
+  }
+
+  Future<Uint8List> _readAesEntry(
+    String archivePath,
+    _CdEntry match,
+    String password,
+  ) async {
+    final f = await File(archivePath).open();
+    Uint8List rawEncrypted;
+    try {
+      await f.setPosition(match.localHeaderOffset);
+      final lhFixed = await f.read(30);
+      if (lhFixed[0] != 0x50 ||
+          lhFixed[1] != 0x4b ||
+          lhFixed[2] != 0x03 ||
+          lhFixed[3] != 0x04) {
+        throw ArchiveFailure(
+          code: ArchiveErrorCode.corruptedArchive,
+          debugMessage:
+              'Invalid local file header at ${match.localHeaderOffset}',
+        );
+      }
+      final fnLen = _u16(lhFixed, 26);
+      final extraLen = _u16(lhFixed, 28);
+      await f.setPosition(match.localHeaderOffset + 30 + fnLen + extraLen);
+      rawEncrypted = Uint8List.fromList(await f.read(match.compressedSize));
+    } finally {
+      await f.close();
+    }
+
+    final saltLen = match.aesStrength == 1
+        ? 8
+        : match.aesStrength == 2
+            ? 12
+            : 16;
+    final keySize = match.aesStrength == 1
+        ? 16
+        : match.aesStrength == 2
+            ? 24
+            : 32;
+    if (rawEncrypted.length < saltLen + 2 + 10) {
+      throw ArchiveFailure(
+        code: ArchiveErrorCode.corruptedArchive,
+        debugMessage: 'AES payload too small for ${match.path}',
+      );
+    }
+    final salt = Uint8List.sublistView(rawEncrypted, 0, saltLen);
+    final pwdVerify =
+        Uint8List.sublistView(rawEncrypted, saltLen, saltLen + 2);
+    final dataEnd = rawEncrypted.length - 10;
+    final cipherData = Uint8List.fromList(
+      Uint8List.sublistView(rawEncrypted, saltLen + 2, dataEnd),
+    );
+    final fileMac = Uint8List.sublistView(rawEncrypted, dataEnd);
+
+    final derivedKey = _pbkdf2HmacSha1(
+      Uint8List.fromList(password.codeUnits),
+      salt,
+      1000,
+      keySize * 2 + 2,
+    );
+    final encKey = Uint8List.sublistView(derivedKey, 0, keySize);
+    final macKey = Uint8List.sublistView(derivedKey, keySize, keySize * 2);
+    final pwdCheck =
+        Uint8List.sublistView(derivedKey, keySize * 2, keySize * 2 + 2);
+
+    if (!_bytesEqual(pwdCheck, pwdVerify)) {
+      throw ArchiveFailure(
+        code: ArchiveErrorCode.wrongPassword,
+        debugMessage: 'Password verification failed for ${match.path}',
+      );
+    }
+
+    final hmac = pc.HMac(pc.SHA1Digest(), 64)
+      ..init(pc.KeyParameter(macKey))
+      ..update(cipherData, 0, cipherData.length);
+    final computedMac = Uint8List(hmac.macSize);
+    hmac.doFinal(computedMac, 0);
+    if (!_bytesEqual(
+      Uint8List.sublistView(computedMac, 0, 10),
+      Uint8List.fromList(fileMac),
+    )) {
+      throw ArchiveFailure(
+        code: ArchiveErrorCode.wrongPassword,
+        debugMessage: 'AES HMAC mismatch for ${match.path}',
+      );
+    }
+
+    _aesCtrXorZip(cipherData, encKey);
+
+    final method = match.compressionMethod;
+    if (method == 0) {
+      return cipherData;
+    } else if (method == 8) {
+      return _inflateRaw(cipherData);
+    } else {
+      throw ArchiveFailure(
+        code: ArchiveErrorCode.unsupportedFormat,
+        debugMessage: 'Unsupported AES inner method $method for ${match.path}',
+      );
+    }
+  }
+
+  static Uint8List _pbkdf2HmacSha1(
+    Uint8List password,
+    Uint8List salt,
+    int iterations,
+    int keyLength,
+  ) {
+    final derivator = pc.PBKDF2KeyDerivator(pc.HMac(pc.SHA1Digest(), 64))
+      ..init(pc.Pbkdf2Parameters(salt, iterations, keyLength));
+    return derivator.process(password);
+  }
+
+  static void _aesCtrXorZip(Uint8List data, Uint8List key) {
+    final cipher = pc.AESEngine()..init(true, pc.KeyParameter(key));
+    final iv = Uint8List(16);
+    final block = Uint8List(16);
+    var nonce = 1;
+    for (var offset = 0; offset < data.length; offset += 16) {
+      iv[0] = nonce & 0xFF;
+      iv[1] = (nonce >> 8) & 0xFF;
+      iv[2] = (nonce >> 16) & 0xFF;
+      iv[3] = (nonce >> 24) & 0xFF;
+      for (var i = 4; i < 16; i++) {
+        iv[i] = 0;
+      }
+      cipher.processBlock(iv, 0, block, 0);
+      final end = offset + 16 <= data.length ? offset + 16 : data.length;
+      for (var i = offset; i < end; i++) {
+        data[i] ^= block[i - offset];
+      }
+      nonce++;
+    }
+  }
+
+  static bool _bytesEqual(Uint8List a, Uint8List b) {
+    if (a.length != b.length) return false;
+    var v = 0;
+    for (var i = 0; i < a.length; i++) {
+      v |= a[i] ^ b[i];
+    }
+    return v == 0;
+  }
+
+  static Uint8List _inflateRaw(Uint8List src) {
+    final filter = RawZLibFilter.inflateFilter();
+    filter.process(src, 0, src.length);
+    final chunks = <int>[];
+    while (true) {
+      final chunk = filter.processed(flush: false);
+      if (chunk == null) break;
+      chunks.addAll(chunk);
+    }
+    final last = filter.processed(flush: true, end: true);
+    if (last != null) chunks.addAll(last);
+    return Uint8List.fromList(chunks);
   }
 
   Future<Uint8List> _readEntryFallback(
@@ -158,11 +425,19 @@ class DartZipBackend implements ArchiveBackend {
   ) async {
     final cdEntries = await _parseCentralDirectoryWithOffsets(archivePath);
     final normalizedTarget = entryPath.replaceAll('\\', '/');
-    final match = cdEntries.where((e) => e.path == normalizedTarget).firstOrNull;
+    final match =
+        cdEntries.where((e) => e.path == normalizedTarget).firstOrNull;
     if (match == null) {
       throw ArchiveFailure(
         code: ArchiveErrorCode.entryNotFound,
         debugMessage: 'Entry not found (fallback): $entryPath in $archivePath',
+      );
+    }
+    if (match.isEncrypted) {
+      throw ArchiveFailure(
+        code: ArchiveErrorCode.wrongPassword,
+        debugMessage:
+            'Encrypted entry cannot be read by raw fallback: $entryPath',
       );
     }
 
@@ -170,11 +445,14 @@ class DartZipBackend implements ArchiveBackend {
     try {
       await f.setPosition(match.localHeaderOffset);
       final lhFixed = await f.read(30);
-      if (lhFixed[0] != 0x50 || lhFixed[1] != 0x4b ||
-          lhFixed[2] != 0x03 || lhFixed[3] != 0x04) {
+      if (lhFixed[0] != 0x50 ||
+          lhFixed[1] != 0x4b ||
+          lhFixed[2] != 0x03 ||
+          lhFixed[3] != 0x04) {
         throw ArchiveFailure(
           code: ArchiveErrorCode.corruptedArchive,
-          debugMessage: 'Invalid local file header at ${match.localHeaderOffset}',
+          debugMessage:
+              'Invalid local file header at ${match.localHeaderOffset}',
         );
       }
       final method = _u16(lhFixed, 8);
@@ -221,8 +499,10 @@ class DartZipBackend implements ArchiveBackend {
 
       int eocdOffset = -1;
       for (int i = searchBuf.length - 22; i >= 0; i--) {
-        if (searchBuf[i] == 0x50 && searchBuf[i + 1] == 0x4b &&
-            searchBuf[i + 2] == 0x05 && searchBuf[i + 3] == 0x06) {
+        if (searchBuf[i] == 0x50 &&
+            searchBuf[i + 1] == 0x4b &&
+            searchBuf[i + 2] == 0x05 &&
+            searchBuf[i + 3] == 0x06) {
           eocdOffset = searchOffset + i;
           break;
         }
@@ -237,13 +517,17 @@ class DartZipBackend implements ArchiveBackend {
       if (eocdOffset >= 20) {
         await file.setPosition(eocdOffset - 20);
         final locator = await file.read(20);
-        if (locator[0] == 0x50 && locator[1] == 0x4b &&
-            locator[2] == 0x06 && locator[3] == 0x07) {
+        if (locator[0] == 0x50 &&
+            locator[1] == 0x4b &&
+            locator[2] == 0x06 &&
+            locator[3] == 0x07) {
           final zip64EocdOffset = _u64(locator, 8);
           await file.setPosition(zip64EocdOffset);
           final zip64Eocd = await file.read(56);
-          if (zip64Eocd[0] == 0x50 && zip64Eocd[1] == 0x4b &&
-              zip64Eocd[2] == 0x06 && zip64Eocd[3] == 0x06) {
+          if (zip64Eocd[0] == 0x50 &&
+              zip64Eocd[1] == 0x4b &&
+              zip64Eocd[2] == 0x06 &&
+              zip64Eocd[3] == 0x06) {
             cdSize = _u64(zip64Eocd, 40);
             cdOffset = _u64(zip64Eocd, 48);
           }
@@ -256,13 +540,18 @@ class DartZipBackend implements ArchiveBackend {
       final entries = <_CdEntry>[];
       int pos = 0;
       while (pos + 46 <= cd.length) {
-        if (cd[pos] != 0x50 || cd[pos + 1] != 0x4b ||
-            cd[pos + 2] != 0x01 || cd[pos + 3] != 0x02) {
+        if (cd[pos] != 0x50 ||
+            cd[pos + 1] != 0x4b ||
+            cd[pos + 2] != 0x01 ||
+            cd[pos + 3] != 0x02) {
           break;
         }
 
         final flags = _u16(cd, pos + 8);
         final isEncrypted = (flags & 0x1) != 0;
+        var isAesEncrypted = false;
+        var aesStrength = 0;
+        var compressionMethod = _u16(cd, pos + 10);
         var compressedSize = _u32(cd, pos + 20);
         var uncompressedSize = _u32(cd, pos + 24);
         final fnLen = _u16(cd, pos + 28);
@@ -280,20 +569,27 @@ class DartZipBackend implements ArchiveBackend {
         while (ep + 4 <= epEnd && ep + 4 <= cd.length) {
           final headerId = _u16(cd, ep);
           final dataSize = _u16(cd, ep + 2);
+          final dataStart = ep + 4;
+          final dataEnd = dataStart + dataSize;
+          if (dataEnd > epEnd || dataEnd > cd.length) break;
           if (headerId == 0x0001) {
-            int dp = ep + 4;
-            if (uncompressedSize == 0xFFFFFFFF && dp + 8 <= cd.length) {
+            int dp = dataStart;
+            if (uncompressedSize == 0xFFFFFFFF && dp + 8 <= dataEnd) {
               uncompressedSize = _u64(cd, dp);
               dp += 8;
             }
-            if (compressedSize == 0xFFFFFFFF && dp + 8 <= cd.length) {
+            if (compressedSize == 0xFFFFFFFF && dp + 8 <= dataEnd) {
               compressedSize = _u64(cd, dp);
               dp += 8;
             }
-            if (localOffset == 0xFFFFFFFF && dp + 8 <= cd.length) {
+            if (localOffset == 0xFFFFFFFF && dp + 8 <= dataEnd) {
               localOffset = _u64(cd, dp);
             }
-            break;
+          } else if (headerId == 0x9901 && dataSize >= 7) {
+            final dp = dataStart;
+            aesStrength = cd[dp + 4];
+            compressionMethod = _u16(cd, dp + 5);
+            isAesEncrypted = true;
           }
           ep += 4 + dataSize;
         }
@@ -305,9 +601,12 @@ class DartZipBackend implements ArchiveBackend {
           localHeaderOffset: localOffset,
           compressedSize: compressedSize,
           uncompressedSize: uncompressedSize,
-          isEncrypted: isEncrypted,
+          isEncrypted: isEncrypted || isAesEncrypted,
           isDirectory: isDir,
           externalAttributes: extAttrs,
+          isAesEncrypted: isAesEncrypted,
+          compressionMethod: compressionMethod,
+          aesStrength: aesStrength,
         ));
         pos += 46 + fnLen + extraLen + commentLen;
       }
@@ -538,6 +837,9 @@ class _CdEntry {
     required this.isEncrypted,
     required this.isDirectory,
     required this.externalAttributes,
+    this.isAesEncrypted = false,
+    this.compressionMethod = 0,
+    this.aesStrength = 0,
   });
 
   final String path;
@@ -547,4 +849,7 @@ class _CdEntry {
   final bool isEncrypted;
   final bool isDirectory;
   final int externalAttributes;
+  final bool isAesEncrypted;
+  final int compressionMethod;
+  final int aesStrength;
 }
