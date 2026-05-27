@@ -79,6 +79,10 @@ abstract class ReadingData {
 
   String buildImageKey(int ep, int page, String url) => url;
 
+  String epDisplayName(int index) {
+    return eps?.values.elementAt(index) ?? '';
+  }
+
   Future<List<String>> loadEpNetwork(int ep);
 
   Stream<List<int>> loadImageNetwork(int ep, int page, String url);

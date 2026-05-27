@@ -18,7 +18,7 @@ class _EpsViewState extends State<EpsView> {
     var data = widget.data;
     var epsWidgets = <Widget>[];
     for (int index = 0; index < data.eps!.length; index++) {
-      String title = data.eps!.values.elementAt(index);
+      String title = data.epDisplayName(index);
       epsWidgets.add(InkWell(
         onTap: () {
           unawaited(App.maybePopActiveRoute(context: context));
