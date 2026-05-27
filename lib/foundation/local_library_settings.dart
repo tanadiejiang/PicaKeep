@@ -12,6 +12,10 @@ const localLibraryViewSettingIndex = 104;
 const deleteBehaviorSettingIndex = 105;
 const externalToolOrderSettingIndex = 106;
 const externalToolVisibilitySettingIndex = 107;
+const archiveDefaultPasswordsSettingIndex = 108;
+const archiveAutoUnlockEnabledSettingIndex = 109;
+const archiveReadingCacheLimitMbSettingIndex = 110;
+const archiveUseChapterNumberSettingIndex = 111;
 const androidRootModeSettingIndex = 101;
 const androidShizukuModeSettingIndex = 102;
 
@@ -140,3 +144,4 @@ String encodeLocalComicPathList(Iterable<String> paths) {
       .toList();
   return jsonEncode(normalized);
 }
+

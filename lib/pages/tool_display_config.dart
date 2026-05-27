@@ -38,6 +38,7 @@ const albumsToolId = 'albums';
 const appCapabilitiesToolId = 'app_capabilities';
 const trashToolId = 'trash';
 const clearCacheToolId = 'clear_cache';
+const archiveSettingsToolId = 'archive_settings';
 
 const List<ToolDisplayDefinition> allToolDisplayDefinitions = [
   ToolDisplayDefinition(
@@ -88,6 +89,13 @@ const List<ToolDisplayDefinition> allToolDisplayDefinitions = [
     title: '缓存管理',
     subtitle: '管理本地缓存数据',
     quickLabel: '缓存管理',
+  ),
+  ToolDisplayDefinition(
+    id: archiveSettingsToolId,
+    icon: Icons.folder_zip_outlined,
+    title: '压缩包设置',
+    subtitle: '自动解密、密码管理',
+    quickLabel: '压缩包',
   ),
 ];
 

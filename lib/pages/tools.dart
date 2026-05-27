@@ -5,9 +5,13 @@ import 'package:flutter/material.dart';
 import 'package:flutter_reorderable_grid_view/widgets/reorderable_builder.dart';
 import 'package:picakeep/base.dart' hide eraseCache;
 import 'package:picakeep/foundation/app.dart';
+import 'package:picakeep/foundation/archive/archive_memory_cache.dart';
+import 'package:picakeep/foundation/archive/archive_reading_service.dart';
+import 'package:picakeep/foundation/local_library_settings.dart';
 import 'package:picakeep/pages/app_capabilities_page.dart';
 import 'package:picakeep/pages/local_library_page.dart';
 import 'package:picakeep/pages/service_info_page.dart';
+import 'package:picakeep/pages/settings/archive_settings_page.dart';
 import 'package:picakeep/pages/tool_display_config.dart';
 import 'package:picakeep/pages/trash_page.dart';
 import 'package:picakeep/tools/io_tools.dart';
@@ -239,6 +243,10 @@ class _ToolsPageState extends State<ToolsPage> {
         );
       case clearCacheToolId:
         return _clearCache(context);
+      case archiveSettingsToolId:
+        return Navigator.of(context).push(
+          MaterialPageRoute(builder: (_) => const ArchiveSettingsPage()),
+        );
       default:
         return Future.value();
     }
@@ -264,6 +272,55 @@ class _ToolsPageState extends State<ToolsPage> {
     messenger.showSnackBar(
       SnackBar(
         content: Text('缓存已清理'.tl),
+        duration: const Duration(seconds: 1),
+      ),
+    );
+  }
+
+  Future<void> _editArchiveCacheLimit(BuildContext context) async {
+    final current = int.tryParse(
+          appdata.settings[archiveReadingCacheLimitMbSettingIndex],
+        ) ??
+        32;
+    final controller = TextEditingController(text: current.toString());
+    final value = await showDialog<int>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text('压缩包阅读缓存大小限制'.tl),
+        content: TextField(
+          controller: controller,
+          keyboardType: TextInputType.number,
+          decoration: const InputDecoration(suffixText: 'MB', hintText: '8~256'),
+          autofocus: true,
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: Text('取消'.tl),
+          ),
+          TextButton(
+            onPressed: () {
+              final v = int.tryParse(controller.text);
+              Navigator.of(dialogContext).pop(v);
+            },
+            child: Text('确定'.tl),
+          ),
+        ],
+      ),
+    );
+    if (value != null) {
+      final clamped = value.clamp(8, 256);
+      ArchiveMemoryCache.instance.setLimitMB(clamped);
+      if (mounted) setState(() {});
+    }
+  }
+
+  Future<void> _clearArchiveCache(BuildContext context) async {
+    ArchiveReadingService.instance.clearAllReadingState();
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('压缩包阅读缓存已清理'.tl),
         duration: const Duration(seconds: 1),
       ),
     );
@@ -305,6 +362,21 @@ class _ToolsPageState extends State<ToolsPage> {
                   title: Text('清除缓存'.tl),
                   trailing: const Icon(Icons.chevron_right),
                   onTap: () => _clearCache(context),
+                ),
+                ListTile(
+                  leading: const Icon(Icons.folder_zip_outlined),
+                  title: Text('压缩包阅读缓存大小限制'.tl),
+                  subtitle: Text(
+                    '${appdata.settings[archiveReadingCacheLimitMbSettingIndex]} MB',
+                  ),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () => _editArchiveCacheLimit(context),
+                ),
+                ListTile(
+                  leading: const Icon(Icons.cleaning_services_outlined),
+                  title: Text('清理压缩包阅读缓存'.tl),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () => _clearArchiveCache(context),
                 ),
               ],
             ),

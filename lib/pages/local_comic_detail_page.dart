@@ -7,6 +7,8 @@ import 'package:photo_view/photo_view.dart';
 import 'package:picakeep/base.dart';
 import 'package:picakeep/components/scrollable.dart';
 import 'package:picakeep/foundation/app.dart';
+import 'package:picakeep/foundation/archive/archive_memory_cache.dart';
+import 'package:picakeep/foundation/archive/archive_password_store.dart';
 import 'package:picakeep/foundation/download.dart';
 import 'package:picakeep/foundation/download_model.dart';
 import 'package:picakeep/foundation/local_library.dart';
@@ -264,6 +266,15 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
     if (mounted) {
       setState(() {});
     }
+  }
+
+  Future<void> _onForgetArchivePassword(LocalLibraryComicItem item) async {
+    final path = item.fileSystemPath;
+    if (path == null || path.isEmpty) return;
+    ArchivePasswordStore.instance.forget(path);
+    ArchiveMemoryCache.instance.evictAllForArchive(path);
+    item.markArchiveLocked();
+    if (mounted) setState(() {});
   }
 
   Future<void> _onDelete() async {
@@ -601,6 +612,21 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
     add('漫画源', [comic.sourceDisplayName]);
     add('时间', [_formatTime(comic.time)]);
     add('路径', [_displayPathFor(comic)]);
+    if (comic is LocalLibraryComicItem && comic.isArchiveItem) {
+      add('格式', [comic.archiveFormatDisplay]);
+      final path = comic.fileSystemPath;
+      if (path != null && path.isNotEmpty) {
+        try {
+          final bytes = File(path).statSync().size;
+          final mb = bytes / (1024 * 1024);
+          add('文件大小', ['${mb.toStringAsFixed(1)} MB']);
+        } catch (_) {}
+      }
+      final chapterCount = comic.eps.length;
+      if (chapterCount > 0) {
+        add('章节数', ['$chapterCount']);
+      }
+    }
     if (comic.tags.isNotEmpty) {
       groups['标签'] = comic.tags.map(_translateTagIfNeeded).toSet().toList();
     }
@@ -1293,6 +1319,14 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
             () => _onRead(ep: comic.eps.length > 1 ? 1 : 0),
           ),
           _buildActionItem('分享', Icons.share, () => _copyText(comic.name)),
+          if (comic is LocalLibraryComicItem &&
+              comic.isArchiveItem &&
+              comic.archivePasswordMatched)
+            _buildActionItem(
+              '忘记密码',
+              Icons.lock_reset_outlined,
+              () => _onForgetArchivePassword(comic),
+            ),
           if (_canDeleteComic)
             _buildActionItem('删除下载', Icons.delete_outline, _onDelete),
         ],
@@ -1350,17 +1384,67 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
     if (comic.eps.isEmpty) return const [];
     var length = comic.eps.length;
     if (!_showFullEps) length = math.min(length, 20);
+    final LocalLibraryComicItem? archiveComic =
+        comic is LocalLibraryComicItem && comic.isArchiveItem ? comic : null;
+    final archiveItem = archiveComic != null;
+    final displayNames = archiveComic != null
+        ? LocalLibraryManager.archiveDisplayChapterNames(archiveComic)
+        : comic.eps;
 
     return [
-      _sectionHeader(
-        '章节  ·  共${comic.eps.length}章',
-        trailing: Tooltip(
-          message: '排序'.tl,
-          child: IconButton(
-            icon: const Icon(Icons.swap_vert),
-            onPressed: () =>
-                setState(() => _reverseEpsOrder = !_reverseEpsOrder),
-          ),
+      SliverToBoxAdapter(
+        child: Column(
+          children: [
+            const Divider(),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 18),
+              child: Row(
+                children: [
+                  Text(
+                    '章节'.tl,
+                    style: const TextStyle(
+                      fontWeight: FontWeight.w500,
+                      fontSize: 18,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Flexible(
+                    child: Text(
+                      '共${comic.eps.length}章'.tl,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                        color: Theme.of(context).colorScheme.outline,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 40),
+                  if (archiveItem) ...[
+                    Text('序号'.tl,
+                        style: Theme.of(context).textTheme.bodySmall),
+                    Transform.scale(
+                      scale: 0.8,
+                      child: Switch(
+                        value: readArchiveUseChapterNumber(),
+                        onChanged: (v) async {
+                          await writeArchiveUseChapterNumber(v);
+                          setState(() {});
+                        },
+                      ),
+                    ),
+                    const SizedBox(width: 4),
+                  ],
+                  Tooltip(
+                    message: '排序'.tl,
+                    child: IconButton(
+                      icon: const Icon(Icons.swap_vert),
+                      onPressed: () =>
+                          setState(() => _reverseEpsOrder = !_reverseEpsOrder),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
         ),
       ),
       const SliverPadding(padding: EdgeInsets.all(6)),
@@ -1371,15 +1455,16 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
             childCount: length,
             (context, i) {
               final index = _reverseEpsOrder ? comic.eps.length - i - 1 : i;
-              final isDownloaded =
-                  comic.downloadedEps.contains(index) || !comic.canDelete;
+              final isDownloaded = archiveItem ||
+                  comic.downloadedEps.contains(index) ||
+                  !comic.canDelete;
               final readEp = comic.eps.length > 1 ? index + 1 : 0;
               return Padding(
                 padding: const EdgeInsets.fromLTRB(8, 4, 8, 4),
                 child: InkWell(
                   borderRadius: const BorderRadius.all(Radius.circular(16)),
                   onTap: isDownloaded ? () => _onRead(ep: readEp) : null,
-                  onLongPress: comic.canDelete && isDownloaded
+                  onLongPress: comic.canDelete && !archiveItem && isDownloaded
                       ? () => _onDeleteEpisode(index)
                       : null,
                   child: Material(
@@ -1393,7 +1478,7 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
                           horizontal: 8, vertical: 4),
                       child: Center(
                         child: Text(
-                          comic.eps[index],
+                          index < displayNames.length ? displayNames[index] : comic.eps[index],
                           maxLines: 1,
                           textAlign: TextAlign.center,
                           overflow: TextOverflow.ellipsis,

@@ -10,6 +10,9 @@ import 'package:picakeep/foundation/image_loader/stream_image_provider.dart';
 import 'package:picakeep/pages/reader/comic_reading_page.dart';
 
 import '../base.dart';
+import 'archive/archive_models.dart';
+import 'archive/archive_password_store.dart';
+import 'archive/archive_reading_service.dart';
 import 'download_model.dart';
 import 'local_data_source.dart';
 import 'local_favorites.dart';
@@ -300,7 +303,47 @@ class LocalLibraryComicItem extends DownloadedItem {
       _downloadedEps.length > 1;
 
   bool get isAlbum =>
-      itemId.startsWith('local_album::') || sourceDisplayName == '图集';
+      itemId.startsWith('local_album::') ||
+      itemId.startsWith('local_archive::') ||
+      sourceDisplayName == '图集';
+
+  bool get isArchiveItem => itemId.startsWith('local_archive::');
+
+  bool _archiveEncrypted = false;
+  bool _archivePasswordMatched = false;
+  ArchiveFormat _archiveFormat = ArchiveFormat.unknown;
+  List<String>? _archiveChapterRealNames;
+
+  bool get archiveEncrypted => _archiveEncrypted;
+  bool get archivePasswordMatched => _archivePasswordMatched;
+  ArchiveFormat get archiveFormat => _archiveFormat;
+
+  bool get needsArchivePassword =>
+      isArchiveItem && _archiveEncrypted && !_archivePasswordMatched;
+
+  String get archiveFormatDisplay {
+    final enc = _archiveEncrypted ? '加密 ' : '';
+    switch (_archiveFormat) {
+      case ArchiveFormat.cbz:
+        return '${enc}CBZ';
+      case ArchiveFormat.zip:
+        return '${enc}ZIP';
+      case ArchiveFormat.unknown:
+        return '$enc压缩包';
+    }
+  }
+
+  void markArchiveUnlocked(String password) {
+    _archivePasswordMatched = true;
+    ArchivePasswordStore.instance.setSessionPassword(
+      _fileSystemPath,
+      password,
+    );
+  }
+
+  void markArchiveLocked() {
+    _archivePasswordMatched = false;
+  }
 
   bool get isManagedDownloadItem =>
       itemId.startsWith('local_download::current_download::') ||
@@ -355,7 +398,8 @@ class LocalLibraryComicItem extends DownloadedItem {
       favoriteType: LocalLibraryManager._favoriteTypeForDownloadType(type),
       episodeFiles: episodeFiles,
       downloadedEpisodeIndexes: downloadedEps,
-      supportsImageSort: isAlbum,
+      supportsImageSort: isAlbum && !isArchiveItem,
+      archiveChapterRealNames: isArchiveItem ? _archiveChapterRealNames : null,
     );
     return ComicReadingPage(data, page ?? 1, ep ?? (hasEp ? 1 : 0));
   }
@@ -375,6 +419,7 @@ class LocalPathReadingData extends ReadingData {
     required Map<int, List<String>> episodeFiles,
     required Iterable<int> downloadedEpisodeIndexes,
     this.supportsImageSort = false,
+    this.archiveChapterRealNames,
   }) : _episodeFiles = {
           for (final entry in episodeFiles.entries)
             entry.key: List<String>.from(entry.value),
@@ -387,6 +432,18 @@ class LocalPathReadingData extends ReadingData {
   final String directoryPath;
 
   final bool supportsImageSort;
+
+  final List<String>? archiveChapterRealNames;
+
+  @override
+  String epDisplayName(int index) {
+    final defaultNames = eps?.values.toList(growable: false) ?? const <String>[];
+    return LocalLibraryManager.buildArchiveChapterDisplayName(
+      index: index,
+      defaultNames: defaultNames,
+      realNames: archiveChapterRealNames,
+    );
+  }
 
   @override
   bool get supportsLocalImageSort => supportsImageSort;
@@ -451,17 +508,46 @@ class LocalPathReadingData extends ReadingData {
 
   @override
   Stream<List<int>> loadImage(int ep, int page, String url) async* {
+    if (isArchiveUri(url)) {
+      final bytes =
+          await ArchiveReadingService.instance.readEntryBytesByUri(url);
+      yield bytes;
+      return;
+    }
     final bytes = await LocalLibraryManager._readFileBytes(url);
     yield bytes ?? const <int>[];
   }
 
   @override
   ImageProvider createImageProvider(int ep, int page, String url) {
+    if (isArchiveUri(url)) {
+      final parsed = parseArchiveUri(url)!;
+      final fp = ArchiveReadingService.instance
+          .fingerprintCachedFor(parsed.archivePath);
+      final fileSize = fp?.fileSize ?? 0;
+      final mtimeMillis = fp?.mtimeMillis ?? 0;
+      return ArchiveReadingService.instance.imageProviderFor(
+        parsed.archivePath,
+        parsed.entryPath,
+        fileSize,
+        mtimeMillis,
+      );
+    }
     return LocalLibraryManager.instance.imageProviderForLocalPath(url);
   }
 
   @override
-  String buildImageKey(int ep, int page, String url) => url;
+  String buildImageKey(int ep, int page, String url) {
+    if (isArchiveUri(url)) {
+      final parsed = parseArchiveUri(url)!;
+      final fp = ArchiveReadingService.instance
+          .fingerprintCachedFor(parsed.archivePath);
+      final fileSize = fp?.fileSize ?? 0;
+      final mtimeMillis = fp?.mtimeMillis ?? 0;
+      return 'archive::${fileSize}_$mtimeMillis::${parsed.archivePath}::${parsed.entryPath}';
+    }
+    return url;
+  }
 
   @override
   Future<List<String>> loadEpNetwork(int ep) async {
@@ -472,6 +558,14 @@ class LocalPathReadingData extends ReadingData {
   Stream<List<int>> loadImageNetwork(int ep, int page, String url) async* {
     yield* loadImage(ep, page, url);
   }
+}
+
+bool readArchiveUseChapterNumber() =>
+    appdata.settings[archiveUseChapterNumberSettingIndex] == '1';
+
+Future<void> writeArchiveUseChapterNumber(bool value) async {
+  appdata.settings[archiveUseChapterNumberSettingIndex] = value ? '1' : '0';
+  await appdata.updateSettings();
 }
 
 class LocalLibraryManager {
@@ -1117,6 +1211,7 @@ class LocalLibraryManager {
     }
 
     _loaded = true;
+    await _autoUnlockEncryptedArchives();
   }
 
   Future<void> ensureLoaded() async {
@@ -1530,7 +1625,6 @@ class LocalLibraryManager {
         db.dispose();
       }
     } catch (e) {
-      print('[PicaKeep] Failed to load download.db for ${source.path}: $e');
       return _loadDirectoryOnlyDownloadSourceMetadata(source);
     }
     if (items.isEmpty && trustStorageFromDatabase) {
@@ -1869,6 +1963,12 @@ class LocalLibraryManager {
 
     if (await _shouldTreatAsSingleAlbumSource(source.path)) {
       await _scanSingleAlbumSource(source);
+      // Still scan for archive files even when the directory itself is a single album
+      final entries = await _listDirectoryEntries(source.path);
+      final hasArchives = entries.any((e) => !e.isDirectory && isArchivePath(e.path));
+      if (hasArchives) {
+        await _scanArchiveFilesUnder(source, const [], 0);
+      }
       return;
     }
 
@@ -1930,6 +2030,338 @@ class LocalLibraryManager {
         source: source,
       ),
     );
+
+    // Scan archive files (.zip/.cbz) in the same source directory
+    await _scanArchiveFilesUnder(source, children, totalSize);
+  }
+
+  Future<void> _scanArchiveFilesUnder(
+    LocalLibrarySource source,
+    List<LocalLibraryStorageChildEntry> existingChildren,
+    double existingTotalSize,
+  ) async {
+    final hiddenIndex = await LocalTrashStore.instance.hiddenIndex();
+    final entries = await _listDirectoryEntries(source.path);
+    final archiveFiles = entries
+        .where((e) => !e.isDirectory && isArchivePath(e.path))
+        .toList();
+    if (archiveFiles.isEmpty) return;
+
+    final archiveChildren = <LocalLibraryStorageChildEntry>[];
+    double archiveTotalSize = 0;
+
+    // Limit concurrency to 2
+    final semaphore = _Semaphore(2);
+    final futures = archiveFiles.map((entry) async {
+      await semaphore.acquire();
+      try {
+        if (hiddenIndex.matchesPath(entry.path)) return;
+        await _scanSingleArchiveFile(
+          source,
+          entry,
+          archiveChildren,
+          (size) => archiveTotalSize += size,
+        );
+      } finally {
+        semaphore.release();
+      }
+    });
+    await Future.wait(futures);
+
+    if (archiveChildren.isNotEmpty) {
+      // Update the existing storage entry to include archive items
+      final existingIdx = _storageEntries.indexWhere((e) => e.id == source.id);
+      if (existingIdx >= 0) {
+        final existing = _storageEntries[existingIdx];
+        _storageEntries[existingIdx] = LocalLibraryStorageEntry(
+          id: existing.id,
+          title: existing.title,
+          path: existing.path,
+          sizeMb: existing.sizeMb + archiveTotalSize,
+          comicCount: existing.comicCount + archiveChildren.length,
+          children: [...existing.children, ...archiveChildren],
+          source: existing.source,
+        );
+      }
+    }
+  }
+
+  Future<void> _scanSingleArchiveFile(
+    LocalLibrarySource source,
+    _LocalDirectoryEntry entry,
+    List<LocalLibraryStorageChildEntry> sink,
+    void Function(double) addSize,
+  ) async {
+    try {
+      final format = archiveFormatForPath(entry.path);
+      if (format == ArchiveFormat.unknown) return;
+
+      final ArchiveIndex? probe;
+      try {
+        probe = await ArchiveReadingService.instance.getIndex(entry.path);
+      } catch (e) {
+        return;
+      }
+      if (probe.imageEntries.isEmpty) return;
+
+      final stat = await File(entry.path).stat();
+      final sizeMb = stat.size / (1024 * 1024);
+      final isEncrypted = probe.isEncrypted;
+      final built = _buildArchiveEpisodes(probe);
+      final episodeFiles = built.episodeFiles;
+      final itemId = 'local_archive::${entry.path}';
+
+      String? coverPath;
+      if (!isEncrypted) {
+        final coverEntry = _pickArchiveCoverEntry(probe);
+        if (coverEntry != null) {
+          coverPath = await ArchiveReadingService.instance.extractCoverToCache(
+            entry.path,
+            coverEntry,
+          );
+        }
+      }
+
+      final item = LocalLibraryComicItem(
+        itemId: itemId,
+        originalId: entry.path,
+        type: DownloadType.favorite,
+        name: _basenameWithoutExtension(entry.name),
+        subTitle: '',
+        tags: const <String>[],
+        sourceDisplayName: isEncrypted ? '加密压缩包' : '压缩包',
+        fileSystemPath: entry.path,
+        episodeFiles: episodeFiles,
+        downloadedEps: episodeFiles.keys.toList()..sort(),
+        eps: _buildLocalEpisodeNames(episodeFiles.length),
+        localCoverPath: coverPath,
+        localStorageExists: true,
+        canDelete: false,
+        aliases: [entry.path],
+        comicSize: sizeMb,
+      )..time = stat.modified;
+
+      item._archiveFormat = format;
+      item._archiveEncrypted = isEncrypted;
+      item._archivePasswordMatched =
+          !isEncrypted ||
+          ArchivePasswordStore.instance.getSessionPassword(entry.path) != null;
+      item._archiveChapterRealNames = built.realNames;
+
+      _indexItem(item);
+      _items.add(item);
+      addSize(sizeMb);
+      sink.add(LocalLibraryStorageChildEntry(
+        id: item.id,
+        title: item.name,
+        path: entry.path,
+        sizeMb: sizeMb,
+        sourceDisplayName: item.sourceDisplayName,
+      ));
+    } catch (e) {
+    }
+  }
+
+  static List<String> archiveDisplayChapterNames(
+      LocalLibraryComicItem item) {
+    if (!item.isArchiveItem) return item.eps;
+    return List<String>.generate(
+      item.eps.length,
+      (index) => buildArchiveChapterDisplayName(
+        index: index,
+        defaultNames: item.eps,
+        realNames: item._archiveChapterRealNames,
+      ),
+    );
+  }
+
+  static String buildArchiveChapterDisplayName({
+    required int index,
+    required List<String> defaultNames,
+    required List<String>? realNames,
+  }) {
+    if (index < 0 || index >= defaultNames.length) {
+      return '';
+    }
+    final fallback = defaultNames[index];
+    final realName = realNames != null && index < realNames.length
+        ? realNames[index].trim()
+        : '';
+    if (realName.isEmpty) {
+      return fallback;
+    }
+    if (!readArchiveUseChapterNumber()) {
+      return realName;
+    }
+    if (fallback.trim().isEmpty || fallback == '全部') {
+      return realName;
+    }
+    return '$fallback $realName';
+  }
+
+  static _ArchiveEpisodesBuildResult _buildArchiveEpisodes(ArchiveIndex index) {
+    final imageEntries = index.imageEntries;
+    if (imageEntries.isEmpty) {
+      return const _ArchiveEpisodesBuildResult(
+          episodeFiles: {}, realNames: []);
+    }
+
+    // Find common prefix to strip
+    final prefix = _longestCommonDirectoryPrefix(
+        imageEntries.map((e) => e.path).toList());
+
+    // Group by parent directory after stripping prefix
+    final groups = <String, List<String>>{};
+    for (final entry in imageEntries) {
+      final stripped = prefix.isEmpty
+          ? entry.path
+          : entry.path.substring(prefix.length);
+      final slashIdx = stripped.indexOf('/');
+      final parent = slashIdx > 0 ? stripped.substring(0, slashIdx) : '';
+      groups.putIfAbsent(parent, () => []).add(
+            buildArchiveUri(index.archivePath, entry.path).toString(),
+          );
+    }
+
+    if (groups.length == 1) {
+      // All in one group — single chapter, real name is the group key (or '')
+      final uris = groups.values.first;
+      uris.sort(_archiveUriNaturalCompare);
+      final key = groups.keys.first;
+      return _ArchiveEpisodesBuildResult(
+        episodeFiles: {0: uris},
+        realNames: [key],
+      );
+    }
+
+    // Multiple groups: subdirs as chapters (1-indexed), root files as chapter 0
+    final result = <int, List<String>>{};
+    final realNames = <String>[];
+    final rootUris = groups[''] ?? [];
+    if (rootUris.isNotEmpty) {
+      rootUris.sort(_archiveUriNaturalCompare);
+      result[0] = rootUris;
+      realNames.add(''); // root chapter has no dir name
+    }
+
+    final subdirs = groups.keys.where((k) => k.isNotEmpty).toList()
+      ..sort(_naturalCompare);
+    for (int i = 0; i < subdirs.length; i++) {
+      final uris = groups[subdirs[i]]!;
+      uris.sort(_archiveUriNaturalCompare);
+      result[i + 1] = uris;
+      realNames.add(subdirs[i]);
+    }
+    return _ArchiveEpisodesBuildResult(
+        episodeFiles: result, realNames: realNames);
+  }
+
+  static String? _pickArchiveCoverEntry(ArchiveIndex index) {
+    if (index.imageEntries.isEmpty) return null;
+    const coverNames = ['cover.jpg', 'cover.jpeg', 'cover.png', 'cover.webp'];
+    for (final candidate in coverNames) {
+      for (final e in index.imageEntries) {
+        final basename = e.path.split('/').last.toLowerCase();
+        if (basename == candidate) return e.path;
+      }
+    }
+    final episodes = _buildArchiveEpisodes(index).episodeFiles;
+    if (episodes.isEmpty) return null;
+    final keys = episodes.keys.toList()..sort();
+    for (final k in keys) {
+      final list = episodes[k];
+      if (list != null && list.isNotEmpty) {
+        final parsed = parseArchiveUri(list.first);
+        if (parsed != null) return parsed.entryPath;
+      }
+    }
+    return null;
+  }
+
+  static String _longestCommonDirectoryPrefix(List<String> paths) {
+    if (paths.isEmpty) return '';
+    final parts = paths.first.split('/');
+    var prefixParts = <String>[];
+    for (int depth = 0; depth < parts.length - 1; depth++) {
+      final candidate = parts[depth];
+      if (paths.every((p) {
+        final ps = p.split('/');
+        return ps.length > depth && ps[depth] == candidate;
+      })) {
+        prefixParts.add(candidate);
+      } else {
+        break;
+      }
+    }
+    return prefixParts.isEmpty ? '' : '${prefixParts.join('/')}/';
+  }
+
+  static int _archiveUriNaturalCompare(String a, String b) {
+    final pa = parseArchiveUri(a);
+    final pb = parseArchiveUri(b);
+    if (pa == null || pb == null) return a.compareTo(b);
+    return _naturalCompare(pa.entryPath, pb.entryPath);
+  }
+
+  static String _basenameWithoutExtension(String name) {
+    final dotIdx = name.lastIndexOf('.');
+    if (dotIdx > 0) return name.substring(0, dotIdx);
+    return name;
+  }
+
+  Future<void> refreshArchiveCoverFor(LocalLibraryComicItem item) async {
+    if (!item.isArchiveItem) return;
+    final archivePath = item.fileSystemPath ?? '';
+    if (archivePath.isEmpty) return;
+    try {
+      final index = await ArchiveReadingService.instance
+          .getIndex(archivePath, forceRefresh: true);
+      final coverEntry = _pickArchiveCoverEntry(index);
+      if (coverEntry != null) {
+        await ArchiveReadingService.instance.extractCoverToCache(
+          archivePath,
+          coverEntry,
+        );
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _autoUnlockEncryptedArchives() async {
+    final store = ArchivePasswordStore.instance;
+    if (!store.autoUnlockEnabled) return;
+    final passwords = store.defaultPasswords;
+    if (passwords.isEmpty) return;
+
+    final encryptedItems = _items
+        .where((item) =>
+            item.isArchiveItem &&
+            item.archiveEncrypted &&
+            !item.archivePasswordMatched &&
+            !store.isBlacklisted(item.fileSystemPath ?? ''))
+        .toList();
+    if (encryptedItems.isEmpty) return;
+
+    final semaphore = _Semaphore(2);
+    final futures = encryptedItems.map((item) async {
+      await semaphore.acquire();
+      try {
+        final archivePath = item.fileSystemPath ?? '';
+        if (archivePath.isEmpty) return;
+        for (final password in passwords) {
+          final ok = await ArchiveReadingService.instance
+              .tryUnlock(archivePath, password);
+          if (ok) {
+            item.markArchiveUnlocked(password);
+            await refreshArchiveCoverFor(item);
+            break;
+          }
+        }
+      } catch (_) {
+      } finally {
+        semaphore.release();
+      }
+    });
+    await Future.wait(futures);
   }
 
   Future<void> _scanSingleAlbumSource(LocalLibrarySource source) async {
@@ -3358,4 +3790,40 @@ class LocalLibraryManager {
         break;
     }
   }
+}
+
+class _Semaphore {
+  _Semaphore(int maxCount) : _count = maxCount;
+
+  int _count;
+  final List<Completer<void>> _waiters = [];
+
+  Future<void> acquire() async {
+    if (_count > 0) {
+      _count--;
+      return;
+    }
+    final completer = Completer<void>();
+    _waiters.add(completer);
+    await completer.future;
+  }
+
+  void release() {
+    if (_waiters.isNotEmpty) {
+      final next = _waiters.removeAt(0);
+      next.complete();
+    } else {
+      _count++;
+    }
+  }
+}
+
+class _ArchiveEpisodesBuildResult {
+  const _ArchiveEpisodesBuildResult({
+    required this.episodeFiles,
+    required this.realNames,
+  });
+
+  final Map<int, List<String>> episodeFiles;
+  final List<String> realNames;
 }

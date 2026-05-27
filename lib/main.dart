@@ -8,6 +8,7 @@ import 'package:flutter_localizations/flutter_localizations.dart';
 import 'base.dart';
 import 'components/window_frame.dart';
 import 'foundation/app.dart';
+import 'foundation/archive/archive_registry.dart';
 import 'foundation/history.dart';
 import 'foundation/local_favorites.dart';
 import 'foundation/remote_library_event_channel.dart';
@@ -41,6 +42,7 @@ Future<void> _initializeApplication() async {
   AppStartupTrace.log('App.init.done');
 
   await appdata.readEssentialData();
+  ArchiveRegistry.initDefaults();
   if (_shouldLoadTranslationsBeforeRunApp()) {
     await loadTranslations();
   } else {
