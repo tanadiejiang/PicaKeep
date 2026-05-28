@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
@@ -907,18 +908,51 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
       ..comics = [item]
       ..selected = [false];
     if (UiMode.m1(context)) {
+      final screenHeight = MediaQuery.of(context).size.height;
+      final maxSize = screenHeight > 0
+          ? math.min(0.8, math.max(0.5, (screenHeight - 92) / screenHeight))
+          : 0.8;
+      const minSize = 0.3;
+      final sheetController = DraggableScrollableController();
       showModalBottomSheet(
         context: context,
         isScrollControlled: true,
         showDragHandle: false,
         useSafeArea: false,
+        backgroundColor: Colors.transparent,
         builder: (context) {
-          return DownloadedComicInfoView(item, logic);
+          return DraggableScrollableSheet(
+            controller: sheetController,
+            initialChildSize: 0.6,
+            minChildSize: minSize,
+            maxChildSize: maxSize,
+            expand: false,
+            builder: (context, scrollController) {
+              return Material(
+                color: Theme.of(context).colorScheme.surface,
+                surfaceTintColor: Theme.of(context).colorScheme.surfaceTint,
+                shape: const RoundedRectangleBorder(
+                  borderRadius: BorderRadius.vertical(
+                    top: Radius.circular(16),
+                  ),
+                ),
+                clipBehavior: Clip.antiAlias,
+                child: DownloadedComicInfoView(
+                  item,
+                  logic,
+                  scrollController: scrollController,
+                  sheetController: sheetController,
+                  sheetMaxSize: maxSize,
+                  sheetMinSize: minSize,
+                ),
+              );
+            },
+          );
         },
-      );
+      ).whenComplete(sheetController.dispose);
     } else {
       showSideBar(
-        context,
+        App.globalContext ?? context,
         DownloadedComicInfoView(item, logic),
         useSurfaceTintColor: true,
       );

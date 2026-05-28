@@ -4,6 +4,7 @@ import 'dart:math' as math;
 import 'dart:io' show File, Platform, Process;
 
 import 'package:flutter/rendering.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:picakeep/base.dart';
@@ -1786,18 +1787,51 @@ class _DownloadPageState extends State<DownloadPage>
   void _showInfo(int index, DownloadPageLogic logic, BuildContext context) {
     final item = logic.comics[index];
     if (UiMode.m1(context)) {
+      final screenHeight = MediaQuery.of(context).size.height;
+      final maxSize = screenHeight > 0
+          ? math.min(0.8, math.max(0.5, (screenHeight - 92) / screenHeight))
+          : 0.8;
+      const minSize = 0.3;
+      final sheetController = DraggableScrollableController();
       showModalBottomSheet(
         context: context,
         isScrollControlled: true,
         showDragHandle: false,
         useSafeArea: false,
+        backgroundColor: Colors.transparent,
         builder: (context) {
-          return DownloadedComicInfoView(item, logic);
+          return DraggableScrollableSheet(
+            controller: sheetController,
+            initialChildSize: 0.6,
+            minChildSize: minSize,
+            maxChildSize: maxSize,
+            expand: false,
+            builder: (context, scrollController) {
+              return Material(
+                color: Theme.of(context).colorScheme.surface,
+                surfaceTintColor: Theme.of(context).colorScheme.surfaceTint,
+                shape: const RoundedRectangleBorder(
+                  borderRadius: BorderRadius.vertical(
+                    top: Radius.circular(16),
+                  ),
+                ),
+                clipBehavior: Clip.antiAlias,
+                child: DownloadedComicInfoView(
+                  item,
+                  logic,
+                  scrollController: scrollController,
+                  sheetController: sheetController,
+                  sheetMaxSize: maxSize,
+                  sheetMinSize: minSize,
+                ),
+              );
+            },
+          );
         },
-      );
+      ).whenComplete(sheetController.dispose);
     } else {
       showSideBar(
-        context,
+        App.globalContext ?? context,
         DownloadedComicInfoView(item, logic),
         useSurfaceTintColor: true,
       );
@@ -2352,9 +2386,21 @@ class _DownloadPageState extends State<DownloadPage>
 }
 
 class DownloadedComicInfoView extends StatefulWidget {
-  const DownloadedComicInfoView(this.item, this.logic, {super.key});
+  const DownloadedComicInfoView(
+    this.item,
+    this.logic, {
+    super.key,
+    this.scrollController,
+    this.sheetController,
+    this.sheetMaxSize,
+    this.sheetMinSize = 0.3,
+  });
   final DownloadedItem item;
   final DownloadPageLogic logic;
+  final ScrollController? scrollController;
+  final DraggableScrollableController? sheetController;
+  final double? sheetMaxSize;
+  final double sheetMinSize;
 
   @override
   State<DownloadedComicInfoView> createState() =>
@@ -2379,7 +2425,9 @@ class _DownloadedComicInfoViewState extends State<DownloadedComicInfoView> {
     }
     return eps;
   }
-  late final ScrollController _scrollController;
+  ScrollController? _ownedScrollController;
+  ScrollController get _scrollController =>
+      widget.scrollController ?? _ownedScrollController!;
   late DownloadedItem _comic;
   String? _resolvedCoverPath;
   bool _loadingRemoteDetail = false;
@@ -2387,7 +2435,9 @@ class _DownloadedComicInfoViewState extends State<DownloadedComicInfoView> {
   @override
   void initState() {
     super.initState();
-    _scrollController = ScrollController();
+    if (widget.scrollController == null) {
+      _ownedScrollController = ScrollController();
+    }
     _comic = widget.item;
     _syncInfo();
     _resolveCoverIfNeeded();
@@ -2396,7 +2446,7 @@ class _DownloadedComicInfoViewState extends State<DownloadedComicInfoView> {
 
   @override
   void dispose() {
-    _scrollController.dispose();
+    _ownedScrollController?.dispose();
     super.dispose();
   }
 
@@ -2467,232 +2517,254 @@ class _DownloadedComicInfoViewState extends State<DownloadedComicInfoView> {
     );
   }
 
+  void _handleSheetWheel(PointerSignalEvent event) {
+    final sheet = widget.sheetController;
+    if (sheet == null || !sheet.isAttached) return;
+    if (event is! PointerScrollEvent) return;
+    final dy = event.scrollDelta.dy;
+    if (dy <= 0) return;
+    final maxSize = widget.sheetMaxSize ?? 1.0;
+    if (sheet.size >= maxSize - 0.0001) return;
+    final screenHeight = MediaQuery.of(context).size.height;
+    if (screenHeight <= 0) return;
+    final next = (sheet.size + dy / screenHeight).clamp(
+      widget.sheetMinSize,
+      maxSize,
+    );
+    sheet.jumpTo(next);
+  }
+
+  Widget _buildHeader(ThemeData theme) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 0),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _buildCover(theme),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  name,
+                  style: theme.textTheme.titleLarge,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                if (author.isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  Text(author, style: theme.textTheme.bodyMedium),
+                ],
+                if (source.isNotEmpty) ...[
+                  const SizedBox(height: 6),
+                  Row(
+                    children: [
+                      Flexible(
+                        child: Text(
+                          source,
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: theme.colorScheme.outline,
+                          ),
+                        ),
+                      ),
+                      if (_canForgetArchivePassword()) ...[
+                        const SizedBox(width: 6),
+                        IconButton(
+                          onPressed: _forgetArchivePassword,
+                          icon: const Icon(Icons.lock_reset),
+                          iconSize: 18,
+                          visualDensity: VisualDensity.compact,
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(
+                            minWidth: 28,
+                            minHeight: 28,
+                          ),
+                          tooltip: '忘记密码'.tl,
+                          color: theme.colorScheme.primary,
+                        ),
+                      ],
+                    ],
+                  ),
+                ],
+                const SizedBox(height: 8),
+                Text(
+                  '${eps.length} ${eps.length == 1 ? '章' : '章节'}',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.outline,
+                  ),
+                ),
+                if (tags.isNotEmpty) ...[
+                  const SizedBox(height: 12),
+                  Wrap(
+                    spacing: 6,
+                    runSpacing: 6,
+                    children: [
+                      for (final tag in tags)
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 8,
+                            vertical: 4,
+                          ),
+                          decoration: BoxDecoration(
+                            color: theme.colorScheme.secondaryContainer,
+                            borderRadius: BorderRadius.circular(999),
+                          ),
+                          child: Text(
+                            _translateDownloadedTag(tag),
+                            style: const TextStyle(fontSize: 12),
+                          ),
+                        ),
+                    ],
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildChapterTitleRow(ThemeData theme) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+      child: Row(
+        children: [
+          Text('章节'.tl, style: theme.textTheme.titleMedium),
+          const Spacer(),
+          if (_isArchive) ...[
+            Text('序号', style: theme.textTheme.bodySmall),
+            Transform.scale(
+              scale: 0.8,
+              child: Switch(
+                value: readArchiveUseChapterNumber(),
+                onChanged: (v) async {
+                  await writeArchiveUseChapterNumber(v);
+                  setState(() {});
+                },
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildChapterGrid(ThemeData theme) {
+    return GridView.builder(
+      controller: _scrollController,
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+      gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+        maxCrossAxisExtent: 300,
+        childAspectRatio: 4,
+      ),
+      itemCount: eps.length,
+      itemBuilder: (BuildContext context, int i) {
+        final isDownloaded = _isArchive || downloadedEps.contains(i);
+        final displayNames = _displayNames;
+        return Padding(
+          padding: const EdgeInsets.all(4),
+          child: InkWell(
+            borderRadius: const BorderRadius.all(Radius.circular(16)),
+            onTap: () => readSpecifiedEps(i),
+            onLongPress: () => deleteEpisode(i),
+            onSecondaryTapDown: (_) => deleteEpisode(i),
+            child: Material(
+              color: isDownloaded
+                  ? theme.colorScheme.primaryContainer
+                  : theme.colorScheme.surfaceContainerHighest,
+              surfaceTintColor: theme.colorScheme.surfaceTint,
+              borderRadius: const BorderRadius.all(Radius.circular(16)),
+              child: Row(
+                children: [
+                  const SizedBox(width: 16),
+                  Expanded(
+                    child: Text(
+                      i < displayNames.length ? displayNames[i] : eps[i],
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  const SizedBox(width: 4),
+                  if (!_isArchive && isDownloaded)
+                    const Icon(Icons.download_done_outlined),
+                  const SizedBox(width: 16),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final mediaQuery = MediaQuery.of(context);
-    final sheetMaxHeight =
-        mediaQuery.size.height - mediaQuery.padding.vertical - 24;
+    final topSpacer = widget.scrollController != null
+        ? 12.0
+        : mediaQuery.padding.top + 12.0;
+    Widget grid = _buildChapterGrid(theme);
+    if (widget.sheetController != null) {
+      grid = Listener(
+        onPointerSignal: _handleSheetWheel,
+        child: grid,
+      );
+    }
     return SafeArea(
       top: false,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 0, 16, 0),
-        child: ConstrainedBox(
-          constraints: BoxConstraints(maxHeight: sheetMaxHeight),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const SizedBox(height: 4),
-              Material(
-                color: theme.colorScheme.surfaceContainerLow,
-                surfaceTintColor: theme.colorScheme.surfaceTint,
-                borderRadius: const BorderRadius.all(Radius.circular(20)),
-                child: Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      _buildCover(theme),
-                      const SizedBox(width: 14),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              name,
-                              style: theme.textTheme.titleLarge,
-                              maxLines: 2,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                            if (author.isNotEmpty) ...[
-                              const SizedBox(height: 8),
-                              Text(author, style: theme.textTheme.bodyMedium),
-                            ],
-                            if (source.isNotEmpty) ...[
-                              const SizedBox(height: 6),
-                              Row(
-                                children: [
-                                  Flexible(
-                                    child: Text(
-                                      source,
-                                      style:
-                                          theme.textTheme.bodySmall?.copyWith(
-                                        color: theme.colorScheme.outline,
-                                      ),
-                                    ),
-                                  ),
-                                  if (_canForgetArchivePassword()) ...[
-                                    const SizedBox(width: 6),
-                                    IconButton(
-                                      onPressed: _forgetArchivePassword,
-                                      icon: const Icon(Icons.lock_reset),
-                                      iconSize: 18,
-                                      visualDensity: VisualDensity.compact,
-                                      padding: EdgeInsets.zero,
-                                      constraints: const BoxConstraints(
-                                        minWidth: 28,
-                                        minHeight: 28,
-                                      ),
-                                      tooltip: '忘记密码'.tl,
-                                      color: theme.colorScheme.primary,
-                                    ),
-                                  ],
-                                ],
-                              ),
-                            ],
-                            const SizedBox(height: 8),
-                            Text(
-                              '${eps.length} ${eps.length == 1 ? '章' : '章节'}',
-                              style: theme.textTheme.bodySmall?.copyWith(
-                                color: theme.colorScheme.outline,
-                              ),
-                            ),
-                            if (tags.isNotEmpty) ...[
-                              const SizedBox(height: 12),
-                              Wrap(
-                                spacing: 6,
-                                runSpacing: 6,
-                                children: [
-                                  for (final tag in tags)
-                                    Container(
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: 8,
-                                        vertical: 4,
-                                      ),
-                                      decoration: BoxDecoration(
-                                        color: theme
-                                            .colorScheme.secondaryContainer,
-                                        borderRadius: BorderRadius.circular(999),
-                                      ),
-                                      child: Text(
-                                        _translateDownloadedTag(tag),
-                                        style: const TextStyle(fontSize: 12),
-                                      ),
-                                    ),
-                                ],
-                              ),
-                            ],
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-              if (_loadingRemoteDetail)
-                const Padding(
-                  padding: EdgeInsets.only(top: 10),
-                  child: LinearProgressIndicator(minHeight: 2),
-                ),
-              const SizedBox(height: 12),
-              Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          SizedBox(height: topSpacer),
+          _buildHeader(theme),
+          if (_loadingRemoteDetail)
+            const Padding(
+              padding: EdgeInsets.fromLTRB(16, 10, 16, 0),
+              child: LinearProgressIndicator(minHeight: 2),
+            ),
+          _buildChapterTitleRow(theme),
+          Expanded(child: grid),
+          Padding(
+            padding: EdgeInsets.fromLTRB(
+              16,
+              0,
+              16,
+              math.max(mediaQuery.padding.bottom, 12),
+            ),
+            child: SizedBox(
+              height: 56,
+              child: Row(
                 children: [
-                  Text('章节'.tl, style: theme.textTheme.titleMedium),
-                  const Spacer(),
-                  if (_isArchive) ...[
-                    Text('序号', style: theme.textTheme.bodySmall),
-                    Transform.scale(
-                      scale: 0.8,
-                      child: Switch(
-                        value: readArchiveUseChapterNumber(),
-                        onChanged: (v) async {
-                          await writeArchiveUseChapterNumber(v);
-                          setState(() {});
-                        },
+                  Expanded(
+                    child: FilledButton.tonal(
+                      style: FilledButton.styleFrom(
+                        minimumSize: const Size.fromHeight(56),
                       ),
+                      onPressed: () {
+                        Navigator.of(context).pop();
+                        _toComicInfoPage(_comic);
+                      },
+                      child: Text("查看详情".tl),
                     ),
-                  ],
+                  ),
+                  const SizedBox(width: 16),
+                  Expanded(
+                    child: FilledButton(
+                      style: FilledButton.styleFrom(
+                        minimumSize: const Size.fromHeight(56),
+                      ),
+                      onPressed: read,
+                      child: Text("阅读".tl),
+                    ),
+                  ),
                 ],
               ),
-              const SizedBox(height: 8),
-              Expanded(
-                child: GridView.builder(
-                  controller: _scrollController,
-                  padding: const EdgeInsets.only(bottom: 12),
-                  gridDelegate:
-                      const SliverGridDelegateWithMaxCrossAxisExtent(
-                    maxCrossAxisExtent: 300,
-                    childAspectRatio: 4,
-                  ),
-                  itemCount: eps.length,
-                  itemBuilder: (BuildContext context, int i) {
-                    final isDownloaded = _isArchive || downloadedEps.contains(i);
-                    final displayNames = _displayNames;
-                    return Padding(
-                      padding: const EdgeInsets.all(4),
-                      child: InkWell(
-                        borderRadius:
-                            const BorderRadius.all(Radius.circular(16)),
-                        onTap: () => readSpecifiedEps(i),
-                        onLongPress: () => deleteEpisode(i),
-                        onSecondaryTapDown: (_) => deleteEpisode(i),
-                        child: Material(
-                          color: isDownloaded
-                              ? theme.colorScheme.primaryContainer
-                              : theme.colorScheme.surfaceContainerHighest,
-                          surfaceTintColor: theme.colorScheme.surfaceTint,
-                          borderRadius:
-                              const BorderRadius.all(Radius.circular(16)),
-                          child: Row(
-                            children: [
-                              const SizedBox(width: 16),
-                              Expanded(
-                                child: Text(
-                                  i < displayNames.length
-                                      ? displayNames[i]
-                                      : eps[i],
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                              ),
-                              const SizedBox(width: 4),
-                              if (!_isArchive && isDownloaded)
-                                const Icon(Icons.download_done_outlined),
-                              const SizedBox(width: 16),
-                            ],
-                          ),
-                        ),
-                      ),
-                    );
-                  },
-                ),
-              ),
-              const SizedBox(height: 12),
-              SizedBox(
-                height: 56,
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: FilledButton.tonal(
-                        style: FilledButton.styleFrom(
-                          minimumSize: const Size.fromHeight(56),
-                        ),
-                        onPressed: () {
-                          Navigator.of(context).pop();
-                          _toComicInfoPage(_comic);
-                        },
-                        child: Text("查看详情".tl),
-                      ),
-                    ),
-                    const SizedBox(width: 16),
-                    Expanded(
-                      child: FilledButton(
-                        style: FilledButton.styleFrom(
-                          minimumSize: const Size.fromHeight(56),
-                        ),
-                        onPressed: read,
-                        child: Text("阅读".tl),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              SizedBox(
-                height: math.max(mediaQuery.padding.bottom, 12) + 28,
-              ),
-            ],
+            ),
           ),
-        ),
+        ],
       ),
     );
   }

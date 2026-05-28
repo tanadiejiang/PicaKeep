@@ -56,74 +56,76 @@ class WindowFrame extends StatelessWidget {
     return StateBuilder<WindowFrameController>(builder: (controller) {
       if (controller.isHideWindowFrame) return child;
 
-      return Stack(
-        children: [
-          Positioned.fill(
-            child: MediaQuery(
-              data: MediaQuery.of(context).copyWith(
-                padding: const EdgeInsets.only(top: _kTitleBarHeight),
-              ),
-              child: child,
-            ),
-          ),
-          const _DesktopSideBarOverlay(),
-          Positioned(
-            top: 0,
-            left: 0,
-            right: 0,
-            child: Material(
-              color: Theme.of(context).colorScheme.surface,
-              surfaceTintColor: Theme.of(context).colorScheme.surfaceTint,
-              child: Theme(
-                data: Theme.of(context).copyWith(
-                  brightness:
-                      controller.useDarkTheme ? Brightness.dark : null,
+      return ColoredBox(
+        color: Theme.of(context).colorScheme.surface,
+        child: Stack(
+          children: [
+            Positioned.fill(
+              child: MediaQuery(
+                data: MediaQuery.of(context).copyWith(
+                  padding: const EdgeInsets.only(top: _kTitleBarHeight),
                 ),
-                child: Builder(
-                  builder: (context) {
-                    return SizedBox(
-                      height: _kTitleBarHeight,
-                      child: Row(
-                        children: [
-                          if (!App.isMacOS)
-                            buildMenuButton(controller, context)
-                                .toAlign(Alignment.centerLeft)
-                          else
-                            const DragToMoveArea(
-                              child: SizedBox(
-                                height: double.infinity,
-                                width: 16,
-                              ),
-                            ).paddingRight(52),
-                          Expanded(
-                            child: DragToMoveArea(
-                              child: Text(
-                                'PicaKeep',
-                                style: TextStyle(
-                                  fontSize: 13,
-                                  color: (controller.useDarkTheme ||
-                                          context.brightness ==
-                                              Brightness.dark)
-                                      ? Colors.white
-                                      : Colors.black,
+                child: child,
+              ),
+            ),
+            const _DesktopSideBarOverlay(),
+            Positioned(
+              top: 0,
+              left: 0,
+              right: 0,
+              child: Material(
+                color: Colors.transparent,
+                child: Theme(
+                  data: Theme.of(context).copyWith(
+                    brightness:
+                        controller.useDarkTheme ? Brightness.dark : null,
+                  ),
+                  child: Builder(
+                    builder: (context) {
+                      return SizedBox(
+                        height: _kTitleBarHeight,
+                        child: Row(
+                          children: [
+                            if (!App.isMacOS)
+                              buildMenuButton(controller, context)
+                                  .toAlign(Alignment.centerLeft)
+                            else
+                              const DragToMoveArea(
+                                child: SizedBox(
+                                  height: double.infinity,
+                                  width: 16,
                                 ),
-                              ).toAlign(Alignment.centerLeft).paddingLeft(4),
+                              ).paddingRight(52),
+                            Expanded(
+                              child: DragToMoveArea(
+                                child: Text(
+                                  'PicaKeep',
+                                  style: TextStyle(
+                                    fontSize: 13,
+                                    color: (controller.useDarkTheme ||
+                                            context.brightness ==
+                                                Brightness.dark)
+                                        ? Colors.white
+                                        : Colors.black,
+                                  ),
+                                ).toAlign(Alignment.centerLeft).paddingLeft(4),
+                              ),
                             ),
-                          ),
-                          if (!App.isMacOS)
-                            const WindowButtons()
-                          else
-                            buildMenuButton(controller, context)
-                                .toAlign(Alignment.centerRight),
-                        ],
-                      ),
-                    );
-                  },
+                            if (!App.isMacOS)
+                              const WindowButtons()
+                            else
+                              buildMenuButton(controller, context)
+                                  .toAlign(Alignment.centerRight),
+                          ],
+                        ),
+                      );
+                    },
+                  ),
                 ),
               ),
             ),
-          ),
-        ],
+          ],
+        ),
       );
     });
   }
