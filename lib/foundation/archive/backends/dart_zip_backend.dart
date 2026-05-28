@@ -321,8 +321,12 @@ class DartZipBackend implements ArchiveBackend {
       1000,
       keySize * 2 + 2,
     );
-    final encKey = Uint8List.sublistView(derivedKey, 0, keySize);
-    final macKey = Uint8List.sublistView(derivedKey, keySize, keySize * 2);
+    final encKey = Uint8List.fromList(
+      Uint8List.sublistView(derivedKey, 0, keySize),
+    );
+    final macKey = Uint8List.fromList(
+      Uint8List.sublistView(derivedKey, keySize, keySize * 2),
+    );
     final pwdCheck =
         Uint8List.sublistView(derivedKey, keySize * 2, keySize * 2 + 2);
 
@@ -406,7 +410,7 @@ class DartZipBackend implements ArchiveBackend {
   }
 
   static Uint8List _inflateRaw(Uint8List src) {
-    final filter = RawZLibFilter.inflateFilter();
+    final filter = RawZLibFilter.inflateFilter(windowBits: -15);
     filter.process(src, 0, src.length);
     final chunks = <int>[];
     while (true) {
@@ -465,7 +469,7 @@ class DartZipBackend implements ArchiveBackend {
         return Uint8List.fromList(compressedData);
       } else if (method == 8) {
         final src = Uint8List.fromList(compressedData);
-        final filter = RawZLibFilter.inflateFilter();
+        final filter = RawZLibFilter.inflateFilter(windowBits: -15);
         filter.process(src, 0, src.length);
         final chunks = <int>[];
         while (true) {
