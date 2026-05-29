@@ -92,6 +92,8 @@ class Select extends StatefulWidget {
   final double width;
   final bool enabled;
   final Widget? tailing;
+  final Widget Function(String value)? leadingBuilder;
+  final bool centerTextWhenPlain;
   final ValueChanged<String>? onChanged;
 
   const Select({
@@ -102,6 +104,8 @@ class Select extends StatefulWidget {
     required this.titles,
     this.enabled = true,
     this.tailing,
+    this.leadingBuilder,
+    this.centerTextWhenPlain = false,
     this.onChanged,
   });
 
@@ -132,6 +136,11 @@ class _SelectState extends State<Select> {
     String title = index >= 0 && index < widget.titles.length
         ? widget.titles[index]
         : _currentValue;
+    final currentLeading = widget.leadingBuilder?.call(_currentValue);
+    final shouldCenterText =
+        currentLeading == null &&
+        widget.tailing == null &&
+        widget.centerTextWhenPlain;
 
     return PopupMenuButton<String>(
       enabled: widget.enabled,
@@ -147,23 +156,46 @@ class _SelectState extends State<Select> {
         return List.generate(widget.values.length, (index) {
           return PopupMenuItem<String>(
             value: widget.values[index],
-            child: Center(child: Text(widget.titles[index])),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (widget.leadingBuilder != null) ...[
+                  widget.leadingBuilder!(widget.values[index]),
+                  const SizedBox(width: 12),
+                ],
+                Flexible(child: Text(widget.titles[index])),
+              ],
+            ),
           );
         });
       },
       child: Container(
         width: widget.width,
         height: 40,
-        alignment: Alignment.center,
+        alignment: Alignment.centerLeft,
+        padding: const EdgeInsets.symmetric(horizontal: 12),
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(6),
           border: Border.all(color: context.colorScheme.outline),
         ),
         child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Text(title),
-            if (widget.tailing != null) widget.tailing!,
+            if (currentLeading != null) ...[
+              currentLeading,
+              const SizedBox(width: 8),
+            ],
+            Expanded(
+              child: Text(
+                title,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                textAlign: shouldCenterText ? TextAlign.center : TextAlign.start,
+              ),
+            ),
+            if (widget.tailing != null) ...[
+              const SizedBox(width: 10),
+              widget.tailing!,
+            ],
           ],
         ),
       ),

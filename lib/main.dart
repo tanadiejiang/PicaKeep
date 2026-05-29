@@ -16,6 +16,7 @@ import 'pages/auth_page.dart';
 import 'pages/main_page.dart';
 import 'server/local_server_runtime_sync.dart';
 import 'tools/block_screenshot.dart';
+import 'tools/dynamic_theme_channel.dart';
 import 'tools/translations.dart';
 
 Future<void> main() async {
@@ -145,9 +146,12 @@ class _PicaKeepAppState extends State<PicaKeepApp> with WidgetsBindingObserver {
   bool _requireAuthOnResume = false;
   DateTime? _lastBackgroundedAt;
   bool _deferredStartupQueued = false;
-  bool _dynamicColorsQueued = false;
   ColorScheme? _lightDynamicScheme;
   ColorScheme? _darkDynamicScheme;
+  int _dynamicColorRequestVersion = 0;
+  int _dynamicColorAppliedVersion = 0;
+  DateTime? _lastDynamicColorRefreshAt;
+  Timer? _dynamicColorRefreshDebounce;
 
   @override
   void initState() {
@@ -158,6 +162,9 @@ class _PicaKeepAppState extends State<PicaKeepApp> with WidgetsBindingObserver {
     App.serviceConfigVersion.addListener(_handleServiceStateSyncRequest);
     App.serviceRuntimeVersion.addListener(_handleServiceStateSyncRequest);
     RemoteLibraryEventChannel.instance.start();
+    DynamicThemeChannel.instance.changes.listen((_) {
+      _handleDynamicThemeChanged();
+    });
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     if (!App.isMobile) {
       HardwareKeyboard.instance.addHandler(_handleGlobalKeyEvent);
@@ -168,12 +175,13 @@ class _PicaKeepAppState extends State<PicaKeepApp> with WidgetsBindingObserver {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       AppStartupTrace.log('PicaKeepApp.firstPostFrame');
     });
-    _scheduleDynamicColorsLoad();
+    _scheduleInitialDynamicColorsLoad();
     _scheduleDeferredStartupWork();
   }
 
   @override
   void dispose() {
+    _dynamicColorRefreshDebounce?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     if (!App.isMobile) {
       HardwareKeyboard.instance.removeHandler(_handleGlobalKeyEvent);
@@ -196,30 +204,55 @@ class _PicaKeepAppState extends State<PicaKeepApp> with WidgetsBindingObserver {
     });
   }
 
-  void _scheduleDynamicColorsLoad() {
-    if (_dynamicColorsQueued || !App.isAndroid || appdata.settings[27] != '0') {
+  bool get _usesDynamicTheme => App.isAndroid && appdata.settings[27] == '0';
+
+  void _scheduleInitialDynamicColorsLoad() {
+    if (!_usesDynamicTheme) {
       return;
     }
-    _dynamicColorsQueued = true;
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      unawaited(_loadDynamicColors());
+      unawaited(_refreshDynamicColors(force: true));
     });
   }
 
-  Future<void> _loadDynamicColors() async {
+  bool _shouldThrottleDynamicColorRefresh({required bool force}) {
+    if (force) {
+      return false;
+    }
+    final lastRefreshAt = _lastDynamicColorRefreshAt;
+    if (lastRefreshAt == null) {
+      return false;
+    }
+    return DateTime.now().difference(lastRefreshAt) <
+        const Duration(milliseconds: 600);
+  }
+
+  Future<void> _refreshDynamicColors({bool force = false}) async {
+    if (!_usesDynamicTheme || _shouldThrottleDynamicColorRefresh(force: force)) {
+      return;
+    }
+    final requestVersion = ++_dynamicColorRequestVersion;
+    _lastDynamicColorRefreshAt = DateTime.now();
     AppStartupTrace.log('dynamicColors.start');
     try {
       final corePalette = await DynamicColorPlugin.getCorePalette();
-      if (!mounted || corePalette == null) {
+      if (!mounted) {
+        return;
+      }
+      if (requestVersion < _dynamicColorAppliedVersion) {
+        return;
+      }
+      if (corePalette == null) {
         AppStartupTrace.log('dynamicColors.unavailable');
         return;
       }
       final lightScheme = corePalette.toColorScheme();
       final darkScheme = corePalette.toColorScheme(brightness: Brightness.dark);
-      if (!mounted) {
+      if (!mounted || requestVersion < _dynamicColorAppliedVersion) {
         return;
       }
       setState(() {
+        _dynamicColorAppliedVersion = requestVersion;
         _lightDynamicScheme = lightScheme;
         _darkDynamicScheme = darkScheme;
       });
@@ -227,6 +260,32 @@ class _PicaKeepAppState extends State<PicaKeepApp> with WidgetsBindingObserver {
     } catch (e) {
       AppStartupTrace.log('dynamicColors.failed: $e');
     }
+  }
+
+  /// Coalesce bursty refresh triggers (config changes, wallpaper recolor,
+  /// resume, brightness flips) into a single deferred refresh.
+  ///
+  /// Returning to the app after changing the wallpaper makes Android — MIUI
+  /// especially — emit a rapid burst of onConfigurationChanged callbacks. If
+  /// every one forced an immediate refresh we'd run getCorePalette() + two
+  /// HCT toColorScheme() quantizations + a full MaterialApp rebuild dozens of
+  /// times on the main isolate within a frame or two, which is exactly the
+  /// ANR shown when the wallpaper changes. Debouncing lets the burst settle
+  /// and then refreshes once.
+  void _scheduleDynamicColorRefresh() {
+    if (!_usesDynamicTheme) {
+      return;
+    }
+    _dynamicColorRefreshDebounce?.cancel();
+    _dynamicColorRefreshDebounce = Timer(
+      const Duration(milliseconds: 350),
+      () {
+        if (!mounted) {
+          return;
+        }
+        unawaited(_refreshDynamicColors(force: true));
+      },
+    );
   }
 
   @override
@@ -243,6 +302,7 @@ class _PicaKeepAppState extends State<PicaKeepApp> with WidgetsBindingObserver {
 
     if (state == AppLifecycleState.resumed) {
       RemoteLibraryEventChannel.instance.onForeground();
+      _scheduleDynamicColorRefresh();
       final backgroundDuration = _lastBackgroundedAt == null
           ? Duration.zero
           : DateTime.now().difference(_lastBackgroundedAt!);
@@ -259,6 +319,14 @@ class _PicaKeepAppState extends State<PicaKeepApp> with WidgetsBindingObserver {
         _requireAuthOnResume = false;
       }
       _lastBackgroundedAt = null;
+    }
+  }
+
+  @override
+  void didChangePlatformBrightness() {
+    super.didChangePlatformBrightness();
+    if (_usesDynamicTheme && _getThemeMode() == ThemeMode.system) {
+      _scheduleDynamicColorRefresh();
     }
   }
 
@@ -283,6 +351,10 @@ class _PicaKeepAppState extends State<PicaKeepApp> with WidgetsBindingObserver {
       return;
     }
     unawaited(syncAndroidForegroundServiceForCurrentMode());
+  }
+
+  void _handleDynamicThemeChanged() {
+    _scheduleDynamicColorRefresh();
   }
 
   ThemeMode _getThemeMode() {

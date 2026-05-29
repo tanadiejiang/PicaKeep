@@ -25,7 +25,9 @@ import 'package:picakeep/pages/auth_page.dart';
 import 'package:picakeep/pages/local_library_page.dart';
 import 'package:picakeep/pages/settings/settings_common_widgets.dart';
 import 'package:picakeep/server/local_server_runtime.dart';
+import 'package:picakeep/tools/app_icon_channel.dart';
 import 'package:picakeep/tools/block_screenshot.dart';
+import 'package:picakeep/tools/night_mode_channel.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -43,6 +45,35 @@ void refreshLocalDataCaches() {
 }
 
 const double _settingsWideLayoutBreakpoint = 900;
+
+Widget _buildSettingColorDot(Color color) {
+  return Container(
+    width: 16,
+    height: 16,
+    decoration: BoxDecoration(
+      color: color,
+      shape: BoxShape.circle,
+    ),
+  );
+}
+
+Color _themeColorForValue(String value) {
+  return switch (value) {
+    '1' => Colors.red,
+    '2' => Colors.pink,
+    '3' => Colors.purple,
+    '4' => Colors.indigo,
+    '5' => Colors.blue,
+    '6' => Colors.cyan,
+    '7' => Colors.teal,
+    '8' => Colors.green,
+    '9' => Colors.lime,
+    '10' => Colors.yellow,
+    '11' => Colors.amber,
+    '12' => Colors.orange,
+    _ => Colors.grey,
+  };
+}
 
 class SettingsPage extends StatefulWidget {
   static void open([int initialPage = -1]) {
@@ -456,17 +487,30 @@ class _SettingsPageState extends State<SettingsPage> {
               "amber",
               "orange"
             ],
+            controlWidth: 136,
+            leadingBuilder: (value) => _buildSettingColorDot(
+              value == '0'
+                  ? Theme.of(context).colorScheme.primary
+                  : _themeColorForValue(value),
+            ),
+            tailing: const Icon(Icons.arrow_drop_down),
             onChanged: (value) {
               App.updater?.call();
             },
           ),
+          if (App.isAndroid) _AppIconSetting(),
           SelectSetting(
             leading: const Icon(Icons.dark_mode),
             title: "深色模式".tl,
             settingsIndex: 32,
             values: const ["0", "1", "2"],
             titles: ["跟随系统".tl, "禁用".tl, "启用".tl],
+            controlWidth: 108,
+            centerTextWhenPlain: true,
             onChanged: (value) {
+              // Push the new preference to UiModeManager so the next cold-start
+              // splash (drawn by system_server) follows the in-app setting.
+              unawaited(NightModeChannel.instance.setMode(value));
               setState(() {});
               App.updater?.call();
             },
@@ -553,7 +597,7 @@ class _SettingsPageState extends State<SettingsPage> {
             ),
           ),
           const Center(
-            child: Text("V1.8.23", style: TextStyle(fontSize: 16)),
+            child: Text("V1.9.9", style: TextStyle(fontSize: 16)),
           ),
           const SizedBox(height: 4),
           const Center(
@@ -625,6 +669,9 @@ class SelectSetting extends StatefulWidget {
     required this.titles,
     this.controlWidth = 140,
     this.initialValue,
+    this.leadingBuilder,
+    this.tailing,
+    this.centerTextWhenPlain = false,
     this.onChanged,
   });
 
@@ -635,6 +682,9 @@ class SelectSetting extends StatefulWidget {
   final List<String> titles;
   final double controlWidth;
   final String? initialValue;
+  final Widget Function(String value)? leadingBuilder;
+  final Widget? tailing;
+  final bool centerTextWhenPlain;
   final void Function(String value)? onChanged;
 
   @override
@@ -654,6 +704,9 @@ class _SelectSettingState extends State<SelectSetting> {
             widget.initialValue ?? appdata.settings[widget.settingsIndex],
         values: widget.values,
         titles: widget.titles,
+        leadingBuilder: widget.leadingBuilder,
+        tailing: widget.tailing,
+        centerTextWhenPlain: widget.centerTextWhenPlain,
         onChanged: (value) {
           setState(() {
             appdata.settings[widget.settingsIndex] = value;
@@ -662,6 +715,104 @@ class _SelectSettingState extends State<SelectSetting> {
           widget.onChanged?.call(value);
         },
       ),
+    );
+  }
+}
+
+class _AppIconSetting extends StatefulWidget {
+  @override
+  State<_AppIconSetting> createState() => _AppIconSettingState();
+}
+
+class _AppIconSettingState extends State<_AppIconSetting> {
+  static const Map<String, Color> _iconColors = {
+    'blue': Colors.blue,
+    'coral': Color(0xFFFF7F7F),
+    'red': Colors.red,
+    'pink': Colors.pink,
+    'purple': Colors.purple,
+    'indigo': Colors.indigo,
+    'cyan': Colors.cyan,
+    'teal': Colors.teal,
+    'green': Colors.green,
+    'lime': Colors.lime,
+    'yellow': Colors.yellow,
+    'amber': Colors.amber,
+    'orange': Colors.orange,
+  };
+
+  List<AppIconInfo> _icons = const [];
+  String? _currentId;
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    final results = await Future.wait<dynamic>([
+      AppIconChannel.instance.list(),
+      AppIconChannel.instance.current(),
+    ]);
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _icons = results[0] as List<AppIconInfo>;
+      _currentId = results[1] as String?;
+      _loading = false;
+    });
+  }
+
+  Future<void> _selectIcon(String id) async {
+    await AppIconChannel.instance.set(id);
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _currentId = id;
+    });
+  }
+
+  AppIconInfo? get _currentIcon {
+    for (final icon in _icons) {
+      if (icon.id == _currentId) {
+        return icon;
+      }
+    }
+    return _icons.isNotEmpty ? _icons.first : null;
+  }
+
+  Widget _buildColorDot(String id) {
+    final color = _iconColors[id] ?? Theme.of(context).colorScheme.outline;
+    return _buildSettingColorDot(color);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final currentIcon = _currentIcon;
+    return buildResponsiveSettingTile(
+      leading: const Icon(Icons.apps),
+      title: Text("应用图标".tl),
+      trailingWidth: 136,
+      trailing: _loading
+          ? const SizedBox(
+              width: 24,
+              height: 24,
+              child: CircularProgressIndicator(strokeWidth: 2.4),
+            )
+          : Select(
+              width: 136,
+              enabled: _icons.isNotEmpty,
+              initialValue: currentIcon?.id ?? '',
+              values: [for (final icon in _icons) icon.id],
+              titles: [for (final icon in _icons) icon.label],
+              leadingBuilder: _buildColorDot,
+              tailing: const Icon(Icons.arrow_drop_down),
+              onChanged: _selectIcon,
+            ),
     );
   }
 }

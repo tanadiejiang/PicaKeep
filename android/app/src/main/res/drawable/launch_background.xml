@@ -1,15 +1,23 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Modify this file to customize your launch splash screen -->
+<!--
+  Launch background drawn behind the Flutter UI during the brief
+  hand-off between the system SplashScreen and the first Flutter frame.
+
+  We center a single composite vector (launch_icon_full.xml) over the
+  window-fill color. The composite encodes the rounded card AND the
+  pica glyph in one path — the rounded corners are baked into the
+  vector path data itself, so they cannot be lost to layer-list
+  canvas-sizing quirks.
+-->
 <layer-list xmlns:android="http://schemas.android.com/apk/res/android">
     <item>
         <shape android:shape="rectangle">
             <solid android:color="#FFFFFF" />
         </shape>
     </item>
-
-    <item>
-        <bitmap
-            android:gravity="center"
-            android:src="@drawable/launch_icon_blue" />
-    </item>
+    <item
+        android:width="180dp"
+        android:height="180dp"
+        android:gravity="center"
+        android:drawable="@drawable/launch_icon_full" />
 </layer-list>
