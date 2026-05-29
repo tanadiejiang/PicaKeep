@@ -223,6 +223,27 @@ class MainActivity : FlutterActivity() {
         }
         MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
+            APP_ICON_CHANNEL,
+        ).setMethodCallHandler { call, result ->
+            when (call.method) {
+                "list" -> result.success(launcherIcons.map { it.toMap() })
+                "current" -> result.success(currentLauncherIconId())
+                "set" -> {
+                    val id = call.argument<String>("id")
+                    if (id == null) {
+                        result.error("missing_id", "Icon id is required", null)
+                    } else if (launcherIcons.none { it.id == id }) {
+                        result.error("unknown_icon", "Unknown icon id: $id", null)
+                    } else {
+                        setLauncherIcon(id)
+                        result.success(null)
+                    }
+                }
+                else -> result.notImplemented()
+            }
+        }
+        MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
             STORAGE_ACCESS_CHANNEL,
         ).setMethodCallHandler { call, result ->
             when (call.method) {
@@ -1459,8 +1480,45 @@ class MainActivity : FlutterActivity() {
         }
     }
 
+    private fun currentLauncherIconId(): String {
+        val packageManager = packageManager
+        return launcherIcons.firstOrNull { icon ->
+            packageManager.getComponentEnabledSetting(icon.componentName(this)) ==
+                PackageManager.COMPONENT_ENABLED_STATE_ENABLED
+        }?.id ?: launcherIcons.first().id
+    }
+
+    private fun setLauncherIcon(id: String) {
+        val packageManager = packageManager
+        launcherIcons.forEach { icon ->
+            packageManager.setComponentEnabledSetting(
+                icon.componentName(this),
+                if (icon.id == id) {
+                    PackageManager.COMPONENT_ENABLED_STATE_ENABLED
+                } else {
+                    PackageManager.COMPONENT_ENABLED_STATE_DISABLED
+                },
+                PackageManager.DONT_KILL_APP,
+            )
+        }
+    }
+
     private fun shellEscape(value: String): String =
         "'" + value.replace("'", "'\"'\"'") + "'"
+
+    private data class LauncherIcon(
+        val id: String,
+        val label: String,
+        val className: String,
+    ) {
+        fun componentName(activity: MainActivity): ComponentName =
+            ComponentName(activity.packageName, "${activity.packageName}.$className")
+
+        fun toMap(): Map<String, String> = mapOf(
+            "id" to id,
+            "label" to label,
+        )
+    }
 
     companion object {
         private const val TAG = "PicaKeepStartup"
@@ -1468,6 +1526,8 @@ class MainActivity : FlutterActivity() {
             "lingxue.picakeep/foreground_service"
         private const val KEEP_SCREEN_ON_CHANNEL =
             "lingxue.picakeep/keepScreenOn"
+        private const val APP_ICON_CHANNEL =
+            "lingxue.picakeep/app_icon"
         private const val STORAGE_ACCESS_CHANNEL =
             "lingxue.picakeep/storage_access"
         private const val REQUEST_CODE_POST_NOTIFICATIONS = 1001
@@ -1479,5 +1539,20 @@ class MainActivity : FlutterActivity() {
         private const val SHIZUKU_USER_SERVICE_BIND_TIMEOUT_MS = 4_000L
         private const val ROOT_ACCESS_CACHE_MS = 30 * 60 * 1000L
         private const val SHIZUKU_ANDROID_DATA_PATH = "/storage/emulated/0/Android/data"
+        private val launcherIcons = listOf(
+            LauncherIcon("blue", "Blue", "LauncherBlue"),
+            LauncherIcon("coral", "Coral", "LauncherCoral"),
+            LauncherIcon("red", "Red", "LauncherRed"),
+            LauncherIcon("pink", "Pink", "LauncherPink"),
+            LauncherIcon("purple", "Purple", "LauncherPurple"),
+            LauncherIcon("indigo", "Indigo", "LauncherIndigo"),
+            LauncherIcon("cyan", "Cyan", "LauncherCyan"),
+            LauncherIcon("teal", "Teal", "LauncherTeal"),
+            LauncherIcon("green", "Green", "LauncherGreen"),
+            LauncherIcon("lime", "Lime", "LauncherLime"),
+            LauncherIcon("yellow", "Yellow", "LauncherYellow"),
+            LauncherIcon("amber", "Amber", "LauncherAmber"),
+            LauncherIcon("orange", "Orange", "LauncherOrange"),
+        )
     }
 }
