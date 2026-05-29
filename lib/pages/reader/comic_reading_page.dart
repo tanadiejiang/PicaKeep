@@ -76,9 +76,7 @@ void _hideReaderSystemUi({required bool useDarkBackground}) {
   SystemChrome.setSystemUIOverlayStyle(
     _readerOverlayStyle(useDarkBackground),
   );
-  SystemChrome.setEnabledSystemUIMode(
-    App.isMobile ? SystemUiMode.immersiveSticky : SystemUiMode.immersive,
-  );
+  SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersive);
 }
 
 void _syncReaderSystemUi({
