@@ -1,10 +1,13 @@
 package lingxue.picakeep
 
 import android.Manifest
+import android.app.UiModeManager
 import android.content.ComponentName
+import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
 import android.content.pm.PackageManager
+import android.content.res.Configuration
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -13,6 +16,9 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.os.PowerManager
+import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
+import org.json.JSONArray
+import java.io.File
 import android.os.SystemClock
 import android.provider.Settings
 import android.util.Log
@@ -49,6 +55,9 @@ class MainActivity : FlutterActivity() {
     private var shizukuUserService: IPicaKeepShizukuFileService? = null
     @Volatile
     private var shizukuUserServiceBinding = false
+    private var dynamicThemeChannel: MethodChannel? = null
+    private var lastDynamicThemeNotifyAt: Long = 0L
+    private var lastForwardedNightFlag: Int = Int.MIN_VALUE
 
     private val shizukuUserServiceArgs by lazy {
         Shizuku.UserServiceArgs(
@@ -109,14 +118,97 @@ class MainActivity : FlutterActivity() {
             }
         }
 
+    // NOTE: We intentionally do NOT override attachBaseContext to force a
+    // uiMode here. Earlier we used createConfigurationContext +
+    // applyOverrideConfiguration to lock the activity to a fixed uiMode based
+    // on settings[32], but that "stickied" the override across config changes
+    // (because of android:configChanges="...uiMode" the activity is not
+    // recreated, so attachBaseContext never re-runs). Switching back to
+    // "follow system" via UiModeManager would update the application uiMode
+    // but the stale override on this activity stayed pinned to dark.
+    //
+    // UiModeManager.setApplicationNightMode (API 31+, see
+    // applyApplicationNightMode below) is the supported way to express a
+    // per-app night-mode preference and is honored by both the system splash
+    // and the in-process resources. We rely on it exclusively now.
+
     override fun onCreate(savedInstanceState: Bundle?) {
         Log.i(TAG, "startup onCreate +${SystemClock.elapsedRealtime() - launchStartElapsedMs}ms")
-        super.onCreate(savedInstanceState)
+        val splashScreen = installSplashScreen()
+        splashScreen.setOnExitAnimationListener { provider -> provider.remove() }
         WindowCompat.setDecorFitsSystemWindows(window, false)
         window.statusBarColor = android.graphics.Color.TRANSPARENT
         window.navigationBarColor = android.graphics.Color.TRANSPARENT
-        WindowCompat.getInsetsController(window, window.decorView)?.systemBarsBehavior =
-            WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        super.onCreate(savedInstanceState)
+        // Sync per-app night mode to the system so the next cold-start splash
+        // (drawn by system_server before our process starts) follows our setting.
+        applyApplicationNightMode(readDarkModeSetting(this))
+        val isDark = (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) ==
+            Configuration.UI_MODE_NIGHT_YES
+        WindowCompat.getInsetsController(window, window.decorView).apply {
+            isAppearanceLightStatusBars = !isDark
+            isAppearanceLightNavigationBars = !isDark
+            systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        }
+    }
+
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        // Returning to the app after a wallpaper change makes MIUI emit a rapid
+        // burst of onConfigurationChanged callbacks. Forwarding every one to
+        // Dart triggered a getCorePalette() + double toColorScheme() + full
+        // MaterialApp rebuild storm on the UI isolate, producing the resume ANR.
+        // Throttle on the native side and only forward when something the
+        // dynamic theme actually depends on (uiMode night flag) changed.
+        val nightFlag = newConfig.uiMode and Configuration.UI_MODE_NIGHT_MASK
+        val now = SystemClock.elapsedRealtime()
+        val nightChanged = nightFlag != lastForwardedNightFlag
+        if (!nightChanged && now - lastDynamicThemeNotifyAt < DYNAMIC_THEME_NOTIFY_MIN_INTERVAL_MS) {
+            return
+        }
+        lastForwardedNightFlag = nightFlag
+        lastDynamicThemeNotifyAt = now
+        dynamicThemeChannel?.invokeMethod("changed", null)
+    }
+
+    /**
+     * Push the user's dark-mode preference (settings[32]) to the system via
+     * [UiModeManager.setApplicationNightMode] (API 31+). Once set, system_server
+     * will use the requested uiMode when resolving our launch theme on the
+     * next cold start, so the splash background follows the in-app setting.
+     *
+     * - "0" -> follow system (MODE_NIGHT_AUTO)
+     * - "1" -> force light (MODE_NIGHT_NO)
+     * - "2" -> force dark  (MODE_NIGHT_YES)
+     *
+     * No-op below API 31 (older devices fall back to system uiMode for splash).
+     */
+    private fun applyApplicationNightMode(darkMode: String) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
+            return
+        }
+        val uiModeManager = getSystemService(UiModeManager::class.java) ?: return
+        val mode = when (darkMode) {
+            "1" -> UiModeManager.MODE_NIGHT_NO
+            "2" -> UiModeManager.MODE_NIGHT_YES
+            else -> UiModeManager.MODE_NIGHT_AUTO
+        }
+        runCatching { uiModeManager.setApplicationNightMode(mode) }
+            .onFailure { Log.w(TAG, "setApplicationNightMode failed for $darkMode", it) }
+    }
+
+    private fun readDarkModeSetting(ctx: Context): String {
+        return try {
+            val settingsFile = File(ctx.filesDir, "settings")
+            if (settingsFile.exists()) {
+                val json = JSONArray(settingsFile.readText())
+                if (json.length() > 32) json.getString(32) else "0"
+            } else {
+                "0"
+            }
+        } catch (_: Exception) {
+            "0"
+        }
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
@@ -242,6 +334,23 @@ class MainActivity : FlutterActivity() {
                 else -> result.notImplemented()
             }
         }
+        MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            NIGHT_MODE_CHANNEL,
+        ).setMethodCallHandler { call, result ->
+            when (call.method) {
+                "setMode" -> {
+                    val mode = call.argument<String>("mode") ?: "0"
+                    applyApplicationNightMode(mode)
+                    result.success(null)
+                }
+                else -> result.notImplemented()
+            }
+        }
+        dynamicThemeChannel = MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            DYNAMIC_THEME_CHANNEL,
+        )
         MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
             STORAGE_ACCESS_CHANNEL,
@@ -1528,6 +1637,11 @@ class MainActivity : FlutterActivity() {
             "lingxue.picakeep/keepScreenOn"
         private const val APP_ICON_CHANNEL =
             "lingxue.picakeep/app_icon"
+        private const val NIGHT_MODE_CHANNEL =
+            "lingxue.picakeep/night_mode"
+        private const val DYNAMIC_THEME_CHANNEL =
+            "lingxue.picakeep/dynamic_theme"
+        private const val DYNAMIC_THEME_NOTIFY_MIN_INTERVAL_MS = 1_000L
         private const val STORAGE_ACCESS_CHANNEL =
             "lingxue.picakeep/storage_access"
         private const val REQUEST_CODE_POST_NOTIFICATIONS = 1001

@@ -1,4 +1,5 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="lingxue.picakeep">
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
@@ -19,10 +20,15 @@
             android:name=".MainActivity"
             android:exported="true"
             android:launchMode="singleTop"
-            android:theme="@style/LaunchTheme"
+            android:theme="@style/SplashTheme"
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
             android:hardwareAccelerated="true"
             android:windowSoftInputMode="adjustResize">
+            <!-- The launcher entry intentionally lives only on the
+                 <activity-alias> declarations below so that the icon-switching
+                 feature can enable exactly one alias at a time. If MainActivity
+                 itself also carried a MAIN/LAUNCHER intent-filter, the home
+                 screen would show two icons (this activity + the active alias). -->
             <!-- Specifies an Android theme to apply to this Activity as soon as
                  the Android process has started. This theme is visible to the user
                  while the Flutter UI initializes. After that, this theme continues
@@ -40,7 +46,7 @@
             android:icon="@mipmap/ic_launcher_blue"
             android:roundIcon="@mipmap/ic_launcher_blue_round"
             android:label="picakeep"
-            android:theme="@style/LaunchTheme"
+            android:theme="@style/SplashTheme"
             android:targetActivity=".MainActivity">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN"/>
@@ -59,7 +65,7 @@
             android:icon="@mipmap/ic_launcher_coral"
             android:roundIcon="@mipmap/ic_launcher_coral_round"
             android:label="picakeep"
-            android:theme="@style/LaunchTheme"
+            android:theme="@style/SplashTheme"
             android:targetActivity=".MainActivity">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN"/>
@@ -78,7 +84,7 @@
             android:icon="@mipmap/ic_launcher_red"
             android:roundIcon="@mipmap/ic_launcher_red_round"
             android:label="picakeep"
-            android:theme="@style/LaunchTheme"
+            android:theme="@style/SplashTheme"
             android:targetActivity=".MainActivity">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN"/>
@@ -97,7 +103,7 @@
             android:icon="@mipmap/ic_launcher_pink"
             android:roundIcon="@mipmap/ic_launcher_pink_round"
             android:label="picakeep"
-            android:theme="@style/LaunchTheme"
+            android:theme="@style/SplashTheme"
             android:targetActivity=".MainActivity">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN"/>
@@ -116,7 +122,7 @@
             android:icon="@mipmap/ic_launcher_purple"
             android:roundIcon="@mipmap/ic_launcher_purple_round"
             android:label="picakeep"
-            android:theme="@style/LaunchTheme"
+            android:theme="@style/SplashTheme"
             android:targetActivity=".MainActivity">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN"/>
@@ -135,7 +141,7 @@
             android:icon="@mipmap/ic_launcher_indigo"
             android:roundIcon="@mipmap/ic_launcher_indigo_round"
             android:label="picakeep"
-            android:theme="@style/LaunchTheme"
+            android:theme="@style/SplashTheme"
             android:targetActivity=".MainActivity">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN"/>
@@ -154,7 +160,7 @@
             android:icon="@mipmap/ic_launcher_cyan"
             android:roundIcon="@mipmap/ic_launcher_cyan_round"
             android:label="picakeep"
-            android:theme="@style/LaunchTheme"
+            android:theme="@style/SplashTheme"
             android:targetActivity=".MainActivity">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN"/>
@@ -173,7 +179,7 @@
             android:icon="@mipmap/ic_launcher_teal"
             android:roundIcon="@mipmap/ic_launcher_teal_round"
             android:label="picakeep"
-            android:theme="@style/LaunchTheme"
+            android:theme="@style/SplashTheme"
             android:targetActivity=".MainActivity">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN"/>
@@ -192,7 +198,7 @@
             android:icon="@mipmap/ic_launcher_green"
             android:roundIcon="@mipmap/ic_launcher_green_round"
             android:label="picakeep"
-            android:theme="@style/LaunchTheme"
+            android:theme="@style/SplashTheme"
             android:targetActivity=".MainActivity">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN"/>
@@ -211,7 +217,7 @@
             android:icon="@mipmap/ic_launcher_lime"
             android:roundIcon="@mipmap/ic_launcher_lime_round"
             android:label="picakeep"
-            android:theme="@style/LaunchTheme"
+            android:theme="@style/SplashTheme"
             android:targetActivity=".MainActivity">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN"/>
@@ -230,7 +236,7 @@
             android:icon="@mipmap/ic_launcher_yellow"
             android:roundIcon="@mipmap/ic_launcher_yellow_round"
             android:label="picakeep"
-            android:theme="@style/LaunchTheme"
+            android:theme="@style/SplashTheme"
             android:targetActivity=".MainActivity">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN"/>
@@ -249,7 +255,7 @@
             android:icon="@mipmap/ic_launcher_amber"
             android:roundIcon="@mipmap/ic_launcher_amber_round"
             android:label="picakeep"
-            android:theme="@style/LaunchTheme"
+            android:theme="@style/SplashTheme"
             android:targetActivity=".MainActivity">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN"/>
@@ -268,7 +274,7 @@
             android:icon="@mipmap/ic_launcher_orange"
             android:roundIcon="@mipmap/ic_launcher_orange_round"
             android:label="picakeep"
-            android:theme="@style/LaunchTheme"
+            android:theme="@style/SplashTheme"
             android:targetActivity=".MainActivity">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN"/>
