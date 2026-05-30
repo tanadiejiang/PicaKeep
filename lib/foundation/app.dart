@@ -51,6 +51,8 @@ class App {
 
   static final ValueNotifier<int> serviceRuntimeVersion = ValueNotifier(0);
 
+  static final ValueNotifier<int> serviceStatsVersion = ValueNotifier(0);
+
   static final ValueNotifier<int> toolDisplayConfigVersion = ValueNotifier(0);
 
   static final ValueNotifier<bool> isReadingActive = ValueNotifier(false);
@@ -71,6 +73,10 @@ class App {
 
   static void notifyServiceRuntimeChanged() {
     serviceRuntimeVersion.value++;
+  }
+
+  static void notifyServiceStatsChanged() {
+    serviceStatsVersion.value++;
   }
 
   static void notifyToolDisplayConfigChanged() {

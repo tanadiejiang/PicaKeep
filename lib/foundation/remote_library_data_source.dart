@@ -596,15 +596,7 @@ class RemoteLibraryComicItem extends DownloadedItem {
   String get id => remoteId;
 
   @override
-  String get subTitle {
-    final label = subtitle.trim();
-    if (label.isNotEmpty) {
-      return label;
-    }
-    return hasMultipleEpisodes
-        ? '${episodesData.length} 个章节'
-        : '$imageCount 张图片';
-  }
+  String get subTitle => subtitle.trim();
 
   @override
   List<String> get tags => metadataTags;

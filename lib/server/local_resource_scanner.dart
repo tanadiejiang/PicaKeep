@@ -1,8 +1,10 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:path_provider/path_provider.dart';
 import 'package:sqlite3/sqlite3.dart';
 import 'package:picakeep/foundation/download_model.dart';
+import 'package:picakeep/foundation/privileged_storage_access.dart';
 
 const _serverTrashDirectoryName = '.picakeep_trash';
 
@@ -101,6 +103,20 @@ class _ServerResourceMetadata {
   final DateTime? updatedAt;
 }
 
+class _ManagedRootRecord {
+  const _ManagedRootRecord({
+    required this.rawId,
+    required this.directoryPath,
+    required this.metadata,
+    required this.comicSizeMb,
+  });
+
+  final String rawId;
+  final String directoryPath;
+  final _ServerResourceMetadata metadata;
+  final double? comicSizeMb;
+}
+
 class ServerResourceItemSummary {
   const ServerResourceItemSummary({
     required this.id,
@@ -194,11 +210,15 @@ class ServerResourceSnapshot {
 }
 
 class LocalResourceScanner {
+  final Map<String, Map<String, _ServerResourceMetadata>> _metadataCacheByRoot =
+      <String, Map<String, _ServerResourceMetadata>>{};
+
   Future<ServerResourceSnapshot> scan({
     required String currentDownloadRoot,
     required String originalDownloadRoot,
     required List<String> customLibraryRoots,
   }) async {
+    _metadataCacheByRoot.clear();
     final roots = <ServerResourceRootSummary>[];
     final items = <ServerResourceItemSummary>[];
 
@@ -222,8 +242,7 @@ class LocalResourceScanner {
     ].where((e) => e.path.isNotEmpty).toList();
 
     for (final root in allRoots) {
-      final directory = Directory(root.path);
-      if (!await directory.exists()) {
+      if (!await PrivilegedStorageAccess.directoryExists(root.path)) {
         roots.add(
           ServerResourceRootSummary(
             id: root.id,
@@ -237,7 +256,7 @@ class LocalResourceScanner {
         continue;
       }
 
-      final discoveredItems = await _scanRootItems(root.id, root.title, directory);
+      final discoveredItems = await _scanRootItems(root.id, root.title, root.path);
       final totalBytes = discoveredItems.fold<int>(
         0,
         (sum, item) => sum + item.totalBytes,
@@ -267,22 +286,59 @@ class LocalResourceScanner {
   Future<List<ServerResourceItemSummary>> _scanRootItems(
     String rootId,
     String rootTitle,
-    Directory root,
+    String rootPath,
   ) async {
     if (rootId.startsWith('custom_')) {
-      return _scanCustomRootItems(rootId, rootTitle, root);
+      return _scanCustomRootItems(rootId, rootTitle, rootPath);
     }
 
-    final metadataByDirectory = _loadManagedRootMetadata(rootTitle, root);
+    return _scanManagedRootItems(rootId, rootTitle, rootPath);
+  }
+
+  Future<List<ServerResourceItemSummary>> _scanManagedRootItems(
+    String rootId,
+    String rootTitle,
+    String rootPath,
+  ) async {
+    final records = await _loadManagedRootRecords(rootTitle, rootPath);
+    _cacheManagedRootMetadata(rootPath, records);
     final results = <ServerResourceItemSummary>[];
-    final children = await _listDirectories(root);
+    final seenPaths = <String>{};
+
+    if (records.isNotEmpty) {
+      final sourceDirectoryNames = await _listRootDirectoryNames(rootPath);
+      for (final record in records) {
+        if (!_managedDirectoryExistsInIndex(
+          rootPath,
+          record.directoryPath,
+          sourceDirectoryNames,
+        )) {
+          continue;
+        }
+        final dedupeKey = _normalizePath(record.directoryPath);
+        if (!seenPaths.add(dedupeKey)) {
+          continue;
+        }
+        final item = await _buildManagedShallowItem(
+          rootId: rootId,
+          rootTitle: rootTitle,
+          directoryPath: record.directoryPath,
+          metadata: record.metadata,
+          comicSizeMb: record.comicSizeMb,
+        );
+        if (item != null) {
+          results.add(item);
+        }
+      }
+      return results;
+    }
+
+    final children = await _listDirectories(rootPath);
     for (final child in children) {
-      final item = await _scanComicItem(
-        rootId,
-        rootTitle,
-        root.path,
-        child,
-        metadataByDirectory,
+      final item = await _buildManagedFallbackShallowItem(
+        rootId: rootId,
+        rootTitle: rootTitle,
+        directoryPath: child,
       );
       if (item != null) {
         results.add(item);
@@ -292,12 +348,10 @@ class LocalResourceScanner {
       return results;
     }
 
-    final rootItem = await _scanComicItem(
-      rootId,
-      rootTitle,
-      root.path,
-      root,
-      metadataByDirectory,
+    final rootItem = await _buildManagedFallbackShallowItem(
+      rootId: rootId,
+      rootTitle: rootTitle,
+      directoryPath: rootPath,
     );
     if (rootItem != null) {
       results.add(rootItem);
@@ -305,35 +359,91 @@ class LocalResourceScanner {
     return results;
   }
 
+  Future<ServerResourceItemSummary?> deepScanItem(
+    ServerResourceItemSummary shallow, {
+    required String rootPath,
+  }) async {
+    if (shallow.rootId.startsWith('custom_')) {
+      return shallow;
+    }
+
+    final metadataByDirectory = await _loadManagedRootMetadata(
+      shallow.sourceTitle,
+      rootPath,
+    );
+    return await _scanComicItem(
+          shallow.rootId,
+          shallow.sourceTitle,
+          rootPath,
+          shallow.path,
+          metadataByDirectory,
+          includeTotalBytes: false,
+          fallbackTotalBytes: shallow.totalBytes,
+        ) ??
+        shallow;
+  }
+
+  Future<String> resolveCoverPathOnly(
+    ServerResourceItemSummary shallow, {
+    required String? rootPath,
+  }) async {
+    final metadataCoverPath = shallow.coverPath?.trim() ?? '';
+    if (metadataCoverPath.isNotEmpty &&
+        await PrivilegedStorageAccess.fileExists(metadataCoverPath)) {
+      return metadataCoverPath;
+    }
+
+    final directCover = await _findCoverLikeImage(shallow.path);
+    if (directCover != null) {
+      return directCover;
+    }
+
+    final directImages = await _listDirectVisibleImages(shallow.path);
+    if (directImages.isNotEmpty) {
+      return directImages.first;
+    }
+
+    final children = await _listDirectories(shallow.path);
+    if (children.isEmpty) {
+      return '';
+    }
+    final firstChildImages = await _listDirectVisibleImages(children.first);
+    if (firstChildImages.isNotEmpty) {
+      return firstChildImages.first;
+    }
+    return '';
+  }
+
   Future<List<ServerResourceItemSummary>> _scanCustomRootItems(
     String rootId,
     String rootTitle,
-    Directory root,
+    String rootPath,
   ) async {
     final results = <ServerResourceItemSummary>[];
-    final directories = _collectLeafAlbumDirectories(root);
+    final directories = await _collectLeafAlbumDirectories(rootPath);
     for (final directory in directories) {
-      final images = _listDirectVisibleImages(directory);
+      final images = await _listDirectVisibleImages(directory);
       final episode = await _buildEpisodeSummary(
         index: 1,
         title: _directoryTitle(directory),
         directory: directory,
         images: images,
+        includeTotalBytes: true,
       );
       if (episode == null) {
         continue;
       }
       results.add(
         ServerResourceItemSummary(
-          id: _buildItemId(rootId, directory.path),
+          id: _buildItemId(rootId, directory),
           rootId: rootId,
           sourceTitle: rootTitle,
           sourceDisplayName: '图集',
           title: _directoryTitle(directory),
           displayId: _directoryTitle(directory),
-          subtitle: '${episode.imageCount} 张图片',
+          subtitle: '',
           tags: const <String>[],
-          path: directory.path,
+          path: directory,
           imageCount: episode.imageCount,
           totalBytes: episode.totalBytes,
           coverPath: episode.coverPath,
@@ -349,25 +459,28 @@ class LocalResourceScanner {
     String rootId,
     String rootTitle,
     String rootPath,
-    Directory directory,
-    Map<String, _ServerResourceMetadata> metadataByDirectory,
-  ) async {
-    final directImages = await _listImageFiles(directory, recursive: false);
+    String directoryPath,
+    Map<String, _ServerResourceMetadata> metadataByDirectory, {
+    required bool includeTotalBytes,
+    int fallbackTotalBytes = 0,
+  }) async {
+    final directImages = await _listImageFiles(directoryPath, recursive: false);
     final episodes = <ServerResourceEpisodeSummary>[];
 
     if (directImages.isNotEmpty) {
-      final images = await _listImageFiles(directory, recursive: true);
+      final images = await _listImageFiles(directoryPath, recursive: true);
       final episode = await _buildEpisodeSummary(
         index: 1,
-        title: _directoryTitle(directory),
-        directory: directory,
+        title: _directoryTitle(directoryPath),
+        directory: directoryPath,
         images: images,
+        includeTotalBytes: includeTotalBytes,
       );
       if (episode != null) {
         episodes.add(episode);
       }
     } else {
-      final children = await _listDirectories(directory);
+      final children = await _listDirectories(directoryPath);
       for (final child in children) {
         final images = await _listImageFiles(child, recursive: true);
         final episode = await _buildEpisodeSummary(
@@ -375,6 +488,7 @@ class LocalResourceScanner {
           title: _directoryTitle(child),
           directory: child,
           images: images,
+          includeTotalBytes: includeTotalBytes,
         );
         if (episode != null) {
           episodes.add(episode);
@@ -382,12 +496,13 @@ class LocalResourceScanner {
       }
 
       if (episodes.isEmpty) {
-        final images = await _listImageFiles(directory, recursive: true);
+        final images = await _listImageFiles(directoryPath, recursive: true);
         final episode = await _buildEpisodeSummary(
           index: 1,
-          title: _directoryTitle(directory),
-          directory: directory,
+          title: _directoryTitle(directoryPath),
+          directory: directoryPath,
           images: images,
+          includeTotalBytes: includeTotalBytes,
         );
         if (episode != null) {
           episodes.add(episode);
@@ -400,11 +515,14 @@ class LocalResourceScanner {
     }
 
     final imageCount = episodes.fold<int>(0, (sum, item) => sum + item.imageCount);
-    final totalBytes = episodes.fold<int>(0, (sum, item) => sum + item.totalBytes);
+    final computedTotalBytes =
+        episodes.fold<int>(0, (sum, item) => sum + item.totalBytes);
+    final totalBytes =
+        includeTotalBytes ? computedTotalBytes : fallbackTotalBytes;
     final metadata = _resolveManagedMetadata(
       metadataByDirectory,
       rootPath,
-      directory.path,
+      directoryPath,
     );
     final titledEpisodes = _applyEpisodeTitles(
       episodes,
@@ -412,7 +530,7 @@ class LocalResourceScanner {
     );
     final fallbackSubtitle = titledEpisodes.length > 1
         ? '${titledEpisodes.length} 个章节'
-        : '$imageCount 张图片';
+        : '';
     final subtitle = _firstNonEmptyValue([
       metadata?.subtitle,
       fallbackSubtitle,
@@ -423,15 +541,15 @@ class LocalResourceScanner {
     ]);
     final title = _firstNonEmptyValue([
       metadata?.title,
-      _directoryTitle(directory),
+      _directoryTitle(directoryPath),
     ]);
     final displayId = _firstNonEmptyValue([
       metadata?.displayId,
-      _buildItemId(rootId, directory.path),
+      _buildItemId(rootId, directoryPath),
     ]);
-    final updatedAt = metadata?.updatedAt ?? await _directoryUpdatedAt(directory);
+    final updatedAt = metadata?.updatedAt ?? await _directoryUpdatedAt(directoryPath);
     return ServerResourceItemSummary(
-      id: _buildItemId(rootId, directory.path),
+      id: _buildItemId(rootId, directoryPath),
       rootId: rootId,
       sourceTitle: rootTitle,
       sourceDisplayName: sourceDisplayName,
@@ -439,12 +557,12 @@ class LocalResourceScanner {
       displayId: displayId,
       subtitle: subtitle,
       tags: metadata?.tags ?? const <String>[],
-      path: directory.path,
+      path: directoryPath,
       imageCount: imageCount,
       totalBytes: totalBytes,
-      coverPath: _resolveItemCoverPath(
+      coverPath: await _resolveItemCoverPath(
         metadata?.coverPath,
-        directory,
+        directoryPath,
         titledEpisodes,
       ),
       episodes: titledEpisodes,
@@ -452,19 +570,63 @@ class LocalResourceScanner {
     );
   }
 
-  Map<String, _ServerResourceMetadata> _loadManagedRootMetadata(
+  Future<Map<String, _ServerResourceMetadata>> _loadManagedRootMetadata(
     String rootTitle,
-    Directory root,
+    String rootPath,
+  ) async {
+    final cached = _metadataCacheByRoot[rootPath];
+    if (cached != null) {
+      return cached;
+    }
+    final records = await _loadManagedRootRecords(rootTitle, rootPath);
+    return _cacheManagedRootMetadata(rootPath, records);
+  }
+
+  Map<String, _ServerResourceMetadata> _cacheManagedRootMetadata(
+    String rootPath,
+    List<_ManagedRootRecord> records,
   ) {
-    final dbFile = File('${root.path}${Platform.pathSeparator}download.db');
-    if (!dbFile.existsSync()) {
-      return const <String, _ServerResourceMetadata>{};
+    final results = <String, _ServerResourceMetadata>{};
+    for (final record in records) {
+      final lookupKeys = _metadataLookupKeysForStoredRecord(
+        rootPath,
+        record.rawId,
+        record.directoryPath,
+      );
+      if (lookupKeys.isEmpty) {
+        continue;
+      }
+      for (final key in lookupKeys) {
+        if (key.contains('/') || key.startsWith('id::')) {
+          results[key] = record.metadata;
+        } else {
+          results.putIfAbsent(key, () => record.metadata);
+        }
+      }
+    }
+    _metadataCacheByRoot[rootPath] = results;
+    return results;
+  }
+
+  Future<List<_ManagedRootRecord>> _loadManagedRootRecords(
+    String rootTitle,
+    String rootPath,
+  ) async {
+    final dbPath = '$rootPath${Platform.pathSeparator}download.db';
+    final dbBytes = await PrivilegedStorageAccess.readFileBytes(dbPath);
+    if (dbBytes == null || dbBytes.isEmpty) {
+      return const <_ManagedRootRecord>[];
+    }
+
+    final snapshotFile = await _writeDatabaseSnapshot(rootPath, dbBytes);
+    if (snapshotFile == null) {
+      return const <_ManagedRootRecord>[];
     }
 
     Database? db;
-    final results = <String, _ServerResourceMetadata>{};
+    final results = <_ManagedRootRecord>[];
     try {
-      db = sqlite3.open(dbFile.path);
+      db = sqlite3.open(snapshotFile.path);
       final rows = db.select(
         'select id, title, subtitle, time, directory, json from download',
       );
@@ -483,7 +645,7 @@ class LocalResourceScanner {
           time: itemTime,
           directory: rawDirectory,
         );
-        final metadata = _extractDownloadMetadata(
+        final metadata = await _extractDownloadMetadata(
           id: rawId,
           title: row['title']?.toString() ?? '',
           subtitle: row['subtitle']?.toString() ?? '',
@@ -492,31 +654,57 @@ class LocalResourceScanner {
           parsedItem: parsedItem,
           fallbackSourceDisplayName: rootTitle,
         );
-        final lookupKeys = _metadataLookupKeysForStoredRecord(
-          root.path,
-          rawId,
-          rawDirectory,
+        final directoryPath = _resolveManagedDirectoryPathFromMetadata(
+          rootPath: rootPath,
+          rawId: rawId,
+          rawDirectory: rawDirectory,
+          parsedItem: parsedItem,
         );
-        if (lookupKeys.isEmpty) {
+        if (directoryPath.isEmpty) {
           continue;
         }
-        for (final key in lookupKeys) {
-          if (key.contains('/') || key.startsWith('id::')) {
-            results[key] = metadata;
-          } else {
-            results.putIfAbsent(key, () => metadata);
-          }
-        }
+        final comicSizeMb = _normalizeComicSizeMb(parsedItem?.comicSize) ??
+            _extractComicSizeMb(data);
+        results.add(
+          _ManagedRootRecord(
+            rawId: rawId,
+            directoryPath: directoryPath,
+            metadata: metadata,
+            comicSizeMb: comicSizeMb,
+          ),
+        );
       }
     } catch (_) {
-      return const <String, _ServerResourceMetadata>{};
+      return const <_ManagedRootRecord>[];
     } finally {
       db?.dispose();
+      try {
+        snapshotFile.deleteSync();
+      } catch (_) {}
     }
     return results;
   }
 
-  _ServerResourceMetadata _extractDownloadMetadata({
+  Future<File?> _writeDatabaseSnapshot(String rootPath, List<int> dbBytes) async {
+    try {
+      final supportDir = await getApplicationSupportDirectory();
+      final dbDir = Directory('${supportDir.path}${Platform.pathSeparator}server_db_snapshots');
+      await dbDir.create(recursive: true);
+      final safeName = _safeCacheName(rootPath);
+      final snapshotFile = File('${dbDir.path}${Platform.pathSeparator}$safeName.db');
+      await snapshotFile.writeAsBytes(dbBytes, flush: true);
+      return snapshotFile;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  String _safeCacheName(String value) {
+    final sanitized = value.replaceAll(RegExp(r'[^a-zA-Z0-9._-]'), '_');
+    return sanitized.isEmpty ? 'default' : sanitized;
+  }
+
+  Future<_ServerResourceMetadata> _extractDownloadMetadata({
     required String id,
     required String title,
     required String subtitle,
@@ -524,7 +712,7 @@ class LocalResourceScanner {
     required Map<String, dynamic>? data,
     required DownloadedItem? parsedItem,
     required String fallbackSourceDisplayName,
-  }) {
+  }) async {
     final comicItem = data?['comicItem'];
     final comicItemMap = comicItem is Map
         ? comicItem.map((key, value) => MapEntry(key.toString(), value))
@@ -581,6 +769,223 @@ class LocalResourceScanner {
     );
   }
 
+  String _resolveManagedDirectoryPathFromMetadata({
+    required String rootPath,
+    required String rawId,
+    required String rawDirectory,
+    required DownloadedItem? parsedItem,
+  }) {
+    final candidates = <String>[
+      rawDirectory.trim(),
+      parsedItem?.directory?.trim() ?? '',
+      rawId.trim(),
+      parsedItem?.id.trim() ?? '',
+      _basename(rawDirectory),
+      _sanitizePathSegment(rawId),
+      _sanitizePathSegment(parsedItem?.name ?? ''),
+    ];
+    for (final candidate in candidates) {
+      final normalized = candidate.trim();
+      if (normalized.isEmpty) {
+        continue;
+      }
+      final resolved = _joinManagedPath(rootPath, normalized);
+      if (resolved.isNotEmpty) {
+        return resolved;
+      }
+    }
+    return '';
+  }
+
+  Future<ServerResourceItemSummary?> _buildManagedShallowItem({
+    required String rootId,
+    required String rootTitle,
+    required String directoryPath,
+    required _ServerResourceMetadata metadata,
+    required double? comicSizeMb,
+  }) async {
+    final episodes = _buildPlaceholderEpisodes(directoryPath, metadata.episodeTitles);
+    if (episodes.isEmpty) {
+      return null;
+    }
+    final title = _firstNonEmptyValue([
+      metadata.title,
+      _directoryTitle(directoryPath),
+    ]);
+    final fallbackSubtitle = episodes.length > 1 ? '${episodes.length} 个章节' : '';
+    final subtitle = _firstNonEmptyValue([
+      metadata.subtitle,
+      fallbackSubtitle,
+    ]);
+    final sourceDisplayName = _firstNonEmptyValue([
+      metadata.sourceDisplayName,
+      rootTitle,
+    ]);
+    final displayId = _firstNonEmptyValue([
+      metadata.displayId,
+      _directoryTitle(directoryPath),
+      _buildItemId(rootId, directoryPath),
+    ]);
+    final totalBytes = _comicSizeMbToBytes(comicSizeMb);
+    final coverPath = _resolveShallowItemCoverPath(
+      metadata.coverPath,
+      directoryPath,
+    );
+    return ServerResourceItemSummary(
+      id: _buildItemId(rootId, directoryPath),
+      rootId: rootId,
+      sourceTitle: rootTitle,
+      sourceDisplayName: sourceDisplayName,
+      title: title,
+      displayId: displayId,
+      subtitle: subtitle,
+      tags: metadata.tags,
+      path: directoryPath,
+      imageCount: 0,
+      totalBytes: totalBytes,
+      coverPath: coverPath,
+      episodes: episodes,
+      updatedAt: metadata.updatedAt ?? DateTime.fromMillisecondsSinceEpoch(0),
+    );
+  }
+
+  Future<bool> _hasManagedFallbackContent(String directoryPath) async {
+    final entries = await PrivilegedStorageAccess.listDirectoryEntries(directoryPath);
+    final childDirectories = <String>[];
+    for (final entry in entries) {
+      if (_isInServerTrash(entry.path)) {
+        continue;
+      }
+      if (entry.isDirectory) {
+        childDirectories.add(entry.path);
+        continue;
+      }
+      if (_isImageFile(entry.path)) {
+        return true;
+      }
+    }
+
+    for (final childDirectory in childDirectories) {
+      final childEntries = await PrivilegedStorageAccess.listDirectoryEntries(
+        childDirectory,
+      );
+      for (final childEntry in childEntries) {
+        if (childEntry.isDirectory || _isInServerTrash(childEntry.path)) {
+          continue;
+        }
+        if (_isImageFile(childEntry.path)) {
+          return true;
+        }
+      }
+    }
+
+    return false;
+  }
+
+  Future<ServerResourceItemSummary?> _buildManagedFallbackShallowItem({
+    required String rootId,
+    required String rootTitle,
+    required String directoryPath,
+  }) async {
+    if (!await _hasManagedFallbackContent(directoryPath)) {
+      return null;
+    }
+    final episodes = _buildPlaceholderEpisodes(directoryPath, const <String>[]);
+    if (episodes.isEmpty) {
+      return null;
+    }
+    final title = _directoryTitle(directoryPath);
+    return ServerResourceItemSummary(
+      id: _buildItemId(rootId, directoryPath),
+      rootId: rootId,
+      sourceTitle: rootTitle,
+      sourceDisplayName: rootTitle,
+      title: title,
+      displayId: title,
+      subtitle: episodes.length > 1 ? '${episodes.length} 个章节' : '',
+      tags: const <String>[],
+      path: directoryPath,
+      imageCount: 0,
+      totalBytes: 0,
+      coverPath: '',
+      episodes: episodes,
+      updatedAt: DateTime.fromMillisecondsSinceEpoch(0),
+    );
+  }
+
+  List<ServerResourceEpisodeSummary> _buildPlaceholderEpisodes(
+    String directoryPath,
+    List<String> episodeTitles,
+  ) {
+    final titles = episodeTitles
+        .map((entry) => entry.trim())
+        .where((entry) => entry.isNotEmpty)
+        .toList(growable: false);
+    if (titles.isEmpty) {
+      return [
+        ServerResourceEpisodeSummary(
+          index: 1,
+          title: _directoryTitle(directoryPath),
+          path: directoryPath,
+          imageCount: 0,
+          totalBytes: 0,
+          coverPath: '',
+          imagePaths: const <String>[],
+          imageSizes: const <ServerResourceImageSize?>[],
+        ),
+      ];
+    }
+    return [
+      for (var i = 0; i < titles.length; i++)
+        ServerResourceEpisodeSummary(
+          index: i + 1,
+          title: titles[i],
+          path: directoryPath,
+          imageCount: 0,
+          totalBytes: 0,
+          coverPath: '',
+          imagePaths: const <String>[],
+          imageSizes: const <ServerResourceImageSize?>[],
+        ),
+    ];
+  }
+
+  Future<Set<String>> _listRootDirectoryNames(String rootPath) async {
+    final names = <String>{};
+    final entries = await PrivilegedStorageAccess.listDirectoryEntries(rootPath);
+    for (final entry in entries) {
+      if (!entry.isDirectory || _basename(entry.path) == _serverTrashDirectoryName) {
+        continue;
+      }
+      names.add(entry.name.toLowerCase());
+    }
+    return names;
+  }
+
+  bool _managedDirectoryExistsInIndex(
+    String rootPath,
+    String itemDirectory,
+    Set<String> sourceDirectoryNames,
+  ) {
+    if (sourceDirectoryNames.isEmpty) {
+      return false;
+    }
+    final normalizedRoot =
+        rootPath.replaceAll('\\', '/').replaceFirst(RegExp(r'/+$'), '');
+    final normalizedItem = itemDirectory
+        .replaceAll('\\', '/')
+        .replaceFirst(RegExp(r'/+$'), '');
+    final candidateName = normalizedItem.startsWith('$normalizedRoot/')
+        ? normalizedItem.substring(normalizedRoot.length + 1).split('/').first
+        : _basename(normalizedItem);
+    return sourceDirectoryNames.contains(candidateName.toLowerCase());
+  }
+
+  String _sanitizePathSegment(String value) {
+    final sanitized = value.trim().replaceAll(RegExp(r'[<>:"/\\|?*]'), '_');
+    return sanitized.isEmpty ? '' : sanitized;
+  }
+
   String _normalizeManagedDirectoryPath(String rootPath, String directory) {
     final normalizedDirectory = directory.trim();
     if (normalizedDirectory.isEmpty) {
@@ -602,6 +1007,29 @@ class LocalResourceScanner {
         ? normalizedRoot.substring(0, normalizedRoot.length - 1)
         : normalizedRoot;
     return _normalizePath('$joinedRoot/$unifiedDirectory');
+  }
+
+  String _joinManagedPath(String rootPath, String directory) {
+    final normalizedDirectory = directory.trim();
+    if (normalizedDirectory.isEmpty) {
+      return '';
+    }
+
+    final unifiedDirectory = normalizedDirectory.replaceAll('\\', '/');
+    final isAbsolute = unifiedDirectory.startsWith('/') ||
+        RegExp(r'^[a-zA-Z]:/').hasMatch(unifiedDirectory);
+    if (isAbsolute) {
+      return unifiedDirectory;
+    }
+
+    final normalizedRoot = rootPath.trim().replaceAll('\\', '/');
+    if (normalizedRoot.isEmpty) {
+      return unifiedDirectory;
+    }
+    final joinedRoot = normalizedRoot.endsWith('/')
+        ? normalizedRoot.substring(0, normalizedRoot.length - 1)
+        : normalizedRoot;
+    return '$joinedRoot/$unifiedDirectory';
   }
 
   String _relativeManagedDirectoryPath(String rootPath, String directoryPath) {
@@ -863,6 +1291,42 @@ class LocalResourceScanner {
     return const <String>[];
   }
 
+  double? _extractComicSizeMb(Map<String, dynamic>? data) {
+    if (data == null) {
+      return null;
+    }
+    for (final map in _candidateMetadataMaps(data, _asStringDynamicMap(data['comicItem']))) {
+      final value = _normalizeComicSizeMb(
+        map['comicSize'] ?? map['size'] ?? map['totalSize'],
+      );
+      if (value != null) {
+        return value;
+      }
+    }
+    return null;
+  }
+
+  double? _normalizeComicSizeMb(Object? raw) {
+    if (raw is num) {
+      final value = raw.toDouble();
+      return value > 0 ? value : null;
+    }
+    if (raw is String) {
+      final value = double.tryParse(raw.trim());
+      if (value != null && value > 0) {
+        return value;
+      }
+    }
+    return null;
+  }
+
+  int _comicSizeMbToBytes(double? comicSizeMb) {
+    if (comicSizeMb == null || comicSizeMb <= 0) {
+      return 0;
+    }
+    return (comicSizeMb * 1024 * 1024).round();
+  }
+
   List<String> _normalizeEpisodeTitles(Object? raw) {
     if (raw is List) {
       return raw
@@ -969,8 +1433,9 @@ class LocalResourceScanner {
   Future<ServerResourceEpisodeSummary?> _buildEpisodeSummary({
     required int index,
     required String title,
-    required Directory directory,
-    required List<File> images,
+    required String directory,
+    required List<String> images,
+    required bool includeTotalBytes,
   }) async {
     if (images.isEmpty) {
       return null;
@@ -979,147 +1444,15 @@ class LocalResourceScanner {
     return ServerResourceEpisodeSummary(
       index: index,
       title: title,
-      path: directory.path,
+      path: directory,
       imageCount: images.length,
-      totalBytes: await _calculateTotalBytes(images),
-      coverPath: _resolveEpisodeCoverPath(directory, images),
-      imagePaths: images.map((e) => e.path).toList(growable: false),
-      imageSizes: images.map(_readImageSize).toList(growable: false),
+      totalBytes: includeTotalBytes ? await _calculateTotalBytes(images) : 0,
+      coverPath: await _resolveEpisodeCoverPath(directory, images),
+      imagePaths: images,
+      imageSizes:
+          List<ServerResourceImageSize?>.filled(images.length, null),
     );
   }
-
-  ServerResourceImageSize? _readImageSize(File file) {
-    try {
-      final bytes = file.openSync(mode: FileMode.read);
-      try {
-        final length = bytes.lengthSync();
-        final headerLength = length < 512 ? length : 512;
-        final header = bytes.readSync(headerLength);
-        return _readPngSize(header) ??
-            _readJpegSize(file) ??
-            _readWebpSize(header);
-      } finally {
-        bytes.closeSync();
-      }
-    } catch (_) {
-      return null;
-    }
-  }
-
-  ServerResourceImageSize? _readPngSize(List<int> bytes) {
-    if (bytes.length < 24 ||
-        bytes[0] != 0x89 ||
-        bytes[1] != 0x50 ||
-        bytes[2] != 0x4E ||
-        bytes[3] != 0x47) {
-      return null;
-    }
-    final width = _readUint32BigEndian(bytes, 16);
-    final height = _readUint32BigEndian(bytes, 20);
-    return width > 0 && height > 0
-        ? ServerResourceImageSize(width: width, height: height)
-        : null;
-  }
-
-  ServerResourceImageSize? _readJpegSize(File file) {
-    final raf = file.openSync(mode: FileMode.read);
-    try {
-      if (raf.lengthSync() < 4 || raf.readByteSync() != 0xFF || raf.readByteSync() != 0xD8) {
-        return null;
-      }
-      while (raf.positionSync() < raf.lengthSync()) {
-        var markerPrefix = raf.readByteSync();
-        while (markerPrefix != 0xFF && raf.positionSync() < raf.lengthSync()) {
-          markerPrefix = raf.readByteSync();
-        }
-        var marker = raf.readByteSync();
-        while (marker == 0xFF && raf.positionSync() < raf.lengthSync()) {
-          marker = raf.readByteSync();
-        }
-        if (marker == 0xD9 || marker == 0xDA) {
-          return null;
-        }
-        final lengthBytes = raf.readSync(2);
-        if (lengthBytes.length < 2) {
-          return null;
-        }
-        final segmentLength = _readUint16BigEndian(lengthBytes, 0);
-        if (segmentLength < 2) {
-          return null;
-        }
-        final isSizeMarker = (marker >= 0xC0 && marker <= 0xCF) &&
-            marker != 0xC4 &&
-            marker != 0xC8 &&
-            marker != 0xCC;
-        if (isSizeMarker) {
-          final segment = raf.readSync(segmentLength - 2);
-          if (segment.length < 5) {
-            return null;
-          }
-          final height = _readUint16BigEndian(segment, 1);
-          final width = _readUint16BigEndian(segment, 3);
-          return width > 0 && height > 0
-              ? ServerResourceImageSize(width: width, height: height)
-              : null;
-        }
-        raf.setPositionSync(raf.positionSync() + segmentLength - 2);
-      }
-    } catch (_) {
-      return null;
-    } finally {
-      raf.closeSync();
-    }
-    return null;
-  }
-
-  ServerResourceImageSize? _readWebpSize(List<int> bytes) {
-    if (bytes.length < 30 ||
-        _ascii(bytes, 0, 4) != 'RIFF' ||
-        _ascii(bytes, 8, 4) != 'WEBP') {
-      return null;
-    }
-    final chunk = _ascii(bytes, 12, 4);
-    if (chunk == 'VP8X' && bytes.length >= 30) {
-      final width = 1 + _readUint24LittleEndian(bytes, 24);
-      final height = 1 + _readUint24LittleEndian(bytes, 27);
-      return ServerResourceImageSize(width: width, height: height);
-    }
-    if (chunk == 'VP8 ' && bytes.length >= 30) {
-      final width = _readUint16LittleEndian(bytes, 26) & 0x3FFF;
-      final height = _readUint16LittleEndian(bytes, 28) & 0x3FFF;
-      return width > 0 && height > 0
-          ? ServerResourceImageSize(width: width, height: height)
-          : null;
-    }
-    if (chunk == 'VP8L' && bytes.length >= 25) {
-      final b0 = bytes[21];
-      final b1 = bytes[22];
-      final b2 = bytes[23];
-      final b3 = bytes[24];
-      final width = 1 + (((b1 & 0x3F) << 8) | b0);
-      final height = 1 + ((b3 << 6) | (b2 >> 2) | ((b1 & 0xC0) << 6));
-      return ServerResourceImageSize(width: width, height: height);
-    }
-    return null;
-  }
-
-  int _readUint16BigEndian(List<int> bytes, int offset) =>
-      (bytes[offset] << 8) | bytes[offset + 1];
-
-  int _readUint32BigEndian(List<int> bytes, int offset) =>
-      (bytes[offset] << 24) |
-      (bytes[offset + 1] << 16) |
-      (bytes[offset + 2] << 8) |
-      bytes[offset + 3];
-
-  int _readUint16LittleEndian(List<int> bytes, int offset) =>
-      bytes[offset] | (bytes[offset + 1] << 8);
-
-  int _readUint24LittleEndian(List<int> bytes, int offset) =>
-      bytes[offset] | (bytes[offset + 1] << 8) | (bytes[offset + 2] << 16);
-
-  String _ascii(List<int> bytes, int offset, int length) =>
-      String.fromCharCodes(bytes.skip(offset).take(length));
 
   String _extractCoverPath(
     Map<String, dynamic>? data,
@@ -1127,39 +1460,46 @@ class LocalResourceScanner {
     DownloadedItem? parsedItem,
   ) {
     final parsedCover = parsedItem?.localCoverPath?.trim() ?? '';
-    if (parsedCover.isNotEmpty && File(parsedCover).existsSync()) {
+    if (parsedCover.isNotEmpty) {
       return parsedCover;
     }
 
     for (final map in _candidateMetadataMaps(data, comicItemMap)) {
       for (final key in const ['coverPath', 'cover', 'localCoverPath']) {
         final raw = map[key]?.toString().trim() ?? '';
-        if (raw.isEmpty) {
-          continue;
-        }
-        final file = File(raw);
-        if (file.existsSync()) {
-          return file.path;
+        if (raw.isNotEmpty) {
+          return raw;
         }
       }
     }
     return '';
   }
 
-  String _resolveItemCoverPath(
+  String _resolveShallowItemCoverPath(
     String? metadataCoverPath,
-    Directory directory,
-    List<ServerResourceEpisodeSummary> episodes,
+    String directoryPath,
   ) {
     final normalizedMetadataPath = metadataCoverPath?.trim() ?? '';
+    if (normalizedMetadataPath.isNotEmpty) {
+      return normalizedMetadataPath;
+    }
+    return '';
+  }
+
+  Future<String> _resolveItemCoverPath(
+    String? metadataCoverPath,
+    String directoryPath,
+    List<ServerResourceEpisodeSummary> episodes,
+  ) async {
+    final normalizedMetadataPath = metadataCoverPath?.trim() ?? '';
     if (normalizedMetadataPath.isNotEmpty &&
-        File(normalizedMetadataPath).existsSync()) {
+        await PrivilegedStorageAccess.fileExists(normalizedMetadataPath)) {
       return normalizedMetadataPath;
     }
 
-    final coverFile = _findCoverLikeImage(directory);
+    final coverFile = await _findCoverLikeImage(directoryPath);
     if (coverFile != null) {
-      return coverFile.path;
+      return coverFile;
     }
 
     for (final episode in episodes) {
@@ -1171,138 +1511,143 @@ class LocalResourceScanner {
     return '';
   }
 
-  String _resolveEpisodeCoverPath(Directory directory, List<File> images) {
-    final coverFile = _findCoverLikeImage(directory);
+  Future<String> _resolveEpisodeCoverPath(
+    String directoryPath,
+    List<String> images,
+  ) async {
+    final coverFile = await _findCoverLikeImage(directoryPath);
     if (coverFile != null) {
-      return coverFile.path;
+      return coverFile;
     }
-    return images.first.path;
+    return images.first;
   }
 
-  File? _findCoverLikeImage(Directory directory) {
-    for (final entity in _safeList(directory)) {
-      if (entity is! File) {
+  Future<String?> _findCoverLikeImage(String directoryPath) async {
+    final entries = await PrivilegedStorageAccess.listDirectoryEntries(directoryPath);
+    for (final entry in entries) {
+      if (entry.isDirectory) {
         continue;
       }
-      if (!_isImageFile(entity.path) || _isInServerTrash(entity.path)) {
+      if (!_isImageFile(entry.path) || _isInServerTrash(entry.path)) {
         continue;
       }
-      if (_isCoverLikeFile(entity.path)) {
-        return entity;
+      if (_isCoverLikeFile(entry.path)) {
+        return entry.path;
       }
     }
     return null;
   }
 
-  Future<int> _calculateTotalBytes(List<File> files) async {
+  Future<int> _calculateTotalBytes(List<String> filePaths) async {
     var totalBytes = 0;
-    for (final file in files) {
-      try {
-        totalBytes += await file.length();
-      } catch (_) {}
+    for (final filePath in filePaths) {
+      final length = await PrivilegedStorageAccess.fileLength(filePath);
+      if (length != null) {
+        totalBytes += length;
+      }
     }
     return totalBytes;
   }
 
-  Future<DateTime> _directoryUpdatedAt(Directory directory) async {
+  Future<DateTime> _directoryUpdatedAt(String directoryPath) async {
     try {
-      return (await directory.stat()).modified;
+      return (await Directory(directoryPath).stat()).modified;
     } catch (_) {
       return DateTime.fromMillisecondsSinceEpoch(0);
     }
   }
 
-  Future<List<Directory>> _listDirectories(Directory directory) async {
-    final results = <Directory>[];
-    await for (final entity in directory.list(recursive: false, followLinks: false)) {
-      if (entity is Directory && _basename(entity.path) != _serverTrashDirectoryName) {
-        results.add(entity);
+  Future<List<String>> _listDirectories(String directoryPath) async {
+    final results = <String>[];
+    final entries = await PrivilegedStorageAccess.listDirectoryEntries(directoryPath);
+    for (final entry in entries) {
+      if (entry.isDirectory && _basename(entry.path) != _serverTrashDirectoryName) {
+        results.add(entry.path);
       }
     }
-    results.sort(_compareEntityPath);
+    results.sort((a, b) => _naturalCompare(_normalizePath(a), _normalizePath(b)));
     return results;
   }
 
-  Future<List<File>> _listImageFiles(
-    Directory directory, {
+  Future<List<String>> _listImageFiles(
+    String directoryPath, {
     required bool recursive,
   }) async {
-    final results = <File>[];
-    await for (final entity in directory.list(
-      recursive: recursive,
-      followLinks: false,
-    )) {
-      if (entity is! File) {
-        continue;
-      }
-      if (_isInServerTrash(entity.path)) {
-        continue;
-      }
-      if (!_isImageFile(entity.path)) {
-        continue;
-      }
-      results.add(entity);
-    }
-    results.sort(_compareEntityPath);
+    final results = <String>[];
+    await _collectImageFiles(directoryPath, recursive: recursive, sink: results);
+    results.sort((a, b) => _naturalCompare(_normalizePath(a), _normalizePath(b)));
     return results;
   }
 
-  List<File> _listDirectVisibleImages(Directory directory) {
-    final results = <File>[];
-    for (final entity in _safeList(directory)) {
-      if (entity is! File) {
+  Future<void> _collectImageFiles(
+    String directoryPath, {
+    required bool recursive,
+    required List<String> sink,
+  }) async {
+    final entries = await PrivilegedStorageAccess.listDirectoryEntries(directoryPath);
+    for (final entry in entries) {
+      if (_isInServerTrash(entry.path)) {
         continue;
       }
-      if (!_isImageFile(entity.path)) {
+      if (entry.isDirectory) {
+        if (recursive) {
+          await _collectImageFiles(entry.path, recursive: true, sink: sink);
+        }
         continue;
       }
-      results.add(entity);
+      if (!_isImageFile(entry.path)) {
+        continue;
+      }
+      sink.add(entry.path);
     }
-    results.sort(_compareEntityPath);
-    final visibleFiles = results.where((file) => !_isCoverLikeFile(file.path)).toList();
+  }
+
+  Future<List<String>> _listDirectVisibleImages(String directoryPath) async {
+    final results = <String>[];
+    final entries = await PrivilegedStorageAccess.listDirectoryEntries(directoryPath);
+    for (final entry in entries) {
+      if (entry.isDirectory || _isInServerTrash(entry.path)) {
+        continue;
+      }
+      if (!_isImageFile(entry.path)) {
+        continue;
+      }
+      results.add(entry.path);
+    }
+    results.sort((a, b) => _naturalCompare(_normalizePath(a), _normalizePath(b)));
+    final visibleFiles = results.where((file) => !_isCoverLikeFile(file)).toList();
     return visibleFiles.isNotEmpty ? visibleFiles : results;
   }
 
-  List<Directory> _collectLeafAlbumDirectories(Directory root) {
-    final results = <Directory>[];
+  Future<List<String>> _collectLeafAlbumDirectories(String rootPath) async {
+    final results = <String>[];
 
-    bool visit(Directory directory) {
-      final children = _safeList(directory);
-      final hasImages = children.any(_isVisibleImageFile);
+    Future<bool> visit(String directoryPath) async {
+      final children = await PrivilegedStorageAccess.listDirectoryEntries(directoryPath);
+      final hasImages = children.any((entry) =>
+          !entry.isDirectory &&
+          !_isInServerTrash(entry.path) &&
+          _isImageFile(entry.path) &&
+          !_basename(entry.path).startsWith('.'));
       var hasAlbumDescendant = false;
-      for (final child in children.whereType<Directory>()) {
+      for (final child in children.where((entry) => entry.isDirectory)) {
         if (_basename(child.path) == _serverTrashDirectoryName) {
           continue;
         }
-        if (visit(child)) {
+        if (await visit(child.path)) {
           hasAlbumDescendant = true;
         }
       }
       if (hasImages && !hasAlbumDescendant) {
-        results.add(directory);
+        results.add(directoryPath);
         return true;
       }
       return hasImages || hasAlbumDescendant;
     }
 
-    visit(root);
-    results.sort(_compareEntityPath);
+    await visit(rootPath);
+    results.sort((a, b) => _naturalCompare(_normalizePath(a), _normalizePath(b)));
     return results;
-  }
-
-  List<FileSystemEntity> _safeList(Directory directory) {
-    try {
-      return directory.listSync(recursive: false, followLinks: false);
-    } catch (_) {
-      return const <FileSystemEntity>[];
-    }
-  }
-
-  bool _isVisibleImageFile(FileSystemEntity entity) {
-    return entity is File &&
-        !_isInServerTrash(entity.path) &&
-        _isImageFile(entity.path) &&
-        !_basename(entity.path).startsWith('.');
   }
 
   bool _isInServerTrash(String path) {
@@ -1341,14 +1686,10 @@ class LocalResourceScanner {
         lower.endsWith('.bmp');
   }
 
-  String _directoryTitle(Directory directory) {
-    final normalized = directory.path.replaceAll('\\', '/');
+  String _directoryTitle(String directoryPath) {
+    final normalized = directoryPath.replaceAll('\\', '/');
     final parts = normalized.split('/').where((e) => e.isNotEmpty).toList();
-    return parts.isEmpty ? directory.path : parts.last;
-  }
-
-  int _compareEntityPath(FileSystemEntity a, FileSystemEntity b) {
-    return _naturalCompare(_normalizePath(a.path), _normalizePath(b.path));
+    return parts.isEmpty ? directoryPath : parts.last;
   }
 
   String _normalizePath(String path) {

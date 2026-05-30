@@ -7,6 +7,7 @@ import 'package:flutter/widgets.dart' hide Row;
 import 'package:path_provider/path_provider.dart';
 import 'package:sqlite3/sqlite3.dart';
 import 'package:picakeep/foundation/image_loader/stream_image_provider.dart';
+import 'package:picakeep/foundation/privileged_storage_access.dart';
 import 'package:picakeep/pages/reader/comic_reading_page.dart';
 
 import '../base.dart';
@@ -2986,181 +2987,40 @@ class LocalLibraryManager {
     return _directoryExists(itemDirectory);
   }
 
-  static Future<bool> _directoryExists(String path) async {
-    try {
-      if (Directory(path).existsSync()) {
-        return true;
-      }
-    } catch (_) {}
-    return _existsWithPrivilegedAccess(path);
+  static Future<bool> _directoryExists(String path) {
+    return PrivilegedStorageAccess.directoryExists(path);
   }
 
-  static Future<bool> _fileExists(String path) async {
-    try {
-      if (File(path).existsSync()) {
-        return true;
-      }
-    } catch (_) {}
-    return _existsWithPrivilegedAccess(path);
+  static Future<bool> _fileExists(String path) {
+    return PrivilegedStorageAccess.fileExists(path);
   }
 
   static Future<bool> _isDownloadDirectoryAsync(String path) {
     return _fileExists(_joinPath(path, 'download.db'));
   }
 
-  static Future<Uint8List?> _readFileBytes(String path) async {
-    try {
-      final file = File(path);
-      if (file.existsSync()) {
-        return await file.readAsBytes();
-      }
-    } catch (_) {}
-    return _readFileWithPrivilegedAccess(path);
+  static Future<Uint8List?> _readFileBytes(String path) {
+    return PrivilegedStorageAccess.readFileBytes(path);
   }
 
   static Future<int> _fileLength(String path) async {
-    try {
-      final file = File(path);
-      if (file.existsSync()) {
-        return await file.length();
-      }
-    } catch (_) {}
-    final bytes = await _readFileWithPrivilegedAccess(path);
-    return bytes?.length ?? 0;
+    final length = await PrivilegedStorageAccess.fileLength(path);
+    return length ?? 0;
   }
 
   static Future<List<_LocalDirectoryEntry>> _listDirectoryEntries(
     String path,
   ) async {
-    try {
-      final directory = Directory(path);
-      if (directory.existsSync()) {
-        return directory
-            .listSync(followLinks: false)
-            .where((entity) => entity is Directory || entity is File)
-            .map(
-              (entity) => _LocalDirectoryEntry(
-                name: _basename(entity.path),
-                path: entity.path,
-                isDirectory: entity is Directory,
-              ),
-            )
-            .toList();
-      }
-    } catch (_) {}
-    return _listDirectoryEntriesWithPrivilegedAccess(path);
-  }
-
-  static Future<List<_LocalDirectoryEntry>>
-      _listDirectoryEntriesWithPrivilegedAccess(String path) async {
-    if (!Platform.isAndroid) {
-      return const <_LocalDirectoryEntry>[];
-    }
-    final method = _androidPrivilegedAccessMethod('listDirectoryEntries');
-    if (method == null) {
-      return const <_LocalDirectoryEntry>[];
-    }
-    try {
-      final result = await _storageAccessChannel.invokeListMethod<Object>(
-        method,
-        {'path': path},
-      );
-      return (result ?? const <Object>[])
-          .whereType<Map>()
-          .map((item) {
-            final name = item['name']?.toString().trim() ?? '';
-            if (name.isEmpty) {
-              return null;
-            }
-            final type = item['type']?.toString();
-            return _LocalDirectoryEntry(
-              name: name,
-              path: _joinPath(path, name),
-              isDirectory: type == 'directory',
-            );
-          })
-          .whereType<_LocalDirectoryEntry>()
-          .toList();
-    } catch (_) {
-      return const <_LocalDirectoryEntry>[];
-    }
-  }
-
-  static Future<Uint8List?> _readFileWithPrivilegedAccess(String path) async {
-    if (!Platform.isAndroid) {
-      return null;
-    }
-    final method = _androidPrivilegedAccessMethod('readFile');
-    if (method == null) {
-      return null;
-    }
-    try {
-      final result = await _storageAccessChannel.invokeMethod<Object>(
-        method,
-        {'path': path},
-      );
-      if (result is Uint8List) {
-        return result;
-      }
-      if (result is ByteData) {
-        return result.buffer.asUint8List();
-      }
-      if (result is List) {
-        return Uint8List.fromList(result.cast<int>());
-      }
-    } catch (_) {}
-    return null;
-  }
-
-  static Future<bool> _existsWithPrivilegedAccess(String path) async {
-    if (!Platform.isAndroid) {
-      return false;
-    }
-    final method = _androidPrivilegedAccessMethod('exists');
-    if (method == null) {
-      return false;
-    }
-    try {
-      return await _storageAccessChannel.invokeMethod<bool>(
-            method,
-            {'path': path},
-          ) ??
-          false;
-    } catch (_) {
-      return false;
-    }
-  }
-
-  static String? _androidPrivilegedAccessMethod(String operation) {
-    final rootEnabled = normalizeAndroidRootMode(
-            appdata.settings[androidRootModeSettingIndex]) ==
-        '1';
-    if (rootEnabled) {
-      switch (operation) {
-        case 'listDirectoryEntries':
-          return 'listDirectoryEntriesWithRoot';
-        case 'readFile':
-          return 'readFileWithRoot';
-        case 'exists':
-          return 'existsWithRoot';
-      }
-    }
-
-    final shizukuEnabled = normalizeAndroidShizukuMode(
-          appdata.settings[androidShizukuModeSettingIndex],
-        ) ==
-        '1';
-    if (shizukuEnabled) {
-      switch (operation) {
-        case 'listDirectoryEntries':
-          return 'listDirectoryEntriesWithShizuku';
-        case 'readFile':
-          return 'readFileWithShizuku';
-        case 'exists':
-          return 'existsWithShizuku';
-      }
-    }
-    return null;
+    final entries = await PrivilegedStorageAccess.listDirectoryEntries(path);
+    return entries
+        .map(
+          (entry) => _LocalDirectoryEntry(
+            name: entry.name,
+            path: entry.path,
+            isDirectory: entry.isDirectory,
+          ),
+        )
+        .toList();
   }
 
   static Future<bool> _shouldUsePrivilegedFallbackForDirectory(

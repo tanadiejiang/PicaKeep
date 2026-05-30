@@ -59,7 +59,8 @@ class _ServiceInfoPageState extends State<ServiceInfoPage> {
   void initState() {
     super.initState();
     App.serviceConfigVersion.addListener(_handleServiceConfigChanged);
-    App.serviceRuntimeVersion.addListener(_handleServiceConfigChanged);
+    App.serviceRuntimeVersion.addListener(_handleServiceRuntimeChanged);
+    App.serviceStatsVersion.addListener(_handleServiceStatsChanged);
     _reloadSnapshot();
     if (currentServerPlatformCapability().isEnhancedServerTarget) {
       _reloadAndroidSupportState();
@@ -69,7 +70,8 @@ class _ServiceInfoPageState extends State<ServiceInfoPage> {
   @override
   void dispose() {
     App.serviceConfigVersion.removeListener(_handleServiceConfigChanged);
-    App.serviceRuntimeVersion.removeListener(_handleServiceConfigChanged);
+    App.serviceRuntimeVersion.removeListener(_handleServiceRuntimeChanged);
+    App.serviceStatsVersion.removeListener(_handleServiceStatsChanged);
     super.dispose();
   }
 
@@ -78,6 +80,17 @@ class _ServiceInfoPageState extends State<ServiceInfoPage> {
     if (currentServerPlatformCapability().isEnhancedServerTarget) {
       _reloadAndroidSupportState();
     }
+  }
+
+  void _handleServiceRuntimeChanged() {
+    _reloadSnapshot();
+    if (currentServerPlatformCapability().isEnhancedServerTarget) {
+      _reloadAndroidSupportState();
+    }
+  }
+
+  void _handleServiceStatsChanged() {
+    _reloadSnapshot();
   }
 
   ServiceInfoSnapshot _placeholderSnapshot() {
