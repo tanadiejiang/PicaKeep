@@ -7,7 +7,7 @@ const serverRuntimeLifecycleStopping = 'stopping';
 const serverRuntimeLifecycleError = 'error';
 
 class ServerRuntimeState {
-  ServerRuntimeState({this.onChanged});
+  ServerRuntimeState({this.onChanged, this.onStatsChanged});
 
   DateTime? startedAt;
   int totalRequests = 0;
@@ -16,6 +16,7 @@ class ServerRuntimeState {
   String? lastMessage;
   String? lastError;
   void Function()? onChanged;
+  void Function()? onStatsChanged;
   final ListQueue<Map<String, dynamic>> _recentLogs = ListQueue();
 
   bool get isRunning => lifecycle == serverRuntimeLifecycleRunning;
@@ -77,14 +78,14 @@ class ServerRuntimeState {
     totalRequests++;
     activeConnections++;
     addLog('request', '$method $path', notify: false);
-    _notifyChanged();
+    _notifyStatsChanged();
   }
 
   void endRequest() {
     if (activeConnections > 0) {
       activeConnections--;
     }
-    _notifyChanged();
+    _notifyStatsChanged();
   }
 
   void addLog(String type, String message, {bool notify = true}) {
@@ -97,7 +98,7 @@ class ServerRuntimeState {
       _recentLogs.removeFirst();
     }
     if (notify) {
-      _notifyChanged();
+      _notifyStatsChanged();
     }
   }
 
@@ -106,5 +107,9 @@ class ServerRuntimeState {
 
   void _notifyChanged() {
     onChanged?.call();
+  }
+
+  void _notifyStatsChanged() {
+    onStatsChanged?.call();
   }
 }

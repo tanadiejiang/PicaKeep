@@ -63,6 +63,7 @@ class LocalServerRuntimeSnapshot {
 class LocalServerRuntime {
   LocalServerRuntime._() {
     _state.onChanged = _scheduleNotify;
+    _state.onStatsChanged = _scheduleStatsNotify;
   }
 
   static final LocalServerRuntime instance = LocalServerRuntime._();
@@ -70,6 +71,7 @@ class LocalServerRuntime {
   final ServerRuntimeState _state = ServerRuntimeState();
   Future<void> _operationQueue = Future.value();
   Timer? _pendingNotifyTimer;
+  Timer? _pendingStatsNotifyTimer;
 
   final LocalResourceScanner _scanner = LocalResourceScanner();
   PicaKeepAdminServer? _server;
@@ -507,6 +509,12 @@ class LocalServerRuntime {
     _pendingNotifyTimer = Timer(const Duration(milliseconds: 250), _notifyNow);
   }
 
+  void _scheduleStatsNotify() {
+    _pendingStatsNotifyTimer?.cancel();
+    _pendingStatsNotifyTimer =
+        Timer(const Duration(milliseconds: 500), _notifyStatsNow);
+  }
+
   void _notify() {
     _pendingNotifyTimer?.cancel();
     _notifyNow();
@@ -514,5 +522,9 @@ class LocalServerRuntime {
 
   void _notifyNow() {
     App.notifyServiceRuntimeChanged();
+  }
+
+  void _notifyStatsNow() {
+    App.notifyServiceStatsChanged();
   }
 }

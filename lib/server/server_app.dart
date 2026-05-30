@@ -10,6 +10,7 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 import 'package:web_socket_channel/status.dart' as web_socket_status;
 
 import '../foundation/local_trash_store.dart';
+import '../foundation/privileged_storage_access.dart';
 import '../foundation/trash.dart';
 import 'admin_web.dart';
 import 'library_event_bus.dart';
@@ -38,6 +39,14 @@ class PicaKeepAdminServer {
   String? _librarySignature;
   final LibraryEventBus _eventBus = LibraryEventBus();
   final Set<WebSocketChannel> _eventChannels = <WebSocketChannel>{};
+  final Map<String, ServerResourceItemSummary> _deepItemCache =
+      <String, ServerResourceItemSummary>{};
+  final Map<String, Future<ServerResourceItemSummary>> _deepItemInFlight =
+      <String, Future<ServerResourceItemSummary>>{};
+  final Map<String, String> _coverPathCache = <String, String>{};
+  final int _maxConcurrentDeepScans = Platform.isAndroid ? 2 : 6;
+  int _activeDeepScanCount = 0;
+  final List<Completer<void>> _deepScanWaiters = <Completer<void>>[];
   Timer? _pendingLibraryChangedTimer;
   String? _pendingLibraryChangedSignature;
   DateTime? _pendingLibraryChangedGeneratedAt;
@@ -615,7 +624,7 @@ class PicaKeepAdminServer {
       if (coverFile == null || coverFile.path.trim().isEmpty) {
         return _jsonResponse({'error': 'cover not found'}, statusCode: 404);
       }
-      return _fileResponse(request, coverFile);
+      return _fileResponse(request, coverFile.path);
     }
 
     if (segments.length == 5 && segments[4] == 'restore') {
@@ -726,6 +735,7 @@ class PicaKeepAdminServer {
     if (item == null) {
       return _jsonResponse({'error': 'item not found'}, statusCode: 404);
     }
+    final rootPath = _rootPathForRootId(item.rootId);
 
     if (segments.length == 5 && segments[4] == 'trash') {
       if (request.method != 'POST') {
@@ -761,18 +771,31 @@ class PicaKeepAdminServer {
       if (request.method != 'GET') {
         return _jsonResponse({'error': 'method not allowed'}, statusCode: 405);
       }
-      return _jsonResponse(_buildLibraryItemPayload(item, includePages: true));
+      final deepItem = await _ensureDeepItem(item, rootPath: rootPath);
+      return _jsonResponse(_buildLibraryItemPayload(deepItem, includePages: true));
     }
 
     if (segments.length == 5 && segments[4] == 'cover') {
       if (request.method != 'GET') {
         return _jsonResponse({'error': 'method not allowed'}, statusCode: 405);
       }
-      final coverPath = item.coverPath;
-      if (coverPath == null || coverPath.trim().isEmpty) {
+      final cachedCoverPath = _coverPathCache[item.id]?.trim() ?? '';
+      if (cachedCoverPath.isNotEmpty) {
+        final cached = await _fileResponse(request, cachedCoverPath);
+        if (cached.statusCode != 404) {
+          return cached;
+        }
+        _coverPathCache.remove(item.id);
+      }
+      final coverPath = await _scanner.resolveCoverPathOnly(
+        item,
+        rootPath: rootPath,
+      );
+      if (coverPath.isEmpty) {
         return _jsonResponse({'error': 'cover not found'}, statusCode: 404);
       }
-      return _fileResponse(request, File(coverPath));
+      _coverPathCache[item.id] = coverPath;
+      return _fileResponse(request, coverPath);
     }
 
     if (segments.length == 6 && segments[4] == 'episodes') {
@@ -783,12 +806,13 @@ class PicaKeepAdminServer {
       if (episodeIndex == null) {
         return _jsonResponse({'error': 'invalid episode'}, statusCode: 400);
       }
-      final episode = _findEpisode(item, episodeIndex);
+      final deepItem = await _ensureDeepItem(item, rootPath: rootPath);
+      final episode = _findEpisode(deepItem, episodeIndex);
       if (episode == null) {
         return _jsonResponse({'error': 'episode not found'}, statusCode: 404);
       }
       return _jsonResponse(
-        _buildLibraryEpisodePayload(item.id, episode, includePages: true),
+        _buildLibraryEpisodePayload(deepItem.id, episode, includePages: true),
       );
     }
 
@@ -802,17 +826,79 @@ class PicaKeepAdminServer {
         return _jsonResponse({'error': 'invalid image target'},
             statusCode: 400);
       }
-      final episode = _findEpisode(item, episodeIndex);
+      final deepItem = await _ensureDeepItem(item, rootPath: rootPath);
+      final episode = _findEpisode(deepItem, episodeIndex);
       if (episode == null) {
         return _jsonResponse({'error': 'episode not found'}, statusCode: 404);
       }
       if (pageIndex < 0 || pageIndex >= episode.imagePaths.length) {
         return _jsonResponse({'error': 'page not found'}, statusCode: 404);
       }
-      return _fileResponse(request, File(episode.imagePaths[pageIndex]));
+      return _fileResponse(request, episode.imagePaths[pageIndex]);
     }
 
     return _jsonResponse({'error': 'not found'}, statusCode: 404);
+  }
+
+  Future<ServerResourceItemSummary> _ensureDeepItem(
+    ServerResourceItemSummary shallow, {
+    required String? rootPath,
+  }) async {
+    if (shallow.rootId.startsWith('custom_') || rootPath == null || rootPath.trim().isEmpty) {
+      return shallow;
+    }
+    final cached = _deepItemCache[shallow.id];
+    if (cached != null) {
+      return cached;
+    }
+    final inFlight = _deepItemInFlight[shallow.id];
+    if (inFlight != null) {
+      return await inFlight;
+    }
+    final future = _runDeepItemScan(shallow, rootPath: rootPath);
+    _deepItemInFlight[shallow.id] = future;
+    try {
+      return await future;
+    } finally {
+      _deepItemInFlight.remove(shallow.id);
+    }
+  }
+
+  Future<ServerResourceItemSummary> _runDeepItemScan(
+    ServerResourceItemSummary shallow, {
+    required String rootPath,
+  }) async {
+    await _acquireDeepScanSlot();
+    try {
+      final deepItem = await _scanner.deepScanItem(shallow, rootPath: rootPath);
+      final resolved = deepItem ?? shallow;
+      _deepItemCache[shallow.id] = resolved;
+      return resolved;
+    } finally {
+      _releaseDeepScanSlot();
+    }
+  }
+
+  Future<void> _acquireDeepScanSlot() async {
+    while (_activeDeepScanCount >= _maxConcurrentDeepScans) {
+      final completer = Completer<void>();
+      _deepScanWaiters.add(completer);
+      await completer.future;
+    }
+    _activeDeepScanCount += 1;
+  }
+
+  void _releaseDeepScanSlot() {
+    if (_activeDeepScanCount > 0) {
+      _activeDeepScanCount -= 1;
+    }
+    if (_deepScanWaiters.isEmpty) {
+      return;
+    }
+    final completer = _deepScanWaiters.removeAt(0);
+    if (!completer.isCompleted) {
+      completer.complete();
+    }
   }
 
   Future<ServerResourceSnapshot> _currentSnapshot() async {
@@ -1061,54 +1147,72 @@ class PicaKeepAdminServer {
     return parts.isEmpty ? normalized : parts.last;
   }
 
-  Future<Response> _fileResponse(Request request, File file) async {
-    if (!await file.exists()) {
-      return _jsonResponse({'error': 'file not found'}, statusCode: 404);
-    }
+  Future<Response> _fileResponse(Request request, String filePath) async {
+    final directFile = File(filePath);
 
-    final length = await file.length();
-    final headers = <String, String>{
-      HttpHeaders.contentTypeHeader: _contentTypeForPath(file.path),
-      HttpHeaders.acceptRangesHeader: 'bytes',
-      HttpHeaders.cacheControlHeader: 'public, max-age=300',
-    };
+    if (await directFile.exists()) {
+      try {
+        final length = await directFile.length();
+        final headers = <String, String>{
+          HttpHeaders.contentTypeHeader: _contentTypeForPath(filePath),
+          HttpHeaders.acceptRangesHeader: 'bytes',
+          HttpHeaders.cacheControlHeader: 'public, max-age=300',
+        };
 
-    final range = request.headers[HttpHeaders.rangeHeader];
-    if (range != null) {
-      final match = RegExp(r'bytes=(\d*)-(\d*)').firstMatch(range);
-      if (match != null) {
-        var start = int.tryParse(match.group(1) ?? '') ?? 0;
-        var end = int.tryParse(match.group(2) ?? '') ?? (length - 1);
-        if (start < 0 || start >= length || end < start) {
-          return Response(
-            416,
-            headers: {
-              HttpHeaders.contentRangeHeader: 'bytes */$length',
-              HttpHeaders.acceptRangesHeader: 'bytes',
-            },
-          );
+        final range = request.headers[HttpHeaders.rangeHeader];
+        if (range != null) {
+          final match = RegExp(r'bytes=(\d*)-(\d*)').firstMatch(range);
+          if (match != null) {
+            var start = int.tryParse(match.group(1) ?? '') ?? 0;
+            var end = int.tryParse(match.group(2) ?? '') ?? (length - 1);
+            if (start < 0 || start >= length || end < start) {
+              return Response(
+                416,
+                headers: {
+                  HttpHeaders.contentRangeHeader: 'bytes */$length',
+                  HttpHeaders.acceptRangesHeader: 'bytes',
+                },
+              );
+            }
+            if (end >= length) {
+              end = length - 1;
+            }
+            final chunkLength = end - start + 1;
+            return Response(
+              206,
+              body: directFile.openRead(start, end + 1),
+              headers: {
+                ...headers,
+                HttpHeaders.contentLengthHeader: chunkLength.toString(),
+                HttpHeaders.contentRangeHeader: 'bytes $start-$end/$length',
+              },
+            );
+          }
         }
-        if (end >= length) {
-          end = length - 1;
-        }
-        final chunkLength = end - start + 1;
-        return Response(
-          206,
-          body: file.openRead(start, end + 1),
+
+        return Response.ok(
+          directFile.openRead(),
           headers: {
             ...headers,
-            HttpHeaders.contentLengthHeader: chunkLength.toString(),
-            HttpHeaders.contentRangeHeader: 'bytes $start-$end/$length',
+            HttpHeaders.contentLengthHeader: length.toString(),
           },
         );
+      } catch (_) {
+        // dart:io access failed — try privileged fallback below.
       }
     }
 
+    final bytes = await PrivilegedStorageAccess.readFileBytes(filePath);
+    if (bytes == null || bytes.isEmpty) {
+      return _jsonResponse({'error': 'file not found'}, statusCode: 404);
+    }
+
     return Response.ok(
-      file.openRead(),
+      bytes,
       headers: {
-        ...headers,
-        HttpHeaders.contentLengthHeader: length.toString(),
+        HttpHeaders.contentTypeHeader: _contentTypeForPath(filePath),
+        HttpHeaders.contentLengthHeader: bytes.length.toString(),
+        HttpHeaders.cacheControlHeader: 'public, max-age=300',
       },
     );
   }
@@ -1143,8 +1247,13 @@ class PicaKeepAdminServer {
     ServerResourceSnapshot snapshot, {
     required bool emitEvent,
   }) {
+    final previousSignature = _librarySignature;
     _snapshot = snapshot;
     _recomputeLibrarySignature(emitEvent: emitEvent);
+    if (previousSignature != _librarySignature) {
+      _deepItemCache.clear();
+      _deepItemInFlight.clear();
+    }
   }
 
   void _recomputeLibrarySignature({required bool emitEvent}) {
@@ -1200,10 +1309,7 @@ class PicaKeepAdminServer {
     }
     buffer
       ..writeln(snapshot.totalComicCount.toString())
-      ..writeln(snapshot.totalBytes.toString())
-      ..writeln(
-        (snapshot.generatedAt.millisecondsSinceEpoch ~/ 1000).toString(),
-      );
+      ..writeln(snapshot.totalBytes.toString());
     return _fnv1a64(buffer.toString());
   }
 
