@@ -89,6 +89,39 @@ class ReadingSettings extends StatelessWidget {
         ],
       ),
       SelectSetting(
+        title: "阅读时远程图片并发".tl,
+        settingsIndex: remoteReaderImageConcurrencySettingIndex,
+        controlWidth: 120,
+        values: const [
+          "1",
+          "2",
+          "3",
+          "4",
+          "5",
+          "6",
+          "7",
+          "8",
+          "9",
+          "10",
+          "11",
+          "12"
+        ],
+        titles: const [
+          "1",
+          "2",
+          "3",
+          "4",
+          "5",
+          "6",
+          "7",
+          "8",
+          "9",
+          "10",
+          "11",
+          "12"
+        ],
+      ),
+      SelectSetting(
         title: "阅读器图片布局方式".tl,
         settingsIndex: 41,
         values: const ["0", "1"],
@@ -126,23 +159,45 @@ class ReadingSettings extends StatelessWidget {
       ),
       ListTile(
         title: Text("点按翻页识别范围".tl),
-        subtitle: Slider(
-          value: double.tryParse(appdata.settings[40]) ?? 25,
-          min: 0,
-          max: 50,
-          divisions: 50,
-          label:
-              (double.tryParse(appdata.settings[40]) ?? 25).toStringAsFixed(0),
-          onChanged: (value) {
-            appdata.settings[40] = value.toStringAsFixed(0);
-            appdata.updateSettings();
-          },
-        ),
+        subtitle: const _TapTurnRangeSlider(),
       ),
       SwitchSetting(
         title: "反转点按识别".tl,
         settingsIndex: 70,
       ),
     ]);
+  }
+}
+
+/// Slider whose thumb tracks the finger in real time. `ReadingSettings` is a
+/// StatelessWidget, so an inline Slider reading straight from
+/// `appdata.settings` would not rebuild while dragging — the thumb only jumped
+/// once something else rebuilt the page. Holding the drag value in local state
+/// and setState-ing on change makes it follow.
+class _TapTurnRangeSlider extends StatefulWidget {
+  const _TapTurnRangeSlider();
+
+  @override
+  State<_TapTurnRangeSlider> createState() => _TapTurnRangeSliderState();
+}
+
+class _TapTurnRangeSliderState extends State<_TapTurnRangeSlider> {
+  late double _value =
+      (double.tryParse(appdata.settings[40]) ?? 25).clamp(0, 50).toDouble();
+
+  @override
+  Widget build(BuildContext context) {
+    return Slider(
+      value: _value,
+      min: 0,
+      max: 50,
+      divisions: 50,
+      label: _value.toStringAsFixed(0),
+      onChanged: (value) {
+        setState(() => _value = value);
+        appdata.settings[40] = value.toStringAsFixed(0);
+        appdata.updateSettings();
+      },
+    );
   }
 }

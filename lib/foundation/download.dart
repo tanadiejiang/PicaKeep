@@ -732,6 +732,9 @@ abstract mixin class _DownloadDb {
   }
 
   bool isExists(String id) {
+    if (_db == null) {
+      return false;
+    }
     var result = _db!.select('''
       select id from download
       where id = ?

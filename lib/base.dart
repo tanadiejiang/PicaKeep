@@ -139,6 +139,10 @@ class Appdata {
     '1', //109 压缩包自动解密开关
     '32', //110 压缩包阅读缓存上限 MB
     '0', //111 压缩包章节使用序号
+    'local', //112 收藏页来源视图
+    'local', //113 图片收藏页来源视图
+    '6', //114 阅读时远程图片并发上限
+    '8', //115 浏览时远程图片并发上限
   ];
 
   List<String> implicitData = [
@@ -232,6 +236,11 @@ class Appdata {
             settings[downloadedLibraryViewSettingIndex]);
     settings[localLibraryViewSettingIndex] =
         normalizeLocalLibraryView(settings[localLibraryViewSettingIndex]);
+    settings[favoritesLibraryViewSettingIndex] =
+        normalizeTwoWayLibraryView(settings[favoritesLibraryViewSettingIndex]);
+    settings[imageFavoritesLibraryViewSettingIndex] =
+        normalizeTwoWayLibraryView(
+            settings[imageFavoritesLibraryViewSettingIndex]);
     settings[appRuntimeModeSettingIndex] =
         normalizeAppRuntimeMode(settings[appRuntimeModeSettingIndex]);
     settings[remoteServerAddressSettingIndex] =

@@ -12,6 +12,8 @@ import 'package:web_socket_channel/status.dart' as web_socket_status;
 import '../foundation/local_trash_store.dart';
 import '../foundation/privileged_storage_access.dart';
 import '../foundation/trash.dart';
+import '../foundation/local_favorites.dart';
+import '../foundation/image_favorites.dart';
 import 'admin_web.dart';
 import 'library_event_bus.dart';
 import 'library_trash_store.dart';
@@ -514,6 +516,16 @@ class PicaKeepAdminServer {
       return trashResponse;
     }
 
+    final favoritesResponse = await _handleFavoritesRequest(request);
+    if (favoritesResponse != null) {
+      return favoritesResponse;
+    }
+
+    final imageFavoritesResponse = await _handleImageFavoritesRequest(request);
+    if (imageFavoritesResponse != null) {
+      return imageFavoritesResponse;
+    }
+
     final libraryResponse = await _handleLibraryRequest(request);
     if (libraryResponse != null) {
       return libraryResponse;
@@ -614,7 +626,11 @@ class PicaKeepAdminServer {
       return _jsonResponse(await batchPurgeTrashItems(ids));
     }
 
-    final trashId = Uri.decodeComponent(segments[3]);
+    // request.url.pathSegments is already percent-decoded by Uri; calling
+    // Uri.decodeComponent on it again is a double-decode that throws
+    // "Illegal percent encoding" on multi-byte characters (e.g. CJK folder
+    // names like "%E4%B8%AD..."). Use the segment as-is.
+    final trashId = segments[3];
 
     if (segments.length == 5 && segments[4] == 'cover') {
       if (request.method != 'GET') {
@@ -730,7 +746,7 @@ class PicaKeepAdminServer {
       return _jsonResponse(await batchDeleteItemsPermanently(ids));
     }
 
-    final itemId = Uri.decodeComponent(segments[3]);
+    final itemId = segments[3];
     final item = snapshot.findItemById(itemId);
     if (item == null) {
       return _jsonResponse({'error': 'item not found'}, statusCode: 404);
@@ -835,6 +851,178 @@ class PicaKeepAdminServer {
         return _jsonResponse({'error': 'page not found'}, statusCode: 404);
       }
       return _fileResponse(request, episode.imagePaths[pageIndex]);
+    }
+
+    return _jsonResponse({'error': 'not found'}, statusCode: 404);
+  }
+
+  Future<Response?> _handleFavoritesRequest(Request request) async {
+    final segments = request.url.pathSegments;
+    if (segments.length < 3 ||
+        segments[0] != 'api' ||
+        segments[1] != 'library' ||
+        segments[2] != 'favorites') {
+      return null;
+    }
+
+    // LocalFavoritesManager is a singleton that is initialized once during
+    // app startup (main.dart). Calling init() here per request would re-open
+    // the SQLite db, dispose the previous handle (potentially breaking
+    // concurrent UI reads), and add latency that can push small clients past
+    // their request timeouts — manifesting as "远程加载失败" on the client.
+    final favorites = LocalFavoritesManager();
+
+    if (segments.length == 3) {
+      if (request.method == 'GET') {
+        return _jsonResponse({
+          'folders': [
+            for (final folder in favorites.folderNames)
+              {
+                'name': folder,
+                'count': favorites.count(folder),
+              },
+          ],
+        });
+      }
+      if (request.method == 'POST') {
+        final payload = await _readJsonMapFromBody(request);
+        final name = payload['name']?.toString().trim() ?? '';
+        if (name.isEmpty) {
+          return _jsonResponse({'error': 'invalid folder name'}, statusCode: 400);
+        }
+        favorites.createFolder(name);
+        _state.addLog('favorites', '已新建收藏夹 $name');
+        _notifyLibraryChanged();
+        return _jsonResponse({'ok': true, 'name': name});
+      }
+      return _jsonResponse({'error': 'method not allowed'}, statusCode: 405);
+    }
+
+    final folder = segments[3];
+
+    if (segments.length == 4) {
+      if (request.method == 'GET') {
+        return _jsonResponse({
+          'folder': folder,
+          'items': favorites
+              .getAllComics(folder)
+              .map((item) => _buildFavoriteItemPayload(folder, item))
+              .toList(growable: false),
+        });
+      }
+      if (request.method == 'POST') {
+        final payload = await _readJsonMapFromBody(request);
+        final item = _favoriteItemFromPayload(payload);
+        favorites.addComic(folder, item);
+        _state.addLog('favorites', '已添加收藏 ${item.name} -> $folder');
+        _notifyLibraryChanged();
+        return _jsonResponse({'ok': true});
+      }
+      if (request.method == 'PUT') {
+        final payload = await _readJsonMapFromBody(request);
+        final newName = payload['newName']?.toString().trim() ?? '';
+        if (newName.isEmpty) {
+          return _jsonResponse({'error': 'invalid folder name'}, statusCode: 400);
+        }
+        favorites.rename(folder, newName);
+        _state.addLog('favorites', '已重命名收藏夹 $folder -> $newName');
+        _notifyLibraryChanged();
+        return _jsonResponse({'ok': true, 'name': newName});
+      }
+      if (request.method == 'DELETE') {
+        favorites.deleteFolder(folder);
+        _state.addLog('favorites', '已删除收藏夹 $folder');
+        _notifyLibraryChanged();
+        return _jsonResponse({'ok': true});
+      }
+      return _jsonResponse({'error': 'method not allowed'}, statusCode: 405);
+    }
+
+    final target = segments[4];
+
+    if (segments.length == 6 && segments[5] == 'cover') {
+      if (request.method != 'GET') {
+        return _jsonResponse({'error': 'method not allowed'}, statusCode: 405);
+      }
+      final item = _findFavoriteItemByTarget(favorites, folder, target);
+      if (item == null || item.coverPath.trim().isEmpty) {
+        return _jsonResponse({'error': 'cover not found'}, statusCode: 404);
+      }
+      return _fileResponse(request, item.coverPath);
+    }
+
+    if (segments.length == 5 && request.method == 'DELETE') {
+      final item = _findFavoriteItemByTarget(favorites, folder, target);
+      if (item == null) {
+        return _jsonResponse({'error': 'favorite not found'}, statusCode: 404);
+      }
+      favorites.deleteComic(folder, item);
+      _state.addLog('favorites', '已删除收藏 ${item.name} <- $folder');
+      _notifyLibraryChanged();
+      return _jsonResponse({'ok': true});
+    }
+
+    return _jsonResponse({'error': 'not found'}, statusCode: 404);
+  }
+
+  Future<Response?> _handleImageFavoritesRequest(Request request) async {
+    final segments = request.url.pathSegments;
+    if (segments.length < 3 ||
+        segments[0] != 'api' ||
+        segments[1] != 'library' ||
+        segments[2] != 'image-favorites') {
+      return null;
+    }
+
+    if (segments.length == 3) {
+      if (request.method == 'GET') {
+        return _jsonResponse({
+          'items': ImageFavoriteManager.getAll()
+              .map(_buildImageFavoritePayload)
+              .toList(growable: false),
+        });
+      }
+      if (request.method == 'POST') {
+        final payload = await _readJsonMapFromBody(request);
+        final item = _imageFavoriteFromPayload(payload);
+        ImageFavoriteManager.add(item);
+        _state.addLog('image_favorites', '已添加图片收藏 ${item.title}');
+        _notifyLibraryChanged();
+        return _jsonResponse({'ok': true});
+      }
+      return _jsonResponse({'error': 'method not allowed'}, statusCode: 405);
+    }
+
+    if (segments.length < 6) {
+      return _jsonResponse({'error': 'not found'}, statusCode: 404);
+    }
+
+    final id = segments[3];
+    final ep = int.tryParse(segments[4]);
+    final page = int.tryParse(segments[5]);
+    if (ep == null || page == null) {
+      return _jsonResponse({'error': 'invalid image favorite key'}, statusCode: 400);
+    }
+    final item = _findImageFavorite(id, ep, page);
+    if (item == null) {
+      return _jsonResponse({'error': 'image favorite not found'}, statusCode: 404);
+    }
+
+    if (segments.length == 7 && segments[6] == 'image') {
+      if (request.method != 'GET') {
+        return _jsonResponse({'error': 'method not allowed'}, statusCode: 405);
+      }
+      if (item.imagePath.trim().isEmpty) {
+        return _jsonResponse({'error': 'image not found'}, statusCode: 404);
+      }
+      return _fileResponse(request, item.imagePath);
+    }
+
+    if (segments.length == 6 && request.method == 'DELETE') {
+      ImageFavoriteManager.delete(item);
+      _state.addLog('image_favorites', '已删除图片收藏 ${item.title}');
+      _notifyLibraryChanged();
+      return _jsonResponse({'ok': true});
     }
 
     return _jsonResponse({'error': 'not found'}, statusCode: 404);
@@ -1009,6 +1197,88 @@ class PicaKeepAdminServer {
       'coverUrl': '/api/library/trash/$encodedId/cover',
       'source': 'server',
     };
+  }
+
+  Map<String, dynamic> _buildFavoriteItemPayload(
+    String folder,
+    FavoriteItem item,
+  ) {
+    final encodedFolder = Uri.encodeComponent(folder);
+    final encodedTarget = Uri.encodeComponent(item.target);
+    return {
+      'name': item.name,
+      'author': item.author,
+      'type': item.type.key,
+      'tags': item.tags,
+      'target': item.target,
+      'time': item.time,
+      'coverUrl': '/api/library/favorites/$encodedFolder/$encodedTarget/cover',
+    };
+  }
+
+  Map<String, dynamic> _buildImageFavoritePayload(ImageFavorite item) {
+    final encodedId = Uri.encodeComponent(item.id);
+    return {
+      'id': item.id,
+      'title': item.title,
+      'ep': item.ep,
+      'page': item.page,
+      'otherInfo': item.otherInfo,
+      'imageUrl':
+          '/api/library/image-favorites/$encodedId/${item.ep}/${item.page}/image',
+    };
+  }
+
+  FavoriteItem? _findFavoriteItemByTarget(
+    LocalFavoritesManager favorites,
+    String folder,
+    String target,
+  ) {
+    for (final item in favorites.getAllComics(folder)) {
+      if (item.target == target) {
+        return item;
+      }
+    }
+    return null;
+  }
+
+  ImageFavorite? _findImageFavorite(String id, int ep, int page) {
+    for (final item in ImageFavoriteManager.getAll()) {
+      if (item.id == id && item.ep == ep && item.page == page) {
+        return item;
+      }
+    }
+    return null;
+  }
+
+  FavoriteItem _favoriteItemFromPayload(Map<String, dynamic> payload) {
+    return FavoriteItem(
+      target: payload['target']?.toString() ?? '',
+      name: payload['name']?.toString() ?? '',
+      coverPath: payload['coverPath']?.toString() ?? '',
+      author: payload['author']?.toString() ?? '',
+      type: FavoriteType(_readIntValue(payload['type']) ?? 0),
+      tags: _readStringListValue(payload['tags']),
+    )..time = payload['time']?.toString().trim().isNotEmpty == true
+        ? payload['time'].toString().trim()
+        : getCurTime();
+  }
+
+  ImageFavorite _imageFavoriteFromPayload(Map<String, dynamic> payload) {
+    return ImageFavorite(
+      payload['id']?.toString() ?? '',
+      payload['imagePath']?.toString() ?? '',
+      payload['title']?.toString() ?? '',
+      _readIntValue(payload['ep']) ?? 0,
+      _readIntValue(payload['page']) ?? 0,
+      _readJsonLikeMap(payload['otherInfo']),
+    );
+  }
+
+  void _notifyLibraryChanged() {
+    // Favorites and image favorites live in their own SQLite stores; changing
+    // them must not trigger a full resource rescan, which would block existing
+    // remote library endpoints on large libraries.
   }
 
   String? _rootPathForRootId(String rootId) {
@@ -1447,5 +1717,44 @@ class PicaKeepAdminServer {
         .map((entry) => entry.toString().trim())
         .where((entry) => entry.isNotEmpty)
         .toList(growable: false);
+  }
+
+  Future<Map<String, dynamic>> _readJsonMapFromBody(Request request) async {
+    final body = await request.readAsString();
+    if (body.trim().isEmpty) {
+      return const <String, dynamic>{};
+    }
+    final decoded = jsonDecode(body);
+    return _readJsonLikeMap(decoded);
+  }
+
+  Map<String, dynamic> _readJsonLikeMap(Object? value) {
+    if (value is Map<String, dynamic>) {
+      return value;
+    }
+    if (value is Map) {
+      return value.map((key, value) => MapEntry(key.toString(), value));
+    }
+    return const <String, dynamic>{};
+  }
+
+  List<String> _readStringListValue(Object? value) {
+    if (value is! List) {
+      return const <String>[];
+    }
+    return value
+        .map((entry) => entry.toString().trim())
+        .where((entry) => entry.isNotEmpty)
+        .toList(growable: false);
+  }
+
+  int? _readIntValue(Object? value) {
+    if (value is int) {
+      return value;
+    }
+    if (value is num) {
+      return value.toInt();
+    }
+    return int.tryParse(value?.toString() ?? '');
   }
 }

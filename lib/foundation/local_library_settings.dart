@@ -16,8 +16,39 @@ const archiveDefaultPasswordsSettingIndex = 108;
 const archiveAutoUnlockEnabledSettingIndex = 109;
 const archiveReadingCacheLimitMbSettingIndex = 110;
 const archiveUseChapterNumberSettingIndex = 111;
+const favoritesLibraryViewSettingIndex = 112;
+const imageFavoritesLibraryViewSettingIndex = 113;
 const androidRootModeSettingIndex = 101;
 const androidShizukuModeSettingIndex = 102;
+
+/// Max concurrent remote image downloads while reading (reader full-size
+/// pages / preload). Bounds the HttpClient connection pool so a reader that
+/// fans out dozens of precache requests cannot saturate it — the surplus would
+/// otherwise queue inside `getUrl` and fail with a 5s "couldn't get a
+/// connection" timeout, poison the singleton pool, and break every remote tab.
+const remoteReaderImageConcurrencySettingIndex = 114;
+
+/// Max concurrent remote cover/thumbnail downloads while browsing (favorites,
+/// image favorites, downloaded, albums grids). Separate from the reader limit
+/// because grids and the reader are never on screen together.
+const remoteBrowseImageConcurrencySettingIndex = 115;
+
+int _clampConcurrency(String? raw, int fallback) {
+  final value = int.tryParse(raw?.trim() ?? '') ?? fallback;
+  if (value < 1) {
+    return 1;
+  }
+  if (value > 12) {
+    return 12;
+  }
+  return value;
+}
+
+int normalizeRemoteReaderImageConcurrency(String? value) =>
+    _clampConcurrency(value, 6);
+
+int normalizeRemoteBrowseImageConcurrency(String? value) =>
+    _clampConcurrency(value, 8);
 
 const localAlbumImageSortNameAsc = '0';
 const localAlbumImageSortNameDesc = '1';
@@ -84,6 +115,10 @@ String normalizeLocalLibraryView(String? value) {
     default:
       return 'local';
   }
+}
+
+String normalizeTwoWayLibraryView(String? value) {
+  return value == 'remote' ? 'remote' : 'local';
 }
 
 String normalizeAndroidRootMode(String? value) {

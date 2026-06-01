@@ -40,25 +40,7 @@ Widget buildExploreSettings(double width, BuildContext context) {
         ),
         ListTile(
           title: Text("漫画块大小".tl),
-          subtitle: Slider(
-            value: double.parse(
-                    appdata.settings[44].split(',').length == 2
-                        ? appdata.settings[44].split(',')[1]
-                        : "1.0")
-                .clamp(0.5, 1.5),
-            min: 0.5,
-            max: 1.5,
-            divisions: 20,
-            label: (double.parse(
-                        appdata.settings[44].split(',').length == 2
-                            ? appdata.settings[44].split(',')[1]
-                            : "1.0")
-                    .clamp(0.5, 1.5))
-                .toStringAsFixed(2),
-            onChanged: (value) {
-              _setSliderValue(value);
-            },
-          ),
+          subtitle: const _ComicTileSizeSlider(),
         ),
         SelectSetting(
           title: "漫画块缩略图布局".tl,
@@ -76,38 +58,126 @@ Widget buildExploreSettings(double width, BuildContext context) {
         ),
         ListTile(
           title: Text("图片收藏大小".tl),
-          subtitle: Slider(
-            value: double.tryParse(appdata.settings[74]) ?? 1.0,
-            min: 0.5,
-            max: 1.5,
-            divisions: 10,
-            label: (double.tryParse(appdata.settings[74]) ?? 1.0)
-                .toStringAsFixed(1),
-            onChanged: (value) {
-              _setImageFavoriteSize(value);
-            },
-          ),
+          subtitle: const _ImageFavoriteSizeSlider(),
         ),
         SwitchSetting(
           title: "检查剪切板中的链接".tl,
           settingsIndex: 61,
         ),
+        SelectSetting(
+          title: "浏览时远程图片并发".tl,
+          settingsIndex: remoteBrowseImageConcurrencySettingIndex,
+          controlWidth: 120,
+          values: const [
+            "1",
+            "2",
+            "3",
+            "4",
+            "5",
+            "6",
+            "7",
+            "8",
+            "9",
+            "10",
+            "11",
+            "12"
+          ],
+          titles: const [
+            "1",
+            "2",
+            "3",
+            "4",
+            "5",
+            "6",
+            "7",
+            "8",
+            "9",
+            "10",
+            "11",
+            "12"
+          ],
+        ),
   ]);
 }
 
-void _setSliderValue(double value) {
-  var values = appdata.settings[44].split(',');
-  if (values.length != 2) {
-    values = ['0', '1.0'];
-  }
-  values[1] = value.toStringAsFixed(2);
-  appdata.settings[44] = values.join(',');
-  appdata.updateSettings();
+/// Slider whose thumb tracks the finger in real time. The plain inline Slider
+/// read its value straight from `appdata.settings`, but `buildExploreSettings`
+/// is a stateless function, so dragging triggered no rebuild and the thumb only
+/// jumped to the new position when something else rebuilt the page. Holding the
+/// drag value in local state and setState-ing on change makes it follow.
+class _ComicTileSizeSlider extends StatefulWidget {
+  const _ComicTileSizeSlider();
+
+  @override
+  State<_ComicTileSizeSlider> createState() => _ComicTileSizeSliderState();
 }
 
-void _setImageFavoriteSize(double value) {
-  appdata.settings[74] = value.toStringAsFixed(1);
-  appdata.updateSettings();
+class _ComicTileSizeSliderState extends State<_ComicTileSizeSlider> {
+  static double _readValue() {
+    final parts = appdata.settings[44].split(',');
+    final raw = parts.length == 2 ? parts[1] : "1.0";
+    return (double.tryParse(raw) ?? 1.0).clamp(0.5, 1.5);
+  }
+
+  late double _value = _readValue();
+
+  void _write(double value) {
+    var values = appdata.settings[44].split(',');
+    if (values.length != 2) {
+      values = ['0', '1.0'];
+    }
+    values[1] = value.toStringAsFixed(2);
+    appdata.settings[44] = values.join(',');
+    appdata.updateSettings();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Slider(
+      value: _value,
+      min: 0.5,
+      max: 1.5,
+      divisions: 20,
+      label: _value.toStringAsFixed(2),
+      onChanged: (value) {
+        setState(() => _value = value);
+        _write(value);
+      },
+    );
+  }
+}
+
+class _ImageFavoriteSizeSlider extends StatefulWidget {
+  const _ImageFavoriteSizeSlider();
+
+  @override
+  State<_ImageFavoriteSizeSlider> createState() =>
+      _ImageFavoriteSizeSliderState();
+}
+
+class _ImageFavoriteSizeSliderState extends State<_ImageFavoriteSizeSlider> {
+  late double _value =
+      (double.tryParse(appdata.settings[74]) ?? 1.0).clamp(0.5, 1.5);
+
+  void _write(double value) {
+    appdata.settings[74] = value.toStringAsFixed(1);
+    appdata.updateSettings();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Slider(
+      value: _value,
+      min: 0.5,
+      max: 1.5,
+      divisions: 10,
+      label: _value.toStringAsFixed(1),
+      onChanged: (value) {
+        setState(() => _value = value);
+        _write(value);
+      },
+    );
+  }
 }
 
 class KeywordBlockingSetting extends StatefulWidget {
