@@ -9,9 +9,11 @@ import 'package:picakeep/base.dart';
 import 'package:picakeep/foundation/app.dart';
 import 'package:picakeep/foundation/app_runtime_mode.dart';
 import 'package:picakeep/foundation/download_model.dart';
+import 'package:picakeep/foundation/image_favorites.dart';
 import 'package:picakeep/foundation/image_loader/base_image_provider.dart';
 import 'package:picakeep/foundation/image_loader/stream_image_provider.dart';
 import 'package:picakeep/foundation/local_favorites.dart';
+import 'package:picakeep/foundation/local_library_settings.dart';
 import 'package:picakeep/pages/reader/comic_reading_page.dart';
 
 class RemoteLibraryDataSourceException implements Exception {
@@ -344,6 +346,122 @@ class RemoteLibraryTrashItem {
   }
 }
 
+class RemoteFavoriteFolder {
+  const RemoteFavoriteFolder({
+    required this.name,
+    required this.count,
+  });
+
+  final String name;
+  final int count;
+
+  factory RemoteFavoriteFolder.fromJson(Map<String, dynamic> json) {
+    return RemoteFavoriteFolder(
+      name: _readText(json['name']),
+      count: _readInt(json['count']) ?? 0,
+    );
+  }
+}
+
+class RemoteFavoriteItem {
+  const RemoteFavoriteItem({
+    required this.name,
+    required this.author,
+    required this.type,
+    required this.tags,
+    required this.target,
+    required this.time,
+    required this.coverUrl,
+  });
+
+  final String name;
+  final String author;
+  final FavoriteType type;
+  final List<String> tags;
+  final String target;
+  final String time;
+  final String coverUrl;
+
+  FavoriteItem toLocalFavoriteItem() {
+    return FavoriteItem(
+      target: target,
+      name: name,
+      coverPath: '',
+      author: author,
+      type: type,
+      tags: tags,
+    )..time = time;
+  }
+
+  factory RemoteFavoriteItem.fromJson(
+    Map<String, dynamic> json,
+    RemoteLibraryClient client,
+  ) {
+    return RemoteFavoriteItem(
+      name: _readText(json['name']),
+      author: _readText(json['author']),
+      type: FavoriteType(_readInt(json['type']) ?? 0),
+      tags: _readStringList(json['tags']),
+      target: _readText(json['target']),
+      time: _readText(json['time']),
+      coverUrl: client.resolveUrlString(_readText(json['coverUrl'])),
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+        'name': name,
+        'author': author,
+        'type': type.key,
+        'tags': tags,
+        'target': target,
+        'time': time,
+      };
+}
+
+class RemoteImageFavorite {
+  const RemoteImageFavorite({
+    required this.id,
+    required this.title,
+    required this.ep,
+    required this.page,
+    required this.otherInfo,
+    required this.imageUrl,
+  });
+
+  final String id;
+  final String title;
+  final int ep;
+  final int page;
+  final Map<String, dynamic> otherInfo;
+  final String imageUrl;
+
+  ImageFavorite toLocalImageFavorite() {
+    return ImageFavorite(id, '', title, ep, page, otherInfo);
+  }
+
+  factory RemoteImageFavorite.fromJson(
+    Map<String, dynamic> json,
+    RemoteLibraryClient client,
+  ) {
+    return RemoteImageFavorite(
+      id: _readText(json['id']),
+      title: _readText(json['title']),
+      ep: _readInt(json['ep']) ?? 0,
+      page: _readInt(json['page']) ?? 0,
+      otherInfo: _readNestedMap(json['otherInfo']),
+      imageUrl: client.resolveUrlString(_readText(json['imageUrl'])),
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'title': title,
+        'ep': ep,
+        'page': page,
+        'otherInfo': otherInfo,
+      };
+}
+
 class RemoteLibraryComicItem extends DownloadedItem {
   RemoteLibraryComicItem({
     required this.client,
@@ -433,6 +551,9 @@ class RemoteLibraryComicItem extends DownloadedItem {
   Iterable<String> get candidateValues sync* {
     yield remoteId;
     yield title;
+    if (displayId.isNotEmpty) {
+      yield displayId;
+    }
     if (detailUrl.isNotEmpty) {
       yield detailUrl;
     }
@@ -788,8 +909,57 @@ class _RemoteLibrarySnapshot {
   final String signature;
 }
 
+/// Thrown when a remote cover/image is known to be unavailable (e.g. the
+/// server has no image file for this favorite). It is consumed by the
+/// widget-level `errorBuilder` to show a placeholder, and is intentionally
+/// lightweight so it does not spam the console.
+class RemoteCoverUnavailableException implements Exception {
+  const RemoteCoverUnavailableException();
+
+  @override
+  String toString() => 'RemoteCoverUnavailableException';
+}
+
 class _RemoteLibraryCoverDiskCache {
   static final Map<String, Future<File>> _pending = <String, Future<File>>{};
+
+  /// Negative cache: URLs whose download recently failed. Keyed by url, value
+  /// is the time the failure expires. While present and unexpired, we skip the
+  /// network entirely so a screen full of missing covers cannot flood the
+  /// server with doomed requests (which would starve the /status probe and
+  /// make remote tabs look "offline").
+  static final Map<String, DateTime> _failureUntil = <String, DateTime>{};
+
+  /// 404 (server genuinely has no file) is unlikely to fix itself quickly, so
+  /// it gets a longer cooldown than transient errors (timeouts, socket drops),
+  /// which deserve a quick retry.
+  static const Duration _notFoundCooldown = Duration(minutes: 10);
+  static const Duration _transientCooldown = Duration(seconds: 20);
+
+  /// Coalesces [_trimToLimit] so a burst of cover downloads cannot trigger a
+  /// burst of full-tree disk scans on the event loop.
+  static const Duration _trimMinInterval = Duration(seconds: 30);
+  static bool _trimInFlight = false;
+  static DateTime? _lastTrimAt;
+
+  static bool _isInFailureWindow(String url) {
+    final until = _failureUntil[url];
+    if (until == null) {
+      return false;
+    }
+    if (DateTime.now().isAfter(until)) {
+      _failureUntil.remove(url);
+      return false;
+    }
+    return true;
+  }
+
+  static void _recordFailure(String url, Object error) {
+    final isNotFound = error is RemoteLibraryRequestException &&
+        error.statusCode == 404;
+    _failureUntil[url] =
+        DateTime.now().add(isNotFound ? _notFoundCooldown : _transientCooldown);
+  }
 
   static Directory get _cacheDirectory => Directory(
         '${App.dataPath}${Platform.pathSeparator}cache'
@@ -812,6 +982,12 @@ class _RemoteLibraryCoverDiskCache {
     final target = cachedFileFor(url);
     if (await _isUsable(target)) {
       return target;
+    }
+
+    // Recently failed (e.g. server has no image for this favorite): skip the
+    // network so a grid full of missing covers does not flood the server.
+    if (_isInFailureWindow(url)) {
+      throw const RemoteCoverUnavailableException();
     }
 
     final key = target.path;
@@ -837,7 +1013,18 @@ class _RemoteLibraryCoverDiskCache {
     IOSink? sink;
     try {
       sink = temp.openWrite();
-      await for (final chunk in client.loadImage(url)) {
+      // Route cover downloads through the BULK image pool (_httpClient), NOT
+      // the control pool. Covers and the JSON control calls (folder list, item
+      // list, /status probe) are shown together — a grid loads N cover streams
+      // while the page also needs to fetch its list. If covers sat on the small
+      // control pool they would occupy all its connections and the list/detail
+      // calls would time out ("远程加载失败" on both favorites pages, and a tap
+      // throwing "远程服务响应超时"). The reader's full-page streams (also bulk)
+      // are never on screen at the same time as a cover grid, so they do not
+      // contend. lightweight=false keeps covers off the control plane;
+      // isCover=true makes them draw from the browse concurrency budget.
+      await for (final chunk
+          in client.loadImage(url, lightweight: false, isCover: true)) {
         sink.add(chunk);
       }
       await sink.flush();
@@ -848,8 +1035,10 @@ class _RemoteLibraryCoverDiskCache {
       }
       await temp.rename(target.path);
       await _trimToLimit(protectedPath: target.path);
+      _failureUntil.remove(url);
       return target;
-    } catch (_) {
+    } catch (error) {
+      _recordFailure(url, error);
       try {
         await sink?.close();
       } catch (_) {}
@@ -858,11 +1047,40 @@ class _RemoteLibraryCoverDiskCache {
           await temp.delete();
         }
       } catch (_) {}
-      rethrow;
+      // Collapse to a quiet, expected failure so the widget errorBuilder can
+      // show a placeholder without the console being spammed by 404s.
+      throw const RemoteCoverUnavailableException();
     }
   }
 
   static Future<void> _trimToLimit({required String protectedPath}) async {
+    // This walks the entire cache tree (twice) reading every file's size. It is
+    // invoked after every cover download, so when a grid loads dozens of covers
+    // at once it would otherwise run dozens of full-disk scans back to back,
+    // saturating the event loop (visible as "doing too much work on its main
+    // thread" / skipped frames) and starving the .timeout() timers that the
+    // list requests depend on — which is exactly when the remote tabs appear to
+    // hang on the loading spinner. Coalesce: never overlap, and run at most once
+    // per interval. Trimming is best-effort eviction, so a slightly stale run is
+    // harmless.
+    if (_trimInFlight) {
+      return;
+    }
+    final lastTrim = _lastTrimAt;
+    if (lastTrim != null &&
+        DateTime.now().difference(lastTrim) < _trimMinInterval) {
+      return;
+    }
+    _trimInFlight = true;
+    try {
+      await _trimToLimitInner(protectedPath: protectedPath);
+    } finally {
+      _lastTrimAt = DateTime.now();
+      _trimInFlight = false;
+    }
+  }
+
+  static Future<void> _trimToLimitInner({required String protectedPath}) async {
     final limitBytes = appdata.appSettings.cacheLimit * 1024 * 1024;
     if (limitBytes <= 0 || !await _cacheDirectory.exists()) {
       return;
@@ -1062,20 +1280,101 @@ class RemoteLibraryDataSource {
   }
 }
 
+/// A simple async semaphore: at most N holders run concurrently (N is read
+/// live via [_permitsResolver]); the rest await in FIFO order. Used to cap how many remote image requests are
+/// in flight at once so they never exceed the HttpClient connection pool. When
+/// they would, the surplus piles up inside `getUrl` and fails with a 5s
+/// "couldn't acquire a connection" timeout — and because that timeout cannot
+/// cancel the queued connection attempt, the orphaned attempts churn the pool
+/// forever, poisoning every remote tab. Capping in front of `getUrl` removes
+/// that failure mode entirely.
+///
+/// The permit count is read live on each acquire so a settings change takes
+/// effect immediately (it only affects newly acquired permits, never revokes
+/// ones already held).
+class _ImageConcurrencyLimiter {
+  _ImageConcurrencyLimiter(this._permitsResolver);
+
+  final int Function() _permitsResolver;
+  int _active = 0;
+  final _waiters = <Completer<void>>[];
+
+  Future<void> acquire() {
+    if (_active < _permitsResolver()) {
+      _active++;
+      return Future<void>.value();
+    }
+    // At capacity: queue. The permit is handed to us by release() without
+    // changing _active, so we must NOT increment here (doing so would let a
+    // synchronous acquire() in the gap before our microtask runs double-count
+    // the freed slot and exceed the limit).
+    final completer = Completer<void>();
+    _waiters.add(completer);
+    return completer.future;
+  }
+
+  void release() {
+    // Prefer to hand this holder's permit straight to the next waiter (keep
+    // _active unchanged). Only when no waiter can be admitted under the current
+    // (possibly just-lowered) limit do we actually free the permit.
+    if (_waiters.isNotEmpty && _active <= _permitsResolver()) {
+      final next = _waiters.removeAt(0);
+      if (!next.isCompleted) {
+        next.complete();
+        return;
+      }
+    }
+    if (_active > 0) {
+      _active--;
+    }
+  }
+}
+
 class RemoteLibraryClient {
   RemoteLibraryClient._({
     required this.baseUrl,
     required this.baseUri,
-  }) : _httpClient = HttpClient()
+  })  : _httpClient = HttpClient()
           ..connectionTimeout = const Duration(seconds: 5)
           ..idleTimeout = const Duration(seconds: 20)
-          ..maxConnectionsPerHost = 12;
+          // Must be >= the sum of both image concurrency limiters' maximums
+          // (reader up to 12 + browse up to 12 = 24). The limiters already cap
+          // how many requests we launch; sizing the pool to match guarantees a
+          // launched request never has to queue inside getUrl, so the 5s
+          // "acquire a connection" timeout — and the orphaned-connection pool
+          // exhaustion it used to cause — cannot happen under normal use.
+          ..maxConnectionsPerHost = 24,
+        // Separate client for control-plane requests (JSON list/detail/
+        // favorites) so the bulk image pool used by the reader cannot starve
+        // them. Reader sessions can hold dozens of in-flight image streams
+        // and saturate _httpClient; lightweight metadata calls would then time
+        // out, breaking favorites lists and remote tab loads.
+        _controlClient = HttpClient()
+          ..connectionTimeout = const Duration(seconds: 5)
+          ..idleTimeout = const Duration(seconds: 20)
+          ..maxConnectionsPerHost = 6;
 
   static final Map<String, RemoteLibraryClient> _instances = {};
 
   final String baseUrl;
   final Uri baseUri;
   final HttpClient _httpClient;
+  final HttpClient _controlClient;
+
+  // Caps in-flight remote image requests so they never exceed the connection
+  // pool. Reader pages and browse covers get separate budgets because they are
+  // never on screen at the same time. Limits are read live from settings.
+  final _ImageConcurrencyLimiter _readerImageLimiter = _ImageConcurrencyLimiter(
+    () => normalizeRemoteReaderImageConcurrency(
+      appdata.settings[remoteReaderImageConcurrencySettingIndex],
+    ),
+  );
+  final _ImageConcurrencyLimiter _browseImageLimiter = _ImageConcurrencyLimiter(
+    () => normalizeRemoteBrowseImageConcurrency(
+      appdata.settings[remoteBrowseImageConcurrencySettingIndex],
+    ),
+  );
+
   final Map<String, RemoteLibraryComicItem> _detailCache = {};
   final Map<String, Future<RemoteLibraryComicItem>> _pendingDetailRequests = {};
   Future<_RemoteLibrarySnapshot>? _pendingSnapshotRequest;
@@ -1197,6 +1496,126 @@ class RemoteLibraryClient {
           ),
         )
         .toList(growable: false);
+  }
+
+  Future<List<RemoteFavoriteFolder>> fetchFavoriteFolders() async {
+    final payload = await _getJsonMap('/api/library/favorites');
+    final foldersValue = payload['folders'];
+    if (foldersValue is! List) {
+      return const <RemoteFavoriteFolder>[];
+    }
+    return foldersValue
+        .whereType<Map>()
+        .map(
+          (folder) => RemoteFavoriteFolder.fromJson(
+            folder.map((key, value) => MapEntry(key.toString(), value)),
+          ),
+        )
+        .toList(growable: false);
+  }
+
+  Future<List<RemoteFavoriteItem>> fetchFavoritesInFolder(String folder) async {
+    final payload = await _getJsonMap(
+      '/api/library/favorites/${Uri.encodeComponent(folder)}',
+    );
+    final itemsValue = payload['items'];
+    if (itemsValue is! List) {
+      return const <RemoteFavoriteItem>[];
+    }
+    return itemsValue
+        .whereType<Map>()
+        .map(
+          (item) => RemoteFavoriteItem.fromJson(
+            item.map((key, value) => MapEntry(key.toString(), value)),
+            this,
+          ),
+        )
+        .toList(growable: false);
+  }
+
+  Future<List<RemoteImageFavorite>> fetchImageFavorites() async {
+    final payload = await _getJsonMap('/api/library/image-favorites');
+    final itemsValue = payload['items'];
+    if (itemsValue is! List) {
+      return const <RemoteImageFavorite>[];
+    }
+    return itemsValue
+        .whereType<Map>()
+        .map(
+          (item) => RemoteImageFavorite.fromJson(
+            item.map((key, value) => MapEntry(key.toString(), value)),
+            this,
+          ),
+        )
+        .toList(growable: false);
+  }
+
+  Future<void> createRemoteFolder(String name) async {
+    await _sendRequest(
+      'POST',
+      '/api/library/favorites',
+      body: {'name': name},
+    );
+    _clearCaches();
+  }
+
+  Future<void> deleteRemoteFolder(String folder) async {
+    await _sendRequest(
+      'DELETE',
+      '/api/library/favorites/${Uri.encodeComponent(folder)}',
+    );
+    _clearCaches();
+  }
+
+  Future<void> renameRemoteFolder(String folder, String newName) async {
+    await _sendRequest(
+      'PUT',
+      '/api/library/favorites/${Uri.encodeComponent(folder)}',
+      body: {'newName': newName},
+    );
+    _clearCaches();
+  }
+
+  Future<void> addRemoteFavorite(String folder, FavoriteItem item) async {
+    await _sendRequest(
+      'POST',
+      '/api/library/favorites/${Uri.encodeComponent(folder)}',
+      body: item.toJson(),
+    );
+    _clearCaches();
+  }
+
+  Future<void> deleteRemoteFavorite(
+      String folder, RemoteFavoriteItem item) async {
+    await _sendRequest(
+      'DELETE',
+      '/api/library/favorites/${Uri.encodeComponent(folder)}/${Uri.encodeComponent(item.target)}',
+    );
+    _clearCaches();
+  }
+
+  Future<void> addRemoteImageFavorite(ImageFavorite item) async {
+    await _sendRequest(
+      'POST',
+      '/api/library/image-favorites',
+      body: {
+        'id': item.id,
+        'imagePath': item.imagePath,
+        'title': item.title,
+        'ep': item.ep,
+        'page': item.page,
+        'otherInfo': item.otherInfo,
+      },
+    );
+    _clearCaches();
+  }
+
+  Future<void> deleteRemoteImageFavorite(RemoteImageFavorite item) async {
+    await _sendRequest(
+      'DELETE',
+      '/api/library/image-favorites/${Uri.encodeComponent(item.id)}/${item.ep}/${item.page}',
+    );
+    _clearCaches();
   }
 
   Future<void> rescanLibrary() async {
@@ -1562,31 +1981,189 @@ class RemoteLibraryClient {
     return detail;
   }
 
-  Future<StreamImageLoadResult> loadImageWithProgress(String url) async {
+  /// Opens an HTTP connection with a timeout that does NOT leak the socket.
+  ///
+  /// `future.timeout(d)` only abandons the *front-end* future — the underlying
+  /// `HttpClient` keeps trying to open the connection. If it eventually
+  /// succeeds AFTER we have given up, the returned [HttpClientRequest] is owned
+  /// by no one: nobody calls close()/abort(), so its socket stays pinned in the
+  /// keep-alive pool forever. A handful of these and `maxConnectionsPerHost` is
+  /// exhausted by orphans → every later request times out trying to acquire a
+  /// connection → all remote image loading dies until the isolate is rebuilt
+  /// (hot restart / app relaunch), which is exactly the observed symptom.
+  ///
+  /// Here we keep the orphan future and, if the timeout wins, attach a
+  /// continuation that aborts the request whenever it finally resolves, handing
+  /// the connection straight back to the pool.
+  static Future<HttpClientRequest> _openWithTimeout(
+    Future<HttpClientRequest> connecting,
+    Duration timeout,
+  ) {
+    return connecting.timeout(
+      timeout,
+      onTimeout: () {
+        // Reclaim the connection once (if) it eventually opens.
+        unawaited(connecting.then(
+          (request) {
+            try {
+              request.abort();
+            } catch (_) {}
+          },
+          onError: (_) {},
+        ));
+        throw TimeoutException('connection acquisition timed out', timeout);
+      },
+    );
+  }
+
+  Future<StreamImageLoadResult> loadImageWithProgress(
+    String url, {
+    bool lightweight = false,
+    bool isCover = false,
+  }) async {
+    final client = lightweight ? _controlClient : _httpClient;
+    // Acquire a concurrency permit BEFORE touching getUrl. This is the core
+    // fix: without it, a reader/grid that fires dozens of image requests at
+    // once overflows the connection pool, the surplus blocks inside getUrl, and
+    // each fails with a 5s timeout that cannot cancel its queued connection
+    // attempt — orphaned attempts then churn the singleton pool forever and
+    // every remote tab dies. Capping here means getUrl is only ever called when
+    // a connection is actually available, so it returns promptly.
+    final limiter = isCover ? _browseImageLimiter : _readerImageLimiter;
+    await limiter.acquire();
+    var permitReleased = false;
+    void releasePermit() {
+      if (!permitReleased) {
+        permitReleased = true;
+        limiter.release();
+      }
+    }
+
+    HttpClientRequest? request;
     try {
-      final request = await _httpClient.getUrl(resolveUri(url)).timeout(
-            const Duration(seconds: 5),
-          );
+      request = await _openWithTimeout(
+        client.getUrl(resolveUri(url)),
+        const Duration(seconds: 5),
+      );
       final response = await request.close().timeout(
             const Duration(seconds: 10),
           );
       if (response.statusCode < 200 || response.statusCode >= 300) {
-        throw RemoteLibraryDataSourceException(
+        // A non-2xx response (e.g. a 404 for a missing cover) STILL has a live
+        // body and an attached socket. dart:io only returns that socket to the
+        // keep-alive pool once the body is fully consumed. request.abort() here
+        // is unreliable after close() — the socket is owned by the response by
+        // now — so the connection leaks. Scrolling a folder full of missing
+        // covers then leaks one connection per cover; after maxConnectionsPerHost
+        // (24) the pool is exhausted and EVERY later image (covers AND reader
+        // pages, which share _httpClient) hangs until the isolate is rebuilt
+        // (hot restart). drain() reads/discards the body so the connection is
+        // cleanly recycled. A short timeout guards against a 404 whose body
+        // itself stalls — only then do we fall back to abort.
+        try {
+          await response.drain<void>().timeout(const Duration(seconds: 5));
+        } catch (_) {
+          try {
+            request.abort();
+          } catch (_) {}
+        }
+        releasePermit();
+        throw RemoteLibraryRequestException(
           '远程图片请求失败：${response.statusCode}',
+          response.statusCode,
         );
       }
+      // Permit ownership transfers to the body stream — released in its finally
+      // (on normal completion, error, or consumer cancellation).
       return StreamImageLoadResult(
-        stream: response,
+        stream: _guardedImageBody(request, response, releasePermit),
         expectedTotalBytes:
             response.contentLength >= 0 ? response.contentLength : null,
       );
+    } on TimeoutException {
+      // Critical: a front-end .timeout() does NOT cancel the underlying
+      // socket. Without abort(), timed-out reader image requests keep the
+      // connection pinned in the pool — after a few comics the pool fills up
+      // and every later request times out at "5s to get a connection",
+      // producing a screen of broken covers and unreadable comics. abort()
+      // releases the socket back to the pool.
+      try {
+        request?.abort();
+      } catch (_) {}
+      releasePermit();
+      rethrow;
     } on SocketException {
+      try {
+        request?.abort();
+      } catch (_) {}
+      releasePermit();
       throw const RemoteLibraryDataSourceException('无法连接远程图片资源');
+    } catch (_) {
+      // Any other failure before the stream is handed off must still free the
+      // permit, or the limiter would leak slots and eventually deadlock.
+      releasePermit();
+      rethrow;
     }
   }
 
-  Stream<List<int>> loadImage(String url) async* {
-    final result = await loadImageWithProgress(url);
+  /// Streams an HTTP response body while guaranteeing the socket is released.
+  ///
+  /// The front-end `.timeout()` in [loadImageWithProgress] only bounds
+  /// connection setup and header arrival. The body itself can either stall
+  /// (server sent headers then hung) or be abandoned by the consumer (image
+  /// evicted from the cache, reader/favorites page disposed). In both cases a
+  /// bare `await for` over the raw response leaves the socket pinned in the
+  /// keep-alive pool forever. After a handful of these the small _controlClient
+  /// pool — shared with the favorites / image-favorites list calls — is fully
+  /// consumed by zombie sockets, so every later control request times out and
+  /// the remote tabs look "stuck loading", even after leaving and re-entering
+  /// the page (the poisoned pool lives in the client singleton).
+  ///
+  /// An idle timeout aborts a stalled transfer; the `finally` aborts when the
+  /// stream is cancelled or errors before completing. A normally-completed body
+  /// is left untouched so its connection can be reused (keep-alive). The
+  /// concurrency permit acquired in [loadImageWithProgress] is released here
+  /// exactly once, whichever way the stream ends.
+  Stream<List<int>> _guardedImageBody(
+    HttpClientRequest request,
+    HttpClientResponse response,
+    void Function() releasePermit,
+  ) async* {
+    var completed = false;
+    try {
+      yield* response.timeout(
+        const Duration(seconds: 15),
+        onTimeout: (sink) {
+          try {
+            request.abort();
+          } catch (_) {}
+          sink.addError(
+            const RemoteLibraryDataSourceException('远程图片传输超时'),
+          );
+          sink.close();
+        },
+      );
+      completed = true;
+    } finally {
+      if (!completed) {
+        try {
+          request.abort();
+        } catch (_) {}
+      }
+      releasePermit();
+    }
+  }
+
+  Stream<List<int>> loadImage(
+    String url, {
+    bool lightweight = false,
+    bool isCover = false,
+  }) async* {
+    final result = await loadImageWithProgress(
+      url,
+      lightweight: lightweight,
+      isCover: isCover,
+    );
     yield* result.stream;
   }
 
@@ -1620,10 +2197,12 @@ class RemoteLibraryClient {
     String path, {
     Object? body,
   }) async {
+    HttpClientRequest? request;
     try {
-      final request = await _httpClient
-          .openUrl(method, resolveUri(path))
-          .timeout(const Duration(seconds: 5));
+      request = await _openWithTimeout(
+        _controlClient.openUrl(method, resolveUri(path)),
+        const Duration(seconds: 5),
+      );
       request.headers.set(HttpHeaders.acceptHeader, 'application/json');
       if (body != null) {
         request.headers.set(
@@ -1653,11 +2232,28 @@ class RemoteLibraryClient {
         return decoded.map((key, value) => MapEntry(key.toString(), value));
       }
       throw const RemoteLibraryDataSourceException('服务端返回了无效数据');
+    } on RemoteLibraryRequestException {
+      rethrow;
     } on TimeoutException {
+      // Without abort(), a timed-out HTTP request keeps its socket pinned in
+      // the connection pool. After a few timeouts the small _controlClient
+      // pool (maxConnectionsPerHost=6) is fully consumed by zombie sockets
+      // and ALL subsequent control-plane requests (favorites list, item
+      // details, etc.) start timing out. abort() returns the socket to the
+      // pool. Mirror the same fix in loadImageWithProgress.
+      try {
+        request?.abort();
+      } catch (_) {}
       throw const RemoteLibraryDataSourceException('远程服务响应超时');
     } on SocketException {
+      try {
+        request?.abort();
+      } catch (_) {}
       throw const RemoteLibraryDataSourceException('无法连接远程服务');
     } on FormatException {
+      try {
+        request?.abort();
+      } catch (_) {}
       throw const RemoteLibraryDataSourceException('服务端返回了不可解析的数据');
     }
   }

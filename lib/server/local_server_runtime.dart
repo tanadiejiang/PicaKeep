@@ -6,6 +6,8 @@ import 'package:picakeep/foundation/app.dart';
 import 'package:picakeep/foundation/app_runtime_mode.dart';
 import 'package:picakeep/foundation/local_data_source.dart';
 import 'package:picakeep/foundation/local_library_settings.dart';
+import 'package:picakeep/foundation/local_favorites.dart';
+import 'package:picakeep/foundation/image_favorites.dart';
 
 import 'local_resource_scanner.dart';
 import 'library_trash_store.dart';
@@ -151,6 +153,72 @@ class LocalServerRuntime {
           throw StateError('trash item not found');
         }
       }
+      _notify();
+    });
+  }
+
+  Future<void> createFavoriteFolder(String name) {
+    return _runExclusive(() async {
+      final favorites = LocalFavoritesManager();
+      await favorites.init();
+      favorites.createFolder(name);
+      _invalidateStandaloneSnapshot();
+      _notify();
+    });
+  }
+
+  Future<void> renameFavoriteFolder(String oldName, String newName) {
+    return _runExclusive(() async {
+      final favorites = LocalFavoritesManager();
+      await favorites.init();
+      favorites.rename(oldName, newName);
+      _invalidateStandaloneSnapshot();
+      _notify();
+    });
+  }
+
+  Future<void> deleteFavoriteFolder(String name) {
+    return _runExclusive(() async {
+      final favorites = LocalFavoritesManager();
+      await favorites.init();
+      favorites.deleteFolder(name);
+      _invalidateStandaloneSnapshot();
+      _notify();
+    });
+  }
+
+  Future<void> addFavoriteItem(String folder, FavoriteItem item) {
+    return _runExclusive(() async {
+      final favorites = LocalFavoritesManager();
+      await favorites.init();
+      favorites.addComic(folder, item);
+      _invalidateStandaloneSnapshot();
+      _notify();
+    });
+  }
+
+  Future<void> deleteFavoriteItem(String folder, FavoriteItem item) {
+    return _runExclusive(() async {
+      final favorites = LocalFavoritesManager();
+      await favorites.init();
+      favorites.deleteComic(folder, item);
+      _invalidateStandaloneSnapshot();
+      _notify();
+    });
+  }
+
+  Future<void> addImageFavorite(ImageFavorite item) {
+    return _runExclusive(() async {
+      ImageFavoriteManager.add(item);
+      _invalidateStandaloneSnapshot();
+      _notify();
+    });
+  }
+
+  Future<void> deleteImageFavorite(ImageFavorite item) {
+    return _runExclusive(() async {
+      ImageFavoriteManager.delete(item);
+      _invalidateStandaloneSnapshot();
       _notify();
     });
   }

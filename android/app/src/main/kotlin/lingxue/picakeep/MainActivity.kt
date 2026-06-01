@@ -56,7 +56,6 @@ class MainActivity : FlutterActivity() {
     @Volatile
     private var shizukuUserServiceBinding = false
     private var dynamicThemeChannel: MethodChannel? = null
-    private var lastDynamicThemeNotifyAt: Long = 0L
     private var lastForwardedNightFlag: Int = Int.MIN_VALUE
 
     private val shizukuUserServiceArgs by lazy {
@@ -154,20 +153,22 @@ class MainActivity : FlutterActivity() {
 
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
-        // Returning to the app after a wallpaper change makes MIUI emit a rapid
-        // burst of onConfigurationChanged callbacks. Forwarding every one to
-        // Dart triggered a getCorePalette() + double toColorScheme() + full
-        // MaterialApp rebuild storm on the UI isolate, producing the resume ANR.
-        // Throttle on the native side and only forward when something the
-        // dynamic theme actually depends on (uiMode night flag) changed.
+        // MIUI emits onConfigurationChanged very frequently (observed ~every 6s
+        // even while idle — status-bar/system churn, none of it relevant to our
+        // theme). The previous guard still forwarded whenever 1s had elapsed, so
+        // those 6s ticks all passed through and each one ran getCorePalette() +
+        // double toColorScheme() + a full MaterialApp rebuild on the UI isolate,
+        // steadily pressuring the main thread into ANRs.
+        //
+        // The only configuration dimension our dynamic theme actually depends on
+        // here is the uiMode night flag (light/dark). Wallpaper palette changes
+        // do NOT arrive via onConfigurationChanged. So forward ONLY when the
+        // night flag truly flips; ignore every other config change.
         val nightFlag = newConfig.uiMode and Configuration.UI_MODE_NIGHT_MASK
-        val now = SystemClock.elapsedRealtime()
-        val nightChanged = nightFlag != lastForwardedNightFlag
-        if (!nightChanged && now - lastDynamicThemeNotifyAt < DYNAMIC_THEME_NOTIFY_MIN_INTERVAL_MS) {
+        if (nightFlag == lastForwardedNightFlag) {
             return
         }
         lastForwardedNightFlag = nightFlag
-        lastDynamicThemeNotifyAt = now
         dynamicThemeChannel?.invokeMethod("changed", null)
     }
 
@@ -1641,7 +1642,6 @@ class MainActivity : FlutterActivity() {
             "lingxue.picakeep/night_mode"
         private const val DYNAMIC_THEME_CHANNEL =
             "lingxue.picakeep/dynamic_theme"
-        private const val DYNAMIC_THEME_NOTIFY_MIN_INTERVAL_MS = 1_000L
         private const val STORAGE_ACCESS_CHANNEL =
             "lingxue.picakeep/storage_access"
         private const val REQUEST_CODE_POST_NOTIFICATIONS = 1001
