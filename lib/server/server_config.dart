@@ -9,6 +9,7 @@ class PicaKeepServerConfig {
     required this.originalDownloadRoot,
     required this.customLibraryRoots,
     required this.logRequests,
+    required this.consolePassword,
   });
 
   static const defaultFileName = 'picakeep_server.json';
@@ -19,13 +20,12 @@ class PicaKeepServerConfig {
   final String originalDownloadRoot;
   final List<String> customLibraryRoots;
   final bool logRequests;
+  final String consolePassword;
 
   List<String> get allLibraryRoots => [
         if (currentDownloadRoot.trim().isNotEmpty) currentDownloadRoot.trim(),
         if (originalDownloadRoot.trim().isNotEmpty) originalDownloadRoot.trim(),
-        ...customLibraryRoots
-            .map((e) => e.trim())
-            .where((e) => e.isNotEmpty),
+        ...customLibraryRoots.map((e) => e.trim()).where((e) => e.isNotEmpty),
       ];
 
   Map<String, dynamic> toJson() => {
@@ -35,6 +35,7 @@ class PicaKeepServerConfig {
         'originalDownloadRoot': originalDownloadRoot,
         'customLibraryRoots': customLibraryRoots,
         'logRequests': logRequests,
+        'consolePassword': consolePassword,
       };
 
   PicaKeepServerConfig copyWith({
@@ -44,6 +45,7 @@ class PicaKeepServerConfig {
     String? originalDownloadRoot,
     List<String>? customLibraryRoots,
     bool? logRequests,
+    String? consolePassword,
   }) {
     return PicaKeepServerConfig(
       host: host ?? this.host,
@@ -52,6 +54,7 @@ class PicaKeepServerConfig {
       originalDownloadRoot: originalDownloadRoot ?? this.originalDownloadRoot,
       customLibraryRoots: customLibraryRoots ?? this.customLibraryRoots,
       logRequests: logRequests ?? this.logRequests,
+      consolePassword: consolePassword ?? this.consolePassword,
     );
   }
 
@@ -63,6 +66,7 @@ class PicaKeepServerConfig {
       originalDownloadRoot: '',
       customLibraryRoots: [],
       logRequests: false,
+      consolePassword: '',
     );
   }
 
@@ -77,6 +81,7 @@ class PicaKeepServerConfig {
           json['originalDownloadRoot']?.toString().trim() ?? '',
       customLibraryRoots: _normalizeStringList(json['customLibraryRoots']),
       logRequests: json['logRequests'] == true,
+      consolePassword: json['consolePassword']?.toString() ?? '',
     );
   }
 

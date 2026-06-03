@@ -300,17 +300,64 @@ class _ReadingSettingsState extends State<ReadingSettings> {
             ),
           ),
           if (logic.readingMethod == ReadingMethod.topToBottomContinuously)
-            ListTile(
-              leading: const Icon(Icons.width_normal_sharp),
-              title: Text("限制图片最大显示宽度".tl),
-              trailing: Switch(
-                value: appdata.settings[43] == "1",
-                onChanged: (b) => setState(() {
-                  appdata.settings[43] = b ? "1" : "0";
-                  appdata.updateSettings();
-                  Future.microtask(() => logic.update());
-                }),
-              ),
+            Column(
+              children: [
+                ListTile(
+                  leading: const Icon(Icons.width_normal_sharp),
+                  title: Text("限制图片最大显示宽度".tl),
+                  trailing: Switch(
+                    value: appdata.settings[43] == "1",
+                    onChanged: (b) => setState(() {
+                      appdata.settings[43] = b ? "1" : "0";
+                      appdata.updateSettings();
+                      Future.microtask(() => logic.update());
+                    }),
+                  ),
+                ),
+                if (appdata.settings[43] == "1")
+                  ListTile(
+                    leading: const SizedBox(),
+                    title: Text("图片最大显示宽度".tl),
+                    subtitle: SizedBox(
+                      height: 25,
+                      child: Stack(
+                        clipBehavior: Clip.none,
+                        children: [
+                          Positioned(
+                            top: 0,
+                            bottom: 0,
+                            left: -20,
+                            right: 0,
+                            child: Slider(
+                              max: 1600,
+                              min: 600,
+                              divisions: 50,
+                              value: (double.tryParse(appdata.settings[116]) ?? 980)
+                                  .clamp(600, 1600)
+                                  .toDouble(),
+                              overlayColor: WidgetStateColor.resolveWith(
+                                  (states) => Colors.transparent),
+                              onChanged: (v) {
+                                appdata.settings[116] = v.round().toString();
+                                appdata.updateSettings();
+                                setState(() {});
+                                logic.update();
+                              },
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    trailing: SizedBox(
+                      width: 54,
+                      child: Text(
+                        "${(double.tryParse(appdata.settings[116]) ?? 980).clamp(600, 1600).round()}px",
+                        style: const TextStyle(fontSize: 14),
+                        textAlign: TextAlign.end,
+                      ),
+                    ),
+                  ),
+              ],
             ),
           ListTile(
             leading: const Icon(Icons.zoom_in),

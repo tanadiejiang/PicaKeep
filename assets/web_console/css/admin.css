@@ -1,0 +1,269 @@
+/* 管理面板样式 — 计划三继续扩充 */
+.admin-shell {
+  display: grid;
+  grid-template-columns: 260px minmax(0, 1fr);
+  min-height: calc(100vh - 96px);
+  border: 1px solid var(--line);
+  border-radius: 22px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--panel) 58%, transparent);
+}
+
+.admin-sidebar {
+  border-right: 1px solid var(--line);
+  background: color-mix(in srgb, var(--panel-2) 70%, var(--panel));
+  padding: 24px 20px;
+}
+
+.admin-nav { margin-top: 24px; display: grid; gap: 10px; }
+.admin-nav button {
+  background: color-mix(in srgb, var(--panel) 82%, transparent);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 14px 16px;
+  text-align: left;
+  cursor: pointer;
+}
+.admin-nav button.active {
+  border-color: rgba(var(--accent-rgb), 0.45);
+  background: rgba(var(--accent-rgb), 0.14);
+  color: var(--accent-2);
+}
+.admin-content { padding: 24px; min-width: 0; }
+.admin-topbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 20px;
+}
+
+.admin-card-head,
+.admin-section-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.admin-card-head h3,
+.admin-section-head h3 { margin: 0; }
+.admin-row-check { width: auto; }
+.admin-row-actions { gap: 6px; }
+.admin-batch-bar { align-items: center; }
+.admin-content table { width: 100%; }
+.admin-content th,
+.admin-content td { vertical-align: middle; }
+.admin-content td { word-break: break-word; }
+button.danger,
+button.ghost.danger {
+  border-color: color-mix(in srgb, var(--danger) 55%, transparent);
+  color: var(--danger);
+}
+button.danger:hover,
+button.ghost.danger:hover { background: color-mix(in srgb, var(--danger) 12%, transparent); }
+button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.admin-error-card,
+.admin-inline-error {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.admin-warning-card {
+  border-color: var(--warning);
+  color: var(--warning);
+  background: color-mix(in srgb, var(--warning) 10%, var(--panel));
+}
+
+.admin-overview {
+  display: grid;
+  gap: 18px;
+}
+
+.admin-overview-section {
+  margin-bottom: 0;
+}
+
+.admin-overview-primary {
+  background:
+    radial-gradient(circle at 100% 0%, rgba(var(--accent-rgb),0.13), transparent 38%),
+    color-mix(in srgb, var(--panel) 92%, transparent);
+}
+
+.admin-stat-grid {
+  gap: 14px;
+}
+
+.admin-stat {
+  border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--panel-2) 78%, transparent);
+}
+
+.admin-stat-compact .v {
+  font-size: 16px;
+  line-height: 1.35;
+}
+
+.admin-trash-thumb,
+.admin-fav-thumb,
+.admin-imgfav-thumb {
+  object-fit: cover;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--panel-2) 76%, transparent);
+  display: block;
+}
+
+.admin-trash-thumb {
+  width: 58px;
+  height: 78px;
+}
+
+.admin-fav-thumb {
+  width: 64px;
+  height: 86px;
+  flex: 0 0 auto;
+}
+
+.admin-imgfav-thumb {
+  width: 100%;
+  aspect-ratio: 1 / 1.35;
+}
+
+.admin-thumb-placeholder {
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.admin-fav-layout {
+  display: grid;
+  grid-template-columns: minmax(220px, 300px) minmax(0, 1fr);
+  gap: 16px;
+}
+
+.admin-fav-folders {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+}
+
+.admin-fav-folder {
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 10px;
+  background: color-mix(in srgb, var(--panel-2) 46%, transparent);
+}
+
+.admin-fav-folder.active {
+  border-color: rgba(var(--accent-rgb), 0.45);
+  background: rgba(var(--accent-rgb), 0.12);
+}
+
+.admin-fav-folder-name {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+  text-align: left;
+}
+
+.admin-fav-content {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 14px;
+  background: color-mix(in srgb, var(--panel-2) 34%, transparent);
+}
+
+.admin-fav-items {
+  display: grid;
+  gap: 12px;
+}
+
+.admin-fav-item {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 10px;
+  background: color-mix(in srgb, var(--panel) 86%, transparent);
+}
+
+.admin-fav-info { min-width: 0; }
+.admin-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.admin-imgfav-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 14px;
+}
+
+.admin-imgfav-card {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+}
+
+.admin-log-tools input,
+.admin-log-tools select {
+  min-height: 34px;
+  width: auto;
+}
+
+.admin-log-pre {
+  max-height: 56vh;
+  overflow: auto;
+}
+
+.admin-endpoint-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+:root[data-effective-theme="light"] .admin-shell {
+  background: color-mix(in srgb, var(--panel) 76%, var(--bg));
+}
+
+:root[data-effective-theme="light"] .admin-sidebar {
+  background: color-mix(in srgb, var(--panel) 72%, var(--panel-2));
+}
+
+:root[data-effective-theme="light"] .admin-nav button {
+  background: color-mix(in srgb, var(--panel) 88%, var(--panel-2));
+}
+
+:root[data-effective-theme="light"] .admin-stat,
+:root[data-effective-theme="light"] .admin-fav-folder,
+:root[data-effective-theme="light"] .admin-fav-content,
+:root[data-effective-theme="light"] .admin-fav-item {
+  background: color-mix(in srgb, var(--panel) 78%, var(--panel-2));
+}
+
+@media (max-width: 960px) {
+  .admin-shell { grid-template-columns: 1fr; }
+  .admin-sidebar { border-right: 0; border-bottom: 1px solid var(--line); }
+  .admin-content { padding: 16px; overflow-x: auto; }
+  .admin-fav-layout { grid-template-columns: 1fr; }
+  .admin-fav-item { grid-template-columns: auto minmax(0, 1fr); }
+  .admin-fav-item button { grid-column: 1 / -1; }
+  .admin-overview { gap: 14px; }
+}
