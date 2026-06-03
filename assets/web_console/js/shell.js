@@ -71,6 +71,11 @@
       if (isReaderActive()) return;
       setCollapsed(!readCollapsed());
     });
+    topbar.addEventListener('click', (event) => {
+      if (isReaderActive()) return;
+      if (isTopbarFunctionalTarget(event.target)) return;
+      setCollapsed(!readCollapsed());
+    });
     avatarButton.addEventListener('click', (event) => {
       event.stopPropagation();
       if (isReaderActive()) return;
@@ -89,6 +94,10 @@
     });
     document.addEventListener('click', (event) => {
       if (!avatarWrap.contains(event.target)) closeAvatarMenu();
+      if (isReaderActive() || readCollapsed()) return;
+      if (topbar.contains(event.target)) return;
+      if (!document.querySelector('#console-root')?.contains(event.target)) return;
+      setCollapsed(true);
     });
     document.addEventListener('keydown', (event) => {
       if (event.key === 'Escape') closeAvatarMenu();
@@ -147,7 +156,10 @@
       <button type="button" data-mode="${mode.value}" class="${mode.value === current ? 'active' : ''}" title="${escapeAttr(mode.label)}"><span class="mode-icon">${escapeHtml(mode.icon || '')}</span><span class="mode-label">${mode.label}</span></button>
     `).join('');
     switcher.querySelectorAll('button').forEach((button) => {
-      button.addEventListener('click', () => api.mode.set(button.dataset.mode));
+      button.addEventListener('click', (event) => {
+        event.stopPropagation();
+        api.mode.set(button.dataset.mode);
+      });
     });
   }
 
@@ -286,6 +298,10 @@
     if (!avatarCloseTimer) return;
     window.clearTimeout(avatarCloseTimer);
     avatarCloseTimer = null;
+  }
+
+  function isTopbarFunctionalTarget(target) {
+    return !!(target && target.closest && target.closest('#topbar-toggle, #mode-switch, #topbar-avatar-wrap, #top-avatar-menu'));
   }
 
   function isReaderActive() {
