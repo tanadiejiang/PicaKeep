@@ -14,12 +14,15 @@ import '../foundation/privileged_storage_access.dart';
 import '../foundation/trash.dart';
 import '../foundation/local_favorites.dart';
 import '../foundation/image_favorites.dart';
-import 'admin_web.dart';
 import 'library_event_bus.dart';
 import 'library_trash_store.dart';
 import 'local_resource_scanner.dart';
 import 'server_config.dart';
 import 'server_runtime_state.dart';
+import 'web_console/remote_proxy_handler.dart';
+import 'web_console/web_auth_handler.dart';
+import 'web_console/web_console_handler.dart';
+import 'web_console/web_user_store.dart';
 
 class PicaKeepAdminServer {
   PicaKeepAdminServer({
@@ -34,6 +37,13 @@ class PicaKeepAdminServer {
   final ServerRuntimeState _state;
   final LocalResourceScanner _scanner = LocalResourceScanner();
   final LibraryTrashStore _trashStore;
+  final WebConsoleUserStore _webUserStore = WebConsoleUserStore();
+
+  late final WebAuthHandler _authHandler = WebAuthHandler(
+    configProvider: () => _config ?? PicaKeepServerConfig.defaults(),
+    userStore: _webUserStore,
+    jsonResponse: _jsonResponse,
+  );
 
   PicaKeepServerConfig? _config;
   ServerResourceSnapshot? _snapshot;
@@ -69,6 +79,7 @@ class PicaKeepAdminServer {
     _state.markStarting('正在启动服务');
     try {
       _config = config ?? await PicaKeepServerConfig.load(configPath);
+      await _webUserStore.init(_config!);
       _setSnapshot(await _scanResources(), emitEvent: true);
       final handler = const Pipeline()
           .addMiddleware(_requestMiddleware())
@@ -109,6 +120,7 @@ class PicaKeepAdminServer {
         await Future.wait(closeFutures, eagerError: false);
       }
       await _eventBus.close();
+      _webUserStore.dispose();
       await server.close(force: true);
       _state.markStopped('服务已停止');
     } catch (e, s) {
@@ -497,7 +509,11 @@ class PicaKeepAdminServer {
               '[PicaKeepServer] ${request.method} ${request.requestedUri}',
             );
           }
-          return await innerHandler(request);
+          if (request.method == 'OPTIONS') {
+            return _withCors(Response(204));
+          }
+          final response = await innerHandler(request);
+          return _withCors(response);
         } finally {
           _state.endRequest();
         }
@@ -505,10 +521,55 @@ class PicaKeepAdminServer {
     };
   }
 
+  Response _withCors(Response response) {
+    return response.change(headers: {
+      'access-control-allow-origin': '*',
+      'access-control-allow-methods': 'GET, POST, PUT, DELETE, OPTIONS',
+      'access-control-allow-headers': 'Authorization, Content-Type, Range',
+      'access-control-expose-headers':
+          'Content-Range, Accept-Ranges, Content-Length',
+    });
+  }
+
+  bool _requiresAuthorization(String path) {
+    if (path.isEmpty || path == 'status' || path == 'api/console/login') {
+      return false;
+    }
+    if (!path.startsWith('api/')) {
+      return false;
+    }
+    return true;
+  }
+
   Future<Response> _handleRequest(Request request) async {
     final path = request.url.path;
-    if (path.isEmpty) {
-      return Response.movedPermanently('/admin');
+
+    final loginResponse = await _authHandler.handleLogin(request);
+    if (loginResponse != null) {
+      return loginResponse;
+    }
+
+    if (_requiresAuthorization(path) && !_authHandler.isAuthorized(request)) {
+      return _jsonResponse({'error': 'unauthorized'}, statusCode: 401);
+    }
+
+    final remoteProxyResponse = await handleRemoteProxyRequest(
+      request,
+      state: _state,
+      jsonResponse: _jsonResponse,
+    );
+    if (remoteProxyResponse != null) {
+      return remoteProxyResponse;
+    }
+
+    final consoleResponse = await _handleConsoleRequest(request);
+    if (consoleResponse != null) {
+      return consoleResponse;
+    }
+
+    final historyResponse = await _handleWebHistoryRequest(request);
+    if (historyResponse != null) {
+      return historyResponse;
     }
 
     final trashResponse = await _handleTrashRequest(request);
@@ -540,12 +601,6 @@ class PicaKeepAdminServer {
     if (path == 'api/events') {
       return webSocketHandler(_handleEventSocket)(request);
     }
-    if (path == 'admin') {
-      return Response.ok(
-        buildAdminConsoleHtml(),
-        headers: {'content-type': 'text/html; charset=utf-8'},
-      );
-    }
     if (path == 'api/admin/summary') {
       return _jsonResponse(buildSummaryPayload());
     }
@@ -568,6 +623,7 @@ class PicaKeepAdminServer {
         );
         _config = nextConfig;
         await PicaKeepServerConfig.save(configPath, _config!);
+        await _webUserStore.ensureAdmin(_config!.consolePassword);
         _setSnapshot(await _scanResources(), emitEvent: true);
         _state.addLog('config', '配置已更新');
         return _jsonResponse({
@@ -589,7 +645,233 @@ class PicaKeepAdminServer {
         'snapshot': snapshot.toJson(),
       });
     }
+
+    final webConsoleResponse = await handleWebConsoleRequest(request);
+    if (webConsoleResponse != null) {
+      return webConsoleResponse;
+    }
+
     return _jsonResponse({'error': 'not found'}, statusCode: 404);
+  }
+
+  Future<Response?> _handleConsoleRequest(Request request) async {
+    final segments = request.url.pathSegments;
+    if (segments.length < 3 ||
+        segments[0] != 'api' ||
+        segments[1] != 'console') {
+      return null;
+    }
+    final user = _authHandler.currentUser(request);
+    if (user == null) {
+      return _jsonResponse({'error': 'unauthorized'}, statusCode: 401);
+    }
+    final action = segments[2];
+    if (segments.length == 3 && action == 'me') {
+      if (request.method != 'GET') {
+        return _jsonResponse({'error': 'method not allowed'}, statusCode: 405);
+      }
+      return _jsonResponse({
+        'ok': true,
+        'user': user.toJson(),
+        'emptyPassword': user.isAdmin &&
+            (_config ?? PicaKeepServerConfig.defaults())
+                .consolePassword
+                .trim()
+                .isEmpty,
+      });
+    }
+    if (segments.length == 3 && action == 'logout') {
+      if (request.method != 'POST') {
+        return _jsonResponse({'error': 'method not allowed'}, statusCode: 405);
+      }
+      return _jsonResponse({'ok': true});
+    }
+    if (segments.length == 3 && action == 'change-password') {
+      if (request.method != 'POST') {
+        return _jsonResponse({'error': 'method not allowed'}, statusCode: 405);
+      }
+      final payload = await _readJsonMapFromBody(request);
+      final oldPassword = payload['oldPassword']?.toString() ?? '';
+      final newPassword = payload['newPassword']?.toString() ?? '';
+      if (!user.isAdmin && newPassword.isEmpty) {
+        return _jsonResponse(
+          {'error': 'empty password is not allowed'},
+          statusCode: 400,
+        );
+      }
+      if (_webUserStore.verifyLogin(user.username, oldPassword) == null) {
+        return _jsonResponse({'error': 'old password mismatch'}, statusCode: 403);
+      }
+      final updated = _webUserStore.resetPassword(
+        userId: user.id,
+        password: newPassword,
+        allowEmptyPassword: user.isAdmin,
+      );
+      if (updated.isAdmin) {
+        _config = (_config ?? PicaKeepServerConfig.defaults())
+            .copyWith(consolePassword: newPassword);
+        await PicaKeepServerConfig.save(configPath, _config!);
+      }
+      return _jsonResponse({
+        'ok': true,
+        'token': _authHandler.tokenForUser(updated),
+        'user': updated.toJson(),
+        'emptyPassword': updated.isAdmin && newPassword.trim().isEmpty,
+      });
+    }
+    if (segments.length == 3 && action == 'users') {
+      if (!user.isAdmin) {
+        return _jsonResponse({'error': 'forbidden'}, statusCode: 403);
+      }
+      if (request.method == 'GET') {
+        return _jsonResponse({
+          'users': _webUserStore
+              .listUsers()
+              .map((entry) => entry.toJson())
+              .toList(),
+        });
+      }
+      if (request.method == 'POST') {
+        final payload = await _readJsonMapFromBody(request);
+        final username = payload['username']?.toString() ?? '';
+        final password = payload['password']?.toString() ?? '';
+        final role =
+            payload['role']?.toString() ?? WebConsoleUserStore.userRole;
+        try {
+          final created = _webUserStore.createUser(
+            username: username,
+            password: password,
+            role: role,
+          );
+          return _jsonResponse({'ok': true, 'user': created.toJson()});
+        } on WebConsoleStoreException catch (e) {
+          return _jsonResponse({'error': e.message}, statusCode: 400);
+        }
+      }
+      return _jsonResponse({'error': 'method not allowed'}, statusCode: 405);
+    }
+    if (segments.length == 4 && action == 'users') {
+      if (!user.isAdmin) {
+        return _jsonResponse({'error': 'forbidden'}, statusCode: 403);
+      }
+      final targetUserId = int.tryParse(segments[3]);
+      if (targetUserId == null) {
+        return _jsonResponse({'error': 'invalid user'}, statusCode: 400);
+      }
+      if (request.method == 'DELETE') {
+        try {
+          _webUserStore.deleteUser(targetUserId);
+          return _jsonResponse({'ok': true});
+        } on WebConsoleStoreException catch (e) {
+          return _jsonResponse({'error': e.message}, statusCode: 400);
+        }
+      }
+      return _jsonResponse({'error': 'method not allowed'}, statusCode: 405);
+    }
+    if (segments.length == 5 &&
+        action == 'users' &&
+        segments[4] == 'reset-password') {
+      if (!user.isAdmin) {
+        return _jsonResponse({'error': 'forbidden'}, statusCode: 403);
+      }
+      if (request.method != 'POST') {
+        return _jsonResponse({'error': 'method not allowed'}, statusCode: 405);
+      }
+      final targetUserId = int.tryParse(segments[3]);
+      if (targetUserId == null) {
+        return _jsonResponse({'error': 'invalid user'}, statusCode: 400);
+      }
+      final payload = await _readJsonMapFromBody(request);
+      final password = payload['password']?.toString() ?? '';
+      final targetUser = _webUserStore.findUserById(targetUserId);
+      if (targetUser == null) {
+        return _jsonResponse({'error': 'user not found'}, statusCode: 404);
+      }
+      try {
+        final updated = _webUserStore.resetPassword(
+          userId: targetUserId,
+          password: password,
+          allowEmptyPassword: targetUser.isAdmin,
+        );
+        if (updated.isAdmin) {
+          _config = (_config ?? PicaKeepServerConfig.defaults())
+              .copyWith(consolePassword: password);
+          await PicaKeepServerConfig.save(configPath, _config!);
+        }
+        return _jsonResponse({'ok': true, 'user': updated.toJson()});
+      } on WebConsoleStoreException catch (e) {
+        return _jsonResponse({'error': e.message}, statusCode: 400);
+      }
+    }
+    return _jsonResponse({'error': 'not found'}, statusCode: 404);
+  }
+
+  Future<Response?> _handleWebHistoryRequest(Request request) async {
+    final segments = request.url.pathSegments;
+    if (segments.length != 3 ||
+        segments[0] != 'api' ||
+        segments[1] != 'library' ||
+        segments[2] != 'history') {
+      return null;
+    }
+    final user = _authHandler.currentUser(request);
+    if (user == null) {
+      return _jsonResponse({'error': 'unauthorized'}, statusCode: 401);
+    }
+    if (request.method == 'GET') {
+      final limit =
+          int.tryParse(request.url.queryParameters['limit'] ?? '') ?? 50;
+      return _jsonResponse({
+        'items': _webUserStore
+            .listHistory(user.id, limit: limit)
+            .map((entry) => entry.toJson())
+            .toList(),
+      });
+    }
+    if (request.method == 'POST') {
+      final payload = await _readJsonMapFromBody(request);
+      final target = payload['target']?.toString().trim() ?? '';
+      if (!_isValidHistoryTarget(target)) {
+        return _jsonResponse({'error': 'invalid target'}, statusCode: 400);
+      }
+      final entry = _webUserStore.upsertHistory(
+        userId: user.id,
+        target: target,
+        title: payload['title']?.toString() ?? '',
+        cover: (payload['cover'] ?? payload['coverUrl'])?.toString() ?? '',
+        ep: _readIntValue(payload['ep']) ??
+            _readIntValue(payload['episode']) ??
+            0,
+        page: _readIntValue(payload['page']) ?? 0,
+        maxPage: _readIntValue(payload['maxPage']) ??
+            _readIntValue(payload['max_page']),
+        readEpisode: _readIntSetValue(payload['readEpisode']),
+      );
+      return _jsonResponse({'ok': true, 'item': entry.toJson()});
+    }
+    if (request.method == 'DELETE') {
+      final payload = await _readJsonMapFromBody(request);
+      final target = (request.url.queryParameters['target'] ??
+              payload['target']?.toString() ??
+              '')
+          .trim();
+      if (target.isNotEmpty && !_isValidHistoryTarget(target)) {
+        return _jsonResponse({'error': 'invalid target'}, statusCode: 400);
+      }
+      _webUserStore.deleteHistory(userId: user.id, target: target);
+      return _jsonResponse({'ok': true});
+    }
+    return _jsonResponse({'error': 'method not allowed'}, statusCode: 405);
+  }
+
+  bool _isValidHistoryTarget(String target) {
+    if (target.isEmpty || target.length > 512) {
+      return false;
+    }
+    if (target.codeUnits.contains(0) || target.contains('..')) {
+      return false;
+    }
+    return true;
   }
 
   Future<Response?> _handleTrashRequest(Request request) async {
@@ -772,6 +1054,18 @@ class PicaKeepAdminServer {
       });
     }
 
+    if (segments.length == 5 && segments[4] == 'recommendations') {
+      if (request.method != 'GET') {
+        return _jsonResponse({'error': 'method not allowed'}, statusCode: 405);
+      }
+      final limit = _clampIntQuery(request.url.queryParameters['limit'], 10, 1, 30);
+      return _jsonResponse(_buildLibraryRecommendationsPayload(
+        snapshot,
+        item,
+        limit: limit,
+      ));
+    }
+
     if (segments.length == 4 && request.method == 'DELETE') {
       final dir = Directory(item.path);
       if (dir.existsSync()) {
@@ -788,7 +1082,8 @@ class PicaKeepAdminServer {
         return _jsonResponse({'error': 'method not allowed'}, statusCode: 405);
       }
       final deepItem = await _ensureDeepItem(item, rootPath: rootPath);
-      return _jsonResponse(_buildLibraryItemPayload(deepItem, includePages: true));
+      return _jsonResponse(
+          _buildLibraryItemPayload(deepItem, includePages: true));
     }
 
     if (segments.length == 5 && segments[4] == 'cover') {
@@ -888,7 +1183,8 @@ class PicaKeepAdminServer {
         final payload = await _readJsonMapFromBody(request);
         final name = payload['name']?.toString().trim() ?? '';
         if (name.isEmpty) {
-          return _jsonResponse({'error': 'invalid folder name'}, statusCode: 400);
+          return _jsonResponse({'error': 'invalid folder name'},
+              statusCode: 400);
         }
         favorites.createFolder(name);
         _state.addLog('favorites', '已新建收藏夹 $name');
@@ -922,7 +1218,8 @@ class PicaKeepAdminServer {
         final payload = await _readJsonMapFromBody(request);
         final newName = payload['newName']?.toString().trim() ?? '';
         if (newName.isEmpty) {
-          return _jsonResponse({'error': 'invalid folder name'}, statusCode: 400);
+          return _jsonResponse({'error': 'invalid folder name'},
+              statusCode: 400);
         }
         favorites.rename(folder, newName);
         _state.addLog('favorites', '已重命名收藏夹 $folder -> $newName');
@@ -1001,11 +1298,13 @@ class PicaKeepAdminServer {
     final ep = int.tryParse(segments[4]);
     final page = int.tryParse(segments[5]);
     if (ep == null || page == null) {
-      return _jsonResponse({'error': 'invalid image favorite key'}, statusCode: 400);
+      return _jsonResponse({'error': 'invalid image favorite key'},
+          statusCode: 400);
     }
     final item = _findImageFavorite(id, ep, page);
     if (item == null) {
-      return _jsonResponse({'error': 'image favorite not found'}, statusCode: 404);
+      return _jsonResponse({'error': 'image favorite not found'},
+          statusCode: 404);
     }
 
     if (segments.length == 7 && segments[6] == 'image') {
@@ -1032,7 +1331,9 @@ class PicaKeepAdminServer {
     ServerResourceItemSummary shallow, {
     required String? rootPath,
   }) async {
-    if (shallow.rootId.startsWith('custom_') || rootPath == null || rootPath.trim().isEmpty) {
+    if (shallow.rootId.startsWith('custom_') ||
+        rootPath == null ||
+        rootPath.trim().isEmpty) {
       return shallow;
     }
     final cached = _deepItemCache[shallow.id];
@@ -1323,6 +1624,137 @@ class PicaKeepAdminServer {
       'itemCount': root.itemCount,
       'totalBytes': root.totalBytes,
       'previewCoverUrls': previewCoverUrls,
+    };
+  }
+
+
+  int _clampIntQuery(String? value, int fallback, int min, int max) {
+    final parsed = int.tryParse((value ?? '').trim()) ?? fallback;
+    if (parsed < min) return min;
+    if (parsed > max) return max;
+    return parsed;
+  }
+
+  Map<String, dynamic> _buildLibraryRecommendationsPayload(
+    ServerResourceSnapshot snapshot,
+    ServerResourceItemSummary item, {
+    required int limit,
+  }) {
+    final scored = <Map<String, dynamic>>[];
+    for (final candidate in snapshot.items) {
+      if (candidate.id == item.id || candidate.title == item.title) {
+        continue;
+      }
+      final score = _recommendationScore(item, candidate);
+      if (score <= 0) {
+        continue;
+      }
+      scored.add({
+        'item': candidate,
+        'score': score,
+        'reason': _recommendationReason(item, candidate),
+      });
+    }
+    scored.sort((a, b) {
+      final scoreCompare = (b['score'] as double).compareTo(a['score'] as double);
+      if (scoreCompare != 0) return scoreCompare;
+      final left = (b['item'] as ServerResourceItemSummary).updatedAt;
+      final right = (a['item'] as ServerResourceItemSummary).updatedAt;
+      return left.compareTo(right);
+    });
+    return {
+      'generatedAt': DateTime.now().toIso8601String(),
+      'librarySignature': _librarySignature ?? '',
+      'itemId': item.id,
+      'items': [
+        for (final entry in scored.take(limit))
+          {
+            ..._buildLibraryItemPayload(entry['item'] as ServerResourceItemSummary),
+            'reason': entry['reason'],
+            'score': entry['score'],
+          },
+      ],
+    };
+  }
+
+  double _recommendationScore(
+    ServerResourceItemSummary base,
+    ServerResourceItemSummary candidate,
+  ) {
+    var score = 0.0;
+    final baseName = _recommendationNormalize(base.title);
+    final candidateName = _recommendationNormalize(candidate.title);
+    if (baseName.isNotEmpty && candidateName.isNotEmpty) {
+      if (baseName.contains(candidateName) || candidateName.contains(baseName)) {
+        score += 90;
+      }
+      score += _bigramOverlap(baseName, candidateName) * 70;
+    }
+    final baseTopics = _recommendationTopics(base.title);
+    final candidateTopics = _recommendationTopics(candidate.title);
+    final topicMatches = baseTopics.intersection(candidateTopics).length;
+    score += topicMatches * 22;
+    final tagMatches = base.tags.toSet().intersection(candidate.tags.toSet()).length;
+    score += tagMatches * 18;
+    if (base.subtitle.isNotEmpty && base.subtitle == candidate.subtitle) {
+      score += 28;
+    }
+    if (base.sourceDisplayName.isNotEmpty &&
+        base.sourceDisplayName == candidate.sourceDisplayName) {
+      score += 8;
+    }
+    return score;
+  }
+
+  String _recommendationReason(
+    ServerResourceItemSummary base,
+    ServerResourceItemSummary candidate,
+  ) {
+    final baseName = _recommendationNormalize(base.title);
+    final candidateName = _recommendationNormalize(candidate.title);
+    final overlap = _bigramOverlap(baseName, candidateName);
+    if (overlap >= 0.62 ||
+        (baseName.isNotEmpty &&
+            candidateName.isNotEmpty &&
+            (baseName.contains(candidateName) || candidateName.contains(baseName)))) {
+      return '名称高度相似';
+    }
+    if (overlap >= 0.32) return '名称相似';
+    final tagMatches = base.tags.toSet().intersection(candidate.tags.toSet()).length;
+    if (base.subtitle.isNotEmpty &&
+        base.subtitle == candidate.subtitle &&
+        tagMatches > 0) {
+      return '同作者 + 同题材';
+    }
+    if (tagMatches > 0) return '同标签';
+    return '同题材';
+  }
+
+  String _recommendationNormalize(String value) {
+    return value.toLowerCase().replaceAll(RegExp(r'\s+'), '');
+  }
+
+  Set<String> _recommendationTopics(String value) {
+    final normalized = value.toLowerCase();
+    return RegExp(r'[a-z0-9]+|[一-鿿぀-ヿ]{2,}')
+        .allMatches(normalized)
+        .map((match) => match.group(0) ?? '')
+        .where((token) => token.length >= 2)
+        .toSet();
+  }
+
+  double _bigramOverlap(String a, String b) {
+    final left = _bigrams(a);
+    final right = _bigrams(b);
+    if (left.isEmpty || right.isEmpty) return 0;
+    final intersection = left.intersection(right).length;
+    return intersection / (left.length < right.length ? left.length : right.length);
+  }
+
+  Set<String> _bigrams(String value) {
+    if (value.length < 2) return value.isEmpty ? <String>{} : <String>{value};
+    return {
+      for (var i = 0; i < value.length - 1; i++) value.substring(i, i + 2),
     };
   }
 
@@ -1621,6 +2053,7 @@ class PicaKeepAdminServer {
       'librarySignature': _librarySignature ?? '',
       'statusUrl': _buildStatusUrl(),
       'adminUrl': _buildAdminUrl(),
+      'consolePasswordEmpty': config.consolePassword.trim().isEmpty,
     };
   }
 
@@ -1650,7 +2083,7 @@ class PicaKeepAdminServer {
   String _buildAdminUrl() {
     final config = _config ?? PicaKeepServerConfig.defaults();
     final port = _server?.port ?? config.port;
-    return 'http://${_buildDisplayHost(config.host)}:$port/admin';
+    return 'http://${_buildDisplayHost(config.host)}:$port/';
   }
 
   String _buildDisplayHost(String host) {
@@ -1746,6 +2179,25 @@ class PicaKeepAdminServer {
         .map((entry) => entry.toString().trim())
         .where((entry) => entry.isNotEmpty)
         .toList(growable: false);
+  }
+
+  Set<int> _readIntSetValue(Object? value) {
+    if (value is List) {
+      return value
+          .map(_readIntValue)
+          .whereType<int>()
+          .where((entry) => entry >= 0)
+          .toSet();
+    }
+    if (value is String) {
+      return value
+          .split(',')
+          .map((entry) => int.tryParse(entry.trim()))
+          .whereType<int>()
+          .where((entry) => entry >= 0)
+          .toSet();
+    }
+    return const <int>{};
   }
 
   int? _readIntValue(Object? value) {

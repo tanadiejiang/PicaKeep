@@ -122,8 +122,15 @@ extension ImageExt on ComicReadingPage {
 
               double imageWidth = width;
 
-              if (height / width < 1.2 && appdata.settings[43] == "1") {
-                imageWidth = height / 1.2;
+              if (appdata.settings[43] == "1") {
+                final maxReaderImageWidth =
+                    (double.tryParse(appdata.settings[116]) ?? 980)
+                        .clamp(600, 1600)
+                        .toDouble();
+                imageWidth = math.min(imageWidth, maxReaderImageWidth);
+                if (height / width < 1.2) {
+                  imageWidth = math.min(imageWidth, height / 1.2);
+                }
               }
 
               precacheComicImage(logic, context, index + 1, target);
@@ -532,7 +539,14 @@ extension ImageExt on ComicReadingPage {
     }
     final currentLocation = controller.position;
     final scale = controller.scale ?? 1;
-    final imageWidth = height / 1.2;
+    double imageWidth = height / 1.2;
+    if (appdata.settings[43] == "1") {
+      final maxReaderImageWidth =
+          (double.tryParse(appdata.settings[116]) ?? 980)
+              .clamp(600, 1600)
+              .toDouble();
+      imageWidth = math.min(imageWidth, maxReaderImageWidth);
+    }
     final showWidth = width / scale;
     if (showWidth >= imageWidth && currentLocation.dx != 0) {
       controller.updateMultiple(
