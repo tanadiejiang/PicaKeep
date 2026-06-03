@@ -27,11 +27,12 @@
       view: { name: 'dashboard', params: {} },
       history: [],
       dashboard: { loading: false, error: '', items: [], historySessionKey: '', historyLoadingForToken: '' },
+      historyPage: { loading: false, error: '', items: [] },
       grid: { loading: false, error: '', warning: '', items: [], query: '', source: consoleApi.source.get(), filter: 'all', viewMode: readGridViewMode() },
       inspector: { open: false, loading: false, error: '', item: null, params: null, requestId: 0 },
       imageFavorites: { loading: false, error: '', items: [] },
       detail: { loading: false, error: '', item: null, recommendationsLoading: false, recommendationsError: '', recommendations: [] },
-      reader: { loading: false, error: '', item: null, episode: null, episodeIndex: 0, pageIndex: 0, mode: readReaderMode(), prefs: readReaderPrefs(), chromeVisible: false, settingsOpen: false, chaptersOpen: false, methodPickerOpen: false, historyTimer: null, autoTurnTimer: null, lastHistoryKey: '', favoriteSaving: false, adapter: null, pages: [], pageSizes: [], resizeRaf: 0, longPressTimer: null, tapTimer: null, gesture: null, activePointers: new Set(), zoom: defaultReaderZoomState(), drawPaged: null },
+      reader: { loading: false, error: '', item: null, episode: null, episodeIndex: 0, pageIndex: 0, mode: readReaderMode(), prefs: readReaderPrefs(), chromeVisible: false, settingsOpen: false, chaptersOpen: false, methodPickerOpen: false, historyTimer: null, autoTurnTimer: null, lastHistoryKey: '', favoriteSaving: false, adapter: null, pages: [], pageSizes: [], resizeRaf: 0, restoreRaf: 0, restoring: false, longPressTimer: null, tapTimer: null, gesture: null, activePointers: new Set(), zoom: defaultReaderZoomState(), drawPaged: null },
       requestId: 0,
       readerCleanup: null,
       toastTimer: null,
@@ -48,15 +49,16 @@
               <span class="muted">远程地址</span>
               <input class="app-remote-input" type="url" placeholder="http://192.168.1.10:9527" value="${escapeAttr(consoleApi.remoteTarget.get())}">
             </label>
-            <label class="app-search-box">
-              <span class="muted">搜索</span>
-              <input class="app-search-input" type="search" placeholder="标题 / 副标题 / 标签">
-            </label>
+            <div class="app-search-box">
+              <span class="app-search-control">
+                <input class="app-search-input" type="text" placeholder="搜索 标题 / 副标题 / 标签" aria-label="搜索资源" autocomplete="off">
+                <button class="ghost app-search-clear" type="button" data-search-clear aria-label="清空搜索" hidden>×</button>
+              </span>
+            </div>
             <div class="app-view-switch" role="group" aria-label="视图切换" hidden>
               <button type="button" data-grid-view="poster">▦ 卡片</button>
               <button type="button" data-grid-view="detailed">☰ 详细</button>
             </div>
-            <button class="ghost app-refresh" type="button">刷新</button>
             <span class="app-count muted">--</span>
           </div>
           <div class="app-warning" hidden></div>
@@ -72,7 +74,9 @@
     const countEl = rootEl.querySelector('.app-count');
     const viewSwitchEl = rootEl.querySelector('.app-view-switch');
     const remoteInput = rootEl.querySelector('.app-remote-input');
+    const remoteBox = rootEl.querySelector('.app-remote-box');
     const searchInput = rootEl.querySelector('.app-search-input');
+    const searchClear = rootEl.querySelector('[data-search-clear]');
 
     function cleanup() {
       cleanupReader();
@@ -106,9 +110,9 @@
         writeGridViewMode(state.grid.viewMode);
         updateToolbar();
         if (state.view.name === 'grid') renderGridContent();
+        else if (state.view.name === 'historyPage') renderHistoryPageContent();
       });
     });
-    rootEl.querySelector('.app-refresh').addEventListener('click', () => reloadCurrent());
     remoteInput.addEventListener('change', () => {
       consoleApi.remoteTarget.set(remoteInput.value.trim());
       if (usesRemote(consoleApi.source.get())) goGrid(true);
@@ -123,9 +127,31 @@
     });
     searchInput.addEventListener('input', () => {
       state.grid.query = searchInput.value.trim();
+      updateSearchClear();
       if (state.view.name === 'grid') renderGridContent();
+      else if (state.view.name === 'historyPage') renderHistoryPageContent();
+    });
+    searchInput.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter') return;
+      const query = searchInput.value.trim();
+      if (!query) return;
+      event.preventDefault();
+      state.grid.query = query;
+      if (state.view.name === 'grid') renderGridContent();
+      else if (state.view.name === 'historyPage') renderHistoryPageContent();
+      else if (state.view.name === 'dashboard') navigate('grid', { filter: 'all' }, true);
+    });
+    searchClear.addEventListener('click', () => {
+      state.grid.query = '';
+      searchInput.value = '';
+      updateSearchClear();
+      searchInput.focus();
+      if (state.view.name === 'grid') renderGridContent();
+      else if (state.view.name === 'historyPage') renderHistoryPageContent();
     });
     disposers.push(consoleApi.source.onChange(() => {
+      state.grid.query = '';
+      searchInput.value = '';
       if (state.view.name === 'dashboard') renderDashboard();
       else goGrid(true);
     }));
@@ -153,8 +179,9 @@
         event.stopPropagation();
         state.reader.settingsOpen = false;
         state.reader.chaptersOpen = false;
+        state.reader.methodPickerOpen = false;
         state.reader.chromeVisible = false;
-        renderReaderContent(state.view.params);
+        refreshReaderChromeForCurrent();
         return;
       }
 
@@ -199,18 +226,22 @@
       rootEl.querySelectorAll('[data-source]').forEach((button) => {
         button.classList.toggle('active', button.dataset.source === currentSource);
       });
+      remoteBox.hidden = !usesRemote(currentSource);
       remoteInput.disabled = !usesRemote(currentSource);
       remoteInput.placeholder = usesRemote(currentSource) ? 'http://192.168.1.10:9527' : '当前源不需要远程地址';
-      if (state.view.name === 'dashboard') {
-        searchInput.disabled = true;
-      } else {
-        searchInput.disabled = state.view.name !== 'grid';
-      }
-      viewSwitchEl.hidden = state.view.name !== 'grid';
+      searchInput.disabled = !['dashboard', 'grid', 'historyPage'].includes(state.view.name);
+      searchInput.value = state.grid.query || '';
+      updateSearchClear();
+      viewSwitchEl.hidden = !['grid', 'historyPage'].includes(state.view.name);
       viewSwitchEl.querySelectorAll('[data-grid-view]').forEach((button) => {
         button.classList.toggle('active', button.dataset.gridView === state.grid.viewMode);
       });
-      countEl.textContent = state.view.name === 'grid' ? gridToolbarSummary() : viewTitle(state.view);
+      countEl.hidden = state.view.name === 'dashboard';
+      countEl.textContent = state.view.name === 'grid'
+        ? gridToolbarSummary()
+        : (state.view.name === 'historyPage'
+          ? `${number((state.historyPage.items || []).length)} 条历史`
+          : (state.view.name === 'dashboard' ? '' : viewTitle(state.view)));
       if (state.grid.warning) {
         warningEl.hidden = false;
         warningEl.textContent = state.grid.warning;
@@ -218,6 +249,12 @@
         warningEl.hidden = true;
         warningEl.textContent = '';
       }
+    }
+
+    function updateSearchClear() {
+      if (!searchClear) return;
+      searchClear.hidden = !state.grid.query || searchInput.disabled;
+      searchInput.parentElement?.classList.toggle('has-value', !!state.grid.query && !searchInput.disabled);
     }
 
     function navigate(name, params, push) {
@@ -228,6 +265,7 @@
       updateToolbar();
       if (name === 'dashboard') renderDashboard();
       if (name === 'grid') renderGrid(params || {});
+      if (name === 'historyPage') renderHistoryPage();
       if (name === 'imageFavorites') renderImageFavorites();
       if (name === 'detail') renderDetail(params || {});
       if (name === 'reader') renderReader(params || {});
@@ -265,7 +303,7 @@
                 <strong>历史记录(${number((state.dashboard.items || []).length)})</strong>
                 <span class="muted">点击封面续读上次位置</span>
               </span>
-              <button class="ghost app-head-action" type="button" data-history-refresh aria-label="刷新历史记录">↻</button>
+              <button class="ghost app-head-action" type="button" data-history-refresh aria-label="刷新历史记录"><svg class="app-head-action-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M17.7 6.3A7.8 7.8 0 0 0 4.4 11"/><path d="M4.4 11H2.2V4.8"/><path d="M6.3 17.7A7.8 7.8 0 0 0 19.6 13"/><path d="M19.6 13h2.2v6.2"/></svg></button>
               <span class="app-chevron">›</span>
             </div>
             <div class="app-history-strip"><div class="app-history-empty"><span class="app-history-empty-icon">▱</span><strong>正在加载阅读历史...</strong><span class="muted">请稍候</span></div></div>
@@ -334,9 +372,15 @@
         event.stopPropagation();
         renderDashboard();
       }));
+      const historyCard = viewEl.querySelector('.app-history-card');
+      if (historyCard) {
+        historyCard.addEventListener('click', (event) => {
+          if (event.target.closest('[data-open-history], [data-history-refresh]')) return;
+          navigate('historyPage', {}, true);
+        });
+      }
       const historyTitle = viewEl.querySelector('[data-history-title]');
       if (historyTitle) {
-        historyTitle.addEventListener('click', () => viewEl.querySelector('.app-history-strip')?.scrollIntoView({ block: 'nearest' }));
         historyTitle.addEventListener('keydown', (event) => {
           if (event.key === 'Enter' || event.key === ' ') {
             event.preventDefault();
@@ -433,7 +477,8 @@
     }
 
     function openHistory(target) {
-      const record = (state.dashboard.items || []).find((item) => item.target === target);
+      const record = (state.historyPage.items || []).find((item) => item.target === target)
+        || (state.dashboard.items || []).find((item) => item.target === target);
       if (!record) return;
       navigate('reader', {
         id: record.target,
@@ -441,6 +486,132 @@
         episodeIndex: numberValue(record.ep),
         pageIndex: numberValue(record.page),
       }, true);
+    }
+
+    async function renderHistoryPage() {
+      cleanupReader();
+      state.historyPage.loading = true;
+      state.historyPage.error = '';
+      updateToolbar();
+      viewEl.innerHTML = loadingCard('正在加载历史记录...');
+      const requestId = ++state.requestId;
+      try {
+        const currentSource = consoleApi.source.get();
+        const [historyResult, itemsResult] = await Promise.all([
+          settle(consoleApi.history.list(500)),
+          settle(fetchItemsForSource(currentSource)),
+        ]);
+        if (requestId !== state.requestId || state.view.name !== 'historyPage') return;
+        if (!historyResult.ok) throw historyResult.error;
+        const metadata = new Map();
+        if (itemsResult.ok) {
+          (itemsResult.value.items || []).forEach((item) => {
+            if (!item || !item.id) return;
+            metadata.set(item.id, {
+              subtitle: item.subtitle || item.sourceDisplayName || '',
+              tags: item.tags || [],
+            });
+          });
+        }
+        state.historyPage.items = normalizeHistoryPayload(historyResult.value).map((item) => {
+          const meta = metadata.get(item.target) || {};
+          return Object.assign({}, item, {
+            subtitle: item.subtitle || meta.subtitle || '',
+            tags: item.tags || meta.tags || [],
+          });
+        });
+      } catch (error) {
+        if (requestId !== state.requestId || state.view.name !== 'historyPage') return;
+        state.historyPage.error = errorMessage(error);
+        state.historyPage.items = [];
+      } finally {
+        if (requestId !== state.requestId || state.view.name !== 'historyPage') return;
+        state.historyPage.loading = false;
+        renderHistoryPageContent();
+      }
+    }
+
+    function renderHistoryPageContent() {
+      updateToolbar();
+      if (state.historyPage.error) {
+        viewEl.innerHTML = retryCard(state.historyPage.error, 'data-history-page-retry', true);
+        viewEl.querySelector('[data-back]').addEventListener('click', back);
+        viewEl.querySelector('[data-history-page-retry]').addEventListener('click', renderHistoryPage);
+        return;
+      }
+      const allItems = state.historyPage.items || [];
+      const query = state.grid.query.trim();
+      const items = filterItems(allItems, query);
+      const listMode = state.grid.viewMode === 'detailed';
+      const emptyMessage = query ? `没有找到「${escapeHtml(query)}」，换个关键词试试。` : '打开一本漫画后，这里会显示全部阅读历史。';
+      viewEl.innerHTML = `
+        <div class="app-list-view app-history-page">
+          <div class="app-view-head app-history-page-head">
+            <button class="ghost" type="button" data-back>← 返回</button>
+            <div>
+              <strong>历史记录</strong>
+              <div class="muted">${query ? `${number(items.length)} / ${number(allItems.length)} 条历史` : `${number(allItems.length)} 条历史`} · 点击封面续读</div>
+            </div>
+            ${allItems.length ? '<button class="ghost danger app-history-clear" type="button" data-history-clear>清空全部</button>' : ''}
+          </div>
+          ${items.length ? `
+            <div class="${listMode ? 'app-detailed-grid' : 'app-grid'}">
+              ${items.map((item) => listMode ? historyDetailedCardHtml(item) : historyPosterCardHtml(item)).join('')}
+            </div>
+          ` : `
+            <div class="card app-empty">
+              <div class="brand">${query && allItems.length ? '没有匹配结果' : '暂无历史记录'}</div>
+              <div class="sub">${query && allItems.length ? emptyMessage : emptyMessage}</div>
+              ${query ? '<button class="ghost" type="button" data-clear-history-query>清空搜索</button>' : ''}
+            </div>
+          `}
+        </div>
+      `;
+      viewEl.querySelector('[data-back]').addEventListener('click', back);
+      viewEl.querySelector('[data-history-clear]')?.addEventListener('click', async () => {
+        if (!window.confirm('确定清空全部阅读历史吗？此操作不可撤销。')) return;
+        try {
+          await consoleApi.history.clear();
+          state.historyPage.items = [];
+          state.dashboard.items = [];
+          renderHistoryPageContent();
+        } catch (error) {
+          showToast(`清空失败：${errorMessage(error)}`);
+        }
+      });
+      viewEl.querySelector('[data-clear-history-query]')?.addEventListener('click', () => {
+        state.grid.query = '';
+        searchInput.value = '';
+        renderHistoryPageContent();
+        searchInput.focus();
+      });
+      viewEl.querySelectorAll('[data-open-history]').forEach((card) => {
+        card.addEventListener('click', () => openHistory(card.dataset.openHistory));
+        card.addEventListener('keydown', (event) => {
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            card.click();
+          }
+        });
+      });
+      viewEl.querySelectorAll('[data-remove-history]').forEach((button) => {
+        button.addEventListener('click', async (event) => {
+          event.stopPropagation();
+          const target = button.dataset.removeHistory;
+          if (!target) return;
+          try {
+            button.disabled = true;
+            await consoleApi.history.remove(target);
+            state.historyPage.items = (state.historyPage.items || []).filter((item) => item.target !== target);
+            state.dashboard.items = (state.dashboard.items || []).filter((item) => item.target !== target);
+            renderHistoryPageContent();
+          } catch (error) {
+            button.disabled = false;
+            showToast(`删除失败：${errorMessage(error)}`);
+          }
+        });
+      });
+      bindImageFallbacks(viewEl);
     }
 
     function goGrid(clearHistory, params) {
@@ -458,6 +629,8 @@
         renderDashboard();
       } else if (state.view.name === 'grid') {
         renderGrid(state.view.params);
+      } else if (state.view.name === 'historyPage') {
+        renderHistoryPage();
       } else if (state.view.name === 'imageFavorites') {
         renderImageFavorites();
       } else if (state.view.name === 'detail') {
@@ -508,6 +681,7 @@
       const items = visibleGridItems(state.grid.items, state.grid.filter, state.grid.query);
       const scopedTotal = gridItemsForFilter(state.grid.items, state.grid.filter).length;
       const gridTitle = gridFilterTitle(state.grid.filter);
+      const query = state.grid.query.trim();
       if (!items.length) {
         viewEl.innerHTML = `
           <div class="app-list-view">
@@ -516,12 +690,19 @@
               <strong>${escapeHtml(gridTitle)}</strong>
             </div>
             <div class="card app-empty">
-              <div class="brand">${scopedTotal ? '没有匹配结果' : `暂无${escapeHtml(gridTitle)}`}</div>
-              <div class="sub">${scopedTotal ? '换个关键词试试。' : '当前数据源没有返回可浏览项目。'}</div>
+              <div class="brand">${query && scopedTotal ? '没有匹配结果' : `暂无${escapeHtml(gridTitle)}`}</div>
+              <div class="sub">${query && scopedTotal ? `没有找到「${escapeHtml(query)}」，换个关键词试试。` : '当前数据源没有返回可浏览项目。'}</div>
+              ${query ? '<button class="ghost" type="button" data-clear-grid-query>清空搜索</button>' : ''}
             </div>
           </div>
         `;
         viewEl.querySelector('[data-back]').addEventListener('click', back);
+        viewEl.querySelector('[data-clear-grid-query]')?.addEventListener('click', () => {
+          state.grid.query = '';
+          searchInput.value = '';
+          renderGridContent();
+          searchInput.focus();
+        });
         return;
       }
       const listMode = state.grid.viewMode === 'detailed';
@@ -981,7 +1162,6 @@
               <button class="ghost reader-icon-button" type="button" data-reader-settings aria-label="阅读设置">⚙</button>
             </div>
           </div>
-          <div class="reader-page-info" ${state.reader.prefs.showPageInfo ? '' : 'hidden'} data-reader-page-info>第 ${safeIndex + 1} / ${total}</div>
           <div class="reader-bottombar reader-chrome" data-reader-chrome>
             <span class="reader-page-pill" data-reader-page-label>${readerPageLabel()}</span>
             <div class="reader-bottom-row reader-bottom-row-primary">
@@ -1022,7 +1202,7 @@
       cleanupReader(false, false);
       renderReaderContent(state.view.params);
       if (isScrollReaderMode(state.reader.mode)) {
-        window.requestAnimationFrame(() => scrollToPage(state.reader.pageIndex));
+        restoreScrollPosition(state.reader.pageIndex);
       }
     }
 
@@ -1040,6 +1220,7 @@
       }, '900px 0px');
       const pageObserver = makeObserver((entry) => {
         if (entry.isIntersecting) {
+          if (state.reader.restoring) return;
           const index = Number(entry.target.dataset.pageIndex || 0);
           state.reader.pageIndex = index;
           updateReaderPageCount();
@@ -1058,11 +1239,14 @@
         pageObserver.disconnect();
         window.removeEventListener('resize', resizeHandler);
         if (state.reader.resizeRaf) window.cancelAnimationFrame(state.reader.resizeRaf);
+        if (state.reader.restoreRaf) window.cancelAnimationFrame(state.reader.restoreRaf);
         if (state.reader.longPressTimer) window.clearTimeout(state.reader.longPressTimer);
         state.reader.resizeRaf = 0;
+        state.reader.restoreRaf = 0;
+        state.reader.restoring = false;
         state.reader.longPressTimer = null;
       };
-      window.requestAnimationFrame(() => scrollToPage(state.reader.pageIndex));
+      restoreScrollPosition(state.reader.pageIndex);
     }
 
     function renderPagedReader(adapter, pages, pageSizes) {
@@ -1097,10 +1281,7 @@
       state.reader.zoom = defaultReaderZoomState();
       state.reader.lastTapTime = 0;
       resetReaderGesture();
-      if (state.reader.historyTimer) {
-        window.clearTimeout(state.reader.historyTimer);
-        state.reader.historyTimer = null;
-      }
+      flushReaderHistory();
       stopAutoTurn(false);
       disposeReaderBindings();
       if (resetPanels) {
@@ -1123,6 +1304,19 @@
         if (previous) previous();
         dispose();
       };
+    }
+
+    function flushReaderHistory() {
+      if (!state.reader.item || !state.reader.episode) return;
+      if (isScrollReaderMode(state.reader.mode)) {
+        const current = currentScrollPage();
+        if (current != null) state.reader.pageIndex = current;
+      }
+      if (state.reader.historyTimer) {
+        window.clearTimeout(state.reader.historyTimer);
+        state.reader.historyTimer = null;
+      }
+      void writeReaderHistoryNow();
     }
 
     function scheduleReaderHistoryWrite() {
@@ -1182,19 +1376,47 @@
       if (page) page.scrollIntoView({ block: 'start' });
     }
 
+    function restoreScrollPosition(target) {
+      const total = readerTotalPages();
+      const safeTarget = clamp(numberValue(target), 0, Math.max(0, total - 1));
+      if (state.reader.restoreRaf) window.cancelAnimationFrame(state.reader.restoreRaf);
+      state.reader.restoreRaf = 0;
+      state.reader.restoring = safeTarget > 0;
+      state.reader.pageIndex = safeTarget;
+      snapReaderPageHeights();
+      scrollToPage(safeTarget);
+      if (!state.reader.restoring) {
+        updateReaderPageCount();
+        return;
+      }
+      let frames = 0;
+      let hits = 0;
+      const tick = () => {
+        frames += 1;
+        snapReaderPageHeights();
+        scrollToPage(safeTarget);
+        const current = currentScrollPage();
+        hits = current === safeTarget ? hits + 1 : 0;
+        if (hits >= 2 || frames >= 25) {
+          state.reader.restoreRaf = 0;
+          state.reader.pageIndex = safeTarget;
+          state.reader.restoring = false;
+          updateReaderPageCount();
+          return;
+        }
+        state.reader.restoreRaf = window.requestAnimationFrame(tick);
+      };
+      state.reader.restoreRaf = window.requestAnimationFrame(tick);
+    }
+
     function updateReaderPageCount() {
       const total = readerTotalPages();
       const page = clamp(numberValue(state.reader.pageIndex), 0, Math.max(0, total - 1));
       const count = viewEl.querySelector('.reader-page-count');
       const label = viewEl.querySelector('[data-reader-page-label]');
-      const info = viewEl.querySelector('[data-reader-page-info]');
       const slider = viewEl.querySelector('[data-reader-slider]');
       if (count) count.textContent = `第 ${page + 1} / ${total}`;
       if (label) label.textContent = readerPageLabel();
-      if (info) {
-        info.textContent = `第 ${page + 1} / ${total}`;
-        info.hidden = !(state.reader.prefs && state.reader.prefs.showPageInfo);
-      }
       if (slider) {
         slider.max = String(Math.max(1, total));
         slider.value = String(page + 1);
@@ -1373,38 +1595,85 @@
       state.toastTimer = window.setTimeout(() => { toast.hidden = true; }, 1200);
     }
 
+    function refreshReaderChromeForCurrent() {
+      const item = state.reader.item;
+      if (!item) return;
+      const adapter = buildAdapter(item.__origin || (state.view.params && state.view.params.origin));
+      const pages = (state.reader.episode && state.reader.episode.pages) || [];
+      refreshReaderChrome(adapter, pages, state.view.params || {});
+    }
+
+    function refreshReaderChrome(adapter, pages, params) {
+      state.reader.prefs = readReaderPrefs();
+      state.reader.mode = state.reader.prefs.readingMethod;
+      state.reader.chromeVisible = !!(state.reader.chromeVisible || state.reader.settingsOpen || state.reader.chaptersOpen);
+      applyReaderAppearance();
+
+      const settingsPanel = viewEl.querySelector('[data-reader-settings-panel]');
+      if (settingsPanel) {
+        settingsPanel.innerHTML = readerSettingsHtml();
+        settingsPanel.hidden = !state.reader.settingsOpen;
+      }
+      const chaptersPanel = viewEl.querySelector('[data-reader-chapters-panel]');
+      if (chaptersPanel) {
+        chaptersPanel.innerHTML = readerChaptersHtml(state.reader.item, state.reader.episodeIndex);
+        chaptersPanel.hidden = !state.reader.chaptersOpen;
+      }
+      updateReaderPageCount();
+      bindReaderChromeControls(adapter, pages, params, true);
+    }
+
+    function applyReaderAppearance() {
+      const root = viewEl.querySelector('[data-reader-root]');
+      if (!root) return;
+      const methodClasses = readerMethodOptions().map(([value]) => `reader-method-${value}`);
+      root.classList.remove(...methodClasses, 'reader-chrome-visible', 'reader-chrome-hidden', 'reader-limit-width', 'reader-full-width', 'reader-dim-dark');
+      root.classList.add(`reader-method-${state.reader.mode}`);
+      root.classList.add(state.reader.chromeVisible ? 'reader-chrome-visible' : 'reader-chrome-hidden');
+      root.classList.add(state.reader.prefs.limitMaxWidth ? 'reader-limit-width' : 'reader-full-width');
+      if (state.reader.prefs.reduceBrightnessInDarkMode) root.classList.add('reader-dim-dark');
+      root.style.setProperty('--reader-max-width', `${clamp(numberValue(state.reader.prefs.maxWidthPx, 980), 600, 1600)}px`);
+    }
+
+    function bindReaderChromeControls(adapter, pages, params, panelOnly) {
+      const scope = panelOnly ? viewEl.querySelectorAll('[data-reader-settings-panel], [data-reader-chapters-panel]') : [viewEl];
+      scope.forEach((container) => {
+        container.querySelectorAll('[data-reader-settings]').forEach((button) => button.addEventListener('click', (event) => {
+          event.stopPropagation();
+          state.reader.settingsOpen = !state.reader.settingsOpen;
+          state.reader.chaptersOpen = false;
+          refreshReaderChrome(adapter, pages, params);
+        }));
+        container.querySelectorAll('[data-reader-chapters]').forEach((button) => button.addEventListener('click', (event) => {
+          event.stopPropagation();
+          state.reader.chaptersOpen = !state.reader.chaptersOpen;
+          state.reader.settingsOpen = false;
+          refreshReaderChrome(adapter, pages, params);
+        }));
+        container.querySelector('[data-reader-method-toggle]')?.addEventListener('click', (event) => {
+          event.stopPropagation();
+          state.reader.methodPickerOpen = !state.reader.methodPickerOpen;
+          refreshReaderChrome(adapter, pages, params);
+        });
+        container.querySelectorAll('[data-reader-setting]').forEach((input) => bindReaderSettingInput(input, adapter, pages, params));
+        container.querySelectorAll('[data-reader-method]').forEach((button) => button.addEventListener('click', () => { stopAutoTurn(true); switchReaderMode(button.dataset.readerMethod); }));
+        container.querySelectorAll('[data-reader-open-episode]').forEach((button) => button.addEventListener('click', () => navigateReaderChapter(numberValue(button.dataset.readerOpenEpisode))));
+      });
+    }
+
     function bindReaderChrome(adapter, pages, params) {
       const root = viewEl.querySelector('[data-reader-root]');
       if (!root) return;
       viewEl.querySelector('[data-reader-back]')?.addEventListener('click', back);
-      viewEl.querySelectorAll('[data-reader-settings]').forEach((button) => button.addEventListener('click', (event) => {
-        event.stopPropagation();
-        state.reader.settingsOpen = !state.reader.settingsOpen;
-        state.reader.chaptersOpen = false;
-        renderReaderContent(state.view.params);
-      }));
-      viewEl.querySelectorAll('[data-reader-chapters]').forEach((button) => button.addEventListener('click', (event) => {
-        event.stopPropagation();
-        state.reader.chaptersOpen = !state.reader.chaptersOpen;
-        state.reader.settingsOpen = false;
-        renderReaderContent(state.view.params);
-      }));
+      bindReaderChromeControls(adapter, pages, params);
       viewEl.querySelector('[data-reader-chapter-prev]')?.addEventListener('click', () => jumpReaderChapter(-1));
       viewEl.querySelector('[data-reader-chapter-next]')?.addEventListener('click', () => jumpReaderChapter(1));
       viewEl.querySelector('[data-reader-fullscreen]')?.addEventListener('click', toggleFullscreen);
       viewEl.querySelector('[data-reader-favorite]')?.addEventListener('click', () => favoriteCurrentImage(adapter));
       viewEl.querySelector('[data-reader-auto]')?.addEventListener('click', toggleAutoTurn);
       viewEl.querySelector('[data-reader-download]')?.addEventListener('click', () => downloadCurrentImage(adapter));
-      viewEl.querySelector('[data-reader-method-toggle]')?.addEventListener('click', (event) => {
-        event.stopPropagation();
-        state.reader.methodPickerOpen = !state.reader.methodPickerOpen;
-        renderReaderContent(state.view.params);
-      });
       const slider = viewEl.querySelector('[data-reader-slider]');
       if (slider) slider.addEventListener('input', () => { stopAutoTurn(true); jumpReaderPage(numberValue(slider.value) - 1); });
-      viewEl.querySelectorAll('[data-reader-setting]').forEach((input) => bindReaderSettingInput(input));
-      viewEl.querySelectorAll('[data-reader-method]').forEach((button) => button.addEventListener('click', () => { stopAutoTurn(true); switchReaderMode(button.dataset.readerMethod); }));
-      viewEl.querySelectorAll('[data-reader-open-episode]').forEach((button) => button.addEventListener('click', () => navigateReaderChapter(numberValue(button.dataset.readerOpenEpisode))));
       const pointerDownHandler = (event) => handleReaderPointerDown(event, root);
       const pointerMoveHandler = (event) => handleReaderPointerMove(event, root);
       const pointerUpHandler = (event) => handleReaderPointerUp(event, root);
@@ -1452,7 +1721,7 @@
       });
     }
 
-    function bindReaderSettingInput(input) {
+    function bindReaderSettingInput(input, adapter, pages, params) {
       const key = input.dataset.readerSetting;
       const handler = () => {
         const prefs = readReaderPrefs();
@@ -1463,16 +1732,11 @@
         if (key === 'maxWidthPx') value = clamp(value, 600, 1600);
         writeReaderPrefs(Object.assign({}, prefs, { [key]: value }));
         state.reader.prefs = readReaderPrefs();
-        if (key === 'maxWidthPx') {
-          const root = viewEl.querySelector('[data-reader-root]');
-          if (root) root.style.setProperty('--reader-max-width', `${state.reader.prefs.maxWidthPx}px`);
-        }
-        if (key === 'limitMaxWidth' || key === 'reduceBrightnessInDarkMode' || key === 'showPageInfo') renderReaderContent(state.view.params);
-        else {
-          updateReaderPageCount();
-          const output = input.closest('.reader-setting-row')?.querySelector('output');
-          if (output) output.textContent = settingOutputText(key, value);
-        }
+        applyReaderAppearance();
+        updateReaderPageCount();
+        const output = input.closest('.reader-setting-row')?.querySelector('output');
+        if (output) output.textContent = settingOutputText(key, value);
+        if (key === 'limitMaxWidth') refreshReaderChrome(adapter, pages, params);
       };
       input.addEventListener('change', handler);
       input.addEventListener('input', () => {
@@ -1633,8 +1897,9 @@
       if (state.reader.settingsOpen || state.reader.chaptersOpen) {
         state.reader.settingsOpen = false;
         state.reader.chaptersOpen = false;
+        state.reader.methodPickerOpen = false;
         state.reader.chromeVisible = false;
-        renderReaderContent(state.view.params);
+        refreshReaderChromeForCurrent();
         return;
       }
       if (!state.reader.chromeVisible && (prefs || state.reader.prefs || readReaderPrefs()).tapTurnEnabled) {
@@ -1773,13 +2038,13 @@
     }
 
     function toggleAutoTurn() {
-      if (state.reader.autoTurnTimer) { stopAutoTurn(true); renderReaderContent(state.view.params); return; }
+      if (state.reader.autoTurnTimer) { stopAutoTurn(true); refreshReaderChromeForCurrent(); return; }
       const seconds = clamp(numberValue(state.reader.prefs.autoTurnSeconds, 1), 1, 60);
       state.reader.autoTurnTimer = window.setInterval(() => {
         if (state.reader.autoTurnTimer) moveReaderPage(1);
       }, seconds * 1000);
       showToast(`自动翻页：${seconds} 秒`);
-      renderReaderContent(state.view.params);
+      refreshReaderChromeForCurrent();
     }
 
     function stopAutoTurn(showMessage) {
@@ -2072,15 +2337,17 @@
     return rawItems.map((raw) => {
       const item = raw && typeof raw === 'object' ? raw : {};
       const target = stringValue(firstValue(item, ['target', 'id', 'itemId']));
+      const episodeTitle = firstValue(item, ['episodeTitle', 'readEpisodeTitle']);
       return Object.assign({}, item, {
         target,
         title: stringValue(firstValue(item, ['title', 'name'])) || target,
-        subtitle: stringValue(firstValue(item, ['subtitle', 'sourceDisplayName', 'readEpisode'])),
+        subtitle: stringValue(firstValue(item, ['subtitle', 'sourceDisplayName'])),
+        displayId: target,
         coverUrl: stringValue(firstValue(item, ['coverUrl', 'cover', 'thumbnail'])),
         ep: numberValue(firstValue(item, ['ep', 'episode', 'episodeIndex'])),
         page: numberValue(firstValue(item, ['page', 'pageIndex'])),
         maxPage: numberValue(firstValue(item, ['maxPage', 'pageCount'])),
-        readEpisode: String(firstValue(item, ['readEpisode', 'episodeTitle']) || ''),
+        readEpisode: typeof episodeTitle === 'string' ? episodeTitle : '',
         updatedAt: stringValue(firstValue(item, ['updatedAt', 'updated_at'])),
       });
     }).filter((item) => item.target);
@@ -2103,16 +2370,70 @@
     const page = numberValue(item.page) + 1;
     const maxPage = numberValue(item.maxPage);
     const cover = item.coverUrl || item.cover;
+    const subtitle = item.readEpisode || item.subtitle || '';
     return `
       <button class="app-history-item" type="button" data-open-history="${escapeAttr(item.target)}">
         ${cover ? `<span class="app-cover-wrap app-history-cover"><img loading="lazy" src="${escapeAttr(window.PicaKeepConsole.api.imageUrl(cover))}" alt="${escapeAttr(item.title)}" data-fallback="▱"></span>` : '<span class="app-cover-fallback app-history-cover">▱</span>'}
         <span class="app-history-meta">
           <strong>${escapeHtml(item.title || item.target)}</strong>
-          <span class="muted">${escapeHtml(item.readEpisode || item.subtitle || '')}</span>
+          ${subtitle ? `<span class="muted">${escapeHtml(subtitle)}</span>` : ''}
           <span class="muted">第 ${number(page)}${maxPage ? ` / ${number(maxPage)}` : ''} 页</span>
         </span>
       </button>
     `;
+  }
+
+  function historyPosterCardHtml(item) {
+    const page = numberValue(item.page) + 1;
+    const maxPage = numberValue(item.maxPage);
+    const tags = (item.tags || []).slice(0, 2);
+    const progress = `第 ${number(page)}${maxPage ? ` / ${number(maxPage)}` : ''} 页`;
+    return `
+      <article class="app-card app-history-entry" data-open-history="${escapeAttr(item.target)}" tabindex="0" role="button">
+        ${historyCoverHtml(item, 'app-card-cover')}
+        <button class="ghost app-history-remove" type="button" data-remove-history="${escapeAttr(item.target)}" aria-label="删除 ${escapeAttr(item.title || item.target)} 的历史记录">×</button>
+        <div class="app-card-body">
+          <h3>${escapeHtml(item.title || item.target)}</h3>
+          ${item.subtitle ? `<div class="muted app-card-sub">${escapeHtml(item.subtitle)}</div>` : ''}
+          <div class="app-card-meta">
+            <span class="badge">历史</span>
+            <span class="muted">${escapeHtml(progress)}</span>
+          </div>
+          ${tags.length ? `<div class="app-detailed-tags app-history-tags">${tags.map((tag) => `<span>${escapeHtml(tag)}</span>`).join('')}</div>` : ''}
+        </div>
+      </article>
+    `;
+  }
+
+  function historyDetailedCardHtml(item) {
+    const page = numberValue(item.page) + 1;
+    const maxPage = numberValue(item.maxPage);
+    const tags = (item.tags || []).slice(0, 3);
+    const progress = `第 ${number(page)}${maxPage ? ` / ${number(maxPage)}` : ''} 页`;
+    return `
+      <article class="app-detailed-card app-history-entry" data-open-history="${escapeAttr(item.target)}" tabindex="0" role="button">
+        ${historyCoverHtml(item, 'app-detailed-cover')}
+        <button class="ghost app-history-remove" type="button" data-remove-history="${escapeAttr(item.target)}" aria-label="删除 ${escapeAttr(item.title || item.target)} 的历史记录">×</button>
+        <div class="app-detailed-body">
+          <div class="app-detailed-title">${escapeHtml(item.title || item.target)}</div>
+          ${item.subtitle ? `<div class="muted app-detailed-sub">${escapeHtml(item.subtitle)}</div>` : ''}
+          <div class="app-detailed-meta">
+            <span class="badge">历史</span>
+            <span class="muted">${escapeHtml(progress)}</span>
+            ${item.updatedAt ? `<span class="muted">${escapeHtml(item.updatedAt)}</span>` : ''}
+          </div>
+          ${tags.length ? `<div class="app-detailed-tags">${tags.map((tag) => `<span>${escapeHtml(tag)}</span>`).join('')}</div>` : ''}
+        </div>
+        <span class="app-chevron">›</span>
+      </article>
+    `;
+  }
+
+  function historyCoverHtml(item, className) {
+    const cover = item.coverUrl || item.cover;
+    const title = item.title || item.target || '?';
+    if (!cover) return `<div class="app-cover-fallback ${className}">${escapeHtml(firstLetter(title))}</div>`;
+    return `<div class="app-cover-wrap ${className}"><img loading="lazy" src="${escapeAttr(window.PicaKeepConsole.api.imageUrl(cover))}" alt="${escapeAttr(title)}" data-fallback="${escapeAttr(firstLetter(title))}"></div>`;
   }
 
   function gridCardHtml(item) {
@@ -2203,7 +2524,6 @@
     return `
       <section class="reader-page" data-page-index="${index}"${dimensions} ${style ? `style="${style}"` : ''}>
         <div class="reader-page-inner">
-          <div class="reader-page-label">${index + 1}</div>
           <img class="reader-img" alt="第 ${index + 1} 页" data-src="${escapeAttr(src)}" data-raw-src="${escapeAttr(src)}" loading="lazy">
           <button class="ghost reader-retry" type="button" hidden>重试加载</button>
         </div>
@@ -2295,10 +2615,11 @@
   }
 
   function viewTitle(view) {
-    if (view.name === 'dashboard') return 'Dashboard';
+    if (view.name === 'dashboard') return '';
     if (view.name === 'detail') return '详情';
     if (view.name === 'reader') return '阅读器';
     if (view.name === 'grid') return gridFilterTitle(view.params && view.params.filter);
+    if (view.name === 'historyPage') return '历史记录';
     if (view.name === 'imageFavorites') return '图片收藏';
     return '--';
   }

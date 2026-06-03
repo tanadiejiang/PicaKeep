@@ -135,6 +135,14 @@ a { color: var(--accent-2); }
   transition: width 0.18s ease, padding 0.18s ease;
 }
 
+#topbar > .topbar-avatar-wrap {
+  grid-row: 2;
+}
+
+#topbar > .topbar-brand {
+  grid-row: 4;
+}
+
 .topbar-toggle {
   width: 48px;
   height: 48px;
@@ -181,7 +189,7 @@ a { color: var(--accent-2); }
 .topbar-avatar-wrap {
   position: relative;
   justify-self: stretch;
-  align-self: end;
+  align-self: start;
   display: grid;
   justify-items: center;
 }
@@ -218,7 +226,7 @@ a { color: var(--accent-2); }
 .topbar-avatar-menu {
   position: absolute;
   left: calc(100% + 14px);
-  bottom: 0;
+  top: 0;
   width: min(360px, calc(100vw - 110px));
   max-height: min(720px, calc(100vh - 24px));
   overflow: auto;
@@ -234,7 +242,7 @@ a { color: var(--accent-2); }
   content: "";
   position: absolute;
   left: -7px;
-  bottom: 20px;
+  top: 20px;
   width: 14px;
   height: 14px;
   background: inherit;
