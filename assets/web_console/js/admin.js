@@ -605,7 +605,7 @@
             <div class="muted">${escapeHtml(item.author || item.type || '')}</div>
             <div class="admin-tags">${(item.tags || []).slice(0, 6).map((tag) => `<span class="badge">${escapeHtml(tag)}</span>`).join('')}</div>
           </div>
-          <button class="ghost danger" type="button" data-fav-item-delete="${escapeAttr(item.target)}">删除</button>
+          <button class="ghost danger" type="button" data-fav-item-delete="${escapeAttr(item.target)}" data-type="${escapeAttr(item.type)}">删除</button>
         </div>
       `).join('');
       box.innerHTML = `
@@ -655,7 +655,11 @@
         button.addEventListener('click', (event) => withButtonBusy(event.currentTarget, () => deleteFavoriteFolder(event.currentTarget.dataset.favDelete)));
       });
       wrap.querySelectorAll('[data-fav-item-delete]').forEach((button) => {
-        button.addEventListener('click', (event) => withButtonBusy(event.currentTarget, () => deleteFavoriteItem(state.favorites.selectedFolder, event.currentTarget.dataset.favItemDelete)));
+        button.addEventListener('click', (event) => withButtonBusy(event.currentTarget, () => deleteFavoriteItem(
+          state.favorites.selectedFolder,
+          event.currentTarget.dataset.favItemDelete,
+          event.currentTarget.dataset.type,
+        )));
       });
     }
 
@@ -701,11 +705,12 @@
       }
     }
 
-    async function deleteFavoriteItem(folder, target) {
+    async function deleteFavoriteItem(folder, target, type) {
       if (!folder || !target) return;
       if (!confirm('确定从当前收藏夹删除这条收藏？')) return;
       try {
-        await api.del(`/api/library/favorites/${encodeURIComponent(folder)}/${encodeURIComponent(target)}`);
+        const query = type == null || String(type).trim() === '' ? '' : `?type=${encodeURIComponent(type)}`;
+        await api.del(`/api/library/favorites/${encodeURIComponent(folder)}/${encodeURIComponent(target)}${query}`);
         state.favorites.itemsByFolder.delete(folder);
         await loadFavorites();
         await loadFavoriteItems(folder);

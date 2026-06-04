@@ -31,6 +31,7 @@
       grid: { loading: false, error: '', warning: '', items: [], query: '', source: consoleApi.source.get(), filter: 'all', viewMode: readGridViewMode() },
       inspector: { open: false, loading: false, error: '', item: null, params: null, requestId: 0 },
       imageFavorites: { loading: false, error: '', items: [] },
+      favorites: { loading: false, error: '', folders: [], folder: '', items: [], resolveCache: new Map() },
       detail: { loading: false, error: '', item: null, recommendationsLoading: false, recommendationsError: '', recommendations: [] },
       reader: { loading: false, error: '', item: null, episode: null, episodeIndex: 0, pageIndex: 0, mode: readReaderMode(), prefs: readReaderPrefs(), chromeVisible: false, settingsOpen: false, chaptersOpen: false, methodPickerOpen: false, historyTimer: null, autoTurnTimer: null, lastHistoryKey: '', favoriteSaving: false, adapter: null, pages: [], pageSizes: [], resizeRaf: 0, restoreRaf: 0, restoring: false, longPressTimer: null, tapTimer: null, gesture: null, activePointers: new Set(), zoom: defaultReaderZoomState(), drawPaged: null },
       requestId: 0,
@@ -111,6 +112,7 @@
         updateToolbar();
         if (state.view.name === 'grid') renderGridContent();
         else if (state.view.name === 'historyPage') renderHistoryPageContent();
+        else if (state.view.name === 'favorites') renderFavoritesContent();
       });
     });
     remoteInput.addEventListener('change', () => {
@@ -130,6 +132,7 @@
       updateSearchClear();
       if (state.view.name === 'grid') renderGridContent();
       else if (state.view.name === 'historyPage') renderHistoryPageContent();
+      else if (state.view.name === 'favorites') renderFavoritesContent();
     });
     searchInput.addEventListener('keydown', (event) => {
       if (event.key !== 'Enter') return;
@@ -139,6 +142,7 @@
       state.grid.query = query;
       if (state.view.name === 'grid') renderGridContent();
       else if (state.view.name === 'historyPage') renderHistoryPageContent();
+      else if (state.view.name === 'favorites') renderFavoritesContent();
       else if (state.view.name === 'dashboard') navigate('grid', { filter: 'all' }, true);
     });
     searchClear.addEventListener('click', () => {
@@ -148,8 +152,14 @@
       searchInput.focus();
       if (state.view.name === 'grid') renderGridContent();
       else if (state.view.name === 'historyPage') renderHistoryPageContent();
+      else if (state.view.name === 'favorites') renderFavoritesContent();
     });
     disposers.push(consoleApi.source.onChange(() => {
+      if (state.view.name === 'favorites') {
+        updateToolbar();
+        renderFavorites(state.view.params);
+        return;
+      }
       state.grid.query = '';
       searchInput.value = '';
       if (state.view.name === 'dashboard') renderDashboard();
@@ -229,10 +239,11 @@
       remoteBox.hidden = !usesRemote(currentSource);
       remoteInput.disabled = !usesRemote(currentSource);
       remoteInput.placeholder = usesRemote(currentSource) ? 'http://192.168.1.10:9527' : '当前源不需要远程地址';
-      searchInput.disabled = !['dashboard', 'grid', 'historyPage'].includes(state.view.name);
+      const favoritesHasFolder = state.view.name === 'favorites' && !!(state.view.params && state.view.params.folder);
+      searchInput.disabled = !(['dashboard', 'grid', 'historyPage'].includes(state.view.name) || favoritesHasFolder);
       searchInput.value = state.grid.query || '';
       updateSearchClear();
-      viewSwitchEl.hidden = !['grid', 'historyPage'].includes(state.view.name);
+      viewSwitchEl.hidden = !(['grid', 'historyPage'].includes(state.view.name) || favoritesHasFolder);
       viewSwitchEl.querySelectorAll('[data-grid-view]').forEach((button) => {
         button.classList.toggle('active', button.dataset.gridView === state.grid.viewMode);
       });
@@ -267,6 +278,7 @@
       if (name === 'grid') renderGrid(params || {});
       if (name === 'historyPage') renderHistoryPage();
       if (name === 'imageFavorites') renderImageFavorites();
+      if (name === 'favorites') renderFavorites(params || {});
       if (name === 'detail') renderDetail(params || {});
       if (name === 'reader') renderReader(params || {});
     }
@@ -335,6 +347,14 @@
                 </span>
                 <span class="app-chevron">›</span>
               </button>
+              <button class="app-outlined-card app-entry-card" type="button" data-open-favorites>
+                <span class="app-entry-icon">⭐</span>
+                <span class="app-entry-text">
+                  <strong>收藏夹</strong>
+                  <span class="muted">浏览本地收藏文件夹</span>
+                </span>
+                <span class="app-chevron">›</span>
+              </button>
               <button class="app-outlined-card app-entry-card" type="button" data-open-image-favorites>
                 <span class="app-entry-icon">🖼</span>
                 <span class="app-entry-text">
@@ -358,6 +378,7 @@
                 <button class="app-quick-chip" type="button" data-open-albums>▦ 图集</button>
                 <button class="app-quick-chip" type="button" data-history-refresh>🕘 历史</button>
                 <button class="app-quick-chip" type="button" data-open-grid>☁ 资源库</button>
+                <button class="app-quick-chip" type="button" data-open-favorites>⭐ 收藏夹</button>
                 <button class="app-quick-chip" type="button" data-open-image-favorites>🖼 图片</button>
               </div>
             </section>
@@ -368,6 +389,7 @@
       viewEl.querySelectorAll('[data-open-comics]').forEach((button) => button.addEventListener('click', () => navigate('grid', { filter: 'comics' }, true)));
       viewEl.querySelectorAll('[data-open-albums]').forEach((button) => button.addEventListener('click', () => navigate('grid', { filter: 'albums' }, true)));
       viewEl.querySelectorAll('[data-open-image-favorites]').forEach((button) => button.addEventListener('click', () => navigate('imageFavorites', {}, true)));
+      viewEl.querySelectorAll('[data-open-favorites]').forEach((button) => button.addEventListener('click', () => navigate('favorites', {}, true)));
       viewEl.querySelectorAll('[data-history-refresh]').forEach((button) => button.addEventListener('click', (event) => {
         event.stopPropagation();
         renderDashboard();
@@ -633,6 +655,8 @@
         renderHistoryPage();
       } else if (state.view.name === 'imageFavorites') {
         renderImageFavorites();
+      } else if (state.view.name === 'favorites') {
+        renderFavorites(state.view.params);
       } else if (state.view.name === 'detail') {
         renderDetail(state.view.params);
       } else if (state.view.name === 'reader') {
@@ -752,6 +776,37 @@
         state.inspector.loading = false;
         renderItemPanel();
       }
+    }
+
+    async function openFavoriteItemPanelFromCard(card) {
+      const id = await resolveFavoriteDetailId({
+        id: card.dataset.openDetail,
+        target: card.dataset.favoriteTarget,
+        type: card.dataset.favoriteType,
+        needsResolve: card.dataset.favoriteResolve === '1',
+      });
+      openItemPanel({ id, origin: card.dataset.origin || 'local' });
+    }
+
+    async function resolveFavoriteDetailId(item) {
+      const fallback = stringValue(item && item.id);
+      const target = stringValue(item && item.target);
+      if (!target || (target === fallback && !(item && item.needsResolve))) return fallback;
+      const type = numberValue(item && item.type);
+      const cacheKey = `${type}|${target}`;
+      const cached = state.favorites.resolveCache.get(cacheKey);
+      if (cached) return cached;
+      try {
+        const adapter = buildAdapter('local');
+        const data = await adapter.fetchItems();
+        const items = normalizeItemsPayload(data, adapter, 'local');
+        const matched = findFavoriteResourceItem(items, target, type);
+        if (matched && matched.id) {
+          state.favorites.resolveCache.set(cacheKey, matched.id);
+          return matched.id;
+        }
+      } catch (_) {}
+      return fallback;
     }
 
     function closeItemPanel() {
@@ -917,6 +972,132 @@
       bindImageFallbacks(viewEl);
     }
 
+    async function renderFavorites(params) {
+      cleanupReader();
+      const folder = stringValue(params && params.folder);
+      if (!folder) {
+        state.grid.query = '';
+        searchInput.value = '';
+      }
+      state.favorites.loading = true;
+      state.favorites.error = '';
+      state.favorites.folder = folder;
+      updateToolbar();
+      viewEl.innerHTML = loadingCard(folder ? '正在加载收藏夹...' : '正在加载收藏夹列表...');
+      const requestId = ++state.requestId;
+      try {
+        if (folder) {
+          const data = await consoleApi.api.get(`/api/library/favorites/${encodeURIComponent(folder)}`);
+          if (requestId !== state.requestId || state.view.name !== 'favorites') return;
+          state.favorites.folder = stringValue(firstValue(data || {}, ['folder'])) || folder;
+          state.favorites.items = normalizeFavoritesItemsPayload(data);
+        } else {
+          const data = await consoleApi.api.get('/api/library/favorites');
+          if (requestId !== state.requestId || state.view.name !== 'favorites') return;
+          state.favorites.folders = normalizeFavoriteFoldersPayload(data);
+          state.favorites.items = [];
+        }
+      } catch (error) {
+        if (requestId !== state.requestId || state.view.name !== 'favorites') return;
+        state.favorites.error = errorMessage(error);
+        state.favorites.items = [];
+        if (!folder) state.favorites.folders = [];
+      } finally {
+        if (requestId !== state.requestId || state.view.name !== 'favorites') return;
+        state.favorites.loading = false;
+        renderFavoritesContent();
+      }
+    }
+
+    function renderFavoritesContent() {
+      updateToolbar();
+      const folder = state.favorites.folder || '';
+      if (state.favorites.error) {
+        viewEl.innerHTML = retryCard(state.favorites.error, 'data-favorites-retry', true);
+        viewEl.querySelector('[data-back]').addEventListener('click', back);
+        viewEl.querySelector('[data-favorites-retry]').addEventListener('click', () => renderFavorites(state.view.params));
+        return;
+      }
+      if (!folder) {
+        const folders = state.favorites.folders || [];
+        viewEl.innerHTML = `
+          <div class="app-list-view">
+            <div class="app-view-head">
+              <button class="ghost" type="button" data-back>← 返回</button>
+              <div>
+                <strong>收藏夹</strong>
+                <div class="muted">${number(folders.length)} 个本地收藏文件夹</div>
+              </div>
+            </div>
+            ${folders.length ? `
+              <div class="app-favorites-folder-grid">
+                ${folders.map((item) => favoriteFolderCardHtml(item)).join('')}
+              </div>
+            ` : `
+              <div class="card app-empty">
+                <div class="brand">暂无收藏夹</div>
+                <div class="sub">在客户端创建收藏夹后，这里会显示文件夹列表。</div>
+              </div>
+            `}
+          </div>
+        `;
+        viewEl.querySelector('[data-back]').addEventListener('click', back);
+        viewEl.querySelectorAll('[data-open-favorite-folder]').forEach((card) => {
+          card.addEventListener('click', () => navigate('favorites', { folder: card.dataset.openFavoriteFolder }, true));
+          card.addEventListener('keydown', (event) => {
+            if (event.key === 'Enter' || event.key === ' ') {
+              event.preventDefault();
+              card.click();
+            }
+          });
+        });
+        return;
+      }
+
+      const allItems = state.favorites.items || [];
+      const query = state.grid.query.trim();
+      const items = filterItems(allItems, query);
+      const listMode = state.grid.viewMode === 'detailed';
+      viewEl.innerHTML = `
+        <div class="app-list-view">
+          <div class="app-view-head app-grid-view-head">
+            <button class="ghost" type="button" data-back>← 返回</button>
+            <div>
+              <strong>${escapeHtml(folder)}</strong>
+              <div class="muted">${query ? `${number(items.length)} / ${number(allItems.length)} 项收藏` : `${number(allItems.length)} 项收藏`} · 点击封面查看详情</div>
+            </div>
+          </div>
+          ${items.length ? `
+            <div class="${listMode ? 'app-detailed-grid' : 'app-grid'}">
+              ${items.map((item) => listMode ? gridDetailedCardHtml(item) : gridCardHtml(item)).join('')}
+            </div>
+          ` : `
+            <div class="card app-empty">
+              <div class="brand">${query && allItems.length ? '没有匹配结果' : '暂无收藏'}</div>
+              <div class="sub">${query && allItems.length ? `没有找到「${escapeHtml(query)}」，换个关键词试试。` : '这个收藏夹里还没有漫画。'}</div>
+              ${query ? '<button class="ghost" type="button" data-clear-favorites-query>清空搜索</button>' : ''}
+            </div>
+          `}
+        </div>
+      `;
+      viewEl.querySelector('[data-back]').addEventListener('click', back);
+      viewEl.querySelector('[data-clear-favorites-query]')?.addEventListener('click', () => {
+        state.grid.query = '';
+        searchInput.value = '';
+        renderFavoritesContent();
+        searchInput.focus();
+      });
+      viewEl.querySelectorAll('[data-open-detail]').forEach((card) => {
+        card.addEventListener('click', () => openFavoriteItemPanelFromCard(card));
+        card.addEventListener('keydown', (event) => {
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            card.click();
+          }
+        });
+      });
+      bindImageFallbacks(viewEl);
+    }
     async function renderDetail(params) {
       cleanupReader();
       state.detail.loading = true;
@@ -2294,6 +2475,51 @@
     }).filter((item) => item.id || item.imageUrl);
   }
 
+  function normalizeFavoriteFoldersPayload(data) {
+    const rawItems = firstArray(data, ['folders', 'items', 'data']);
+    return rawItems.map((raw) => {
+      const item = raw && typeof raw === 'object' ? raw : { name: raw };
+      const name = stringValue(firstValue(item, ['name', 'title', 'folder']));
+      return {
+        name,
+        count: numberValue(firstValue(item, ['count', 'itemCount', 'total'])),
+      };
+    }).filter((item) => item.name);
+  }
+
+  function normalizeFavoritesItemsPayload(data) {
+    const rawItems = firstArray(data, ['items', 'data', 'favorites']);
+    return rawItems.map((raw) => {
+      const item = raw && typeof raw === 'object' ? raw : {};
+      const target = stringValue(firstValue(item, ['target', 'comicId']));
+      const itemId = stringValue(firstValue(item, ['itemId']));
+      const fallbackId = stringValue(firstValue(item, ['id', 'bookId', 'uuid', 'key']));
+      const title = stringValue(firstValue(item, ['name', 'title', 'displayName'])) || target;
+      const author = stringValue(firstValue(item, ['author', 'subtitle', 'sourceDisplayName']));
+      const tags = arrayValue(firstValue(item, ['tags', 'categories', 'labels'])).map((tag) => stringValue(tag)).filter(Boolean);
+      const coverUrl = stringValue(firstValue(item, ['coverUrl', 'cover', 'thumbnail', 'thumbnailUrl']));
+      return Object.assign({}, item, {
+        id: itemId || target || fallbackId,
+        target,
+        title,
+        subtitle: author,
+        sourceDisplayName: author,
+        displayId: target,
+        tags,
+        imageCount: numberValue(firstValue(item, ['imageCount', 'pageCount', 'pagesCount', 'count'])),
+        totalBytes: numberValue(firstValue(item, ['totalBytes', 'bytes', 'size'])),
+        updatedAt: stringValue(firstValue(item, ['time', 'updatedAt', 'modifiedAt'])),
+        coverUrl,
+        episodes: [],
+        __origin: 'local',
+        __favoriteTarget: target,
+        __favoriteType: numberValue(firstValue(item, ['type', 'favoriteType'])),
+        __favoriteNeedsResolve: !itemId && !!target,
+        __imageUrl: (path) => window.PicaKeepConsole.api.imageUrl(path),
+      });
+    }).filter((item) => item.id);
+  }
+
   function gridCounts(items) {
     const all = Array.isArray(items) ? items : [];
     let comics = 0;
@@ -2436,16 +2662,36 @@
     return `<div class="app-cover-wrap ${className}"><img loading="lazy" src="${escapeAttr(window.PicaKeepConsole.api.imageUrl(cover))}" alt="${escapeAttr(title)}" data-fallback="${escapeAttr(firstLetter(title))}"></div>`;
   }
 
-  function gridCardHtml(item) {
+  function favoriteFolderCardHtml(item) {
     return `
-      <article class="app-card" data-open-detail="${escapeAttr(item.id)}" data-origin="${escapeAttr(item.__origin)}" tabindex="0" role="button">
+      <article class="app-favorites-folder-card" data-open-favorite-folder="${escapeAttr(item.name)}" tabindex="0" role="button">
+        <span class="app-entry-icon app-favorites-folder-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" focusable="false">
+            <path d="M3.5 6.8c0-1.1.9-2 2-2h4.2l2 2.2h6.8c1.1 0 2 .9 2 2v8.2c0 1.1-.9 2-2 2h-13c-1.1 0-2-.9-2-2V6.8Z"/>
+            <path d="M3.5 9h17"/>
+          </svg>
+        </span>
+        <div class="app-favorites-folder-text">
+          <strong>${escapeHtml(item.name)}</strong>
+          <span class="muted">本地</span>
+        </div>
+        <span class="badge app-favorites-folder-count">${number(item.count)} 项</span>
+      </article>
+    `;
+  }
+
+  function gridCardHtml(item) {
+    const meta = gridItemMetaText(item);
+    const favoriteAttrs = favoriteDetailAttrs(item);
+    return `
+      <article class="app-card" data-open-detail="${escapeAttr(item.id)}" data-origin="${escapeAttr(item.__origin)}"${favoriteAttrs} tabindex="0" role="button">
         ${coverHtml(item, 'app-card-cover')}
         <div class="app-card-body">
           <h3>${escapeHtml(item.title || item.id)}</h3>
           <div class="muted app-card-sub">${escapeHtml(item.subtitle || item.sourceDisplayName || '')}</div>
           <div class="app-card-meta">
             <span class="badge">${originLabel(item.__origin)}</span>
-            <span class="muted">${number(item.imageCount)} 图 · ${formatBytes(item.totalBytes)}</span>
+            ${meta ? `<span class="muted">${escapeHtml(meta)}</span>` : ''}
           </div>
         </div>
       </article>
@@ -2453,17 +2699,18 @@
   }
 
   function gridDetailedCardHtml(item) {
-    const tags = (item.tags || []).slice(0, 3);
+    const tags = item.tags || [];
+    const stats = gridItemMetaParts(item);
+    const favoriteAttrs = favoriteDetailAttrs(item);
     return `
-      <article class="app-detailed-card" data-open-detail="${escapeAttr(item.id)}" data-origin="${escapeAttr(item.__origin)}" tabindex="0" role="button">
+      <article class="app-detailed-card" data-open-detail="${escapeAttr(item.id)}" data-origin="${escapeAttr(item.__origin)}"${favoriteAttrs} tabindex="0" role="button">
         ${coverHtml(item, 'app-detailed-cover')}
         <div class="app-detailed-body">
           <div class="app-detailed-title">${escapeHtml(item.title || item.id)}</div>
           <div class="muted app-detailed-sub">${escapeHtml(item.subtitle || item.sourceDisplayName || item.displayId || '')}</div>
           <div class="app-detailed-meta">
             <span class="badge">${originLabel(item.__origin)}</span>
-            <span class="muted">${number(item.imageCount)} 图</span>
-            <span class="muted">${formatBytes(item.totalBytes)}</span>
+            ${stats.map((part) => `<span class="muted">${escapeHtml(part)}</span>`).join('')}
             ${item.updatedAt ? `<span class="muted">${escapeHtml(item.updatedAt)}</span>` : ''}
           </div>
           ${tags.length ? `<div class="app-detailed-tags">${tags.map((tag) => `<span>${escapeHtml(tag)}</span>`).join('')}</div>` : ''}
@@ -2471,6 +2718,105 @@
         <span class="app-chevron">›</span>
       </article>
     `;
+  }
+
+  function gridItemMetaParts(item) {
+    const parts = [];
+    if (numberValue(item && item.imageCount) > 0) parts.push(`${number(item.imageCount)} 图`);
+    if (numberValue(item && item.totalBytes) > 0) parts.push(formatBytes(item.totalBytes));
+    return parts;
+  }
+
+  function gridItemMetaText(item) {
+    return gridItemMetaParts(item).join(' · ');
+  }
+
+  function favoriteDetailAttrs(item) {
+    if (!item || !item.__favoriteTarget) return '';
+    const resolveAttr = item.__favoriteNeedsResolve ? ' data-favorite-resolve="1"' : '';
+    return ` data-favorite-target="${escapeAttr(item.__favoriteTarget)}" data-favorite-type="${escapeAttr(item.__favoriteType)}"${resolveAttr}`;
+  }
+
+  function findFavoriteResourceItem(items, target, type) {
+    const candidates = favoriteDownloadIdCandidates(target, type);
+    if (!candidates.length) return null;
+    const normalized = candidates.map((item) => stringValue(item).trim()).filter(Boolean);
+    for (const candidate of normalized) {
+      const matched = (items || []).find((item) => resourceCandidatePool(item).has(candidate));
+      if (matched) return matched;
+    }
+    return null;
+  }
+
+  function favoriteDownloadIdCandidates(target, type) {
+    const rawTarget = stringValue(target).trim();
+    const candidates = [];
+    const seen = new Set();
+    const add = (value) => {
+      const normalized = stringValue(value).trim();
+      if (normalized && !seen.has(normalized)) {
+        seen.add(normalized);
+        candidates.push(normalized);
+      }
+    };
+    add(rawTarget);
+    switch (numberValue(type)) {
+      case 1: {
+        const id = extractEhGalleryId(rawTarget);
+        if (id) add(id);
+        break;
+      }
+      case 2:
+        add(rawTarget.startsWith('jm') ? rawTarget : `jm${rawTarget}`);
+        break;
+      case 3: {
+        const id = extractHitomiId(rawTarget);
+        if (rawTarget.startsWith('hitomi')) add(rawTarget);
+        else if (id) add(`hitomi${id}`);
+        break;
+      }
+      case 4:
+        if (rawTarget.startsWith('Ht') || rawTarget.startsWith('ht')) {
+          const suffix = rawTarget.slice(2);
+          add(`Ht${suffix}`);
+          add(`ht${suffix}`);
+        } else {
+          add(`Ht${rawTarget}`);
+          add(`ht${rawTarget}`);
+        }
+        break;
+      case 6:
+        add(rawTarget.startsWith('nhentai') ? rawTarget : `nhentai${rawTarget}`);
+        break;
+      default:
+        add(rawTarget);
+        break;
+    }
+    return candidates;
+  }
+
+  function resourceCandidatePool(item) {
+    return new Set([
+      item && item.id,
+      item && item.title,
+      item && item.displayId,
+      item && item.sourceTitle,
+      item && item.sourceDisplayName,
+      item && item.subtitle,
+      item && item.path,
+    ].map((value) => stringValue(value).trim()).filter(Boolean));
+  }
+
+  function extractEhGalleryId(target) {
+    const match = stringValue(target).match(/\/g\/([^/]+)/);
+    return match ? match[1].trim() : '';
+  }
+
+  function extractHitomiId(target) {
+    const text = stringValue(target).trim();
+    const htmlMatch = text.match(/(\d+)(?=\.html(?:$|\?))/);
+    if (htmlMatch) return htmlMatch[1];
+    return /^\d+$/.test(text) ? text : '';
   }
 
   function recommendationCardHtml(item) {
@@ -2621,6 +2967,7 @@
     if (view.name === 'grid') return gridFilterTitle(view.params && view.params.filter);
     if (view.name === 'historyPage') return '历史记录';
     if (view.name === 'imageFavorites') return '图片收藏';
+    if (view.name === 'favorites') return '收藏夹';
     return '--';
   }
 
