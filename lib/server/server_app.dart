@@ -56,6 +56,7 @@ class PicaKeepAdminServer {
   final Map<String, Future<ServerResourceItemSummary>> _deepItemInFlight =
       <String, Future<ServerResourceItemSummary>>{};
   final Map<String, String> _coverPathCache = <String, String>{};
+  final Map<String, String> _favoriteCoverFallbackCache = <String, String>{};
   final int _maxConcurrentDeepScans = Platform.isAndroid ? 2 : 6;
   int _activeDeepScanCount = 0;
   final List<Completer<void>> _deepScanWaiters = <Completer<void>>[];
@@ -1198,11 +1199,16 @@ class PicaKeepAdminServer {
 
     if (segments.length == 4) {
       if (request.method == 'GET') {
+        final snapshot = await _currentSnapshot();
         return _jsonResponse({
           'folder': folder,
           'items': favorites
               .getAllComics(folder)
-              .map((item) => _buildFavoriteItemPayload(folder, item))
+              .map((item) => _buildFavoriteItemPayload(
+                    folder,
+                    item,
+                    matched: _resolveFavoriteResourceItem(snapshot, item),
+                  ))
               .toList(growable: false),
         });
       }
@@ -1241,15 +1247,68 @@ class PicaKeepAdminServer {
       if (request.method != 'GET') {
         return _jsonResponse({'error': 'method not allowed'}, statusCode: 405);
       }
-      final item = _findFavoriteItemByTarget(favorites, folder, target);
-      if (item == null || item.coverPath.trim().isEmpty) {
+      final item = _findFavoriteItemByTarget(
+        favorites,
+        folder,
+        target,
+        type: _readIntValue(request.url.queryParameters['type']),
+      );
+      if (item == null) {
+        return _jsonResponse({'error': 'favorite not found'}, statusCode: 404);
+      }
+
+      final cacheKey = _favoriteCoverCacheKey(folder, item);
+      final localCoverPath = item.coverPath.trim();
+      if (localCoverPath.isNotEmpty) {
+        final localResponse = await _fileResponse(request, localCoverPath);
+        if (localResponse.statusCode != 404) {
+          return localResponse;
+        }
+      }
+
+      final cachedCoverPath = _favoriteCoverFallbackCache[cacheKey]?.trim() ?? '';
+      if (cachedCoverPath.isNotEmpty) {
+        final cachedResponse = await _fileResponse(request, cachedCoverPath);
+        if (cachedResponse.statusCode != 404) {
+          return cachedResponse;
+        }
+        _favoriteCoverFallbackCache.remove(cacheKey);
+      }
+
+      final snapshot = await _currentSnapshot();
+      final matched = _resolveFavoriteResourceItem(snapshot, item);
+      if (matched == null) {
         return _jsonResponse({'error': 'cover not found'}, statusCode: 404);
       }
-      return _fileResponse(request, item.coverPath);
+
+      var resolvedCoverPath = matched.coverPath?.trim() ?? '';
+      if (resolvedCoverPath.isEmpty) {
+        final rootPath = _rootPathForRootId(matched.rootId);
+        if (rootPath != null && rootPath.trim().isNotEmpty) {
+          resolvedCoverPath = await _scanner.resolveCoverPathOnly(
+            matched,
+            rootPath: rootPath,
+          );
+        }
+      }
+      if (resolvedCoverPath.isEmpty) {
+        return _jsonResponse({'error': 'cover not found'}, statusCode: 404);
+      }
+      final resolvedResponse = await _fileResponse(request, resolvedCoverPath);
+      if (resolvedResponse.statusCode == 404) {
+        return _jsonResponse({'error': 'cover not found'}, statusCode: 404);
+      }
+      _favoriteCoverFallbackCache[cacheKey] = resolvedCoverPath;
+      return resolvedResponse;
     }
 
     if (segments.length == 5 && request.method == 'DELETE') {
-      final item = _findFavoriteItemByTarget(favorites, folder, target);
+      final item = _findFavoriteItemByTarget(
+        favorites,
+        folder,
+        target,
+        type: _readIntValue(request.url.queryParameters['type']),
+      );
       if (item == null) {
         return _jsonResponse({'error': 'favorite not found'}, statusCode: 404);
       }
@@ -1502,8 +1561,9 @@ class PicaKeepAdminServer {
 
   Map<String, dynamic> _buildFavoriteItemPayload(
     String folder,
-    FavoriteItem item,
-  ) {
+    FavoriteItem item, {
+    ServerResourceItemSummary? matched,
+  }) {
     final encodedFolder = Uri.encodeComponent(folder);
     final encodedTarget = Uri.encodeComponent(item.target);
     return {
@@ -1513,7 +1573,17 @@ class PicaKeepAdminServer {
       'tags': item.tags,
       'target': item.target,
       'time': item.time,
-      'coverUrl': '/api/library/favorites/$encodedFolder/$encodedTarget/cover',
+      if (matched != null) ...{
+        'itemId': matched.id,
+        'id': matched.id,
+        'displayId': matched.displayId,
+        'sourceDisplayName': matched.sourceDisplayName,
+        'imageCount': matched.imageCount,
+        'totalBytes': matched.totalBytes,
+        'updatedAt': matched.updatedAt.toIso8601String(),
+      },
+      'coverUrl':
+          '/api/library/favorites/$encodedFolder/$encodedTarget/cover?type=${item.type.key}',
     };
   }
 
@@ -1533,14 +1603,90 @@ class PicaKeepAdminServer {
   FavoriteItem? _findFavoriteItemByTarget(
     LocalFavoritesManager favorites,
     String folder,
-    String target,
-  ) {
+    String target, {
+    int? type,
+  }) {
     for (final item in favorites.getAllComics(folder)) {
-      if (item.target == target) {
+      if (item.target == target && (type == null || item.type.key == type)) {
         return item;
       }
     }
     return null;
+  }
+
+  String _favoriteCoverCacheKey(String folder, FavoriteItem item) {
+    return '$folder|${item.type.key}|${item.target}';
+  }
+
+  ServerResourceItemSummary? _resolveFavoriteResourceItem(
+    ServerResourceSnapshot snapshot,
+    FavoriteItem item,
+  ) {
+    final candidates = _buildFavoriteServerCandidates(item);
+    return _findResourceItemByCandidates(snapshot.items, candidates);
+  }
+
+  List<String> _buildFavoriteServerCandidates(FavoriteItem item) {
+    final candidates = <String>[];
+    final seen = <String>{};
+    final rawTarget = item.target.trim();
+
+    void addCandidate(String value) {
+      final normalized = value.trim();
+      if (normalized.isNotEmpty && seen.add(normalized)) {
+        candidates.add(normalized);
+      }
+    }
+
+    for (final candidate in item.candidateDownloadIds()) {
+      if (candidate.trim() != rawTarget) {
+        addCandidate(candidate);
+      }
+    }
+    addCandidate(rawTarget);
+    return candidates;
+  }
+
+  ServerResourceItemSummary? _findResourceItemByCandidates(
+    List<ServerResourceItemSummary> items,
+    List<String> candidates,
+  ) {
+    if (candidates.isEmpty) return null;
+
+    final normalizedCandidates = candidates
+        .map((candidate) => candidate.trim())
+        .where((candidate) => candidate.isNotEmpty)
+        .toList(growable: false);
+    if (normalizedCandidates.isEmpty) return null;
+
+    final itemPools = <({ServerResourceItemSummary item, Set<String> pool})>[
+      for (final item in items) (item: item, pool: _resourceItemCandidatePool(item)),
+    ];
+
+    for (final candidate in normalizedCandidates) {
+      for (final entry in itemPools) {
+        if (entry.pool.contains(candidate)) {
+          return entry.item;
+        }
+      }
+    }
+
+    return null;
+  }
+
+  Set<String> _resourceItemCandidatePool(ServerResourceItemSummary item) {
+    return <String>{
+      item.id,
+      item.title,
+      item.displayId,
+      item.sourceTitle,
+      item.sourceDisplayName,
+      item.subtitle,
+      item.path,
+    }
+        .map((value) => value.trim())
+        .where((value) => value.isNotEmpty)
+        .toSet();
   }
 
   ImageFavorite? _findImageFavorite(String id, int ep, int page) {
@@ -1955,6 +2101,7 @@ class PicaKeepAdminServer {
     if (previousSignature != _librarySignature) {
       _deepItemCache.clear();
       _deepItemInFlight.clear();
+      _favoriteCoverFallbackCache.clear();
     }
   }
 
