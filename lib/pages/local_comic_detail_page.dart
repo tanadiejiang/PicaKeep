@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:photo_view/photo_view.dart';
 import 'package:picakeep/base.dart';
+import 'package:picakeep/components/archive_password_dialog.dart';
 import 'package:picakeep/components/scrollable.dart';
 import 'package:picakeep/foundation/app.dart';
 import 'package:picakeep/foundation/archive/archive_memory_cache.dart';
@@ -252,6 +253,10 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
   }
 
   Future<void> _onRead({int? ep, int? page}) async {
+    final unlocked = await _ensureRemoteArchiveUnlocked();
+    if (!unlocked) {
+      return;
+    }
     await ensureHistoryBeforeRead(
       _comic,
       legacyTargets: _historyTargetsFor(_comic),
@@ -266,6 +271,40 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
     if (mounted) {
       setState(() {});
     }
+  }
+
+  Future<bool> _ensureRemoteArchiveUnlocked() async {
+    final comic = _comic;
+    if (comic is! RemoteLibraryComicItem || !comic.needsArchivePassword) {
+      return true;
+    }
+    final result = await showArchivePasswordDialog(
+      context: context,
+      archivePath: comic.remotePath,
+      archiveFileName: comic.name,
+      format: comic.archiveFormat,
+      allowAddToDefaults: false,
+      onVerify: (password) => comic.client.unlockArchive(comic.id, password),
+    );
+    if (result == null) {
+      return false;
+    }
+    comic.archivePasswordMatched = true;
+    try {
+      final detail = await comic.client.fetchItemDetail(comic.id);
+      if (mounted) {
+        setState(() {
+          _comic = detail.copyWith(archivePasswordMatched: true);
+        });
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _comic = comic.copyWith(archivePasswordMatched: true);
+        });
+      }
+    }
+    return true;
   }
 
   Future<void> _onForgetArchivePassword(LocalLibraryComicItem item) async {
@@ -1413,14 +1452,13 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
                       '共${comic.eps.length}章'.tl,
                       overflow: TextOverflow.ellipsis,
                       style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                        color: Theme.of(context).colorScheme.outline,
-                      ),
+                            color: Theme.of(context).colorScheme.outline,
+                          ),
                     ),
                   ),
                   const SizedBox(width: 40),
                   if (archiveItem) ...[
-                    Text('序号'.tl,
-                        style: Theme.of(context).textTheme.bodySmall),
+                    Text('序号'.tl, style: Theme.of(context).textTheme.bodySmall),
                     Transform.scale(
                       scale: 0.8,
                       child: Switch(
@@ -1478,7 +1516,9 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
                           horizontal: 8, vertical: 4),
                       child: Center(
                         child: Text(
-                          index < displayNames.length ? displayNames[index] : comic.eps[index],
+                          index < displayNames.length
+                              ? displayNames[index]
+                              : comic.eps[index],
                           maxLines: 1,
                           textAlign: TextAlign.center,
                           overflow: TextOverflow.ellipsis,

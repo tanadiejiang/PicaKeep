@@ -4,6 +4,7 @@
   const readerModeKey = 'pk-console-reader-mode';
   const readerPrefsKey = 'pk-console-reader-prefs-v1';
   const gridViewModeKey = 'pk-console-grid-view-mode';
+  const gridSortKey = 'pk-console-grid-sort';
   const cleanupByRoot = new WeakMap();
   const readerGestureConfig = Object.freeze({
     tapSlopMouse: 6,
@@ -28,7 +29,7 @@
       history: [],
       dashboard: { loading: false, error: '', items: [], historySessionKey: '', historyLoadingForToken: '' },
       historyPage: { loading: false, error: '', items: [] },
-      grid: { loading: false, error: '', warning: '', items: [], query: '', source: consoleApi.source.get(), filter: 'all', viewMode: readGridViewMode() },
+      grid: { loading: false, error: '', warning: '', items: [], query: '', source: consoleApi.source.get(), filter: 'all', viewMode: readGridViewMode(), sort: readGridSort() },
       inspector: { open: false, loading: false, error: '', item: null, params: null, requestId: 0 },
       imageFavorites: { loading: false, error: '', items: [] },
       favorites: { loading: false, error: '', folders: [], folder: '', items: [], resolveCache: new Map() },
@@ -56,6 +57,9 @@
                 <button class="ghost app-search-clear" type="button" data-search-clear aria-label="清空搜索" hidden>×</button>
               </span>
             </div>
+            <div class="app-sort" role="group" aria-label="排序" hidden>
+              <button type="button" class="ghost app-sort-btn" data-sort-toggle aria-label="排序" title="排序">⇅ 排序</button>
+            </div>
             <div class="app-view-switch" role="group" aria-label="视图切换" hidden>
               <button type="button" data-grid-view="poster">▦ 卡片</button>
               <button type="button" data-grid-view="detailed">☰ 详细</button>
@@ -66,18 +70,130 @@
         </div>
         <div id="app-view" class="app-view"></div>
         <div id="app-item-panel-root" class="app-item-panel-root"></div>
+        <div id="app-modal-root" class="app-modal-root"></div>
       </div>
     `;
 
     const viewEl = rootEl.querySelector('#app-view');
     const panelRoot = rootEl.querySelector('#app-item-panel-root');
+    const modalRoot = rootEl.querySelector('#app-modal-root');
     const warningEl = rootEl.querySelector('.app-warning');
     const countEl = rootEl.querySelector('.app-count');
+    const sortEl = rootEl.querySelector('.app-sort');
+    const sortToggle = rootEl.querySelector('[data-sort-toggle]');
     const viewSwitchEl = rootEl.querySelector('.app-view-switch');
     const remoteInput = rootEl.querySelector('.app-remote-input');
     const remoteBox = rootEl.querySelector('.app-remote-box');
     const searchInput = rootEl.querySelector('.app-search-input');
     const searchClear = rootEl.querySelector('[data-search-clear]');
+    let floatingBackRaf = 0;
+    let webHistoryDepth = 0;
+    let suppressNextPopState = false;
+    const appHistoryStateKey = '__picaKeepAppView';
+
+    ensureBrowserHistoryBase();
+    window.addEventListener('popstate', handleBrowserBack);
+    disposers.push(() => window.removeEventListener('popstate', handleBrowserBack));
+
+    function ensureBrowserHistoryBase() {
+      const current = window.history.state;
+      if (current && current[appHistoryStateKey]) return;
+      const next = Object.assign({}, current || {}, {
+        [appHistoryStateKey]: true,
+        appDepth: webHistoryDepth,
+        appView: { name: state.view.name, params: safeHistoryParams(state.view.params) },
+      });
+      window.history.replaceState(next, '', window.location.href);
+    }
+
+    function pushBrowserView(name, params) {
+      webHistoryDepth += 1;
+      const next = Object.assign({}, window.history.state || {}, {
+        [appHistoryStateKey]: true,
+        appDepth: webHistoryDepth,
+        appView: { name, params: safeHistoryParams(params) },
+      });
+      window.history.pushState(next, '', window.location.href);
+    }
+
+    function handleBrowserBack(event) {
+      const appState = event.state && event.state[appHistoryStateKey] ? event.state : null;
+      if (!appState) return;
+      if (suppressNextPopState) {
+        suppressNextPopState = false;
+        webHistoryDepth = Number(appState.appDepth) || 0;
+        return;
+      }
+      const nextDepth = Number(appState.appDepth) || 0;
+      if (nextDepth < webHistoryDepth) {
+        webHistoryDepth = nextDepth;
+        back({ fromBrowser: true });
+      } else if (nextDepth > webHistoryDepth) {
+        webHistoryDepth = nextDepth;
+        const appView = appState.appView || { name: 'dashboard', params: {} };
+        state.history.push(state.view);
+        navigate(appView.name || 'dashboard', appView.params || {}, false);
+      } else {
+        webHistoryDepth = nextDepth;
+      }
+    }
+
+    function safeHistoryParams(params) {
+      const input = params || {};
+      const output = {};
+      ['id', 'origin', 'episodeIndex', 'pageIndex', 'filter', 'folder'].forEach((key) => {
+        if (input[key] !== undefined && input[key] !== null) output[key] = input[key];
+      });
+      return output;
+    }
+
+    const floatingBackObserver = new MutationObserver(scheduleFloatingBackPosition);
+    floatingBackObserver.observe(viewEl, { childList: true, subtree: true });
+    rootEl.addEventListener('scroll', scheduleFloatingBackPosition, { passive: true });
+    window.addEventListener('scroll', scheduleFloatingBackPosition, { passive: true });
+    window.addEventListener('resize', scheduleFloatingBackPosition);
+    disposers.push(() => {
+      floatingBackObserver.disconnect();
+      rootEl.removeEventListener('scroll', scheduleFloatingBackPosition);
+      window.removeEventListener('scroll', scheduleFloatingBackPosition);
+      window.removeEventListener('resize', scheduleFloatingBackPosition);
+      if (floatingBackRaf) window.cancelAnimationFrame(floatingBackRaf);
+      floatingBackRaf = 0;
+    });
+
+    function scheduleFloatingBackPosition() {
+      if (floatingBackRaf) window.cancelAnimationFrame(floatingBackRaf);
+      floatingBackRaf = window.requestAnimationFrame(syncFloatingBackPosition);
+    }
+
+    function syncFloatingBackPosition() {
+      floatingBackRaf = 0;
+      const button = viewEl.querySelector('.app-floating-back');
+      if (!button) return;
+      const toolbar = rootEl.querySelector('.app-main-toolbar');
+      const topbarEl = document.getElementById('topbar');
+      const rootRect = rootEl.getBoundingClientRect();
+      const topbarRect = topbarEl ? topbarEl.getBoundingClientRect() : null;
+      const horizontalTopbar = !!(topbarRect && topbarRect.width > topbarRect.height);
+      const safeTop = horizontalTopbar && topbarRect ? topbarRect.bottom + 16 : 24;
+      let top = safeTop;
+
+      if (toolbar && !toolbar.hidden) {
+        const toolbarRect = toolbar.getBoundingClientRect();
+        const toolbarVisible = toolbarRect.bottom > 0 && toolbarRect.top < window.innerHeight;
+        const coveredTop = horizontalTopbar && topbarRect ? topbarRect.bottom : 0;
+        if (toolbarVisible && toolbarRect.bottom > coveredTop + 10) {
+          top = toolbarRect.bottom + 12;
+        }
+      }
+
+      const left = window.matchMedia && window.matchMedia('(max-width: 760px)').matches
+        ? 16
+        : Math.max(16, rootRect.left + 24);
+      const maxTop = Math.max(12, window.innerHeight - button.offsetHeight - 12);
+      rootEl.style.setProperty('--app-floating-back-left', `${Math.round(left)}px`);
+      rootEl.style.setProperty('--app-floating-back-top', `${Math.round(Math.min(Math.max(12, top), maxTop))}px`);
+    }
 
     function cleanup() {
       cleanupReader();
@@ -100,19 +216,24 @@
     function syncReaderRoute() {
       setReaderRouteActive(state.view.name === 'reader');
     }
+
+    function rerenderSortableContent() {
+      if (state.view.name === 'grid') renderGridContent();
+      else if (state.view.name === 'historyPage') renderHistoryPageContent();
+      else if (state.view.name === 'favorites') renderFavoritesContent();
+    }
     cleanupByRoot.set(rootEl, cleanup);
 
     rootEl.querySelectorAll('[data-source]').forEach((button) => {
       button.addEventListener('click', () => consoleApi.source.set(button.dataset.source));
     });
+    sortToggle.addEventListener('click', () => showGridSortDialog());
     viewSwitchEl.querySelectorAll('[data-grid-view]').forEach((button) => {
       button.addEventListener('click', () => {
         state.grid.viewMode = normalizeGridViewMode(button.dataset.gridView);
         writeGridViewMode(state.grid.viewMode);
         updateToolbar();
-        if (state.view.name === 'grid') renderGridContent();
-        else if (state.view.name === 'historyPage') renderHistoryPageContent();
-        else if (state.view.name === 'favorites') renderFavoritesContent();
+        rerenderSortableContent();
       });
     });
     remoteInput.addEventListener('change', () => {
@@ -130,9 +251,7 @@
     searchInput.addEventListener('input', () => {
       state.grid.query = searchInput.value.trim();
       updateSearchClear();
-      if (state.view.name === 'grid') renderGridContent();
-      else if (state.view.name === 'historyPage') renderHistoryPageContent();
-      else if (state.view.name === 'favorites') renderFavoritesContent();
+      rerenderSortableContent();
     });
     searchInput.addEventListener('keydown', (event) => {
       if (event.key !== 'Enter') return;
@@ -140,19 +259,15 @@
       if (!query) return;
       event.preventDefault();
       state.grid.query = query;
-      if (state.view.name === 'grid') renderGridContent();
-      else if (state.view.name === 'historyPage') renderHistoryPageContent();
-      else if (state.view.name === 'favorites') renderFavoritesContent();
-      else if (state.view.name === 'dashboard') navigate('grid', { filter: 'all' }, true);
+      if (state.view.name === 'dashboard') navigate('grid', { filter: 'all' }, true);
+      else rerenderSortableContent();
     });
     searchClear.addEventListener('click', () => {
       state.grid.query = '';
       searchInput.value = '';
       updateSearchClear();
       searchInput.focus();
-      if (state.view.name === 'grid') renderGridContent();
-      else if (state.view.name === 'historyPage') renderHistoryPageContent();
-      else if (state.view.name === 'favorites') renderFavoritesContent();
+      rerenderSortableContent();
     });
     disposers.push(consoleApi.source.onChange(() => {
       if (state.view.name === 'favorites') {
@@ -183,6 +298,13 @@
       if (event.key !== 'Escape') return;
       const target = event.target;
       if (target && target.closest && target.closest('input, textarea, select, [contenteditable="true"]')) return;
+
+      if (modalRoot.children.length) {
+        event.preventDefault();
+        event.stopPropagation();
+        closeModal();
+        return;
+      }
 
       if (state.view.name === 'reader' && (state.reader.settingsOpen || state.reader.chaptersOpen)) {
         event.preventDefault();
@@ -240,13 +362,19 @@
       remoteInput.disabled = !usesRemote(currentSource);
       remoteInput.placeholder = usesRemote(currentSource) ? 'http://192.168.1.10:9527' : '当前源不需要远程地址';
       const favoritesHasFolder = state.view.name === 'favorites' && !!(state.view.params && state.view.params.folder);
+      const showListTools = ['grid', 'historyPage'].includes(state.view.name) || favoritesHasFolder;
       searchInput.disabled = !(['dashboard', 'grid', 'historyPage'].includes(state.view.name) || favoritesHasFolder);
       searchInput.value = state.grid.query || '';
       updateSearchClear();
-      viewSwitchEl.hidden = !(['grid', 'historyPage'].includes(state.view.name) || favoritesHasFolder);
+      sortEl.hidden = !showListTools;
+      sortToggle.textContent = sortButtonText(state.grid.sort);
+      sortToggle.title = `排序：${sortButtonTitle(state.grid.sort)}`;
+      sortToggle.setAttribute('aria-label', `排序：${sortButtonTitle(state.grid.sort)}`);
+      viewSwitchEl.hidden = !showListTools;
       viewSwitchEl.querySelectorAll('[data-grid-view]').forEach((button) => {
         button.classList.toggle('active', button.dataset.gridView === state.grid.viewMode);
       });
+      scheduleFloatingBackPosition();
       countEl.hidden = state.view.name === 'dashboard';
       countEl.textContent = state.view.name === 'grid'
         ? gridToolbarSummary()
@@ -271,7 +399,10 @@
     function navigate(name, params, push) {
       cleanupReader();
       closeItemPanel();
-      if (push) state.history.push(state.view);
+      if (push) {
+        state.history.push(state.view);
+        pushBrowserView(name, params || {});
+      }
       state.view = { name, params: params || {} };
       updateToolbar();
       if (name === 'dashboard') renderDashboard();
@@ -283,13 +414,22 @@
       if (name === 'reader') renderReader(params || {});
     }
 
-    function back() {
+    function back(options) {
+      const fromBrowser = !!(options && options.fromBrowser);
       const previous = state.history.pop();
+      if (!fromBrowser && webHistoryDepth > 0) {
+        suppressNextPopState = true;
+        window.history.back();
+      }
       if (!previous) {
         goDashboard(false);
         return;
       }
       navigate(previous.name, previous.params, false);
+    }
+
+    function backButtonHtml(title) {
+      return `<button class="ghost app-floating-back" type="button" data-back><span class="app-mobile-back-title">${escapeHtml(title || '')}${title ? ' · ' : ''}</span>返回</button>`;
     }
 
     function goDashboard(clearHistory) {
@@ -348,7 +488,7 @@
                 <span class="app-chevron">›</span>
               </button>
               <button class="app-outlined-card app-entry-card" type="button" data-open-favorites>
-                <span class="app-entry-icon">⭐</span>
+                <span class="app-entry-icon">♥</span>
                 <span class="app-entry-text">
                   <strong>收藏夹</strong>
                   <span class="muted">浏览本地收藏文件夹</span>
@@ -378,7 +518,7 @@
                 <button class="app-quick-chip" type="button" data-open-albums>▦ 图集</button>
                 <button class="app-quick-chip" type="button" data-history-refresh>🕘 历史</button>
                 <button class="app-quick-chip" type="button" data-open-grid>☁ 资源库</button>
-                <button class="app-quick-chip" type="button" data-open-favorites>⭐ 收藏夹</button>
+                <button class="app-quick-chip" type="button" data-open-favorites>♥ 收藏夹</button>
                 <button class="app-quick-chip" type="button" data-open-image-favorites>🖼 图片</button>
               </div>
             </section>
@@ -456,7 +596,7 @@
     }
 
     function gridToolbarSummary() {
-      const filtered = visibleGridItems(state.grid.items, state.grid.filter, state.grid.query);
+      const filtered = visibleGridItems(state.grid.items, state.grid.filter, state.grid.query, state.grid.sort);
       const scopedTotal = gridItemsForFilter(state.grid.items, state.grid.filter).length;
       return `${gridFilterTitle(state.grid.filter)} · ${sourceLabel(consoleApi.source.get())} · ${number(filtered.length)} / ${number(scopedTotal)} 项`;
     }
@@ -558,18 +698,19 @@
       if (state.historyPage.error) {
         viewEl.innerHTML = retryCard(state.historyPage.error, 'data-history-page-retry', true);
         viewEl.querySelector('[data-back]').addEventListener('click', back);
+      scheduleFloatingBackPosition();
         viewEl.querySelector('[data-history-page-retry]').addEventListener('click', renderHistoryPage);
         return;
       }
       const allItems = state.historyPage.items || [];
       const query = state.grid.query.trim();
-      const items = filterItems(allItems, query);
+      const items = sortGridItems(filterItems(allItems, query), state.grid.sort);
       const listMode = state.grid.viewMode === 'detailed';
       const emptyMessage = query ? `没有找到「${escapeHtml(query)}」，换个关键词试试。` : '打开一本漫画后，这里会显示全部阅读历史。';
       viewEl.innerHTML = `
         <div class="app-list-view app-history-page">
           <div class="app-view-head app-history-page-head">
-            <button class="ghost" type="button" data-back>← 返回</button>
+            ${backButtonHtml('历史记录')}
             <div>
               <strong>历史记录</strong>
               <div class="muted">${query ? `${number(items.length)} / ${number(allItems.length)} 条历史` : `${number(allItems.length)} 条历史`} · 点击封面续读</div>
@@ -590,6 +731,7 @@
         </div>
       `;
       viewEl.querySelector('[data-back]').addEventListener('click', back);
+      scheduleFloatingBackPosition();
       viewEl.querySelector('[data-history-clear]')?.addEventListener('click', async () => {
         if (!window.confirm('确定清空全部阅读历史吗？此操作不可撤销。')) return;
         try {
@@ -702,7 +844,7 @@
         if (usesRemote(consoleApi.source.get()) && /远程地址/.test(state.grid.error)) remoteInput.focus();
         return;
       }
-      const items = visibleGridItems(state.grid.items, state.grid.filter, state.grid.query);
+      const items = visibleGridItems(state.grid.items, state.grid.filter, state.grid.query, state.grid.sort);
       const scopedTotal = gridItemsForFilter(state.grid.items, state.grid.filter).length;
       const gridTitle = gridFilterTitle(state.grid.filter);
       const query = state.grid.query.trim();
@@ -710,7 +852,7 @@
         viewEl.innerHTML = `
           <div class="app-list-view">
             <div class="app-view-head app-grid-view-head">
-              <button class="ghost" type="button" data-back>← 返回</button>
+              ${backButtonHtml(gridTitle)}
               <strong>${escapeHtml(gridTitle)}</strong>
             </div>
             <div class="card app-empty">
@@ -721,6 +863,8 @@
           </div>
         `;
         viewEl.querySelector('[data-back]').addEventListener('click', back);
+      scheduleFloatingBackPosition();
+        scheduleFloatingBackPosition();
         viewEl.querySelector('[data-clear-grid-query]')?.addEventListener('click', () => {
           state.grid.query = '';
           searchInput.value = '';
@@ -733,7 +877,7 @@
       viewEl.innerHTML = `
         <div class="app-list-view">
           <div class="app-view-head app-grid-view-head">
-            <button class="ghost" type="button" data-back>← 返回</button>
+            ${backButtonHtml(gridTitle)}
             <strong>${escapeHtml(gridTitle)}</strong>
           </div>
           <div class="${listMode ? 'app-detailed-grid' : 'app-grid'}">
@@ -742,6 +886,8 @@
         </div>
       `;
       viewEl.querySelector('[data-back]').addEventListener('click', back);
+      scheduleFloatingBackPosition();
+      scheduleFloatingBackPosition();
       viewEl.querySelectorAll('[data-open-detail]').forEach((card) => {
         card.addEventListener('click', () => openItemPanel({ id: card.dataset.openDetail, origin: card.dataset.origin }));
         card.addEventListener('keydown', (event) => {
@@ -849,20 +995,136 @@
         closeItemPanel();
         navigate('detail', { id: item.id, origin: item.__origin }, true);
       });
-      panelRoot.querySelector('[data-panel-read]')?.addEventListener('click', () => {
-        const episode = (item.episodes && item.episodes[0]) || makeFallbackEpisode(item);
+      panelRoot.querySelector('[data-panel-read]')?.addEventListener('click', async () => {
+        const unlockedItem = await ensureArchiveUnlocked(item);
+        if (!unlockedItem) return;
+        const episode = (unlockedItem.episodes && unlockedItem.episodes[0]) || makeFallbackEpisode(unlockedItem);
         closeItemPanel();
-        navigate('reader', { id: item.id, origin: item.__origin, item, episodeIndex: 0, episode, pageList: episode.pages && episode.pages.length ? episode.pages : null, pageSizes: episode.pageSizes || [] }, true);
+        navigate('reader', { id: unlockedItem.id, origin: unlockedItem.__origin, item: unlockedItem, episodeIndex: 0, episode, pageList: episode.pages && episode.pages.length ? episode.pages : null, pageSizes: episode.pageSizes || [] }, true);
       });
       panelRoot.querySelectorAll('[data-read-episode]').forEach((button) => {
-        button.addEventListener('click', () => {
+        button.addEventListener('click', async () => {
+          const unlockedItem = await ensureArchiveUnlocked(item);
+          if (!unlockedItem) return;
           const episodeIndex = Number(button.dataset.readEpisode || 0);
-          const episode = (item.episodes || [])[episodeIndex] || makeFallbackEpisode(item);
+          const episode = (unlockedItem.episodes || [])[episodeIndex] || makeFallbackEpisode(unlockedItem);
           closeItemPanel();
-          navigate('reader', { id: item.id, origin: item.__origin, item, episodeIndex, episode, pageList: episode.pages && episode.pages.length ? episode.pages : null, pageSizes: episode.pageSizes || [] }, true);
+          navigate('reader', { id: unlockedItem.id, origin: unlockedItem.__origin, item: unlockedItem, episodeIndex, episode, pageList: episode.pages && episode.pages.length ? episode.pages : null, pageSizes: episode.pageSizes || [] }, true);
         });
       });
       bindImageFallbacks(panelRoot);
+    }
+
+    function closeModal() {
+      modalRoot.innerHTML = '';
+    }
+
+    function showGridSortDialog() {
+      const sort = normalizeGridSort(state.grid.sort);
+      const options = gridSortOptions();
+      modalRoot.innerHTML = `
+        <div class="app-modal-backdrop" data-modal-cancel></div>
+        <section class="app-modal-card app-sort-modal" role="dialog" aria-modal="true" aria-label="漫画排序模式">
+          <div class="app-modal-head">
+            <strong>漫画排序模式</strong>
+            <button class="ghost" type="button" data-modal-cancel aria-label="关闭">×</button>
+          </div>
+          <form class="app-modal-form app-sort-form" data-grid-sort-form>
+            <div class="app-sort-options" role="radiogroup" aria-label="排序模式">
+              ${options.map((option) => `
+                <label class="app-sort-option">
+                  <input type="radio" name="mode" value="${escapeAttr(option.mode)}"${option.mode === sort.mode ? ' checked' : ''}>
+                  <span>${escapeHtml(option.label)}</span>
+                </label>
+              `).join('')}
+            </div>
+            <label class="app-sort-desc">
+              <span>倒序</span>
+              <input type="checkbox" name="desc"${sort.desc ? '' : ' checked'}>
+            </label>
+          </form>
+        </section>
+      `;
+      const applySort = () => {
+        const form = modalRoot.querySelector('[data-grid-sort-form]');
+        if (!form) return;
+        const data = new FormData(form);
+        state.grid.sort = normalizeGridSort({ mode: data.get('mode'), desc: !form.elements.desc.checked });
+        writeGridSort(state.grid.sort);
+        updateToolbar();
+        rerenderSortableContent();
+      };
+      modalRoot.querySelectorAll('[data-modal-cancel]').forEach((node) => node.addEventListener('click', closeModal));
+      modalRoot.querySelectorAll('input[name="mode"], input[name="desc"]').forEach((input) => input.addEventListener('change', applySort));
+      modalRoot.querySelector('input[name="mode"]:checked')?.focus();
+    }
+
+    function showArchiveUnlockDialog(item, onVerify) {
+      return new Promise((resolve) => {
+        const format = archiveFormatLabel(item);
+        modalRoot.innerHTML = `
+          <div class="app-modal-backdrop" data-modal-cancel></div>
+          <section class="app-modal-card" role="dialog" aria-modal="true" aria-label="解锁压缩包">
+            <div class="app-modal-head">
+              <strong>输入密码</strong>
+              <button class="ghost" type="button" data-modal-cancel aria-label="关闭">×</button>
+            </div>
+            <form class="app-modal-form" data-archive-unlock-form>
+              <p class="muted">${escapeHtml(item.title || item.id)}${format ? ` · ${escapeHtml(format)}` : ''}</p>
+              <input type="password" name="password" autocomplete="current-password" placeholder="密码" required>
+              <div class="app-modal-error" data-modal-error hidden></div>
+              <div class="app-modal-actions">
+                <button class="ghost" type="button" data-modal-cancel>取消</button>
+                <button class="action" type="submit" data-modal-submit>解锁</button>
+              </div>
+            </form>
+          </section>
+        `;
+        const form = modalRoot.querySelector('[data-archive-unlock-form]');
+        const input = form.querySelector('input[name="password"]');
+        const errorEl = modalRoot.querySelector('[data-modal-error]');
+        const submit = modalRoot.querySelector('[data-modal-submit]');
+        const cancel = () => {
+          closeModal();
+          resolve(false);
+        };
+        modalRoot.querySelectorAll('[data-modal-cancel]').forEach((node) => node.addEventListener('click', cancel));
+        form.addEventListener('submit', async (event) => {
+          event.preventDefault();
+          const password = input.value;
+          if (!password) return;
+          submit.disabled = true;
+          errorEl.hidden = true;
+          errorEl.textContent = '';
+          try {
+            await onVerify(password);
+            closeModal();
+            resolve(true);
+          } catch (error) {
+            errorEl.textContent = errorMessage(error) || '解锁失败';
+            errorEl.hidden = false;
+            submit.disabled = false;
+            input.select();
+          }
+        });
+        input.focus();
+      });
+    }
+
+    async function ensureArchiveUnlocked(item) {
+      if (!needsArchivePassword(item)) return item;
+      const adapter = buildAdapter(item.__origin || 'local');
+      const unlocked = await showArchiveUnlockDialog(item, async (password) => {
+        const payload = await adapter.unlockArchive(item.id, password);
+        if (!payload || payload.ok !== true || payload.passwordMatched !== true) {
+          throw new Error((payload && payload.error) || '密码错误');
+        }
+      });
+      if (!unlocked) return null;
+      const raw = await adapter.fetchDetail(item.id);
+      const next = normalizeItem(raw.item || raw, adapter, item.__origin || adapter.origin);
+      next.archivePasswordMatched = true;
+      return next;
     }
 
     function itemPanelContentHtml(item) {
@@ -873,6 +1135,7 @@
       const hiddenTagCount = Math.max(0, (item.tags || []).length - visibleTags.length);
       const sourceName = item.sourceDisplayName || originLabel(item.__origin);
       const displayId = item.displayId && item.displayId !== item.id ? item.displayId : '';
+      const archiveLocked = needsArchivePassword(item);
       return `
         <div class="app-panel-content">
           <div class="app-panel-grip" aria-hidden="true"></div>
@@ -888,6 +1151,7 @@
               <p class="app-panel-subtitle muted">${escapeHtml(item.subtitle || sourceName || '')}</p>
               <div class="app-panel-meta-chips">
                 <span class="badge">${originLabel(item.__origin)}</span>
+                ${archiveLocked ? '<span class="badge">已加密</span>' : ''}
                 <span>${number(episodes.length)} 章</span>
                 <span>${number(totalPages)} 图</span>
                 <span>${formatBytes(item.totalBytes)}</span>
@@ -903,7 +1167,7 @@
           </section>
           <footer class="app-panel-footer">
             <button class="ghost" type="button" data-panel-detail>查看详情</button>
-            <button class="action" type="button" data-panel-read>开始阅读</button>
+            <button class="action" type="button" data-panel-read>${archiveLocked ? '解锁阅读' : '开始阅读'}</button>
           </footer>
         </div>
       `;
@@ -911,6 +1175,18 @@
 
     function isMobilePanel() {
       return !!(window.matchMedia && window.matchMedia('(max-width: 760px)').matches);
+    }
+
+    function readerPanelClass() {
+      return isMobilePanel() ? 'reader-panel-sheet' : 'reader-panel-side';
+    }
+
+    function syncReaderPanelLayout() {
+      const mobile = isMobilePanel();
+      viewEl.querySelectorAll('[data-reader-settings-panel], [data-reader-chapters-panel]').forEach((panel) => {
+        panel.classList.toggle('reader-panel-side', !mobile);
+        panel.classList.toggle('reader-panel-sheet', mobile);
+      });
     }
 
     async function renderImageFavorites() {
@@ -940,6 +1216,7 @@
       if (state.imageFavorites.error) {
         viewEl.innerHTML = retryCard(state.imageFavorites.error, 'data-image-favorites-retry', true);
         viewEl.querySelector('[data-back]').addEventListener('click', back);
+      scheduleFloatingBackPosition();
         viewEl.querySelector('[data-image-favorites-retry]').addEventListener('click', renderImageFavorites);
         return;
       }
@@ -947,7 +1224,7 @@
       viewEl.innerHTML = `
         <div class="app-list-view">
           <div class="app-view-head">
-            <button class="ghost" type="button" data-back>← 返回</button>
+            ${backButtonHtml('图片收藏')}
             <div class="muted">${number(items.length)} 张图片收藏 · 真数据</div>
           </div>
           ${items.length ? `
@@ -963,6 +1240,7 @@
         </div>
       `;
       viewEl.querySelector('[data-back]').addEventListener('click', back);
+      scheduleFloatingBackPosition();
       viewEl.querySelectorAll('[data-open-image]').forEach((button) => {
         button.addEventListener('click', () => {
           const item = items.find((candidate) => candidate.__key === button.dataset.openImage);
@@ -1015,6 +1293,7 @@
       if (state.favorites.error) {
         viewEl.innerHTML = retryCard(state.favorites.error, 'data-favorites-retry', true);
         viewEl.querySelector('[data-back]').addEventListener('click', back);
+      scheduleFloatingBackPosition();
         viewEl.querySelector('[data-favorites-retry]').addEventListener('click', () => renderFavorites(state.view.params));
         return;
       }
@@ -1023,7 +1302,7 @@
         viewEl.innerHTML = `
           <div class="app-list-view">
             <div class="app-view-head">
-              <button class="ghost" type="button" data-back>← 返回</button>
+              ${backButtonHtml('收藏夹')}
               <div>
                 <strong>收藏夹</strong>
                 <div class="muted">${number(folders.length)} 个本地收藏文件夹</div>
@@ -1042,6 +1321,7 @@
           </div>
         `;
         viewEl.querySelector('[data-back]').addEventListener('click', back);
+      scheduleFloatingBackPosition();
         viewEl.querySelectorAll('[data-open-favorite-folder]').forEach((card) => {
           card.addEventListener('click', () => navigate('favorites', { folder: card.dataset.openFavoriteFolder }, true));
           card.addEventListener('keydown', (event) => {
@@ -1056,12 +1336,12 @@
 
       const allItems = state.favorites.items || [];
       const query = state.grid.query.trim();
-      const items = filterItems(allItems, query);
+      const items = sortGridItems(filterItems(allItems, query), state.grid.sort);
       const listMode = state.grid.viewMode === 'detailed';
       viewEl.innerHTML = `
         <div class="app-list-view">
           <div class="app-view-head app-grid-view-head">
-            <button class="ghost" type="button" data-back>← 返回</button>
+            ${backButtonHtml(folder)}
             <div>
               <strong>${escapeHtml(folder)}</strong>
               <div class="muted">${query ? `${number(items.length)} / ${number(allItems.length)} 项收藏` : `${number(allItems.length)} 项收藏`} · 点击封面查看详情</div>
@@ -1081,6 +1361,7 @@
         </div>
       `;
       viewEl.querySelector('[data-back]').addEventListener('click', back);
+      scheduleFloatingBackPosition();
       viewEl.querySelector('[data-clear-favorites-query]')?.addEventListener('click', () => {
         state.grid.query = '';
         searchInput.value = '';
@@ -1126,6 +1407,7 @@
       if (state.detail.error) {
         viewEl.innerHTML = retryCard(state.detail.error, 'data-detail-retry', true);
         viewEl.querySelector('[data-back]').addEventListener('click', back);
+      scheduleFloatingBackPosition();
         viewEl.querySelector('[data-detail-retry]').addEventListener('click', () => renderDetail(params));
         return;
       }
@@ -1152,20 +1434,22 @@
                 <span class="badge">${formatBytes(item.totalBytes)}</span>
               </div>
               <div class="app-detail-actions">
-                <button class="action" type="button" data-read-episode="0">开始阅读</button>
-                <button class="ghost" type="button" data-copy-title>复制标题</button>
+                <button class="app-action-tile" type="button" data-read-episode="0">
+                  <span class="app-action-icon">▶</span>
+                  <span class="app-action-label">阅读</span>
+                </button>
               </div>
             </div>
           </section>
           <section class="card app-detail-section">
             <div class="app-section-head"><h3>信息</h3><span class="muted">本地条目详情</span></div>
             <div class="app-info-groups">
-              ${infoChipHtml('ID', item.displayId || item.id)}
-              ${infoChipHtml('作者/副标题', item.subtitle)}
-              ${infoChipHtml('漫画源', item.sourceDisplayName || originLabel(item.__origin))}
-              ${infoChipHtml('更新时间', item.updatedAt)}
-              ${infoChipHtml('路径', item.path)}
-              ${(item.tags || []).map((tag) => infoChipHtml('标签', tag)).join('')}
+              ${infoRowHtml('ID', item.displayId || item.id)}
+              ${infoRowHtml('作者', item.subtitle)}
+              ${infoRowHtml('漫画源', item.sourceDisplayName || originLabel(item.__origin))}
+              ${infoRowHtml('时间', item.updatedAt)}
+              ${infoRowHtml('路径', item.path)}
+              ${infoRowHtml('标签', item.tags || [])}
             </div>
           </section>
           <section class="card app-detail-section">
@@ -1181,13 +1465,16 @@
         </div>
       `;
       viewEl.querySelector('[data-back]').addEventListener('click', back);
-      viewEl.querySelector('[data-copy-title]')?.addEventListener('click', () => navigator.clipboard?.writeText(item.title || item.id));
+      scheduleFloatingBackPosition();
       viewEl.querySelector('[data-recommend-refresh]')?.addEventListener('click', () => loadRecommendations(item));
       viewEl.querySelectorAll('[data-read-episode]').forEach((button) => {
-        button.addEventListener('click', () => {
+        button.addEventListener('click', async () => {
+          const unlockedItem = await ensureArchiveUnlocked(item);
+          if (!unlockedItem) return;
           const episodeIndex = Number(button.dataset.readEpisode || 0);
-          const episode = episodes[episodeIndex] || episodes[0];
-          navigate('reader', { id: item.id, origin: item.__origin, item, episodeIndex, episode, pageList: episode.pages && episode.pages.length ? episode.pages : null, pageSizes: episode.pageSizes || [] }, true);
+          const unlockedEpisodes = unlockedItem.episodes.length ? unlockedItem.episodes : [makeFallbackEpisode(unlockedItem)];
+          const episode = unlockedEpisodes[episodeIndex] || unlockedEpisodes[0];
+          navigate('reader', { id: unlockedItem.id, origin: unlockedItem.__origin, item: unlockedItem, episodeIndex, episode, pageList: episode.pages && episode.pages.length ? episode.pages : null, pageSizes: episode.pageSizes || [] }, true);
         });
       });
       bindRecommendationClicks(item.__origin);
@@ -1286,6 +1573,12 @@
           item = normalizeItem(rawDetail.item || rawDetail, adapter, params.origin);
           episode = item.episodes[episodeIndex] || item.episodes[0] || makeFallbackEpisode(item);
         }
+        if (needsArchivePassword(item)) {
+          const unlockedItem = await ensureArchiveUnlocked(item);
+          if (!unlockedItem) throw new Error('已取消解锁');
+          item = unlockedItem;
+          episode = item.episodes[episodeIndex] || item.episodes[0] || makeFallbackEpisode(item);
+        }
         const resolvedEpisodeIndex = resolveEpisodeIndex(item, episode, episodeIndex);
         if (!episode || !Array.isArray(episode.pages) || !episode.pages.length) {
           const rawEpisode = await adapter.fetchEpisode(params.id, resolvedEpisodeIndex);
@@ -1313,6 +1606,7 @@
       if (state.reader.error) {
         viewEl.innerHTML = retryCard(state.reader.error, 'data-reader-retry', true);
         viewEl.querySelector('[data-back]').addEventListener('click', back);
+      scheduleFloatingBackPosition();
         viewEl.querySelector('[data-reader-retry]').addEventListener('click', () => renderReader(params));
         return;
       }
@@ -1360,14 +1654,18 @@
               <button class="ghost reader-icon-button" type="button" data-reader-download aria-label="保存图片" title="保存图片">⇩</button>
             </div>
           </div>
-          <div class="reader-settings-panel" ${state.reader.settingsOpen ? '' : 'hidden'} data-reader-settings-panel>${readerSettingsHtml()}</div>
-          <div class="reader-chapters-panel" ${state.reader.chaptersOpen ? '' : 'hidden'} data-reader-chapters-panel>${readerChaptersHtml(item, episodeIndex)}</div>
+          <div class="reader-settings-panel ${readerPanelClass()}" ${state.reader.settingsOpen ? '' : 'hidden'} data-reader-settings-panel>${readerSettingsHtml()}</div>
+          <div class="reader-chapters-panel ${readerPanelClass()}" ${state.reader.chaptersOpen ? '' : 'hidden'} data-reader-chapters-panel>${readerChaptersHtml(item, episodeIndex)}</div>
           <div class="app-toast" hidden></div>
         </div>
       `;
       if (isScrollReaderMode(state.reader.mode)) renderScrollReader(adapter, pages, episode.pageSizes || []);
       else renderPagedReader(adapter, pages, episode.pageSizes || []);
       bindReaderChrome(adapter, pages, params);
+      syncReaderPanelLayout();
+      const resizeHandler = () => syncReaderPanelLayout();
+      window.addEventListener('resize', resizeHandler);
+      addReaderCleanup(() => window.removeEventListener('resize', resizeHandler));
       updateReaderPageCount();
     }
 
@@ -1800,6 +2098,7 @@
         chaptersPanel.innerHTML = readerChaptersHtml(state.reader.item, state.reader.episodeIndex);
         chaptersPanel.hidden = !state.reader.chaptersOpen;
       }
+      syncReaderPanelLayout();
       updateReaderPageCount();
       bindReaderChromeControls(adapter, pages, params, true);
     }
@@ -2352,6 +2651,7 @@
           fetchItems: () => consoleApi.remote.get(target, '/api/library/items'),
           fetchDetail: (id) => consoleApi.remote.get(target, `/api/library/items/${encodeURIComponent(id)}`),
           fetchEpisode: (id, ep) => consoleApi.remote.get(target, `/api/library/items/${encodeURIComponent(id)}/episodes/${encodeURIComponent(ep)}`),
+          unlockArchive: (id, password) => consoleApi.remote.post(target, `/api/library/items/${encodeURIComponent(id)}/archive/unlock`, { password }),
           imageUrl: (path) => consoleApi.remote.imageUrl(target, path),
         };
       }
@@ -2360,6 +2660,7 @@
         fetchItems: () => consoleApi.api.get('/api/library/items'),
         fetchDetail: (id) => consoleApi.api.get(`/api/library/items/${encodeURIComponent(id)}`),
         fetchEpisode: (id, ep) => consoleApi.api.get(`/api/library/items/${encodeURIComponent(id)}/episodes/${encodeURIComponent(ep)}`),
+        unlockArchive: (id, password) => consoleApi.api.post(`/api/library/items/${encodeURIComponent(id)}/archive/unlock`, { password }),
         imageUrl: (path) => consoleApi.api.imageUrl(path),
       };
     }
@@ -2409,6 +2710,11 @@
     const tags = arrayValue(firstValue(item, ['tags', 'categories', 'labels'])).map((tag) => stringValue(tag)).filter(Boolean);
     const episodes = firstArray(item, ['episodes', 'chapters', 'volumes']).map((episode, index) => normalizeEpisode(episode, index));
     const coverUrl = stringValue(firstValue(item, ['coverUrl', 'cover', 'thumbnail', 'thumbnailUrl', 'image', 'imageUrl']));
+    const itemKind = stringValue(firstValue(item, ['itemKind', 'kind']));
+    const archiveFormat = stringValue(firstValue(item, ['archiveFormat', 'format']));
+    const archiveEncrypted = booleanValue(firstValue(item, ['archiveEncrypted', 'encrypted']));
+    const archivePasswordMatched = firstValue(item, ['archivePasswordMatched', 'passwordMatched']) !== false;
+    const isArchive = booleanValue(firstValue(item, ['isArchive'])) || itemKind.toLowerCase() === 'archive';
     return Object.assign({}, item, {
       id,
       title,
@@ -2417,9 +2723,15 @@
       displayId: stringValue(firstValue(item, ['displayId', 'comicId', 'bookId', 'code'])),
       tags,
       path: stringValue(firstValue(item, ['path', 'relativePath', 'filePath'])),
+      archivePath: stringValue(firstValue(item, ['archivePath'])),
       imageCount: numberValue(firstValue(item, ['imageCount', 'pageCount', 'pagesCount', 'count'])),
       totalBytes: numberValue(firstValue(item, ['totalBytes', 'bytes', 'size'])),
       updatedAt: stringValue(firstValue(item, ['updatedAt', 'modifiedAt', 'mtime', 'lastModified'])),
+      itemKind,
+      isArchive,
+      archiveEncrypted,
+      archivePasswordMatched,
+      archiveFormat,
       coverUrl,
       episodes,
       __origin: origin,
@@ -2531,8 +2843,65 @@
     return { total: all.length, comics, albums };
   }
 
-  function visibleGridItems(items, filter, query) {
-    return filterItems(gridItemsForFilter(items, filter), query);
+  function visibleGridItems(items, filter, query, sort) {
+    return sortGridItems(filterItems(gridItemsForFilter(items, filter), query), sort);
+  }
+
+  function sortGridItems(items, sort) {
+    const normalized = normalizeGridSort(sort);
+    const arr = (Array.isArray(items) ? items : []).map((item, index) => ({ item, index }));
+    arr.sort((left, right) => {
+      const primary = compareGridSortItems(left.item, right.item, normalized.mode);
+      const result = (normalized.desc ? -primary : primary)
+        || compareText(left.item && (left.item.title || left.item.id), right.item && (right.item.title || right.item.id))
+        || (left.index - right.index);
+      return result;
+    });
+    return arr.map((entry) => entry.item);
+  }
+
+  function compareGridSortItems(a, b, mode) {
+    if (mode === 'title') return compareText(a && (a.title || a.id), b && (b.title || b.id));
+    if (mode === 'subtitle') return compareText(a && (a.subtitle || a.sourceDisplayName), b && (b.subtitle || b.sourceDisplayName));
+    if (mode === 'size') return numberValue(a && a.totalBytes) - numberValue(b && b.totalBytes);
+    return parseGridSortTime(a && a.updatedAt) - parseGridSortTime(b && b.updatedAt);
+  }
+
+  function compareText(a, b) {
+    return stringValue(a).localeCompare(stringValue(b), 'zh-CN', { numeric: true, sensitivity: 'base' });
+  }
+
+  function parseGridSortTime(value) {
+    const text = stringValue(value).trim();
+    if (!text) return 0;
+    const numeric = Number(text);
+    if (Number.isFinite(numeric)) return numeric;
+    const parsed = Date.parse(text);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+
+  function gridSortOptions() {
+    return [
+      { mode: 'time', label: '时间' },
+      { mode: 'title', label: '漫画名' },
+      { mode: 'subtitle', label: '作者名' },
+      { mode: 'size', label: '大小' },
+    ];
+  }
+
+  function gridSortLabel(mode) {
+    const option = gridSortOptions().find((item) => item.mode === normalizeGridSortMode(mode));
+    return option ? option.label : '时间';
+  }
+
+  function sortButtonText(sort) {
+    const normalized = normalizeGridSort(sort);
+    return `⇅ ${gridSortLabel(normalized.mode)} ${normalized.desc ? '↓' : '↑'}`;
+  }
+
+  function sortButtonTitle(sort) {
+    const normalized = normalizeGridSort(sort);
+    return `${gridSortLabel(normalized.mode)} · ${normalized.desc ? '倒序' : '升序'}`;
   }
 
   function gridItemsForFilter(items, filter) {
@@ -2579,9 +2948,10 @@
     }).filter((item) => item.target);
   }
 
-  function infoChipHtml(label, value) {
-    if (value == null || String(value).trim() === '') return '';
-    return `<span class="app-info-chip"><b>${escapeHtml(label)}</b><em>${escapeHtml(value)}</em></span>`;
+  function infoRowHtml(label, values) {
+    const list = (Array.isArray(values) ? values : [values]).map((value) => String(value == null ? '' : value).trim()).filter(Boolean);
+    if (!list.length) return '';
+    return `<div class="app-info-row"><span class="app-info-key">${escapeHtml(label)}</span>${list.map((value) => `<span class="app-info-val">${escapeHtml(value)}</span>`).join('')}</div>`;
   }
 
   function normalizeRecommendationPayload(data, adapter, origin) {
@@ -2683,14 +3053,17 @@
   function gridCardHtml(item) {
     const meta = gridItemMetaText(item);
     const favoriteAttrs = favoriteDetailAttrs(item);
+    const archiveLabel = archiveFormatLabel(item);
+    const archiveLocked = needsArchivePassword(item);
     return `
       <article class="app-card" data-open-detail="${escapeAttr(item.id)}" data-origin="${escapeAttr(item.__origin)}"${favoriteAttrs} tabindex="0" role="button">
         ${coverHtml(item, 'app-card-cover')}
         <div class="app-card-body">
           <h3>${escapeHtml(item.title || item.id)}</h3>
-          <div class="muted app-card-sub">${escapeHtml(item.subtitle || item.sourceDisplayName || '')}</div>
+          <div class="muted app-card-sub">${escapeHtml(archiveLabel || item.subtitle || item.sourceDisplayName || '')}</div>
           <div class="app-card-meta">
             <span class="badge">${originLabel(item.__origin)}</span>
+            ${archiveLocked ? '<span class="badge">已加密</span>' : ''}
             ${meta ? `<span class="muted">${escapeHtml(meta)}</span>` : ''}
           </div>
         </div>
@@ -2700,20 +3073,26 @@
 
   function gridDetailedCardHtml(item) {
     const tags = item.tags || [];
-    const stats = gridItemMetaParts(item);
     const favoriteAttrs = favoriteDetailAttrs(item);
+    const archiveLabel = archiveFormatLabel(item);
+    const stats = gridItemMetaParts(item).filter((part) => part !== archiveLabel);
+    const archiveLocked = needsArchivePassword(item);
+    const subtitle = item.subtitle || '';
+    const sourceBadge = item.sourceDisplayName || archiveLabel || item.displayId || '';
     return `
-      <article class="app-detailed-card" data-open-detail="${escapeAttr(item.id)}" data-origin="${escapeAttr(item.__origin)}"${favoriteAttrs} tabindex="0" role="button">
+      <article class="app-detailed-card app-resource-detailed-card" data-open-detail="${escapeAttr(item.id)}" data-origin="${escapeAttr(item.__origin)}"${favoriteAttrs} tabindex="0" role="button">
         ${coverHtml(item, 'app-detailed-cover')}
         <div class="app-detailed-body">
-          <div class="app-detailed-title">${escapeHtml(item.title || item.id)}</div>
-          <div class="muted app-detailed-sub">${escapeHtml(item.subtitle || item.sourceDisplayName || item.displayId || '')}</div>
-          <div class="app-detailed-meta">
-            <span class="badge">${originLabel(item.__origin)}</span>
-            ${stats.map((part) => `<span class="muted">${escapeHtml(part)}</span>`).join('')}
-            ${item.updatedAt ? `<span class="muted">${escapeHtml(item.updatedAt)}</span>` : ''}
-          </div>
+          <div class="app-detailed-title">${escapeHtml(item.title || '')}</div>
+          ${subtitle ? `<div class="muted app-detailed-sub">${escapeHtml(subtitle)}</div>` : ''}
           ${tags.length ? `<div class="app-detailed-tags">${tags.map((tag) => `<span>${escapeHtml(tag)}</span>`).join('')}</div>` : ''}
+          <div class="app-detailed-foot">
+            <span class="app-detailed-stats">${escapeHtml(stats.join(' · '))}</span>
+            <span class="app-detailed-badges">
+              ${archiveLocked ? '<span class="badge badge-warn">已加密</span>' : ''}
+              ${sourceBadge ? `<span class="badge">${escapeHtml(sourceBadge)}</span>` : ''}
+            </span>
+          </div>
         </div>
         <span class="app-chevron">›</span>
       </article>
@@ -2722,6 +3101,8 @@
 
   function gridItemMetaParts(item) {
     const parts = [];
+    const archiveLabel = archiveFormatLabel(item);
+    if (archiveLabel) parts.push(archiveLabel);
     if (numberValue(item && item.imageCount) > 0) parts.push(`${number(item.imageCount)} 图`);
     if (numberValue(item && item.totalBytes) > 0) parts.push(formatBytes(item.totalBytes));
     return parts;
@@ -2853,6 +3234,9 @@
 
   function coverHtml(item, className) {
     const title = item.title || item.id || '?';
+    if (needsArchivePassword(item)) {
+      return `<div class="app-cover-fallback app-cover-locked ${className}"><span aria-hidden="true">🔒</span></div>`;
+    }
     if (!item.coverUrl || !item.__imageUrl) {
       return `<div class="app-cover-fallback ${className}">${escapeHtml(firstLetter(title))}</div>`;
     }
@@ -3060,6 +3444,32 @@
     try { window.localStorage.setItem(gridViewModeKey, normalizeGridViewMode(mode)); } catch (_) {}
   }
 
+  function normalizeGridSortMode(mode) {
+    return ['time', 'title', 'subtitle', 'size'].includes(mode) ? mode : 'time';
+  }
+
+  function normalizeGridSort(value) {
+    let raw = value;
+    if (typeof raw === 'string') {
+      try { raw = JSON.parse(raw); } catch (_) { raw = { mode: raw }; }
+    }
+    const object = raw && typeof raw === 'object' ? raw : {};
+    return { mode: normalizeGridSortMode(object.mode), desc: object.desc === true };
+  }
+
+  function readGridSort() {
+    try {
+      const raw = window.localStorage.getItem(gridSortKey);
+      return raw == null ? { mode: 'time', desc: true } : normalizeGridSort(raw);
+    } catch (_) {
+      return { mode: 'time', desc: true };
+    }
+  }
+
+  function writeGridSort(sort) {
+    try { window.localStorage.setItem(gridSortKey, JSON.stringify(normalizeGridSort(sort))); } catch (_) {}
+  }
+
   function normalizeRecommendText(value) { return String(value || '').toLowerCase().replace(/\s+/g, ''); }
 
   function firstValue(object, keys) {
@@ -3082,6 +3492,12 @@
 
   function stringValue(value) { return value == null ? '' : String(value); }
 
+  function booleanValue(value) {
+    if (value === true || value === false) return value;
+    const normalized = String(value == null ? '' : value).trim().toLowerCase();
+    return normalized === 'true' || normalized === '1' || normalized === 'yes';
+  }
+
   function numberValue(value, fallback) {
     const number = Number(value);
     return Number.isFinite(number) ? number : (fallback || 0);
@@ -3100,6 +3516,18 @@
       unit += 1;
     }
     return `${size >= 10 || unit === 0 ? size.toFixed(0) : size.toFixed(1)} ${units[unit]}`;
+  }
+
+  function needsArchivePassword(item) {
+    return !!(item && item.isArchive && item.archiveEncrypted && item.archivePasswordMatched === false);
+  }
+
+  function archiveFormatLabel(item) {
+    const encrypted = item && item.archiveEncrypted ? '加密 ' : '';
+    const format = stringValue(item && item.archiveFormat).toLowerCase();
+    if (format === 'cbz') return `${encrypted}CBZ`;
+    if (format === 'zip') return `${encrypted}ZIP`;
+    return item && item.isArchive ? `${encrypted}压缩包` : '';
   }
 
   function aspectStyle(size) {

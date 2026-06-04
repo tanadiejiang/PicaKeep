@@ -11,6 +11,7 @@ import 'package:picakeep/foundation/privileged_storage_access.dart';
 import 'package:picakeep/pages/reader/comic_reading_page.dart';
 
 import '../base.dart';
+import 'archive/archive_episode_builder.dart';
 import 'archive/archive_models.dart';
 import 'archive/archive_password_store.dart';
 import 'archive/archive_reading_service.dart';
@@ -439,7 +440,8 @@ class LocalPathReadingData extends ReadingData {
 
   @override
   String epDisplayName(int index) {
-    final defaultNames = eps?.values.toList(growable: false) ?? const <String>[];
+    final defaultNames =
+        eps?.values.toList(growable: false) ?? const <String>[];
     return LocalLibraryManager.buildArchiveChapterDisplayName(
       index: index,
       defaultNames: defaultNames,
@@ -1967,7 +1969,8 @@ class LocalLibraryManager {
       await _scanSingleAlbumSource(source);
       // Still scan for archive files even when the directory itself is a single album
       final entries = await _listDirectoryEntries(source.path);
-      final hasArchives = entries.any((e) => !e.isDirectory && isArchivePath(e.path));
+      final hasArchives =
+          entries.any((e) => !e.isDirectory && isArchivePath(e.path));
       if (hasArchives) {
         await _scanArchiveFilesUnder(source, const [], 0);
       }
@@ -2044,9 +2047,8 @@ class LocalLibraryManager {
   ) async {
     final hiddenIndex = await LocalTrashStore.instance.hiddenIndex();
     final entries = await _listDirectoryEntries(source.path);
-    final archiveFiles = entries
-        .where((e) => !e.isDirectory && isArchivePath(e.path))
-        .toList();
+    final archiveFiles =
+        entries.where((e) => !e.isDirectory && isArchivePath(e.path)).toList();
     if (archiveFiles.isEmpty) return;
 
     final archiveChildren = <LocalLibraryStorageChildEntry>[];
@@ -2109,7 +2111,7 @@ class LocalLibraryManager {
       final stat = await File(entry.path).stat();
       final sizeMb = stat.size / (1024 * 1024);
       final isEncrypted = probe.isEncrypted;
-      final built = _buildArchiveEpisodes(probe);
+      final built = buildArchiveEpisodes(probe);
       final episodeFiles = built.episodeFiles;
       final itemId = 'local_archive::${entry.path}';
 
@@ -2117,7 +2119,7 @@ class LocalLibraryManager {
       final hasSessionPassword = isEncrypted &&
           ArchivePasswordStore.instance.getSessionPassword(entry.path) != null;
       if (!isEncrypted || hasSessionPassword) {
-        final coverEntry = _pickArchiveCoverEntry(probe);
+        final coverEntry = pickArchiveCoverEntry(probe);
         if (coverEntry != null) {
           coverPath = await ArchiveReadingService.instance.extractCoverToCache(
             entry.path,
@@ -2147,8 +2149,7 @@ class LocalLibraryManager {
 
       item._archiveFormat = format;
       item._archiveEncrypted = isEncrypted;
-      item._archivePasswordMatched =
-          !isEncrypted ||
+      item._archivePasswordMatched = !isEncrypted ||
           ArchivePasswordStore.instance.getSessionPassword(entry.path) != null;
       item._archiveChapterRealNames = built.realNames;
 
@@ -2167,8 +2168,7 @@ class LocalLibraryManager {
     }
   }
 
-  static List<String> archiveDisplayChapterNames(
-      LocalLibraryComicItem item) {
+  static List<String> archiveDisplayChapterNames(LocalLibraryComicItem item) {
     if (!item.isArchiveItem) return item.eps;
     return List<String>.generate(
       item.eps.length,
@@ -2204,110 +2204,6 @@ class LocalLibraryManager {
     return '$fallback $realName';
   }
 
-  static _ArchiveEpisodesBuildResult _buildArchiveEpisodes(ArchiveIndex index) {
-    final imageEntries = index.imageEntries;
-    if (imageEntries.isEmpty) {
-      return const _ArchiveEpisodesBuildResult(
-          episodeFiles: {}, realNames: []);
-    }
-
-    // Find common prefix to strip
-    final prefix = _longestCommonDirectoryPrefix(
-        imageEntries.map((e) => e.path).toList());
-
-    // Group by parent directory after stripping prefix
-    final groups = <String, List<String>>{};
-    for (final entry in imageEntries) {
-      final stripped = prefix.isEmpty
-          ? entry.path
-          : entry.path.substring(prefix.length);
-      final slashIdx = stripped.indexOf('/');
-      final parent = slashIdx > 0 ? stripped.substring(0, slashIdx) : '';
-      groups.putIfAbsent(parent, () => []).add(
-            buildArchiveUri(index.archivePath, entry.path).toString(),
-          );
-    }
-
-    if (groups.length == 1) {
-      // All in one group — single chapter, real name is the group key (or '')
-      final uris = groups.values.first;
-      uris.sort(_archiveUriNaturalCompare);
-      final key = groups.keys.first;
-      return _ArchiveEpisodesBuildResult(
-        episodeFiles: {0: uris},
-        realNames: [key],
-      );
-    }
-
-    // Multiple groups: subdirs as chapters (1-indexed), root files as chapter 0
-    final result = <int, List<String>>{};
-    final realNames = <String>[];
-    final rootUris = groups[''] ?? [];
-    if (rootUris.isNotEmpty) {
-      rootUris.sort(_archiveUriNaturalCompare);
-      result[0] = rootUris;
-      realNames.add(''); // root chapter has no dir name
-    }
-
-    final subdirs = groups.keys.where((k) => k.isNotEmpty).toList()
-      ..sort(_naturalCompare);
-    for (int i = 0; i < subdirs.length; i++) {
-      final uris = groups[subdirs[i]]!;
-      uris.sort(_archiveUriNaturalCompare);
-      result[i + 1] = uris;
-      realNames.add(subdirs[i]);
-    }
-    return _ArchiveEpisodesBuildResult(
-        episodeFiles: result, realNames: realNames);
-  }
-
-  static String? _pickArchiveCoverEntry(ArchiveIndex index) {
-    if (index.imageEntries.isEmpty) return null;
-    const coverNames = ['cover.jpg', 'cover.jpeg', 'cover.png', 'cover.webp'];
-    for (final candidate in coverNames) {
-      for (final e in index.imageEntries) {
-        final basename = e.path.split('/').last.toLowerCase();
-        if (basename == candidate) return e.path;
-      }
-    }
-    final episodes = _buildArchiveEpisodes(index).episodeFiles;
-    if (episodes.isEmpty) return null;
-    final keys = episodes.keys.toList()..sort();
-    for (final k in keys) {
-      final list = episodes[k];
-      if (list != null && list.isNotEmpty) {
-        final parsed = parseArchiveUri(list.first);
-        if (parsed != null) return parsed.entryPath;
-      }
-    }
-    return null;
-  }
-
-  static String _longestCommonDirectoryPrefix(List<String> paths) {
-    if (paths.isEmpty) return '';
-    final parts = paths.first.split('/');
-    var prefixParts = <String>[];
-    for (int depth = 0; depth < parts.length - 1; depth++) {
-      final candidate = parts[depth];
-      if (paths.every((p) {
-        final ps = p.split('/');
-        return ps.length > depth && ps[depth] == candidate;
-      })) {
-        prefixParts.add(candidate);
-      } else {
-        break;
-      }
-    }
-    return prefixParts.isEmpty ? '' : '${prefixParts.join('/')}/';
-  }
-
-  static int _archiveUriNaturalCompare(String a, String b) {
-    final pa = parseArchiveUri(a);
-    final pb = parseArchiveUri(b);
-    if (pa == null || pb == null) return a.compareTo(b);
-    return _naturalCompare(pa.entryPath, pb.entryPath);
-  }
-
   static String _basenameWithoutExtension(String name) {
     final dotIdx = name.lastIndexOf('.');
     if (dotIdx > 0) return name.substring(0, dotIdx);
@@ -2321,7 +2217,7 @@ class LocalLibraryManager {
     try {
       final index = await ArchiveReadingService.instance
           .getIndex(archivePath, forceRefresh: true);
-      final coverEntry = _pickArchiveCoverEntry(index);
+      final coverEntry = pickArchiveCoverEntry(index);
       if (coverEntry != null) {
         final newCoverPath = await ArchiveReadingService.instance
             .extractCoverToCache(archivePath, coverEntry);
@@ -3681,14 +3577,4 @@ class _Semaphore {
       _count++;
     }
   }
-}
-
-class _ArchiveEpisodesBuildResult {
-  const _ArchiveEpisodesBuildResult({
-    required this.episodeFiles,
-    required this.realNames,
-  });
-
-  final Map<int, List<String>> episodeFiles;
-  final List<String> realNames;
 }

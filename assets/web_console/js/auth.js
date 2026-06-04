@@ -84,8 +84,8 @@
       api.auth.setToken(payload.token);
       api.auth.setUser(payload.user || (username ? { id: username, username, role: 'admin' } : null));
       setEmptyPasswordWarning(!!payload.emptyPassword);
-      showShell();
-      api.auth.refreshMe().catch(() => null);
+      await api.auth.refreshMe().catch(() => null);
+      window.location.reload();
     } catch (err) {
       if (error) error.textContent = err instanceof Error ? err.message : String(err || '登录失败');
     } finally {

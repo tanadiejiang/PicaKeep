@@ -9,6 +9,10 @@ import 'package:sqlite3/sqlite3.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 import 'package:web_socket_channel/status.dart' as web_socket_status;
 
+import '../foundation/archive/archive_errors.dart';
+import '../foundation/archive/archive_models.dart';
+import '../foundation/archive/archive_reading_service.dart';
+import '../foundation/archive/archive_registry.dart';
 import '../foundation/local_trash_store.dart';
 import '../foundation/privileged_storage_access.dart';
 import '../foundation/trash.dart';
@@ -63,6 +67,10 @@ class PicaKeepAdminServer {
   Timer? _pendingLibraryChangedTimer;
   String? _pendingLibraryChangedSignature;
   DateTime? _pendingLibraryChangedGeneratedAt;
+  final List<StreamSubscription<FileSystemEvent>> _libraryWatchers =
+      <StreamSubscription<FileSystemEvent>>[];
+  Timer? _libraryWatchDebounceTimer;
+  bool _libraryWatchRescanRunning = false;
 
   ServerRuntimeState get state => _state;
   PicaKeepServerConfig? get config => _config;
@@ -80,6 +88,7 @@ class PicaKeepAdminServer {
     _state.markStarting('正在启动服务');
     try {
       _config = config ?? await PicaKeepServerConfig.load(configPath);
+      ArchiveRegistry.initDefaults();
       await _webUserStore.init(_config!);
       _setSnapshot(await _scanResources(), emitEvent: true);
       final handler = const Pipeline()
@@ -93,6 +102,7 @@ class PicaKeepAdminServer {
       );
       final message =
           'Listening on http://${_server!.address.address}:${_server!.port}';
+      _restartLibraryWatchers();
       _state.markRunning(message);
       stdout.writeln('[PicaKeepServer] $message');
     } catch (e, s) {
@@ -112,6 +122,9 @@ class PicaKeepAdminServer {
     try {
       _pendingLibraryChangedTimer?.cancel();
       _pendingLibraryChangedTimer = null;
+      _libraryWatchDebounceTimer?.cancel();
+      _libraryWatchDebounceTimer = null;
+      await _cancelLibraryWatchers();
       final closeFutures = <Future<void>>[
         for (final channel in _eventChannels.toList())
           channel.sink.close(web_socket_status.goingAway),
@@ -145,8 +158,81 @@ class PicaKeepAdminServer {
     _config = newConfig;
     final snapshot = await _scanResources();
     _setSnapshot(snapshot, emitEvent: true);
+    _restartLibraryWatchers();
     _state.addLog('config', '已热更新配置 + 重新扫描');
     return snapshot;
+  }
+
+  void _restartLibraryWatchers() {
+    unawaited(_cancelLibraryWatchers().then((_) async {
+      final config = _config;
+      if (config == null || _server == null) {
+        return;
+      }
+      final seen = <String>{};
+      for (final rawPath in config.allLibraryRoots) {
+        final path = rawPath.trim();
+        if (path.isEmpty || !seen.add(path)) {
+          continue;
+        }
+        final directory = Directory(path);
+        if (!directory.existsSync()) {
+          continue;
+        }
+        try {
+          final subscription = directory
+              .watch(recursive: true)
+              .listen(_handleLibraryFileEvent, onError: (_) {});
+          _libraryWatchers.add(subscription);
+        } catch (error) {
+          _state.addLog('watch', '监听失败：$path ($error)');
+        }
+      }
+      if (_libraryWatchers.isNotEmpty) {
+        _state.addLog('watch', '已监听 ${_libraryWatchers.length} 个资源目录');
+      }
+    }));
+  }
+
+  Future<void> _cancelLibraryWatchers() async {
+    _libraryWatchDebounceTimer?.cancel();
+    _libraryWatchDebounceTimer = null;
+    final subscriptions = _libraryWatchers.toList();
+    _libraryWatchers.clear();
+    if (subscriptions.isEmpty) {
+      return;
+    }
+    await Future.wait(
+      subscriptions.map((subscription) => subscription.cancel()),
+      eagerError: false,
+    );
+  }
+
+  void _handleLibraryFileEvent(FileSystemEvent event) {
+    if (_server == null) {
+      return;
+    }
+    _libraryWatchDebounceTimer?.cancel();
+    _libraryWatchDebounceTimer = Timer(
+      const Duration(seconds: 3),
+      () => unawaited(_rescanResourcesFromWatch()),
+    );
+  }
+
+  Future<void> _rescanResourcesFromWatch() async {
+    if (_libraryWatchRescanRunning || _server == null) {
+      return;
+    }
+    _libraryWatchRescanRunning = true;
+    try {
+      await rescanResources();
+      _state.addLog('watch', '检测到资源目录变化，已自动刷新');
+    } catch (error, stackTrace) {
+      _state.addLog('watch', '自动刷新失败：$error');
+      _state.markError(error, stackTrace);
+    } finally {
+      _libraryWatchRescanRunning = false;
+    }
   }
 
   Future<LibraryTrashEntry> restoreTrashItem(String trashId) async {
@@ -608,6 +694,12 @@ class PicaKeepAdminServer {
     if (path == 'api/admin/resources') {
       return _jsonResponse((_snapshot ?? await _scanResources()).toJson());
     }
+    if (path == 'api/admin/browse') {
+      if (request.method != 'GET') {
+        return _jsonResponse({'error': 'method not allowed'}, statusCode: 405);
+      }
+      return _handleAdminBrowse(request);
+    }
     if (path == 'api/admin/config') {
       if (request.method == 'GET') {
         return _jsonResponse(
@@ -653,6 +745,134 @@ class PicaKeepAdminServer {
     }
 
     return _jsonResponse({'error': 'not found'}, statusCode: 404);
+  }
+
+  Future<Response> _handleAdminBrowse(Request request) async {
+    final rawPath = request.url.queryParameters['path']?.trim() ?? '';
+    final roots = _adminBrowseRoots();
+    if (rawPath.isEmpty) {
+      return _jsonResponse({
+        'path': '',
+        'parent': '',
+        'entries': roots
+            .map(
+              (path) => {
+                'name': _adminBrowseRootName(path),
+                'path': path,
+                'isDirectory': true,
+              },
+            )
+            .toList(),
+        'roots': roots,
+      });
+    }
+
+    final normalizedPath = _normalizeBrowsePath(rawPath);
+    try {
+      final exists =
+          await PrivilegedStorageAccess.directoryExists(normalizedPath);
+      if (!exists) {
+        return _jsonResponse(
+          {'error': '目录不存在或无法访问'},
+          statusCode: 404,
+        );
+      }
+      final entries = await PrivilegedStorageAccess.listDirectoryEntries(
+        normalizedPath,
+      );
+      final directories = entries.where((entry) => entry.isDirectory).toList()
+        ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+      return _jsonResponse({
+        'path': normalizedPath,
+        'parent': _parentBrowsePath(normalizedPath),
+        'entries': directories
+            .map(
+              (entry) => {
+                'name': entry.name,
+                'path': _normalizeBrowsePath(entry.path),
+                'isDirectory': true,
+              },
+            )
+            .toList(),
+        'roots': roots,
+      });
+    } catch (error) {
+      return _jsonResponse(
+        {'error': '无法读取目录：$error'},
+        statusCode: 400,
+      );
+    }
+  }
+
+  List<String> _adminBrowseRoots() {
+    final roots = <String>[];
+    void addRoot(String path) {
+      final normalized = _normalizeBrowsePath(path);
+      if (normalized.isEmpty || roots.contains(normalized)) {
+        return;
+      }
+      roots.add(normalized);
+    }
+
+    if (Platform.isWindows) {
+      for (var code = 65; code <= 90; code++) {
+        final path = '${String.fromCharCode(code)}:${Platform.pathSeparator}';
+        try {
+          if (Directory(path).existsSync()) {
+            addRoot(path);
+          }
+        } catch (_) {}
+      }
+    } else {
+      addRoot('/');
+      if (Platform.isAndroid) {
+        addRoot('/storage/emulated/0');
+        addRoot('/sdcard');
+      }
+    }
+
+    return roots;
+  }
+
+  String _adminBrowseRootName(String path) {
+    final normalized = _normalizeBrowsePath(path);
+    if (Platform.isWindows &&
+        normalized.endsWith(':${Platform.pathSeparator}')) {
+      return normalized;
+    }
+    if (normalized == '/') {
+      return '/';
+    }
+    final parts = normalized
+        .replaceAll('\\', '/')
+        .split('/')
+        .where((part) => part.isNotEmpty)
+        .toList();
+    return parts.isEmpty ? normalized : parts.last;
+  }
+
+  String _normalizeBrowsePath(String path) {
+    final trimmed = path.trim();
+    if (trimmed.isEmpty) {
+      return '';
+    }
+    try {
+      return Directory(trimmed).absolute.path;
+    } catch (_) {
+      return trimmed;
+    }
+  }
+
+  String _parentBrowsePath(String path) {
+    final normalized = _normalizeBrowsePath(path);
+    if (normalized.isEmpty) {
+      return '';
+    }
+    final parent = Directory(normalized).parent.path;
+    if (_normalizeBrowsePath(parent) == normalized) {
+      return '';
+    }
+    return _normalizeBrowsePath(parent);
   }
 
   Future<Response?> _handleConsoleRequest(Request request) async {
@@ -701,7 +921,8 @@ class PicaKeepAdminServer {
         );
       }
       if (_webUserStore.verifyLogin(user.username, oldPassword) == null) {
-        return _jsonResponse({'error': 'old password mismatch'}, statusCode: 403);
+        return _jsonResponse({'error': 'old password mismatch'},
+            statusCode: 403);
       }
       final updated = _webUserStore.resetPassword(
         userId: user.id,
@@ -726,10 +947,8 @@ class PicaKeepAdminServer {
       }
       if (request.method == 'GET') {
         return _jsonResponse({
-          'users': _webUserStore
-              .listUsers()
-              .map((entry) => entry.toJson())
-              .toList(),
+          'users':
+              _webUserStore.listUsers().map((entry) => entry.toJson()).toList(),
         });
       }
       if (request.method == 'POST') {
@@ -1059,12 +1278,74 @@ class PicaKeepAdminServer {
       if (request.method != 'GET') {
         return _jsonResponse({'error': 'method not allowed'}, statusCode: 405);
       }
-      final limit = _clampIntQuery(request.url.queryParameters['limit'], 10, 1, 30);
+      final limit =
+          _clampIntQuery(request.url.queryParameters['limit'], 10, 1, 30);
       return _jsonResponse(_buildLibraryRecommendationsPayload(
         snapshot,
         item,
         limit: limit,
       ));
+    }
+
+    if (segments.length == 6 &&
+        segments[4] == 'archive' &&
+        segments[5] == 'status') {
+      if (request.method != 'GET') {
+        return _jsonResponse({'error': 'method not allowed'}, statusCode: 405);
+      }
+      return _jsonResponse({
+        'isArchive': item.isArchive,
+        'encrypted': item.archiveEncrypted,
+        'passwordMatched': item.archivePasswordMatched,
+        'format': item.archiveFormat,
+      });
+    }
+
+    if (segments.length == 6 &&
+        segments[4] == 'archive' &&
+        segments[5] == 'unlock') {
+      if (request.method != 'POST') {
+        return _jsonResponse({'error': 'method not allowed'}, statusCode: 405);
+      }
+      if (!item.isArchive) {
+        return _jsonResponse({'error': 'not an archive item'}, statusCode: 400);
+      }
+      if (!item.archiveEncrypted) {
+        return _jsonResponse({'error': 'archive is not encrypted'},
+            statusCode: 400);
+      }
+      final archivePath = _archivePathForItem(item);
+      if (archivePath == null || archivePath.isEmpty) {
+        return _jsonResponse({'error': 'archive path not found'},
+            statusCode: 404);
+      }
+      final payload = await _readJsonMapFromBody(request);
+      final password = payload['password']?.toString() ?? '';
+      if (password.isEmpty) {
+        return _jsonResponse({'error': 'password required'}, statusCode: 400);
+      }
+
+      final ok = await ArchiveReadingService.instance.tryUnlock(
+        archivePath,
+        password,
+      );
+      if (!ok) {
+        return _jsonResponse({
+          'ok': false,
+          'passwordMatched': false,
+          'error': '密码错误',
+        });
+      }
+
+      _deepItemCache.remove(item.id);
+      _coverPathCache.remove(item.id);
+      final refreshed = await rescanResources();
+      final refreshedItem = refreshed.findItemById(item.id) ?? item;
+      return _jsonResponse({
+        'ok': true,
+        'passwordMatched': true,
+        'coverUrl': _buildItemCoverUrl(refreshedItem),
+      });
     }
 
     if (segments.length == 4 && request.method == 'DELETE') {
@@ -1090,6 +1371,13 @@ class PicaKeepAdminServer {
     if (segments.length == 5 && segments[4] == 'cover') {
       if (request.method != 'GET') {
         return _jsonResponse({'error': 'method not allowed'}, statusCode: 405);
+      }
+      if (item.isArchive) {
+        final coverPath = item.coverPath?.trim() ?? '';
+        if (coverPath.isEmpty || !isArchiveUri(coverPath)) {
+          return _jsonResponse({'error': 'cover not found'}, statusCode: 404);
+        }
+        return _archiveBytesResponse(request, coverPath);
       }
       final cachedCoverPath = _coverPathCache[item.id]?.trim() ?? '';
       if (cachedCoverPath.isNotEmpty) {
@@ -1146,7 +1434,11 @@ class PicaKeepAdminServer {
       if (pageIndex < 0 || pageIndex >= episode.imagePaths.length) {
         return _jsonResponse({'error': 'page not found'}, statusCode: 404);
       }
-      return _fileResponse(request, episode.imagePaths[pageIndex]);
+      final imagePath = episode.imagePaths[pageIndex];
+      if (isArchiveUri(imagePath)) {
+        return _archiveBytesResponse(request, imagePath);
+      }
+      return _fileResponse(request, imagePath);
     }
 
     return _jsonResponse({'error': 'not found'}, statusCode: 404);
@@ -1266,7 +1558,8 @@ class PicaKeepAdminServer {
         }
       }
 
-      final cachedCoverPath = _favoriteCoverFallbackCache[cacheKey]?.trim() ?? '';
+      final cachedCoverPath =
+          _favoriteCoverFallbackCache[cacheKey]?.trim() ?? '';
       if (cachedCoverPath.isNotEmpty) {
         final cachedResponse = await _fileResponse(request, cachedCoverPath);
         if (cachedResponse.statusCode != 404) {
@@ -1293,6 +1586,9 @@ class PicaKeepAdminServer {
       }
       if (resolvedCoverPath.isEmpty) {
         return _jsonResponse({'error': 'cover not found'}, statusCode: 404);
+      }
+      if (isArchiveUri(resolvedCoverPath)) {
+        return _archiveBytesResponse(request, resolvedCoverPath);
       }
       final resolvedResponse = await _fileResponse(request, resolvedCoverPath);
       if (resolvedResponse.statusCode == 404) {
@@ -1660,7 +1956,8 @@ class PicaKeepAdminServer {
     if (normalizedCandidates.isEmpty) return null;
 
     final itemPools = <({ServerResourceItemSummary item, Set<String> pool})>[
-      for (final item in items) (item: item, pool: _resourceItemCandidatePool(item)),
+      for (final item in items)
+        (item: item, pool: _resourceItemCandidatePool(item)),
     ];
 
     for (final candidate in normalizedCandidates) {
@@ -1683,10 +1980,7 @@ class PicaKeepAdminServer {
       item.sourceDisplayName,
       item.subtitle,
       item.path,
-    }
-        .map((value) => value.trim())
-        .where((value) => value.isNotEmpty)
-        .toSet();
+    }.map((value) => value.trim()).where((value) => value.isNotEmpty).toSet();
   }
 
   ImageFavorite? _findImageFavorite(String id, int ep, int page) {
@@ -1773,7 +2067,6 @@ class PicaKeepAdminServer {
     };
   }
 
-
   int _clampIntQuery(String? value, int fallback, int min, int max) {
     final parsed = int.tryParse((value ?? '').trim()) ?? fallback;
     if (parsed < min) return min;
@@ -1802,7 +2095,8 @@ class PicaKeepAdminServer {
       });
     }
     scored.sort((a, b) {
-      final scoreCompare = (b['score'] as double).compareTo(a['score'] as double);
+      final scoreCompare =
+          (b['score'] as double).compareTo(a['score'] as double);
       if (scoreCompare != 0) return scoreCompare;
       final left = (b['item'] as ServerResourceItemSummary).updatedAt;
       final right = (a['item'] as ServerResourceItemSummary).updatedAt;
@@ -1815,7 +2109,8 @@ class PicaKeepAdminServer {
       'items': [
         for (final entry in scored.take(limit))
           {
-            ..._buildLibraryItemPayload(entry['item'] as ServerResourceItemSummary),
+            ..._buildLibraryItemPayload(
+                entry['item'] as ServerResourceItemSummary),
             'reason': entry['reason'],
             'score': entry['score'],
           },
@@ -1831,7 +2126,8 @@ class PicaKeepAdminServer {
     final baseName = _recommendationNormalize(base.title);
     final candidateName = _recommendationNormalize(candidate.title);
     if (baseName.isNotEmpty && candidateName.isNotEmpty) {
-      if (baseName.contains(candidateName) || candidateName.contains(baseName)) {
+      if (baseName.contains(candidateName) ||
+          candidateName.contains(baseName)) {
         score += 90;
       }
       score += _bigramOverlap(baseName, candidateName) * 70;
@@ -1840,7 +2136,8 @@ class PicaKeepAdminServer {
     final candidateTopics = _recommendationTopics(candidate.title);
     final topicMatches = baseTopics.intersection(candidateTopics).length;
     score += topicMatches * 22;
-    final tagMatches = base.tags.toSet().intersection(candidate.tags.toSet()).length;
+    final tagMatches =
+        base.tags.toSet().intersection(candidate.tags.toSet()).length;
     score += tagMatches * 18;
     if (base.subtitle.isNotEmpty && base.subtitle == candidate.subtitle) {
       score += 28;
@@ -1862,11 +2159,13 @@ class PicaKeepAdminServer {
     if (overlap >= 0.62 ||
         (baseName.isNotEmpty &&
             candidateName.isNotEmpty &&
-            (baseName.contains(candidateName) || candidateName.contains(baseName)))) {
+            (baseName.contains(candidateName) ||
+                candidateName.contains(baseName)))) {
       return '名称高度相似';
     }
     if (overlap >= 0.32) return '名称相似';
-    final tagMatches = base.tags.toSet().intersection(candidate.tags.toSet()).length;
+    final tagMatches =
+        base.tags.toSet().intersection(candidate.tags.toSet()).length;
     if (base.subtitle.isNotEmpty &&
         base.subtitle == candidate.subtitle &&
         tagMatches > 0) {
@@ -1894,7 +2193,8 @@ class PicaKeepAdminServer {
     final right = _bigrams(b);
     if (left.isEmpty || right.isEmpty) return 0;
     final intersection = left.intersection(right).length;
-    return intersection / (left.length < right.length ? left.length : right.length);
+    return intersection /
+        (left.length < right.length ? left.length : right.length);
   }
 
   Set<String> _bigrams(String value) {
@@ -1922,6 +2222,11 @@ class PicaKeepAdminServer {
       'imageCount': item.imageCount,
       'totalBytes': item.totalBytes,
       'updatedAt': item.updatedAt.toIso8601String(),
+      'itemKind': item.isArchive ? 'archive' : 'directory',
+      'isArchive': item.isArchive,
+      'archiveEncrypted': item.archiveEncrypted,
+      'archivePasswordMatched': item.archivePasswordMatched,
+      'archiveFormat': item.archiveFormat,
       'coverUrl': _buildItemCoverUrl(item),
       'detailUrl': '/api/library/items/$encodedId',
       'episodeCount': item.episodes.length,
@@ -1976,6 +2281,14 @@ class PicaKeepAdminServer {
   }
 
   String _coverVersionToken(ServerResourceItemSummary item) {
+    if (item.isArchive) {
+      return [
+        item.updatedAt.millisecondsSinceEpoch,
+        item.archiveFormat,
+        item.archiveEncrypted ? 'encrypted' : 'plain',
+        item.archivePasswordMatched ? 'unlocked' : 'locked',
+      ].join(':');
+    }
     final coverPath = item.coverPath?.trim() ?? '';
     if (coverPath.isEmpty) {
       return item.updatedAt.millisecondsSinceEpoch.toString();
@@ -1993,6 +2306,69 @@ class PicaKeepAdminServer {
     final parts =
         normalized.split('/').where((entry) => entry.isNotEmpty).toList();
     return parts.isEmpty ? normalized : parts.last;
+  }
+
+  String? _archivePathForItem(ServerResourceItemSummary item) {
+    final explicit = item.archivePath?.trim() ?? '';
+    if (explicit.isNotEmpty) {
+      return explicit;
+    }
+    if (isArchivePath(item.path)) {
+      return item.path;
+    }
+    final normalizedId = item.id.trim();
+    if (normalizedId.isEmpty) {
+      return null;
+    }
+    try {
+      var padded = normalizedId;
+      while (padded.length % 4 != 0) {
+        padded += '=';
+      }
+      final decoded = utf8.decode(base64Url.decode(padded));
+      final marker = '${item.rootId}::';
+      if (decoded.startsWith(marker)) {
+        final path = decoded.substring(marker.length).trim();
+        return path.isEmpty ? null : path;
+      }
+      final separator = decoded.indexOf('::');
+      if (separator >= 0 && separator + 2 < decoded.length) {
+        final path = decoded.substring(separator + 2).trim();
+        return path.isEmpty ? null : path;
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  Future<Response> _archiveBytesResponse(
+    Request request,
+    String archiveUri,
+  ) async {
+    final parsed = parseArchiveUri(archiveUri);
+    if (parsed == null) {
+      return _jsonResponse({'error': 'archive entry not found'},
+          statusCode: 404);
+    }
+    try {
+      final bytes =
+          await ArchiveReadingService.instance.readEntryBytesByUri(archiveUri);
+      return Response.ok(
+        bytes,
+        headers: {
+          HttpHeaders.contentTypeHeader: _contentTypeForPath(parsed.entryPath),
+          HttpHeaders.contentLengthHeader: bytes.length.toString(),
+          HttpHeaders.cacheControlHeader: 'public, max-age=300',
+        },
+      );
+    } on ArchiveFailure catch (failure) {
+      if (failure.code == ArchiveErrorCode.passwordRequired ||
+          failure.code == ArchiveErrorCode.wrongPassword ||
+          failure.code == ArchiveErrorCode.encryptedArchive) {
+        return _jsonResponse({'error': 'archive locked'}, statusCode: 403);
+      }
+      return _jsonResponse({'error': 'archive entry not found'},
+          statusCode: 404);
+    }
   }
 
   Future<Response> _fileResponse(Request request, String filePath) async {

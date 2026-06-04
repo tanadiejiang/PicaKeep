@@ -46,6 +46,7 @@
 
   applyTheme();
   bindSystemThemeListener();
+  bindMobileViewportMetrics();
 
   function start() {
     if (started) return;
@@ -62,7 +63,10 @@
       renderCurrentMode();
     });
     api.auth.onChange(() => renderAvatarMenu());
-    window.addEventListener('popstate', () => applyRouteMode(true));
+    window.addEventListener('popstate', (event) => {
+      if (event.state && event.state.__picaKeepAppView) return;
+      applyRouteMode(true);
+    });
     renderCurrentMode();
   }
 
@@ -262,6 +266,7 @@
   function renderCurrentMode() {
     const mode = api.mode.get();
     if (window.unmountApp) window.unmountApp(root);
+    if (window.__picaKeepAdminCleanup) window.__picaKeepAdminCleanup();
     root.innerHTML = '';
     if (mode === 'admin') {
       window.renderAdmin(root);
@@ -310,6 +315,10 @@
 
   function isCoarsePointer() {
     return !!(window.matchMedia && window.matchMedia('(hover: none), (pointer: coarse)').matches);
+  }
+
+  function isMobileShell() {
+    return !!(window.matchMedia && window.matchMedia('(max-width: 760px)').matches);
   }
 
   function readTheme() {
@@ -361,6 +370,50 @@
     };
     if (media.addEventListener) media.addEventListener('change', onChange);
     else if (media.addListener) media.addListener(onChange);
+  }
+
+  function bindMobileViewportMetrics() {
+    const doc = document.documentElement;
+    const viewport = window.visualViewport;
+    let raf = 0;
+    let minHeight = 0;
+    let maxHeight = 0;
+    let orientationKey = '';
+    const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
+    const update = () => {
+      raf = 0;
+      const isMobile = window.matchMedia && window.matchMedia('(max-width: 760px)').matches;
+      const visibleHeight = Math.round(viewport ? viewport.height : window.innerHeight);
+      doc.style.setProperty('--mobile-viewport-height', `${Math.max(320, visibleHeight || window.innerHeight || 0)}px`);
+      if (!isMobile) {
+        doc.style.setProperty('--mobile-browser-chrome-pad', '0px');
+        return;
+      }
+      const nextOrientationKey = `${window.innerWidth > window.innerHeight ? 'landscape' : 'portrait'}:${Math.round(window.innerWidth / 10)}`;
+      if (nextOrientationKey !== orientationKey) {
+        orientationKey = nextOrientationKey;
+        minHeight = visibleHeight;
+        maxHeight = visibleHeight;
+      } else {
+        minHeight = minHeight ? Math.min(minHeight, visibleHeight) : visibleHeight;
+        maxHeight = maxHeight ? Math.max(maxHeight, visibleHeight) : visibleHeight;
+      }
+      const range = Math.max(0, maxHeight - minHeight);
+      const expanded = range < 24 ? true : visibleHeight <= minHeight + range * 0.45;
+      const learnedPad = range >= 24 ? clamp(Math.round(range * 0.55), 64, 84) : 64;
+      doc.style.setProperty('--mobile-browser-chrome-pad', expanded ? `${learnedPad}px` : '0px');
+    };
+    const schedule = () => {
+      if (raf) return;
+      raf = window.requestAnimationFrame(update);
+    };
+    update();
+    window.addEventListener('resize', schedule, { passive: true });
+    window.addEventListener('orientationchange', schedule, { passive: true });
+    if (viewport) {
+      viewport.addEventListener('resize', schedule, { passive: true });
+      viewport.addEventListener('scroll', schedule, { passive: true });
+    }
   }
 
   function readThemeStorage(key, fallback) {

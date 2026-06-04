@@ -28,10 +28,33 @@ import 'package:picakeep/components/comic_tile.dart';
 import 'package:picakeep/components/scrollable.dart';
 import 'package:picakeep/components/layout.dart';
 import 'package:picakeep/components/components.dart';
+import 'package:picakeep/components/archive_password_dialog.dart';
 import 'package:picakeep/components/window_frame.dart';
 import 'package:picakeep/tools/read_history_helper.dart';
 import 'package:picakeep/tools/tags_translation.dart';
 import 'local_comic_detail_page.dart';
+
+Future<bool> _ensureRemoteArchiveUnlockedFor(
+  BuildContext context,
+  RemoteLibraryComicItem item,
+) async {
+  if (!item.needsArchivePassword) {
+    return true;
+  }
+  final result = await showArchivePasswordDialog(
+    context: context,
+    archivePath: item.remotePath,
+    archiveFileName: item.name,
+    format: item.archiveFormat,
+    allowAddToDefaults: false,
+    onVerify: (password) => item.client.unlockArchive(item.id, password),
+  );
+  if (result == null) {
+    return false;
+  }
+  item.archivePasswordMatched = true;
+  return true;
+}
 
 void _toComicInfoPage(DownloadedItem comic) {
   if (comic is RemoteLibraryRootItem) {
@@ -47,7 +70,18 @@ void _toComicInfoPage(DownloadedItem comic) {
 }
 
 extension ReadComic on DownloadedItem {
-  Future<void> read({int? ep, int? page}) async {
+  Future<void> read({int? ep, int? page, BuildContext? context}) async {
+    if (this is RemoteLibraryComicItem) {
+      final item = this as RemoteLibraryComicItem;
+      final unlockContext = context ?? App.globalContext;
+      if (item.needsArchivePassword && unlockContext == null) {
+        return;
+      }
+      if (unlockContext != null &&
+          !await _ensureRemoteArchiveUnlockedFor(unlockContext, item)) {
+        return;
+      }
+    }
     await ensureHistoryBeforeRead(this);
     await App.openReader(() => createReadingPage(ep: ep, page: page));
   }
@@ -1633,6 +1667,17 @@ class _DownloadPageState extends State<DownloadPage>
                     logic.update();
                   } else if (isRootItem) {
                     _toComicInfoPage(item);
+                  } else if (item is RemoteLibraryComicItem &&
+                      item.needsArchivePassword) {
+                    final unlocked =
+                        await _ensureRemoteArchiveUnlockedFor(context, item);
+                    if (!context.mounted) {
+                      return;
+                    }
+                    if (unlocked) {
+                      logic.refresh();
+                      _showInfo(index, logic, context);
+                    }
                   } else {
                     _showInfo(index, logic, context);
                   }
@@ -1705,7 +1750,7 @@ class _DownloadPageState extends State<DownloadPage>
               });
               return;
             }
-            item.read();
+            item.read(context: context);
           },
         ),
         if (logic.canDeleteItem(item))
@@ -2415,7 +2460,8 @@ class _DownloadedComicInfoViewState extends State<DownloadedComicInfoView> {
   List<String> eps = [];
   List<int> downloadedEps = [];
 
-  bool get _isArchive => _comic is LocalLibraryComicItem &&
+  bool get _isArchive =>
+      _comic is LocalLibraryComicItem &&
       (_comic as LocalLibraryComicItem).isArchiveItem;
 
   List<String> get _displayNames {
@@ -2425,6 +2471,7 @@ class _DownloadedComicInfoViewState extends State<DownloadedComicInfoView> {
     }
     return eps;
   }
+
   ScrollController? _ownedScrollController;
   ScrollController get _scrollController =>
       widget.scrollController ?? _ownedScrollController!;
@@ -2703,9 +2750,8 @@ class _DownloadedComicInfoViewState extends State<DownloadedComicInfoView> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final mediaQuery = MediaQuery.of(context);
-    final topSpacer = widget.scrollController != null
-        ? 12.0
-        : mediaQuery.padding.top + 12.0;
+    final topSpacer =
+        widget.scrollController != null ? 12.0 : mediaQuery.padding.top + 12.0;
     Widget grid = _buildChapterGrid(theme);
     if (widget.sheetController != null) {
       grid = Listener(
@@ -2869,12 +2915,34 @@ class _DownloadedComicInfoViewState extends State<DownloadedComicInfoView> {
     }
   }
 
-  void read() {
-    _comic.read();
+  Future<void> read() async {
+    final comic = _comic;
+    if (comic is RemoteLibraryComicItem &&
+        !await _ensureRemoteArchiveUnlockedFor(context, comic)) {
+      return;
+    }
+    if (!mounted) {
+      return;
+    }
+    await comic.read(context: context);
+    if (mounted) {
+      setState(_syncInfo);
+    }
   }
 
-  void readSpecifiedEps(int i) {
-    _comic.read(ep: i + 1);
+  Future<void> readSpecifiedEps(int i) async {
+    final comic = _comic;
+    if (comic is RemoteLibraryComicItem &&
+        !await _ensureRemoteArchiveUnlockedFor(context, comic)) {
+      return;
+    }
+    if (!mounted) {
+      return;
+    }
+    await comic.read(ep: i + 1, context: context);
+    if (mounted) {
+      setState(_syncInfo);
+    }
   }
 
   bool _canForgetArchivePassword() {

@@ -2,8 +2,13 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <meta name="color-scheme" content="light dark">
+  <meta name="theme-color" content="#7c9cff">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="PicaKeep">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <script>
     (function () {
       try {
@@ -20,6 +25,9 @@
     })();
   </script>
   <title>PicaKeep Console</title>
+  <link rel="icon" type="image/svg+xml" href="/pica-icon.svg">
+  <link rel="apple-touch-icon" href="/pica-icon.svg">
+  <link rel="manifest" href="/manifest.webmanifest">
   <link rel="stylesheet" href="/css/common.css">
   <link rel="stylesheet" href="/css/admin.css">
   <link rel="stylesheet" href="/css/app.css">
@@ -30,6 +38,7 @@
     <header id="topbar" class="topbar-collapsed">
       <button id="topbar-toggle" class="topbar-toggle" type="button" aria-expanded="false">☰</button>
       <div class="topbar-brand">
+        <img class="console-brand-icon" src="/pica-icon.svg" alt="" aria-hidden="true">
         <div class="brand">PicaKeep Console</div>
         <div class="sub">网页后台 · 应用面板与管理面板</div>
       </div>

@@ -9,6 +9,8 @@ Future<({String password, bool addToDefaults})?> showArchivePasswordDialog({
   required String archivePath,
   required String archiveFileName,
   required ArchiveFormat format,
+  Future<bool> Function(String password)? onVerify,
+  bool allowAddToDefaults = true,
 }) {
   return showDialog<({String password, bool addToDefaults})>(
     context: context,
@@ -17,6 +19,8 @@ Future<({String password, bool addToDefaults})?> showArchivePasswordDialog({
       archivePath: archivePath,
       archiveFileName: archiveFileName,
       format: format,
+      onVerify: onVerify,
+      allowAddToDefaults: allowAddToDefaults,
     ),
   );
 }
@@ -26,11 +30,15 @@ class _ArchivePasswordDialog extends StatefulWidget {
     required this.archivePath,
     required this.archiveFileName,
     required this.format,
+    this.onVerify,
+    required this.allowAddToDefaults,
   });
 
   final String archivePath;
   final String archiveFileName;
   final ArchiveFormat format;
+  final Future<bool> Function(String password)? onVerify;
+  final bool allowAddToDefaults;
 
   @override
   State<_ArchivePasswordDialog> createState() => _ArchivePasswordDialogState();
@@ -58,11 +66,19 @@ class _ArchivePasswordDialogState extends State<_ArchivePasswordDialog> {
       _errorMessage = null;
     });
     try {
-      final ok = await ArchiveReadingService.instance
-          .tryUnlock(widget.archivePath, password);
+      final verifier = widget.onVerify ??
+          (String value) => ArchiveReadingService.instance
+              .tryUnlock(widget.archivePath, value);
+      final ok = await verifier(password);
       if (!mounted) return;
       if (ok) {
         _unlockedPassword = password;
+        if (!widget.allowAddToDefaults) {
+          Navigator.of(context).pop(
+            (password: _unlockedPassword!, addToDefaults: false),
+          );
+          return;
+        }
         setState(() {
           _loading = false;
           _showAddToDefaults = true;

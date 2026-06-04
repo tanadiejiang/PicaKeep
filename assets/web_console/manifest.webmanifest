@@ -1,0 +1,25 @@
+{
+  "name": "PicaKeep Console",
+  "short_name": "PicaKeep",
+  "description": "PicaKeep 网页后台与应用面板",
+  "start_url": "/",
+  "scope": "/",
+  "display": "fullscreen",
+  "orientation": "any",
+  "background_color": "#f6f7fb",
+  "theme_color": "#7c9cff",
+  "icons": [
+    {
+      "src": "/pica-icon.svg",
+      "sizes": "192x192",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/pica-icon.svg",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

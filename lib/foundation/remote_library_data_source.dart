@@ -8,6 +8,7 @@ import 'package:flutter/widgets.dart';
 import 'package:picakeep/base.dart';
 import 'package:picakeep/foundation/app.dart';
 import 'package:picakeep/foundation/app_runtime_mode.dart';
+import 'package:picakeep/foundation/archive/archive_models.dart';
 import 'package:picakeep/foundation/download_model.dart';
 import 'package:picakeep/foundation/image_favorites.dart';
 import 'package:picakeep/foundation/image_loader/base_image_provider.dart';
@@ -480,6 +481,10 @@ class RemoteLibraryComicItem extends DownloadedItem {
     this.displayId = '',
     this.metadataTags = const <String>[],
     this.metadataSourceDisplayName = '',
+    this.isArchive = false,
+    this.archiveEncrypted = false,
+    this.archivePasswordMatched = true,
+    this.archiveFormat = ArchiveFormat.unknown,
   }) {
     comicSize = totalBytes > 0 ? totalBytes / (1024 * 1024) : null;
     directory = null;
@@ -501,9 +506,25 @@ class RemoteLibraryComicItem extends DownloadedItem {
   final String displayId;
   final List<String> metadataTags;
   final String metadataSourceDisplayName;
+  final bool isArchive;
+  final bool archiveEncrypted;
+  bool archivePasswordMatched;
+  final ArchiveFormat archiveFormat;
 
   @override
   double? comicSize;
+
+  bool get needsArchivePassword =>
+      isArchive && archiveEncrypted && !archivePasswordMatched;
+
+  String get archiveFormatDisplay {
+    final encrypted = archiveEncrypted ? '加密 ' : '';
+    return switch (archiveFormat) {
+      ArchiveFormat.cbz => '${encrypted}CBZ',
+      ArchiveFormat.zip => '${encrypted}ZIP',
+      ArchiveFormat.unknown => '$encrypted压缩包',
+    };
+  }
 
   bool get hasMultipleEpisodes => episodesData.length > 1;
 
@@ -594,6 +615,7 @@ class RemoteLibraryComicItem extends DownloadedItem {
     String? coverUrl,
     String? detailUrl,
     List<RemoteLibraryEpisode>? episodesData,
+    bool? archivePasswordMatched,
   }) {
     return RemoteLibraryComicItem(
       client: client,
@@ -612,6 +634,11 @@ class RemoteLibraryComicItem extends DownloadedItem {
       displayId: displayId,
       metadataTags: metadataTags,
       metadataSourceDisplayName: metadataSourceDisplayName,
+      isArchive: isArchive,
+      archiveEncrypted: archiveEncrypted,
+      archivePasswordMatched:
+          archivePasswordMatched ?? this.archivePasswordMatched,
+      archiveFormat: archiveFormat,
     );
   }
 
@@ -697,6 +724,11 @@ class RemoteLibraryComicItem extends DownloadedItem {
           ),
         ),
       ),
+      isArchive: json['isArchive'] == true ||
+          _readText(json['itemKind']).toLowerCase() == 'archive',
+      archiveEncrypted: json['archiveEncrypted'] == true,
+      archivePasswordMatched: json['archivePasswordMatched'] != false,
+      archiveFormat: _readArchiveFormat(json['archiveFormat']),
     );
   }
 
@@ -724,6 +756,9 @@ class RemoteLibraryComicItem extends DownloadedItem {
 
   @override
   String get sourceDisplayName {
+    if (isArchive) {
+      return archiveEncrypted ? '加密压缩包' : '压缩包';
+    }
     if (isCustomLibraryRoot) {
       return '图集';
     }
@@ -763,6 +798,11 @@ class RemoteLibraryComicItem extends DownloadedItem {
         'detailUrl': detailUrl,
         'imageCount': imageCount,
         'totalBytes': totalBytes,
+        'itemKind': isArchive ? 'archive' : 'directory',
+        'isArchive': isArchive,
+        'archiveEncrypted': archiveEncrypted,
+        'archivePasswordMatched': archivePasswordMatched,
+        'archiveFormat': archiveFormat.name,
         'episodeCount': episodesData.length,
         'hasMultipleEpisodes': hasMultipleEpisodes,
         'episodes': episodesData.map((episode) => episode.toJson()).toList(),
@@ -955,8 +995,8 @@ class _RemoteLibraryCoverDiskCache {
   }
 
   static void _recordFailure(String url, Object error) {
-    final isNotFound = error is RemoteLibraryRequestException &&
-        error.statusCode == 404;
+    final isNotFound =
+        error is RemoteLibraryRequestException && error.statusCode == 404;
     _failureUntil[url] =
         DateTime.now().add(isNotFound ? _notFoundCooldown : _transientCooldown);
   }
@@ -1626,6 +1666,19 @@ class RemoteLibraryClient {
     _clearCaches();
   }
 
+  Future<bool> unlockArchive(String itemId, String password) async {
+    final payload = await _sendRequest(
+      'POST',
+      '/api/library/items/${Uri.encodeComponent(itemId)}/archive/unlock',
+      body: {'password': password},
+    );
+    final ok = payload['ok'] == true && payload['passwordMatched'] == true;
+    if (ok) {
+      _clearCaches();
+    }
+    return ok;
+  }
+
   Future<void> trashItem(String itemId) async {
     await _sendRequest(
       'POST',
@@ -2272,6 +2325,14 @@ int? _readInt(Object? value) {
 String _readText(Object? value, {String fallback = ''}) {
   final text = value?.toString().trim() ?? '';
   return text.isEmpty ? fallback : text;
+}
+
+ArchiveFormat _readArchiveFormat(Object? value) {
+  return switch (_readText(value).toLowerCase()) {
+    'zip' => ArchiveFormat.zip,
+    'cbz' => ArchiveFormat.cbz,
+    _ => ArchiveFormat.unknown,
+  };
 }
 
 List<String> _readStringList(Object? value) {

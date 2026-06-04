@@ -1079,6 +1079,10 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
       _handleArchivePasswordTap(item);
       return;
     }
+    if (item is RemoteLibraryComicItem && item.needsArchivePassword) {
+      _handleRemoteArchivePasswordTap(item);
+      return;
+    }
     _showItemInfo(item);
   }
 
@@ -1099,6 +1103,27 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
     await LocalLibraryManager.instance.refreshArchiveCoverFor(item);
     if (mounted) setState(() {});
     _showItemInfo(item);
+  }
+
+  Future<void> _handleRemoteArchivePasswordTap(
+    RemoteLibraryComicItem item,
+  ) async {
+    final result = await showArchivePasswordDialog(
+      context: context,
+      archivePath: item.remotePath,
+      archiveFileName: item.name,
+      format: item.archiveFormat,
+      allowAddToDefaults: false,
+      onVerify: (password) => item.client.unlockArchive(item.id, password),
+    );
+    if (result == null) return;
+    item.archivePasswordMatched = true;
+    await _load();
+    if (!mounted) return;
+    final refreshed = _items.whereType<RemoteLibraryComicItem>().where(
+          (candidate) => candidate.id == item.id,
+        );
+    _showItemInfo(refreshed.isEmpty ? item : refreshed.first);
   }
 
   void _handleItemLongPress(DownloadedItem item) {

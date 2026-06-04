@@ -3,6 +3,10 @@ import 'dart:io';
 
 import 'package:path_provider/path_provider.dart';
 import 'package:sqlite3/sqlite3.dart';
+import 'package:picakeep/foundation/archive/archive_episode_builder.dart';
+import 'package:picakeep/foundation/archive/archive_models.dart';
+import 'package:picakeep/foundation/archive/archive_password_store.dart';
+import 'package:picakeep/foundation/archive/archive_reading_service.dart';
 import 'package:picakeep/foundation/download_model.dart';
 import 'package:picakeep/foundation/privileged_storage_access.dart';
 
@@ -133,6 +137,11 @@ class ServerResourceItemSummary {
     required this.coverPath,
     required this.episodes,
     required this.updatedAt,
+    this.isArchive = false,
+    this.archiveEncrypted = false,
+    this.archivePasswordMatched = true,
+    this.archiveFormat = '',
+    this.archivePath,
   });
 
   final String id;
@@ -149,6 +158,11 @@ class ServerResourceItemSummary {
   final String? coverPath;
   final List<ServerResourceEpisodeSummary> episodes;
   final DateTime updatedAt;
+  final bool isArchive;
+  final bool archiveEncrypted;
+  final bool archivePasswordMatched;
+  final String archiveFormat;
+  final String? archivePath;
 
   bool get hasMultipleEpisodes => episodes.length > 1;
 
@@ -166,6 +180,12 @@ class ServerResourceItemSummary {
         'totalBytes': totalBytes,
         'coverPath': coverPath,
         'updatedAt': updatedAt.toIso8601String(),
+        'itemKind': isArchive ? 'archive' : 'directory',
+        'isArchive': isArchive,
+        'archiveEncrypted': archiveEncrypted,
+        'archivePasswordMatched': archivePasswordMatched,
+        'archiveFormat': archiveFormat,
+        'archivePath': archivePath,
         'episodeCount': episodes.length,
         'hasMultipleEpisodes': hasMultipleEpisodes,
         'episodes': episodes.map((e) => e.toJson()).toList(),
@@ -256,7 +276,8 @@ class LocalResourceScanner {
         continue;
       }
 
-      final discoveredItems = await _scanRootItems(root.id, root.title, root.path);
+      final discoveredItems =
+          await _scanRootItems(root.id, root.title, root.path);
       final totalBytes = discoveredItems.fold<int>(
         0,
         (sum, item) => sum + item.totalBytes,
@@ -452,7 +473,101 @@ class LocalResourceScanner {
         ),
       );
     }
+    final archiveFiles = await _collectArchiveFiles(rootPath);
+    for (final archivePath in archiveFiles) {
+      final item = await _scanCustomArchiveItem(
+        rootId: rootId,
+        rootTitle: rootTitle,
+        archivePath: archivePath,
+      );
+      if (item != null) {
+        results.add(item);
+      }
+    }
     return results;
+  }
+
+  Future<ServerResourceItemSummary?> _scanCustomArchiveItem({
+    required String rootId,
+    required String rootTitle,
+    required String archivePath,
+  }) async {
+    final format = archiveFormatForPath(archivePath);
+    if (format == ArchiveFormat.unknown) {
+      return null;
+    }
+
+    final ArchiveIndex index;
+    try {
+      index = await ArchiveReadingService.instance.getIndex(archivePath);
+    } catch (_) {
+      return null;
+    }
+    if (index.imageEntries.isEmpty) {
+      return null;
+    }
+
+    final built = buildArchiveEpisodes(index);
+    if (built.episodeFiles.isEmpty) {
+      return null;
+    }
+
+    final fileStat = await File(archivePath).stat();
+    final isEncrypted = index.isEncrypted;
+    final hasSessionPassword =
+        ArchivePasswordStore.instance.getSessionPassword(archivePath) != null;
+    final archivePasswordMatched = !isEncrypted || hasSessionPassword;
+    final coverEntry = pickArchiveCoverEntry(index);
+    final coverUri = coverEntry == null
+        ? null
+        : buildArchiveUri(archivePath, coverEntry).toString();
+    final sortedEpisodeIndexes = built.episodeFiles.keys.toList()..sort();
+    final episodes = <ServerResourceEpisodeSummary>[
+      for (var i = 0; i < sortedEpisodeIndexes.length; i++)
+        ServerResourceEpisodeSummary(
+          index: i + 1,
+          title: _archiveEpisodeTitle(
+            archivePath,
+            i,
+            built.realNames,
+            built.episodeFiles.length,
+          ),
+          path: archivePath,
+          imageCount: built.episodeFiles[sortedEpisodeIndexes[i]]?.length ?? 0,
+          totalBytes: 0,
+          coverPath: coverUri,
+          imagePaths:
+              built.episodeFiles[sortedEpisodeIndexes[i]] ?? const <String>[],
+          imageSizes: List<ServerResourceImageSize?>.filled(
+            built.episodeFiles[sortedEpisodeIndexes[i]]?.length ?? 0,
+            null,
+          ),
+        ),
+    ];
+    final imageCount =
+        episodes.fold<int>(0, (sum, episode) => sum + episode.imageCount);
+
+    return ServerResourceItemSummary(
+      id: _buildItemId(rootId, archivePath),
+      rootId: rootId,
+      sourceTitle: rootTitle,
+      sourceDisplayName: isEncrypted ? '加密压缩包' : '压缩包',
+      title: _basenameWithoutExtension(_basename(archivePath)),
+      displayId: _basenameWithoutExtension(_basename(archivePath)),
+      subtitle: episodes.length > 1 ? '${episodes.length} 个章节' : '',
+      tags: const <String>[],
+      path: archivePath,
+      imageCount: imageCount,
+      totalBytes: fileStat.size,
+      coverPath: coverUri,
+      episodes: episodes,
+      updatedAt: fileStat.modified,
+      isArchive: true,
+      archiveEncrypted: isEncrypted,
+      archivePasswordMatched: archivePasswordMatched,
+      archiveFormat: format.name,
+      archivePath: archivePath,
+    );
   }
 
   Future<ServerResourceItemSummary?> _scanComicItem(
@@ -514,7 +629,8 @@ class LocalResourceScanner {
       return null;
     }
 
-    final imageCount = episodes.fold<int>(0, (sum, item) => sum + item.imageCount);
+    final imageCount =
+        episodes.fold<int>(0, (sum, item) => sum + item.imageCount);
     final computedTotalBytes =
         episodes.fold<int>(0, (sum, item) => sum + item.totalBytes);
     final totalBytes =
@@ -528,9 +644,8 @@ class LocalResourceScanner {
       episodes,
       metadata?.episodeTitles ?? const <String>[],
     );
-    final fallbackSubtitle = titledEpisodes.length > 1
-        ? '${titledEpisodes.length} 个章节'
-        : '';
+    final fallbackSubtitle =
+        titledEpisodes.length > 1 ? '${titledEpisodes.length} 个章节' : '';
     final subtitle = _firstNonEmptyValue([
       metadata?.subtitle,
       fallbackSubtitle,
@@ -547,7 +662,8 @@ class LocalResourceScanner {
       metadata?.displayId,
       _buildItemId(rootId, directoryPath),
     ]);
-    final updatedAt = metadata?.updatedAt ?? await _directoryUpdatedAt(directoryPath);
+    final updatedAt =
+        metadata?.updatedAt ?? await _directoryUpdatedAt(directoryPath);
     return ServerResourceItemSummary(
       id: _buildItemId(rootId, directoryPath),
       rootId: rootId,
@@ -685,13 +801,16 @@ class LocalResourceScanner {
     return results;
   }
 
-  Future<File?> _writeDatabaseSnapshot(String rootPath, List<int> dbBytes) async {
+  Future<File?> _writeDatabaseSnapshot(
+      String rootPath, List<int> dbBytes) async {
     try {
       final supportDir = await getApplicationSupportDirectory();
-      final dbDir = Directory('${supportDir.path}${Platform.pathSeparator}server_db_snapshots');
+      final dbDir = Directory(
+          '${supportDir.path}${Platform.pathSeparator}server_db_snapshots');
       await dbDir.create(recursive: true);
       final safeName = _safeCacheName(rootPath);
-      final snapshotFile = File('${dbDir.path}${Platform.pathSeparator}$safeName.db');
+      final snapshotFile =
+          File('${dbDir.path}${Platform.pathSeparator}$safeName.db');
       await snapshotFile.writeAsBytes(dbBytes, flush: true);
       return snapshotFile;
     } catch (_) {
@@ -804,7 +923,8 @@ class LocalResourceScanner {
     required _ServerResourceMetadata metadata,
     required double? comicSizeMb,
   }) async {
-    final episodes = _buildPlaceholderEpisodes(directoryPath, metadata.episodeTitles);
+    final episodes =
+        _buildPlaceholderEpisodes(directoryPath, metadata.episodeTitles);
     if (episodes.isEmpty) {
       return null;
     }
@@ -812,7 +932,8 @@ class LocalResourceScanner {
       metadata.title,
       _directoryTitle(directoryPath),
     ]);
-    final fallbackSubtitle = episodes.length > 1 ? '${episodes.length} 个章节' : '';
+    final fallbackSubtitle =
+        episodes.length > 1 ? '${episodes.length} 个章节' : '';
     final subtitle = _firstNonEmptyValue([
       metadata.subtitle,
       fallbackSubtitle,
@@ -850,7 +971,8 @@ class LocalResourceScanner {
   }
 
   Future<bool> _hasManagedFallbackContent(String directoryPath) async {
-    final entries = await PrivilegedStorageAccess.listDirectoryEntries(directoryPath);
+    final entries =
+        await PrivilegedStorageAccess.listDirectoryEntries(directoryPath);
     final childDirectories = <String>[];
     for (final entry in entries) {
       if (_isInServerTrash(entry.path)) {
@@ -952,9 +1074,11 @@ class LocalResourceScanner {
 
   Future<Set<String>> _listRootDirectoryNames(String rootPath) async {
     final names = <String>{};
-    final entries = await PrivilegedStorageAccess.listDirectoryEntries(rootPath);
+    final entries =
+        await PrivilegedStorageAccess.listDirectoryEntries(rootPath);
     for (final entry in entries) {
-      if (!entry.isDirectory || _basename(entry.path) == _serverTrashDirectoryName) {
+      if (!entry.isDirectory ||
+          _basename(entry.path) == _serverTrashDirectoryName) {
         continue;
       }
       names.add(entry.name.toLowerCase());
@@ -972,9 +1096,8 @@ class LocalResourceScanner {
     }
     final normalizedRoot =
         rootPath.replaceAll('\\', '/').replaceFirst(RegExp(r'/+$'), '');
-    final normalizedItem = itemDirectory
-        .replaceAll('\\', '/')
-        .replaceFirst(RegExp(r'/+$'), '');
+    final normalizedItem =
+        itemDirectory.replaceAll('\\', '/').replaceFirst(RegExp(r'/+$'), '');
     final candidateName = normalizedItem.startsWith('$normalizedRoot/')
         ? normalizedItem.substring(normalizedRoot.length + 1).split('/').first
         : _basename(normalizedItem);
@@ -1295,7 +1418,8 @@ class LocalResourceScanner {
     if (data == null) {
       return null;
     }
-    for (final map in _candidateMetadataMaps(data, _asStringDynamicMap(data['comicItem']))) {
+    for (final map in _candidateMetadataMaps(
+        data, _asStringDynamicMap(data['comicItem']))) {
       final value = _normalizeComicSizeMb(
         map['comicSize'] ?? map['size'] ?? map['totalSize'],
       );
@@ -1336,8 +1460,7 @@ class LocalResourceScanner {
     }
     if (raw is Map) {
       final entries = raw.entries.toList()
-        ..sort((a, b) =>
-            (int.tryParse(a.key.toString()) ?? 0).compareTo(
+        ..sort((a, b) => (int.tryParse(a.key.toString()) ?? 0).compareTo(
               int.tryParse(b.key.toString()) ?? 0,
             ));
       return entries
@@ -1405,7 +1528,8 @@ class LocalResourceScanner {
   }
 
   String _inferSourceDisplayName(String id, Map<String, dynamic>? data) {
-    final sourceKey = (data?['sourceKey']?.toString() ?? '').trim().toLowerCase();
+    final sourceKey =
+        (data?['sourceKey']?.toString() ?? '').trim().toLowerCase();
     if (sourceKey == 'copy_manga') return '拷贝漫画';
     if (sourceKey == 'komiic') return 'Komiic';
     if (sourceKey == 'jm') return '禁漫';
@@ -1449,8 +1573,7 @@ class LocalResourceScanner {
       totalBytes: includeTotalBytes ? await _calculateTotalBytes(images) : 0,
       coverPath: await _resolveEpisodeCoverPath(directory, images),
       imagePaths: images,
-      imageSizes:
-          List<ServerResourceImageSize?>.filled(images.length, null),
+      imageSizes: List<ServerResourceImageSize?>.filled(images.length, null),
     );
   }
 
@@ -1523,7 +1646,8 @@ class LocalResourceScanner {
   }
 
   Future<String?> _findCoverLikeImage(String directoryPath) async {
-    final entries = await PrivilegedStorageAccess.listDirectoryEntries(directoryPath);
+    final entries =
+        await PrivilegedStorageAccess.listDirectoryEntries(directoryPath);
     for (final entry in entries) {
       if (entry.isDirectory) {
         continue;
@@ -1559,13 +1683,16 @@ class LocalResourceScanner {
 
   Future<List<String>> _listDirectories(String directoryPath) async {
     final results = <String>[];
-    final entries = await PrivilegedStorageAccess.listDirectoryEntries(directoryPath);
+    final entries =
+        await PrivilegedStorageAccess.listDirectoryEntries(directoryPath);
     for (final entry in entries) {
-      if (entry.isDirectory && _basename(entry.path) != _serverTrashDirectoryName) {
+      if (entry.isDirectory &&
+          _basename(entry.path) != _serverTrashDirectoryName) {
         results.add(entry.path);
       }
     }
-    results.sort((a, b) => _naturalCompare(_normalizePath(a), _normalizePath(b)));
+    results
+        .sort((a, b) => _naturalCompare(_normalizePath(a), _normalizePath(b)));
     return results;
   }
 
@@ -1574,9 +1701,13 @@ class LocalResourceScanner {
     required bool recursive,
   }) async {
     final results = <String>[];
-    await _collectImageFiles(directoryPath, recursive: recursive, sink: results);
-    results.sort((a, b) => _naturalCompare(_normalizePath(a), _normalizePath(b)));
-    return results;
+    await _collectImageFiles(directoryPath,
+        recursive: recursive, sink: results);
+    results
+        .sort((a, b) => _naturalCompare(_normalizePath(a), _normalizePath(b)));
+    final visibleFiles =
+        results.where((file) => !_isCoverLikeFile(file)).toList();
+    return visibleFiles.isNotEmpty ? visibleFiles : results;
   }
 
   Future<void> _collectImageFiles(
@@ -1584,7 +1715,8 @@ class LocalResourceScanner {
     required bool recursive,
     required List<String> sink,
   }) async {
-    final entries = await PrivilegedStorageAccess.listDirectoryEntries(directoryPath);
+    final entries =
+        await PrivilegedStorageAccess.listDirectoryEntries(directoryPath);
     for (final entry in entries) {
       if (_isInServerTrash(entry.path)) {
         continue;
@@ -1604,7 +1736,8 @@ class LocalResourceScanner {
 
   Future<List<String>> _listDirectVisibleImages(String directoryPath) async {
     final results = <String>[];
-    final entries = await PrivilegedStorageAccess.listDirectoryEntries(directoryPath);
+    final entries =
+        await PrivilegedStorageAccess.listDirectoryEntries(directoryPath);
     for (final entry in entries) {
       if (entry.isDirectory || _isInServerTrash(entry.path)) {
         continue;
@@ -1614,8 +1747,10 @@ class LocalResourceScanner {
       }
       results.add(entry.path);
     }
-    results.sort((a, b) => _naturalCompare(_normalizePath(a), _normalizePath(b)));
-    final visibleFiles = results.where((file) => !_isCoverLikeFile(file)).toList();
+    results
+        .sort((a, b) => _naturalCompare(_normalizePath(a), _normalizePath(b)));
+    final visibleFiles =
+        results.where((file) => !_isCoverLikeFile(file)).toList();
     return visibleFiles.isNotEmpty ? visibleFiles : results;
   }
 
@@ -1623,7 +1758,8 @@ class LocalResourceScanner {
     final results = <String>[];
 
     Future<bool> visit(String directoryPath) async {
-      final children = await PrivilegedStorageAccess.listDirectoryEntries(directoryPath);
+      final children =
+          await PrivilegedStorageAccess.listDirectoryEntries(directoryPath);
       final hasImages = children.any((entry) =>
           !entry.isDirectory &&
           !_isInServerTrash(entry.path) &&
@@ -1646,7 +1782,35 @@ class LocalResourceScanner {
     }
 
     await visit(rootPath);
-    results.sort((a, b) => _naturalCompare(_normalizePath(a), _normalizePath(b)));
+    results
+        .sort((a, b) => _naturalCompare(_normalizePath(a), _normalizePath(b)));
+    return results;
+  }
+
+  Future<List<String>> _collectArchiveFiles(String rootPath) async {
+    final results = <String>[];
+
+    Future<void> visit(String directoryPath) async {
+      final entries =
+          await PrivilegedStorageAccess.listDirectoryEntries(directoryPath);
+      for (final entry in entries) {
+        if (_isInServerTrash(entry.path)) {
+          continue;
+        }
+        if (entry.isDirectory) {
+          await visit(entry.path);
+          continue;
+        }
+        if (isArchivePath(entry.path) &&
+            !_basename(entry.path).startsWith('.')) {
+          results.add(entry.path);
+        }
+      }
+    }
+
+    await visit(rootPath);
+    results
+        .sort((a, b) => _naturalCompare(_normalizePath(a), _normalizePath(b)));
     return results;
   }
 
@@ -1667,8 +1831,17 @@ class LocalResourceScanner {
 
   String _basename(String path) {
     final normalized = path.replaceAll('\\', '/');
-    final parts = normalized.split('/').where((entry) => entry.isNotEmpty).toList();
+    final parts =
+        normalized.split('/').where((entry) => entry.isNotEmpty).toList();
     return parts.isEmpty ? normalized : parts.last;
+  }
+
+  String _basenameWithoutExtension(String name) {
+    final dotIndex = name.lastIndexOf('.');
+    if (dotIndex > 0) {
+      return name.substring(0, dotIndex);
+    }
+    return name;
   }
 
   String _buildItemId(String rootId, String path) {
@@ -1699,7 +1872,8 @@ class LocalResourceScanner {
   int _naturalCompare(String a, String b) {
     final aTokens = _naturalTokens(a);
     final bTokens = _naturalTokens(b);
-    final length = aTokens.length < bTokens.length ? aTokens.length : bTokens.length;
+    final length =
+        aTokens.length < bTokens.length ? aTokens.length : bTokens.length;
     for (var i = 0; i < length; i++) {
       final left = aTokens[i];
       final right = bTokens[i];
@@ -1716,6 +1890,24 @@ class LocalResourceScanner {
       }
     }
     return aTokens.length.compareTo(bTokens.length);
+  }
+
+  String _archiveEpisodeTitle(
+    String archivePath,
+    int displayIndex,
+    List<String> realNames,
+    int episodeCount,
+  ) {
+    final realName = displayIndex >= 0 && displayIndex < realNames.length
+        ? realNames[displayIndex].trim()
+        : '';
+    if (realName.isNotEmpty) {
+      return realName;
+    }
+    if (episodeCount <= 1) {
+      return _basenameWithoutExtension(_basename(archivePath));
+    }
+    return '第 ${displayIndex + 1} 章';
   }
 
   List<Object> _naturalTokens(String value) {
