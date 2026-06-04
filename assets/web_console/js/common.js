@@ -11,6 +11,7 @@ PicaKeepConsole = {
   },
   remote: {
     get(targetBase, subPath)        -> Promise<any(JSON)>
+    post(targetBase, subPath, body) -> Promise<any(JSON)>
     imageUrl(targetBase, subPath)   -> string
   },
   mode: {
@@ -252,6 +253,7 @@ Contract implemented with the signatures above.
     }),
     remote: Object.freeze({
       get(targetBase, subPath) { return requestJson('GET', remoteProxyUrl(targetBase, subPath)); },
+      post(targetBase, subPath, body) { return requestJson('POST', remoteProxyUrl(targetBase, subPath), body); },
       imageUrl(targetBase, subPath) { return remoteProxyUrl(targetBase, subPath); },
     }),
     mode: Object.freeze({

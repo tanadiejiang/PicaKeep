@@ -35,6 +35,9 @@ class ArchiveRegistry {
   }
 
   static void initDefaults() {
+    if (instance._backends.isNotEmpty) {
+      return;
+    }
     instance.register(DartZipBackend());
   }
 }

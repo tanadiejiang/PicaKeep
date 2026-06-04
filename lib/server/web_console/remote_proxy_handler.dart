@@ -19,7 +19,7 @@ Future<Response?> handleRemoteProxyRequest(
   if (request.url.path != 'api/remote/proxy') {
     return null;
   }
-  if (request.method != 'GET') {
+  if (request.method != 'GET' && request.method != 'POST') {
     return jsonResponse({'error': 'method not allowed'}, statusCode: 405);
   }
 
@@ -41,18 +41,30 @@ Future<Response?> handleRemoteProxyRequest(
     query: _mergeQuery(target.query, pathUri.query),
     fragment: '',
   );
-  state.addLog('remote_proxy', 'GET $upstreamUri');
+  state.addLog('remote_proxy', '${request.method} $upstreamUri');
 
   final client = HttpClient()..connectionTimeout = const Duration(seconds: 15);
   try {
-    final upstreamRequest =
-        await client.getUrl(upstreamUri).timeout(const Duration(seconds: 15));
+    final upstreamRequest = await client
+        .openUrl(request.method, upstreamUri)
+        .timeout(const Duration(seconds: 15));
     final range = request.headers[HttpHeaders.rangeHeader];
-    if (range != null && range.trim().isNotEmpty) {
+    if (request.method == 'GET' && range != null && range.trim().isNotEmpty) {
       upstreamRequest.headers.set(HttpHeaders.rangeHeader, range);
     }
     upstreamRequest.headers.set(HttpHeaders.acceptHeader,
         request.headers[HttpHeaders.acceptHeader] ?? '*/*');
+    if (request.method == 'POST') {
+      final contentType = request.headers[HttpHeaders.contentTypeHeader];
+      if (contentType != null && contentType.trim().isNotEmpty) {
+        upstreamRequest.headers.set(HttpHeaders.contentTypeHeader, contentType);
+      }
+      final body = await request.read().expand((chunk) => chunk).toList();
+      if (body.isNotEmpty) {
+        upstreamRequest.headers.contentLength = body.length;
+        upstreamRequest.add(body);
+      }
+    }
     final upstreamResponse =
         await upstreamRequest.close().timeout(const Duration(seconds: 15));
     final headers = <String, String>{};

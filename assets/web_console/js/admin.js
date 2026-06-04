@@ -2,17 +2,27 @@
   'use strict';
 
   function renderAdmin(rootEl) {
+    const consoleApi = window.PicaKeepConsole;
+    const api = consoleApi.api;
+    const isAdmin = consoleApi.auth.isAdmin();
+    if (window.__picaKeepAdminCleanup) window.__picaKeepAdminCleanup();
     rootEl.innerHTML = `
       <div class="admin-shell">
         <aside class="admin-sidebar">
-          <div class="brand">PicaKeep Admin</div>
-          <div class="sub">服务端只暴露当前设备本地可访问的漫画资源与状态。客户端模式连接后，本质上也是在访问这些本地资源。</div>
+          <div class="admin-brand-lockup">
+            <img class="admin-brand-icon" src="/pica-icon.svg" alt="" aria-hidden="true">
+            <div>
+              <div class="brand">PicaKeep Admin</div>
+              <div class="sub">服务端只暴露当前设备本地可访问的漫画资源与状态。客户端模式连接后，本质上也是在访问这些本地资源。</div>
+            </div>
+          </div>
           <div class="admin-nav">
             <button class="active" data-tab="overview">概览</button>
             <button data-tab="resources">本地资源</button>
             <button data-tab="trash">回收站</button>
             <button data-tab="favorites">收藏夹</button>
             <button data-tab="image-favorites">图片收藏</button>
+            ${isAdmin ? '<button data-tab="users">账号管理</button>' : ''}
             <button data-tab="config">服务配置</button>
             <button data-tab="logs">运行日志</button>
             <button data-tab="endpoints">接口</button>
@@ -35,6 +45,7 @@
           <section data-panel="trash" class="tab-panel" hidden></section>
           <section data-panel="favorites" class="tab-panel" hidden></section>
           <section data-panel="image-favorites" class="tab-panel" hidden></section>
+          ${isAdmin ? '<section data-panel="users" class="tab-panel" hidden></section>' : ''}
           <section data-panel="config" class="tab-panel" hidden></section>
           <section data-panel="logs" class="tab-panel" hidden></section>
           <section data-panel="endpoints" class="tab-panel" hidden></section>
@@ -63,9 +74,24 @@
         itemsByFolder: new Map(),
       },
       imageFavorites: { loaded: false, loading: false, error: '', items: [] },
+      users: { loaded: false, loading: false, error: '', items: [] },
       logsFilter: { type: 'all', keyword: '' },
     };
-    const api = window.PicaKeepConsole.api;
+
+    function openUsersFromMenu() {
+      if (isAdmin) switchTab('users');
+    }
+
+    function refreshAfterSessionChange() {
+      refreshAll();
+    }
+
+    window.addEventListener('pk-console-users-open', openUsersFromMenu);
+    window.addEventListener('pk-console-session-refreshed', refreshAfterSessionChange);
+    window.__picaKeepAdminCleanup = () => {
+      window.removeEventListener('pk-console-users-open', openUsersFromMenu);
+      window.removeEventListener('pk-console-session-refreshed', refreshAfterSessionChange);
+    };
 
     rootEl.querySelectorAll('.admin-nav button').forEach((button) => {
       button.addEventListener('click', () => switchTab(button.dataset.tab));
@@ -100,6 +126,7 @@
       if (tab === 'trash' && !state.trash.loaded && !state.trash.loading) loadTrash();
       if (tab === 'favorites' && !state.favorites.loaded && !state.favorites.loading) loadFavorites();
       if (tab === 'image-favorites' && !state.imageFavorites.loaded && !state.imageFavorites.loading) loadImageFavorites();
+      if (tab === 'users' && isAdmin && !state.users.loaded && !state.users.loading) loadUsers();
     }
 
     async function refreshAll() {
@@ -124,6 +151,23 @@
     async function loadResources() { state.resources = await api.get('/api/admin/resources'); }
     async function loadConfig() { state.config = await api.get('/api/admin/config'); }
     async function loadLogs() { state.logs = await api.get('/api/admin/logs'); }
+
+    async function loadUsers() {
+      if (!isAdmin) return;
+      state.users.loading = true;
+      state.users.error = '';
+      renderUsers();
+      try {
+        const data = await api.get('/api/console/users');
+        state.users.items = data.users || [];
+        state.users.loaded = true;
+      } catch (error) {
+        state.users.error = error instanceof Error ? error.message : String(error || '账号列表加载失败');
+      } finally {
+        state.users.loading = false;
+        renderUsers();
+      }
+    }
 
     async function loadTrash() {
       state.trash.loading = true;
@@ -255,8 +299,9 @@
             .map((item) => item.trim())
             .filter(Boolean),
           logRequests: rootEl.querySelector('#cfg-log-requests').checked,
-          consolePassword: rootEl.querySelector('#cfg-console-password').value,
         };
+        const passwordInput = rootEl.querySelector('#cfg-console-password');
+        payload.consolePassword = passwordInput ? passwordInput.value : (state.config.consolePassword || '');
         const submit = form.querySelector('button[type="submit"]');
         submit.disabled = true;
         try {
@@ -287,7 +332,7 @@
       const imageFavoriteCount = state.imageFavorites.loaded ? number(state.imageFavorites.items.length) : '--';
       panel('overview').innerHTML = `
         <div class="admin-overview">
-          ${summary.consolePasswordEmpty ? '<div class="card admin-warning-card">未设置后台密码：局域网内任何人都可能登录访问，请到“服务配置”设置密码。</div>' : ''}
+          ${isAdmin && summary.consolePasswordEmpty ? '<div class="card admin-warning-card">未设置后台密码：局域网内任何人都可能登录访问，请到“服务配置”设置密码。</div>' : ''}
           <section class="card admin-overview-section admin-overview-primary">
             <div class="admin-section-head"><h3>运行概览</h3><span class="muted">服务端实时状态</span></div>
             <div class="grid stats admin-stat-grid">
@@ -779,6 +824,130 @@
       }
     }
 
+    function renderUsers() {
+      const box = panel('users');
+      if (!box) return;
+      if (state.users.loading && !state.users.loaded) {
+        box.innerHTML = '<div class="card muted">正在加载账号列表...</div>';
+        return;
+      }
+      if (state.users.error) {
+        box.innerHTML = retryCard(state.users.error, 'data-users-refresh');
+        box.querySelector('[data-users-refresh]').addEventListener('click', (event) => withButtonBusy(event.currentTarget, loadUsers));
+        return;
+      }
+      const users = state.users.items || [];
+      const currentUser = consoleApi.auth.user && consoleApi.auth.user();
+      const currentUserId = currentUser && currentUser.id;
+      const adminCount = users.filter((user) => user.role === 'admin').length;
+      const rows = users.map((user) => {
+        const isSelf = currentUserId !== undefined && Number(user.id) === Number(currentUserId);
+        const isLastAdmin = user.role === 'admin' && adminCount <= 1;
+        const canDelete = !isSelf && !isLastAdmin;
+        const reason = isSelf ? '当前账号不可删除' : (isLastAdmin ? '最后一个管理员不可删除' : '');
+        return `
+          <tr>
+            <td><strong>${escapeHtml(user.username || '--')}</strong>${isSelf ? '<div class="muted">当前登录账号</div>' : ''}</td>
+            <td><span class="admin-role-badge ${user.role === 'admin' ? 'admin-role-admin' : ''}">${escapeHtml(user.role === 'admin' ? 'admin' : 'user')}</span></td>
+            <td>${escapeHtml(formatDateTime(user.createdAt))}</td>
+            <td>
+              <div class="toolbar admin-row-actions">
+                <button class="ghost danger" type="button" data-user-delete="${escapeAttr(user.id)}" ${canDelete ? '' : 'disabled'}>${reason || '删除'}</button>
+              </div>
+            </td>
+          </tr>
+        `;
+      }).join('');
+      box.innerHTML = `
+        <div class="card">
+          <div class="admin-card-head">
+            <h3>账号管理</h3>
+            <div class="toolbar admin-batch-bar">
+              <span class="muted">共 ${number(users.length)} 个账号</span>
+              <button class="ghost" type="button" data-users-refresh>刷新</button>
+            </div>
+          </div>
+          <table>
+            <thead><tr><th>用户名</th><th>角色</th><th>创建时间</th><th>操作</th></tr></thead>
+            <tbody>${rows || '<tr><td colspan="4" class="muted">暂无账号</td></tr>'}</tbody>
+          </table>
+        </div>
+        <form class="card admin-user-create-form">
+          <h3>新建账号</h3>
+          <div class="form-grid">
+            <label>用户名
+              <input name="username" autocomplete="username" required>
+            </label>
+            <label>密码
+              <input name="password" type="password" autocomplete="new-password">
+            </label>
+            <fieldset class="admin-role-switch">
+              <legend>角色</legend>
+              <div class="admin-role-toggle" role="radiogroup" aria-label="角色">
+                <label>
+                  <input type="radio" name="role" value="user" checked>
+                  <span>user</span>
+                </label>
+                <label>
+                  <input type="radio" name="role" value="admin">
+                  <span>admin</span>
+                </label>
+              </div>
+            </fieldset>
+          </div>
+          <div class="toolbar" style="margin-top:16px">
+            <button class="action" type="submit">创建账号</button>
+            <span class="muted">普通用户可访问网页端资源；admin 可管理服务配置与账号。</span>
+          </div>
+        </form>
+      `;
+      bindUsers();
+    }
+
+    function bindUsers() {
+      const wrap = panel('users');
+      if (!wrap) return;
+      wrap.querySelector('[data-users-refresh]')?.addEventListener('click', (event) => withButtonBusy(event.currentTarget, loadUsers));
+      wrap.querySelectorAll('[data-user-delete]').forEach((button) => {
+        button.addEventListener('click', (event) => withButtonBusy(event.currentTarget, () => deleteUser(event.currentTarget.dataset.userDelete)));
+      });
+      wrap.querySelector('.admin-user-create-form')?.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        setError('');
+        const form = event.currentTarget;
+        const username = form.elements.username.value.trim();
+        const password = form.elements.password.value;
+        const role = form.elements.role.value || 'user';
+        if (!username) {
+          setError('用户名不能为空。');
+          return;
+        }
+        const submit = form.querySelector('button[type="submit"]');
+        submit.disabled = true;
+        try {
+          await api.post('/api/console/users', { username, password, role });
+          form.reset();
+          await loadUsers();
+        } catch (error) {
+          setError(error instanceof Error ? error.message : String(error || '创建账号失败'));
+        } finally {
+          submit.disabled = false;
+        }
+      });
+    }
+
+    async function deleteUser(userId) {
+      if (!userId) return;
+      if (!confirm('确定删除这个账号？此操作不可恢复。')) return;
+      setError('');
+      try {
+        await api.del(`/api/console/users/${encodeURIComponent(userId)}`);
+        await loadUsers();
+      } catch (error) {
+        setError(error instanceof Error ? error.message : String(error || '删除账号失败'));
+      }
+    }
+
     function renderConfig() {
       if (!state.config || !state.summary) return;
       const config = state.config;
@@ -794,23 +963,32 @@
               <input id="cfg-port" type="number" min="1" max="65535" value="${number(config.port)}">
             </label>
             <label>本应用下载目录
-              <input id="cfg-current-root" value="${escapeAttr(config.currentDownloadRoot)}">
+              <div class="admin-path-field">
+                <input id="cfg-current-root" value="${escapeAttr(config.currentDownloadRoot)}">
+                <button class="ghost admin-path-pick" type="button" data-pick-target="cfg-current-root" title="浏览服务端目录">+</button>
+              </div>
             </label>
             <label>原应用下载目录
-              <input id="cfg-original-root" value="${escapeAttr(config.originalDownloadRoot)}">
+              <div class="admin-path-field">
+                <input id="cfg-original-root" value="${escapeAttr(config.originalDownloadRoot)}">
+                <button class="ghost admin-path-pick" type="button" data-pick-target="cfg-original-root" title="浏览服务端目录">+</button>
+              </div>
             </label>
           </div>
           <div style="margin-top:14px">
             <label>自定义资源根（每行一个）
               <textarea id="cfg-custom-roots">${escapeHtml((config.customLibraryRoots || []).join('\n'))}</textarea>
             </label>
+            <div class="toolbar admin-custom-root-tools">
+              <button class="ghost admin-path-pick" type="button" data-pick-target="cfg-custom-roots" data-pick-mode="append">+ 添加目录</button>
+            </div>
           </div>
-          <div style="margin-top:14px">
+          ${isAdmin ? `<div style="margin-top:14px">
             <label>后台密码（留空表示不设防）
               <input id="cfg-console-password" type="password" value="${escapeAttr(config.consolePassword || '')}" autocomplete="new-password">
             </label>
             <div class="muted" style="margin-top:8px">当前为空密码时，登录接口会直接签发 token，并在页面显示风险提示。</div>
-          </div>
+          </div>` : ''}
           <div style="margin-top:14px">
             <label><input id="cfg-log-requests" type="checkbox" ${config.logRequests ? 'checked' : ''} style="width:auto; margin-right:8px;"> 记录请求日志</label>
           </div>
@@ -832,6 +1010,155 @@
         </div>
       `;
       bindConfigForm();
+      bindPathPickers();
+    }
+
+    function bindPathPickers() {
+      panel('config').querySelectorAll('.admin-path-pick').forEach((button) => {
+        button.addEventListener('click', () => {
+          const target = panel('config').querySelector(`#${button.dataset.pickTarget}`);
+          if (!target) return;
+          const initialPath = button.dataset.pickMode === 'append'
+            ? ''
+            : target.value.trim();
+          openPathBrowser(initialPath, (path) => {
+            if (button.dataset.pickMode === 'append') {
+              const lines = target.value
+                .split('\n')
+                .map((item) => item.trim())
+                .filter(Boolean);
+              if (!lines.includes(path)) lines.push(path);
+              target.value = lines.join('\n');
+              return;
+            }
+            target.value = path;
+          });
+        });
+      });
+    }
+
+    function pathName(path) {
+      const value = String(path || '');
+      if (!value) return '根目录';
+      const normalized = value.replace(/\\/g, '/').replace(/\/+$/, '');
+      const parts = normalized.split('/').filter(Boolean);
+      return parts.length ? parts[parts.length - 1] : value;
+    }
+
+    function pathBreadcrumbs(path) {
+      const value = String(path || '');
+      if (!value) return [];
+      if (/^[A-Za-z]:[\\/]?$/.test(value)) return [{ label: value, path: value }];
+      const normalized = value.replace(/\\/g, '/');
+      if (/^[A-Za-z]:\//.test(normalized)) {
+        const parts = normalized.split('/').filter(Boolean);
+        const drive = parts[0];
+        let cursor = `${drive}/`;
+        const crumbs = [{ label: cursor, path: cursor }];
+        parts.slice(1).forEach((part) => {
+          cursor = `${cursor.replace(/\/+$/, '')}/${part}`;
+          crumbs.push({ label: part, path: cursor });
+        });
+        return crumbs;
+      }
+      if (normalized.startsWith('/')) {
+        const parts = normalized.split('/').filter(Boolean);
+        const crumbs = [{ label: '/', path: '/' }];
+        let cursor = '';
+        parts.forEach((part) => {
+          cursor += `/${part}`;
+          crumbs.push({ label: part, path: cursor });
+        });
+        return crumbs;
+      }
+      const parts = normalized.split('/').filter(Boolean);
+      if (!parts.length) return [];
+      let cursor = parts[0];
+      const crumbs = [{ label: parts[0], path: parts[0] }];
+      parts.slice(1).forEach((part) => {
+        cursor += `/${part}`;
+        crumbs.push({ label: part, path: cursor });
+      });
+      return crumbs;
+    }
+
+    function openPathBrowser(initialPath, onSelect) {
+      let currentPath = String(initialPath || '').trim();
+      let payload = null;
+      let loading = false;
+      let error = '';
+      const modal = document.createElement('div');
+      modal.className = 'admin-path-modal';
+      document.body.appendChild(modal);
+
+      function close() {
+        modal.remove();
+      }
+
+      async function load(path) {
+        currentPath = String(path || '').trim();
+        loading = true;
+        error = '';
+        render();
+        try {
+          const query = currentPath ? `?path=${encodeURIComponent(currentPath)}` : '';
+          payload = await api.get(`/api/admin/browse${query}`);
+          currentPath = String(payload.path || currentPath || '');
+        } catch (err) {
+          error = err instanceof Error ? err.message : String(err || '目录读取失败');
+        } finally {
+          loading = false;
+          render();
+        }
+      }
+
+      function render() {
+        const entries = (payload && payload.entries) || [];
+        const roots = (payload && payload.roots) || [];
+        const parent = (payload && payload.parent) || '';
+        const crumbs = pathBreadcrumbs(currentPath);
+        modal.innerHTML = `
+          <div class="admin-path-backdrop" data-close></div>
+          <div class="admin-path-dialog" role="dialog" aria-modal="true" aria-label="路径选择器">
+            <div class="admin-path-head">
+              <div>
+                <h3>选择服务端目录</h3>
+                <div class="muted">浏览运行服务端的设备文件系统，只会列出目录。</div>
+              </div>
+              <button class="ghost" type="button" data-close>取消</button>
+            </div>
+            <div class="admin-path-current">${escapeHtml(currentPath || '请选择根目录')}</div>
+            <div class="admin-path-breadcrumbs">
+              ${crumbs.length ? crumbs.map((crumb) => `<button class="ghost" type="button" data-path-jump="${escapeAttr(crumb.path)}">${escapeHtml(crumb.label)}</button>`).join('<span>/</span>') : '<span class="muted">根列表</span>'}
+            </div>
+            <div class="admin-path-roots">
+              ${roots.map((root) => `<button class="ghost" type="button" data-path-jump="${escapeAttr(root)}">${escapeHtml(pathName(root))}</button>`).join('') || '<span class="muted">暂无快捷根</span>'}
+            </div>
+            <div class="admin-path-list">
+              ${loading ? '<div class="admin-path-message muted">正在读取目录...</div>' : ''}
+              ${!loading && error ? `<div class="admin-path-message admin-inline-error">${escapeHtml(error)}<div style="margin-top:10px"><button class="ghost" type="button" data-path-retry>重试</button></div></div>` : ''}
+              ${!loading && !error && parent ? `<button class="admin-path-item" type="button" data-path-jump="${escapeAttr(parent)}"><span>↰</span><strong>..</strong><small>上一层</small></button>` : ''}
+              ${!loading && !error ? entries.map((entry) => `<button class="admin-path-item" type="button" data-path-jump="${escapeAttr(entry.path)}"><span>📁</span><strong>${escapeHtml(entry.name || pathName(entry.path))}</strong><small>${escapeHtml(entry.path || '')}</small></button>`).join('') : ''}
+              ${!loading && !error && !entries.length ? '<div class="admin-path-message muted">当前目录没有可进入的子目录。</div>' : ''}
+            </div>
+            <div class="admin-path-actions">
+              <button class="ghost" type="button" data-close>取消</button>
+              <button class="action" type="button" data-path-select ${currentPath ? '' : 'disabled'}>选择当前目录</button>
+            </div>
+          </div>
+        `;
+        modal.querySelectorAll('[data-close]').forEach((node) => node.addEventListener('click', close));
+        modal.querySelectorAll('[data-path-jump]').forEach((node) => node.addEventListener('click', () => load(node.dataset.pathJump || '')));
+        modal.querySelector('[data-path-retry]')?.addEventListener('click', () => load(currentPath));
+        modal.querySelector('[data-path-select]')?.addEventListener('click', () => {
+          if (!currentPath) return;
+          onSelect(currentPath);
+          close();
+        });
+      }
+
+      render();
+      load(currentPath);
     }
 
     function renderLogs() {
@@ -893,6 +1220,10 @@
         'GET /api/admin/status',
         'GET /api/admin/summary',
         'GET /api/admin/resources',
+        'GET /api/console/users',
+        'POST /api/console/users',
+        'DELETE /api/console/users/{id}',
+        'GET /api/admin/browse',
         'GET /api/admin/config',
         'PUT /api/admin/config',
         'GET /api/admin/logs',
@@ -956,6 +1287,13 @@
     if (!path) return `<div class="${className} admin-thumb-placeholder">无图</div>`;
     const src = window.PicaKeepConsole.api.imageUrl(path);
     return `<img class="${className}" src="${escapeAttr(src)}" alt="${escapeAttr(title || 'cover')}" onerror="this.style.display='none';this.nextElementSibling.hidden=false"><div class="${className} admin-thumb-placeholder" hidden>无图</div>`;
+  }
+
+  function formatDateTime(value) {
+    if (!value) return '--';
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return String(value);
+    return date.toLocaleString();
   }
 
   function formatBytes(bytes) {
