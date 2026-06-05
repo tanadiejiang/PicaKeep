@@ -8,6 +8,7 @@ import 'package:picakeep/foundation/archive/archive_models.dart';
 import 'package:picakeep/foundation/archive/archive_password_store.dart';
 import 'package:picakeep/foundation/archive/archive_reading_service.dart';
 import 'package:picakeep/foundation/download_model.dart';
+import 'package:picakeep/foundation/local_library_settings.dart';
 import 'package:picakeep/foundation/privileged_storage_access.dart';
 
 const _serverTrashDirectoryName = '.picakeep_trash';
@@ -20,6 +21,8 @@ class ServerResourceRootSummary {
     required this.exists,
     required this.itemCount,
     required this.totalBytes,
+    this.supportsCollectionShell = false,
+    this.collectionShellEnabled = false,
   });
 
   final String id;
@@ -28,6 +31,8 @@ class ServerResourceRootSummary {
   final bool exists;
   final int itemCount;
   final int totalBytes;
+  final bool supportsCollectionShell;
+  final bool collectionShellEnabled;
 
   Map<String, dynamic> toJson() => {
         'id': id,
@@ -36,6 +41,8 @@ class ServerResourceRootSummary {
         'exists': exists,
         'itemCount': itemCount,
         'totalBytes': totalBytes,
+        'supportsCollectionShell': supportsCollectionShell,
+        'collectionShellEnabled': collectionShellEnabled,
       };
 }
 
@@ -237,27 +244,34 @@ class LocalResourceScanner {
     required String currentDownloadRoot,
     required String originalDownloadRoot,
     required List<String> customLibraryRoots,
+    Map<String, bool> customLibraryCollectionShellModes = const <String, bool>{},
   }) async {
     _metadataCacheByRoot.clear();
     final roots = <ServerResourceRootSummary>[];
     final items = <ServerResourceItemSummary>[];
 
-    final allRoots = <({String id, String title, String path})>[
+    final allRoots = <({String id, String title, String path, bool collectionShellEnabled})>[
       (
         id: 'current_download',
         title: '本应用下载目录',
         path: currentDownloadRoot.trim(),
+        collectionShellEnabled: false,
       ),
       (
         id: 'original_download',
         title: '原应用下载目录',
         path: originalDownloadRoot.trim(),
+        collectionShellEnabled: false,
       ),
       for (var i = 0; i < customLibraryRoots.length; i++)
         (
           id: 'custom_$i',
           title: '自定义路径 ${i + 1}',
           path: customLibraryRoots[i].trim(),
+          collectionShellEnabled: _isCollectionShellEnabledForPath(
+            customLibraryRoots[i],
+            customLibraryCollectionShellModes,
+          ),
         ),
     ].where((e) => e.path.isNotEmpty).toList();
 
@@ -271,13 +285,19 @@ class LocalResourceScanner {
             exists: false,
             itemCount: 0,
             totalBytes: 0,
+            supportsCollectionShell: root.id.startsWith('custom_'),
+            collectionShellEnabled: root.collectionShellEnabled,
           ),
         );
         continue;
       }
 
-      final discoveredItems =
-          await _scanRootItems(root.id, root.title, root.path);
+      final discoveredItems = await _scanRootItems(
+        root.id,
+        root.title,
+        root.path,
+        collectionShellEnabled: root.collectionShellEnabled,
+      );
       final totalBytes = discoveredItems.fold<int>(
         0,
         (sum, item) => sum + item.totalBytes,
@@ -290,6 +310,8 @@ class LocalResourceScanner {
           exists: true,
           itemCount: discoveredItems.length,
           totalBytes: totalBytes,
+          supportsCollectionShell: root.id.startsWith('custom_'),
+          collectionShellEnabled: root.collectionShellEnabled,
         ),
       );
       items.addAll(discoveredItems);
@@ -304,13 +326,30 @@ class LocalResourceScanner {
     );
   }
 
+  bool _isCollectionShellEnabledForPath(
+    String path,
+    Map<String, bool> values,
+  ) {
+    final key = normalizeLocalCollectionShellPathKey(path);
+    if (key.isEmpty) {
+      return false;
+    }
+    return values[key] == true;
+  }
+
   Future<List<ServerResourceItemSummary>> _scanRootItems(
     String rootId,
     String rootTitle,
-    String rootPath,
-  ) async {
+    String rootPath, {
+    required bool collectionShellEnabled,
+  }) async {
     if (rootId.startsWith('custom_')) {
-      return _scanCustomRootItems(rootId, rootTitle, rootPath);
+      return _scanCustomRootItems(
+        rootId,
+        rootTitle,
+        rootPath,
+        collectionShellEnabled: collectionShellEnabled,
+      );
     }
 
     return _scanManagedRootItems(rootId, rootTitle, rootPath);
@@ -438,15 +477,79 @@ class LocalResourceScanner {
   Future<List<ServerResourceItemSummary>> _scanCustomRootItems(
     String rootId,
     String rootTitle,
+    String rootPath, {
+    required bool collectionShellEnabled,
+  }) async {
+    final results = <ServerResourceItemSummary>[];
+    if (collectionShellEnabled) {
+      final shellDirectories = await _listDirectories(rootPath);
+      if (shellDirectories.isEmpty) {
+        results.addAll(await _scanCustomLeafAlbumItems(
+          rootId,
+          rootTitle,
+          rootPath,
+        ));
+      } else {
+        for (final shellPath in shellDirectories) {
+          final shellItem = await _buildCustomCollectionShellItem(
+            rootId: rootId,
+            rootTitle: rootTitle,
+            shellPath: shellPath,
+          );
+          if (shellItem != null) {
+            results.add(shellItem);
+            continue;
+          }
+          results.addAll(await _scanCustomLeafAlbumItems(
+            rootId,
+            rootTitle,
+            shellPath,
+          ));
+        }
+      }
+      if (results.isEmpty) {
+        results.addAll(await _scanCustomLeafAlbumItems(
+          rootId,
+          rootTitle,
+          rootPath,
+        ));
+      }
+    } else {
+      results.addAll(await _scanCustomLeafAlbumItems(
+        rootId,
+        rootTitle,
+        rootPath,
+      ));
+    }
+
+    final archiveFiles = await _collectArchiveFiles(rootPath);
+    for (final archivePath in archiveFiles) {
+      final item = await _scanCustomArchiveItem(
+        rootId: rootId,
+        rootTitle: rootTitle,
+        archivePath: archivePath,
+      );
+      if (item != null) {
+        results.add(item);
+      }
+    }
+    return results;
+  }
+
+  Future<List<ServerResourceItemSummary>> _scanCustomLeafAlbumItems(
+    String rootId,
+    String rootTitle,
     String rootPath,
   ) async {
     final results = <ServerResourceItemSummary>[];
     final directories = await _collectLeafAlbumDirectories(rootPath);
     for (final directory in directories) {
       final images = await _listDirectVisibleImages(directory);
+      final displayTitle = _albumDisplayTitleForLeafDirectory(directory);
+      final episodeTitle = _episodeTitleForLeafDirectory(directory, displayTitle);
       final episode = await _buildEpisodeSummary(
         index: 1,
-        title: _directoryTitle(directory),
+        title: episodeTitle,
         directory: directory,
         images: images,
         includeTotalBytes: true,
@@ -460,8 +563,8 @@ class LocalResourceScanner {
           rootId: rootId,
           sourceTitle: rootTitle,
           sourceDisplayName: '图集',
-          title: _directoryTitle(directory),
-          displayId: _directoryTitle(directory),
+          title: displayTitle,
+          displayId: displayTitle,
           subtitle: '',
           tags: const <String>[],
           path: directory,
@@ -473,18 +576,220 @@ class LocalResourceScanner {
         ),
       );
     }
-    final archiveFiles = await _collectArchiveFiles(rootPath);
-    for (final archivePath in archiveFiles) {
-      final item = await _scanCustomArchiveItem(
-        rootId: rootId,
-        rootTitle: rootTitle,
-        archivePath: archivePath,
+    return results;
+  }
+
+  Future<ServerResourceItemSummary?> _buildCustomCollectionShellItem({
+    required String rootId,
+    required String rootTitle,
+    required String shellPath,
+  }) async {
+    final directImages = await _listDirectContentImages(shellPath);
+    if (directImages.isNotEmpty) {
+      return null;
+    }
+
+    final formalDirectories = await _listDirectories(shellPath);
+    if (formalDirectories.isEmpty) {
+      return null;
+    }
+
+    final shellTitle = _directoryTitle(shellPath);
+    final episodes = <ServerResourceEpisodeSummary>[];
+    for (final formalPath in formalDirectories) {
+      final nextEpisodes = await _buildCollectionShellEpisodesForFormalPath(
+        formalPath,
+        shellTitle: shellTitle,
+        startIndex: episodes.length + 1,
       );
-      if (item != null) {
-        results.add(item);
+      episodes.addAll(nextEpisodes);
+    }
+    if (episodes.isEmpty) {
+      return null;
+    }
+
+    final imageCount =
+        episodes.fold<int>(0, (sum, episode) => sum + episode.imageCount);
+    final totalBytes =
+        episodes.fold<int>(0, (sum, episode) => sum + episode.totalBytes);
+    final title = _directoryTitle(shellPath);
+    return ServerResourceItemSummary(
+      id: _buildItemId(rootId, shellPath),
+      rootId: rootId,
+      sourceTitle: rootTitle,
+      sourceDisplayName: '合集图集',
+      title: title,
+      displayId: title,
+      subtitle: episodes.length > 1 ? '${episodes.length} 个章节' : '',
+      tags: const <String>[],
+      path: shellPath,
+      imageCount: imageCount,
+      totalBytes: totalBytes,
+      coverPath: await _resolveCollectionShellCoverPath(
+        shellPath,
+        formalDirectories,
+        episodes,
+      ),
+      episodes: episodes,
+      updatedAt: await _collectionShellUpdatedAt(shellPath, episodes),
+    );
+  }
+
+  Future<List<ServerResourceEpisodeSummary>>
+      _buildCollectionShellEpisodesForFormalPath(
+    String formalPath, {
+    required String shellTitle,
+    required int startIndex,
+  }) async {
+    final formalTitle = _stripCollectionShellParentPrefix(
+      shellTitle,
+      _directoryTitle(formalPath),
+    );
+    final episodes = <ServerResourceEpisodeSummary>[];
+    final directImages = await _listDirectContentImages(formalPath);
+    if (directImages.isNotEmpty) {
+      final episode = await _buildEpisodeSummary(
+        index: startIndex,
+        title: formalTitle,
+        directory: formalPath,
+        images: directImages,
+        includeTotalBytes: true,
+      );
+      if (episode != null) {
+        episodes.add(episode);
       }
     }
-    return results;
+
+    final chapterDirectories = await _listDirectories(formalPath);
+    for (final chapterPath in chapterDirectories) {
+      final images = await _listContentImages(chapterPath, recursive: true);
+      final episode = await _buildEpisodeSummary(
+        index: startIndex + episodes.length,
+        title: _collectionShellEpisodeTitle(
+          formalTitle,
+          _directoryTitle(chapterPath),
+        ),
+        directory: chapterPath,
+        images: images,
+        includeTotalBytes: true,
+      );
+      if (episode != null) {
+        episodes.add(episode);
+      }
+    }
+    return episodes;
+  }
+
+  Future<String> _resolveCollectionShellCoverPath(
+    String shellPath,
+    List<String> formalDirectories,
+    List<ServerResourceEpisodeSummary> episodes,
+  ) async {
+    final shellCover = await _findCoverLikeImage(shellPath);
+    if (shellCover != null) {
+      return shellCover;
+    }
+    for (final formalPath in formalDirectories) {
+      final formalCover = await _findCoverLikeImage(formalPath);
+      if (formalCover != null) {
+        return formalCover;
+      }
+    }
+    for (final episode in episodes) {
+      final coverPath = episode.coverPath?.trim() ?? '';
+      if (coverPath.isNotEmpty) {
+        return coverPath;
+      }
+    }
+    return '';
+  }
+
+  Future<DateTime> _collectionShellUpdatedAt(
+    String shellPath,
+    List<ServerResourceEpisodeSummary> episodes,
+  ) async {
+    var updatedAt = await _directoryUpdatedAt(shellPath);
+    for (final episode in episodes) {
+      final episodeUpdatedAt = await _directoryUpdatedAt(episode.path);
+      if (episodeUpdatedAt.isAfter(updatedAt)) {
+        updatedAt = episodeUpdatedAt;
+      }
+    }
+    return updatedAt;
+  }
+
+  String _collectionShellEpisodeTitle(String formalTitle, String chapterTitle) {
+    final normalizedFormal = formalTitle.trim();
+    final normalizedChapter = chapterTitle.trim();
+    if (normalizedFormal.isEmpty) {
+      return normalizedChapter;
+    }
+    if (normalizedChapter.isEmpty || normalizedChapter == normalizedFormal) {
+      return normalizedFormal;
+    }
+    final numeric = int.tryParse(normalizedChapter);
+    if (numeric != null) {
+      return '$normalizedFormal 第$numeric话';
+    }
+    return normalizedChapter;
+  }
+
+  String _stripCollectionShellParentPrefix(String shellTitle, String title) {
+    final normalizedShell = shellTitle.trim();
+    final normalizedTitle = title.trim();
+    if (normalizedShell.isEmpty || !normalizedTitle.startsWith(normalizedShell)) {
+      return title;
+    }
+    final rest = normalizedTitle.substring(normalizedShell.length).trimLeft();
+    final cleaned = rest.replaceFirst(RegExp(r'^[\s/_\\\-—:：]+'), '').trimLeft();
+    return cleaned.isEmpty ? title : cleaned;
+  }
+
+  String _albumDisplayTitleForLeafDirectory(String directoryPath) {
+    final leafTitle = _directoryTitle(directoryPath).trim();
+    if (!_isPlainNumericTitle(leafTitle)) {
+      return leafTitle;
+    }
+    final parentTitle = _parentDirectoryTitle(directoryPath).trim();
+    return parentTitle.isEmpty ? leafTitle : parentTitle;
+  }
+
+  String _episodeTitleForLeafDirectory(String directoryPath, String displayTitle) {
+    final leafTitle = _directoryTitle(directoryPath).trim();
+    final normalizedDisplay = displayTitle.trim();
+    if (_isPlainNumericTitle(leafTitle)) {
+      final numeric = int.tryParse(leafTitle);
+      if (numeric != null && normalizedDisplay.isNotEmpty) {
+        return '$normalizedDisplay 第$numeric话';
+      }
+    }
+    return '全部';
+  }
+
+  String _parentDirectoryTitle(String path) {
+    final normalized = path.replaceAll('\\', '/');
+    final parts = normalized.split('/').where((e) => e.isNotEmpty).toList();
+    if (parts.length < 2) {
+      return '';
+    }
+    return parts[parts.length - 2];
+  }
+
+  bool _isPlainNumericTitle(String value) {
+    return RegExp(r'^\d+$').hasMatch(value.trim());
+  }
+
+  Future<List<String>> _listDirectContentImages(String directoryPath) async {
+    final images = await _listDirectVisibleImages(directoryPath);
+    return images.where((path) => !_isCoverLikeFile(path)).toList();
+  }
+
+  Future<List<String>> _listContentImages(
+    String directoryPath, {
+    required bool recursive,
+  }) async {
+    final images = await _listImageFiles(directoryPath, recursive: recursive);
+    return images.where((path) => !_isCoverLikeFile(path)).toList();
   }
 
   Future<ServerResourceItemSummary?> _scanCustomArchiveItem({

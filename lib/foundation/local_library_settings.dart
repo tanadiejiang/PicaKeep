@@ -18,6 +18,7 @@ const archiveReadingCacheLimitMbSettingIndex = 110;
 const archiveUseChapterNumberSettingIndex = 111;
 const favoritesLibraryViewSettingIndex = 112;
 const imageFavoritesLibraryViewSettingIndex = 113;
+const localLibraryCollectionShellSettingIndex = 118;
 const androidRootModeSettingIndex = 101;
 const androidShizukuModeSettingIndex = 102;
 
@@ -178,5 +179,86 @@ String encodeLocalComicPathList(Iterable<String> paths) {
       .where((e) => e.isNotEmpty && seen.add(e))
       .toList();
   return jsonEncode(normalized);
+}
+
+String normalizeLocalCollectionShellPathKey(String path) {
+  final normalized = path.trim().replaceAll('\\', '/');
+  if (normalized.isEmpty) {
+    return '';
+  }
+  return normalized.replaceFirst(RegExp(r'/+$'), '');
+}
+
+Map<String, bool> decodeLocalCollectionShellPathMap(String? raw) {
+  if (raw == null || raw.trim().isEmpty) {
+    return const <String, bool>{};
+  }
+  try {
+    final decoded = jsonDecode(raw);
+    if (decoded is Map) {
+      final result = <String, bool>{};
+      for (final entry in decoded.entries) {
+        final key = normalizeLocalCollectionShellPathKey(entry.key.toString());
+        if (key.isEmpty) {
+          continue;
+        }
+        final value = entry.value;
+        if (value == true || value?.toString() == '1') {
+          result[key] = true;
+        }
+      }
+      return result;
+    }
+    if (decoded is List) {
+      final result = <String, bool>{};
+      for (final entry in decoded) {
+        final key = normalizeLocalCollectionShellPathKey(entry.toString());
+        if (key.isNotEmpty) {
+          result[key] = true;
+        }
+      }
+      return result;
+    }
+  } catch (_) {}
+  return const <String, bool>{};
+}
+
+String encodeLocalCollectionShellPathMap(Map<String, bool> values) {
+  final normalized = <String, bool>{};
+  for (final entry in values.entries) {
+    final key = normalizeLocalCollectionShellPathKey(entry.key);
+    if (key.isNotEmpty && entry.value == true) {
+      normalized[key] = true;
+    }
+  }
+  return jsonEncode(normalized);
+}
+
+bool isLocalCollectionShellPathEnabled(String path, String? raw) {
+  final key = normalizeLocalCollectionShellPathKey(path);
+  if (key.isEmpty) {
+    return false;
+  }
+  return decodeLocalCollectionShellPathMap(raw)[key] == true;
+}
+
+String setLocalCollectionShellPathEnabled(
+  String? raw,
+  String path,
+  bool enabled,
+) {
+  final key = normalizeLocalCollectionShellPathKey(path);
+  final values = Map<String, bool>.from(
+    decodeLocalCollectionShellPathMap(raw),
+  );
+  if (key.isEmpty) {
+    return encodeLocalCollectionShellPathMap(values);
+  }
+  if (enabled) {
+    values[key] = true;
+  } else {
+    values.remove(key);
+  }
+  return encodeLocalCollectionShellPathMap(values);
 }
 

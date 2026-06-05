@@ -5,6 +5,7 @@ import 'package:picakeep/base.dart';
 import 'package:picakeep/server/local_server_runtime.dart';
 
 import 'app_runtime_mode.dart';
+import 'picakeep_mdns.dart';
 
 enum ServiceConnectionState {
   notConfigured,
@@ -34,6 +35,8 @@ class ServiceInfoSnapshot {
     this.librarySignature,
     this.totalRequests,
     this.startedAt,
+    this.deviceSystem,
+    this.deviceName,
   });
 
   final String mode;
@@ -54,6 +57,15 @@ class ServiceInfoSnapshot {
   final String? librarySignature;
   final int? totalRequests;
   final String? startedAt;
+  final String? deviceSystem;
+  final String? deviceName;
+
+  String get deviceSummary => _buildDeviceSummary(
+        deviceSystem: deviceSystem,
+        deviceName: deviceName,
+        hostName: normalizedAddress,
+        address: normalizedAddress,
+      );
 
   bool get isClientMode => mode == appRuntimeModeClient;
   bool get isServerMode => mode == appRuntimeModeServer;
@@ -150,6 +162,8 @@ class RemoteRuntimeServiceDataSource implements RuntimeServiceDataSource {
         final totalRequests = _tryReadInt(payload?['totalRequests']);
         final startedAt = payload?['startedAt']?.toString();
         final adminUrl = payload?['adminUrl']?.toString();
+        final deviceSystem = payload?['deviceSystem']?.toString().trim();
+        final deviceName = payload?['deviceName']?.toString().trim();
         final message = payload?['message']?.toString().trim();
         final isOnline =
             response.statusCode >= 200 && response.statusCode < 300;
@@ -176,6 +190,8 @@ class RemoteRuntimeServiceDataSource implements RuntimeServiceDataSource {
           librarySignature: librarySignature,
           totalRequests: totalRequests,
           startedAt: startedAt,
+          deviceSystem: deviceSystem,
+          deviceName: deviceName,
         );
       } finally {
         client.close(force: true);
@@ -244,6 +260,8 @@ class LocalRuntimeServiceDataSource implements RuntimeServiceDataSource {
       adminUrl: runtimeSnapshot.adminUrl,
       statusText: runtimeSnapshot.statusText,
       detailText: detailText,
+      deviceSystem: _localDeviceSystem(),
+      deviceName: _localDeviceName(),
       comicCount: runtimeSnapshot.comicCount ?? 0,
       connectionCount: runtimeSnapshot.connectionCount ?? 0,
       libraryRootCount: runtimeSnapshot.libraryRootCount,
@@ -259,11 +277,17 @@ class LocalNetworkServiceDiscoveryResult {
     required this.candidates,
     required this.scannedHostCount,
     required this.scannedSubnetCount,
+    this.requestedMode = serviceDiscoveryModeMdns,
+    this.effectiveMode = serviceDiscoveryModeMdns,
+    this.fellBackToSubnetScan = false,
   });
 
   final List<ServiceDiscoveryCandidate> candidates;
   final int scannedHostCount;
   final int scannedSubnetCount;
+  final String requestedMode;
+  final String effectiveMode;
+  final bool fellBackToSubnetScan;
 }
 
 class ServiceDiscoveryCandidate {
@@ -271,18 +295,138 @@ class ServiceDiscoveryCandidate {
     required this.address,
     required this.adminUrl,
     required this.detailText,
+    required this.sourceMode,
+    required this.port,
     this.comicCount,
     this.latencyMs,
+    this.instanceName,
+    this.hostName,
+    this.serviceName,
+    this.appName,
+    this.deviceSystem,
+    this.deviceName,
   });
 
   final String address;
   final String adminUrl;
   final String detailText;
+  final String sourceMode;
+  final int port;
   final int? comicCount;
   final int? latencyMs;
+  final String? instanceName;
+  final String? hostName;
+  final String? serviceName;
+  final String? appName;
+  final String? deviceSystem;
+  final String? deviceName;
+
+  String get sourceLabel => serviceDiscoveryModeLabel(sourceMode);
+
+  String get deviceSummary => _buildDeviceSummary(
+        deviceSystem: deviceSystem,
+        deviceName: deviceName,
+        hostName: hostName,
+        address: address,
+      );
+
+  String get displayName {
+    final values = [
+      instanceName,
+      hostName,
+      appName,
+      serviceName,
+    ];
+    for (final value in values) {
+      final normalized = _cleanDiscoveryDisplayName(value);
+      if (normalized.isNotEmpty) {
+        return normalized;
+      }
+    }
+    return address;
+  }
 }
 
 class LocalNetworkServiceDiscovery {
+  Future<LocalNetworkServiceDiscoveryResult> discover({
+    required String mode,
+    String? preferredAddress,
+    String? fallbackPort,
+    bool fallbackToSubnetScan = false,
+  }) async {
+    final normalizedMode = normalizeServiceDiscoveryMode(mode);
+    if (normalizedMode == serviceDiscoveryModeSubnetScan) {
+      return scan(
+        preferredAddress: preferredAddress,
+        fallbackPort: fallbackPort,
+      );
+    }
+
+    final mdnsResult = await discoverMdns();
+    if (mdnsResult.candidates.isNotEmpty || !fallbackToSubnetScan) {
+      return mdnsResult;
+    }
+
+    final scanResult = await scan(
+      preferredAddress: preferredAddress,
+      fallbackPort: fallbackPort,
+    );
+    return LocalNetworkServiceDiscoveryResult(
+      candidates: scanResult.candidates,
+      scannedHostCount: scanResult.scannedHostCount,
+      scannedSubnetCount: scanResult.scannedSubnetCount,
+      requestedMode: serviceDiscoveryModeMdns,
+      effectiveMode: serviceDiscoveryModeSubnetScan,
+      fellBackToSubnetScan: true,
+    );
+  }
+
+  Future<LocalNetworkServiceDiscoveryResult> discoverMdns() async {
+    final endpoints = await PicaKeepMdnsDiscovery().discover();
+    if (endpoints.isEmpty) {
+      return const LocalNetworkServiceDiscoveryResult(
+        candidates: <ServiceDiscoveryCandidate>[],
+        scannedHostCount: 0,
+        scannedSubnetCount: 0,
+      );
+    }
+    final client = HttpClient()
+      ..connectionTimeout = const Duration(milliseconds: 900)
+      ..maxConnectionsPerHost = 16;
+    final candidatesByAddress = <String, ServiceDiscoveryCandidate>{};
+    try {
+      final results = await Future.wait([
+        for (final endpoint in endpoints)
+          _probeHost(
+            client,
+            endpoint.address.address,
+            endpoint.port,
+            sourceMode: serviceDiscoveryModeMdns,
+            instanceName: endpoint.instanceName,
+            hostName: endpoint.hostName,
+            serviceName: endpoint.txt['service'],
+            appName: endpoint.txt['app'],
+            deviceSystemHint: endpoint.txt['deviceSystem'],
+            deviceNameHint: endpoint.txt['deviceName'],
+          ),
+      ]);
+      for (final candidate in results.whereType<ServiceDiscoveryCandidate>()) {
+        candidatesByAddress.putIfAbsent(candidate.address, () => candidate);
+      }
+    } finally {
+      client.close(force: true);
+    }
+    final candidates = candidatesByAddress.values.toList()
+      ..sort(
+        (a, b) => (a.latencyMs ?? 1 << 30).compareTo(b.latencyMs ?? 1 << 30),
+      );
+    return LocalNetworkServiceDiscoveryResult(
+      candidates: candidates,
+      scannedHostCount: endpoints.length,
+      scannedSubnetCount: 0,
+    );
+  }
+
   Future<LocalNetworkServiceDiscoveryResult> scan({
     String? preferredAddress,
     String? fallbackPort,
@@ -300,6 +444,8 @@ class LocalNetworkServiceDiscovery {
         candidates: <ServiceDiscoveryCandidate>[],
         scannedHostCount: 0,
         scannedSubnetCount: 0,
+        requestedMode: serviceDiscoveryModeSubnetScan,
+        effectiveMode: serviceDiscoveryModeSubnetScan,
       );
     }
 
@@ -323,6 +469,8 @@ class LocalNetworkServiceDiscovery {
         candidates: <ServiceDiscoveryCandidate>[],
         scannedHostCount: 0,
         scannedSubnetCount: 0,
+        requestedMode: serviceDiscoveryModeSubnetScan,
+        effectiveMode: serviceDiscoveryModeSubnetScan,
       );
     }
 
@@ -342,15 +490,18 @@ class LocalNetworkServiceDiscovery {
         final results = await Future.wait(
           [
             for (final host in chunk)
-              for (final port in ports) _probeHost(client, host, port),
+              for (final port in ports)
+                _probeHost(
+                  client,
+                  host,
+                  port,
+                  sourceMode: serviceDiscoveryModeSubnetScan,
+                ),
           ],
         );
         for (final candidate
             in results.whereType<ServiceDiscoveryCandidate>()) {
           candidatesByAddress.putIfAbsent(candidate.address, () => candidate);
-        }
-        if (candidatesByAddress.isNotEmpty) {
-          break;
         }
       }
     } finally {
@@ -365,14 +516,23 @@ class LocalNetworkServiceDiscovery {
       candidates: candidates,
       scannedHostCount: scannedHostCount,
       scannedSubnetCount: prefixes.length,
+      requestedMode: serviceDiscoveryModeSubnetScan,
+      effectiveMode: serviceDiscoveryModeSubnetScan,
     );
   }
 
   Future<ServiceDiscoveryCandidate?> _probeHost(
     HttpClient client,
     String host,
-    int port,
-  ) async {
+    int port, {
+    required String sourceMode,
+    String? instanceName,
+    String? hostName,
+    String? serviceName,
+    String? appName,
+    String? deviceSystemHint,
+    String? deviceNameHint,
+  }) async {
     final uri = Uri(scheme: 'http', host: host, port: port, path: '/status');
     final stopwatch = Stopwatch()..start();
     try {
@@ -393,6 +553,14 @@ class LocalNetworkServiceDiscovery {
       }
       final payload = _tryParseJsonMap(body);
       final detailText = payload?['message']?.toString().trim();
+      final deviceSystem = _cleanDeviceText(
+        payload?['deviceSystem']?.toString(),
+        fallback: deviceSystemHint,
+      );
+      final deviceName = _cleanDeviceText(
+        payload?['deviceName']?.toString(),
+        fallback: deviceNameHint ?? hostName,
+      );
       return ServiceDiscoveryCandidate(
         address: 'http://$host:$port',
         adminUrl: payload?['adminUrl']?.toString().trim().isNotEmpty == true
@@ -401,8 +569,16 @@ class LocalNetworkServiceDiscovery {
         detailText: (detailText != null && detailText.isNotEmpty)
             ? detailText
             : '发现可用服务',
+        sourceMode: sourceMode,
+        port: port,
         comicCount: _tryReadInt(payload?['comicCount']),
         latencyMs: stopwatch.elapsedMilliseconds,
+        instanceName: instanceName,
+        hostName: hostName,
+        serviceName: serviceName,
+        appName: appName,
+        deviceSystem: deviceSystem,
+        deviceName: deviceName,
       );
     } catch (_) {
       stopwatch.stop();
@@ -496,6 +672,75 @@ class LocalNetworkServiceDiscovery {
   bool _isLoopbackHost(String value) {
     return value == '127.0.0.1' || value.toLowerCase() == 'localhost';
   }
+}
+
+String _localDeviceSystem() {
+  return switch (Platform.operatingSystem.toLowerCase()) {
+    'android' => 'Android',
+    'ios' => 'iOS',
+    'macos' => 'macOS',
+    'windows' => 'Windows',
+    'linux' => 'Linux',
+    _ => Platform.operatingSystem.trim().isEmpty
+        ? '未知系统'
+        : Platform.operatingSystem,
+  };
+}
+
+String _localDeviceName() {
+  final hostName = Platform.localHostname.trim();
+  return hostName.isEmpty ? '当前设备' : hostName;
+}
+
+String? _cleanDeviceText(String? value, {String? fallback}) {
+  final trimmed = value?.trim() ?? '';
+  if (trimmed.isNotEmpty) {
+    return trimmed;
+  }
+  final fallbackText = fallback?.trim() ?? '';
+  return fallbackText.isEmpty ? null : fallbackText;
+}
+
+String _buildDeviceSummary({
+  String? deviceSystem,
+  String? deviceName,
+  String? hostName,
+  String? address,
+}) {
+  final system = _cleanDeviceText(deviceSystem);
+  final name = _cleanDeviceText(deviceName);
+  if (system != null && name != null) {
+    return '$system · $name';
+  }
+  if (system != null) {
+    final host = _cleanDeviceText(hostName);
+    return host == null ? system : '$system · $host';
+  }
+  if (name != null) {
+    return name;
+  }
+  final host = _cleanDeviceText(hostName);
+  if (host != null) {
+    return host;
+  }
+  final normalizedAddress = _cleanDeviceText(address);
+  return normalizedAddress ?? '未获取到设备信息';
+}
+
+String _cleanDiscoveryDisplayName(String? value) {
+  final trimmed = value?.trim() ?? '';
+  if (trimmed.isEmpty) {
+    return '';
+  }
+  final withoutType = trimmed.replaceFirst(
+    RegExp(r'\.?_picakeep\._tcp\.local\.?$', caseSensitive: false),
+    '',
+  );
+  final withoutLocal = withoutType.replaceFirst(
+    RegExp(r'\.local\.?$', caseSensitive: false),
+    '',
+  );
+  return withoutLocal.replaceAll('\\032', ' ').trim();
 }
 
 String? _extractIpv4Prefix(String value) {

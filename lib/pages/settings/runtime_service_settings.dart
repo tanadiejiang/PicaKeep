@@ -204,7 +204,7 @@ class _AppServiceSettingsSectionState extends State<AppServiceSettingsSection> {
                 .tl,
           ),
         ),
-        const _ServiceDiscoveryStrategyTile(),
+        const ServiceDiscoveryStrategySettings(),
         if (currentMode == appRuntimeModeClient)
           const _RemoteServerAddressTile(),
         if (currentMode == appRuntimeModeServer) const _ServiceAdminPortTile(),
@@ -218,20 +218,193 @@ class _AppServiceSettingsSectionState extends State<AppServiceSettingsSection> {
   }
 }
 
-class _ServiceDiscoveryStrategyTile extends StatelessWidget {
-  const _ServiceDiscoveryStrategyTile();
+class ServiceDiscoveryStrategySettings extends StatefulWidget {
+  const ServiceDiscoveryStrategySettings({super.key});
+
+  @override
+  State<ServiceDiscoveryStrategySettings> createState() =>
+      _ServiceDiscoveryStrategySettingsState();
+}
+
+class ServiceDiscoveryModeSelector extends StatefulWidget {
+  const ServiceDiscoveryModeSelector({
+    super.key,
+    this.compact = true,
+    this.onChanged,
+  });
+
+  final bool compact;
+  final ValueChanged<String>? onChanged;
+
+  @override
+  State<ServiceDiscoveryModeSelector> createState() =>
+      _ServiceDiscoveryModeSelectorState();
+}
+
+class _ServiceDiscoveryModeSelectorState
+    extends State<ServiceDiscoveryModeSelector> {
+  String get _mode => normalizeServiceDiscoveryMode(
+        appdata.settings[serviceDiscoveryModeSettingIndex],
+      );
+
+  Future<void> _setMode(String value) async {
+    final nextValue = normalizeServiceDiscoveryMode(value);
+    if (nextValue == _mode) {
+      return;
+    }
+    appdata.settings[serviceDiscoveryModeSettingIndex] = nextValue;
+    await appdata.updateSettings();
+    App.notifyServiceConfigChanged();
+    widget.onChanged?.call(nextValue);
+    if (mounted) {
+      setState(() {});
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
-    return buildResponsiveSettingTile(
-      leading: const Icon(Icons.wifi_tethering),
-      title: Text('局域网发现方式'.tl),
-      subtitle: Text('当前优先采用 mDNS / Bonjour，较 UDP 广播更收敛，不主动打扰局域网内其他设备'.tl),
-      trailingWidth: 90,
-      trailing: Text(
-        'mDNS',
-        style: Theme.of(context).textTheme.titleSmall,
+    final compact = widget.compact;
+    final textTheme = Theme.of(context).textTheme;
+    final textStyle = (textTheme.labelLarge ?? const TextStyle()).copyWith(
+      fontSize: compact ? 12 : 13,
+      fontWeight: FontWeight.w600,
+    );
+    return SegmentedButton<String>(
+      showSelectedIcon: false,
+      style: ButtonStyle(
+        visualDensity: VisualDensity.compact,
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        minimumSize: WidgetStateProperty.all(
+          Size(compact ? 0 : 72, compact ? 32 : 34),
+        ),
+        padding: WidgetStateProperty.all(
+          EdgeInsets.symmetric(horizontal: compact ? 8 : 10),
+        ),
+        textStyle: WidgetStateProperty.all(textStyle),
       ),
+      segments: [
+        ButtonSegment(
+          value: serviceDiscoveryModeMdns,
+          label: Text(
+            'mDNS'.tl,
+            maxLines: 1,
+            overflow: TextOverflow.fade,
+            softWrap: false,
+          ),
+        ),
+        ButtonSegment(
+          value: serviceDiscoveryModeSubnetScan,
+          label: Text(
+            '网段'.tl,
+            maxLines: 1,
+            overflow: TextOverflow.fade,
+            softWrap: false,
+            semanticsLabel: '网段扫描'.tl,
+          ),
+        ),
+      ],
+      selected: {_mode},
+      onSelectionChanged: (selection) {
+        if (selection.isNotEmpty) {
+          _setMode(selection.first);
+        }
+      },
+    );
+  }
+}
+
+class _ServiceDiscoveryStrategySettingsState
+    extends State<ServiceDiscoveryStrategySettings> {
+  String get _mode => normalizeServiceDiscoveryMode(
+        appdata.settings[serviceDiscoveryModeSettingIndex],
+      );
+
+  bool get _mdnsFallbackEnabled => isServiceDiscoveryMdnsFallbackEnabled(
+        appdata.settings[serviceDiscoveryMdnsFallbackSettingIndex],
+      );
+
+  Future<void> _setMdnsFallbackEnabled(bool value) async {
+    final nextValue = value ? '1' : '0';
+    if (nextValue ==
+        appdata.settings[serviceDiscoveryMdnsFallbackSettingIndex]) {
+      return;
+    }
+    appdata.settings[serviceDiscoveryMdnsFallbackSettingIndex] = nextValue;
+    await appdata.updateSettings();
+    App.notifyServiceConfigChanged();
+    if (mounted) {
+      setState(() {});
+    }
+  }
+
+  Widget _buildDiscoveryModeTile(String mode) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final selectorWidth = constraints.maxWidth < 360 ? 124.0 : 136.0;
+        return ListTile(
+          leading: const Icon(Icons.wifi_tethering),
+          title: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  Expanded(
+                    child: Text(
+                      '局域网发现方式'.tl,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  SizedBox(
+                    width: selectorWidth,
+                    child: Align(
+                      alignment: Alignment.centerRight,
+                      child: ServiceDiscoveryModeSelector(
+                        onChanged: (_) {
+                          if (mounted) {
+                            setState(() {});
+                          }
+                        },
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 4),
+              Text(
+                serviceDiscoveryModeDescription(mode).tl,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final mode = _mode;
+    final mdnsFallbackEnabled = _mdnsFallbackEnabled;
+    return Column(
+      children: [
+        _buildDiscoveryModeTile(mode),
+        SwitchListTile(
+          secondary: const Icon(Icons.alt_route_outlined),
+          title: Text('mDNS 兜底扫描'.tl),
+          subtitle: Text(
+            serviceDiscoveryMdnsFallbackDescription(
+              mdnsFallbackEnabled ? '1' : '0',
+            ).tl,
+          ),
+          value: mdnsFallbackEnabled,
+          onChanged: _setMdnsFallbackEnabled,
+        ),
+      ],
     );
   }
 }

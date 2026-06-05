@@ -9,9 +9,41 @@ String normalizeAppRuntimeMode(String value) {
 
 String normalizeServiceDiscoveryMode(String value) {
   return switch (value.trim().toLowerCase()) {
-    serviceDiscoveryModeUdp => serviceDiscoveryModeUdp,
+    serviceDiscoveryModeMdns => serviceDiscoveryModeMdns,
+    serviceDiscoveryModeSubnetScan ||
+    serviceDiscoveryModeScanLegacy ||
+    serviceDiscoveryModeUdp =>
+      serviceDiscoveryModeSubnetScan,
     _ => serviceDiscoveryModeMdns,
   };
+}
+
+String serviceDiscoveryModeLabel(String value) {
+  return switch (normalizeServiceDiscoveryMode(value)) {
+    serviceDiscoveryModeSubnetScan => '网段扫描',
+    _ => 'mDNS / Bonjour',
+  };
+}
+
+String serviceDiscoveryModeDescription(String value) {
+  return switch (normalizeServiceDiscoveryMode(value)) {
+    serviceDiscoveryModeSubnetScan => '逐个探测当前网段，兼容不支持 mDNS 的网络。',
+    _ => '自动发现同一局域网的 PicaKeep 服务，并校验可用性。',
+  };
+}
+
+String normalizeServiceDiscoveryMdnsFallback(String value) {
+  return value.trim() == '0' ? '0' : '1';
+}
+
+bool isServiceDiscoveryMdnsFallbackEnabled(String value) {
+  return normalizeServiceDiscoveryMdnsFallback(value) == '1';
+}
+
+String serviceDiscoveryMdnsFallbackDescription(String value) {
+  return isServiceDiscoveryMdnsFallbackEnabled(value)
+      ? 'mDNS 无结果时，自动改用网段扫描。'
+      : '关闭时，只显示 mDNS 发现结果。';
 }
 
 String normalizeServiceAdminPortValue(String value) {
@@ -139,8 +171,11 @@ const appRuntimeModeSettingIndex = 97;
 const remoteServerAddressSettingIndex = 98;
 const serviceDiscoveryModeSettingIndex = 99;
 const serviceAdminPortSettingIndex = 100;
+const serviceDiscoveryMdnsFallbackSettingIndex = 117;
 
 const serviceDiscoveryModeMdns = 'mdns';
+const serviceDiscoveryModeSubnetScan = 'subnet_scan';
+const serviceDiscoveryModeScanLegacy = 'scan';
 const serviceDiscoveryModeUdp = 'udp';
 const defaultServiceAdminPort = '9527';
 

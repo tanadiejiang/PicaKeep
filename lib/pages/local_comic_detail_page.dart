@@ -1418,6 +1418,101 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
     });
   }
 
+  bool _canToggleChapterNumber(DownloadedItem comic) {
+    if (comic is LocalLibraryComicItem) {
+      return comic.isArchiveItem ||
+          (comic.sourceDisplayName == '合集图集' && comic.eps.length > 1);
+    }
+    if (comic is RemoteLibraryComicItem) {
+      return comic.isArchive ||
+          (comic.isCustomLibraryRoot && comic.hasMultipleEpisodes);
+    }
+    return false;
+  }
+
+  bool _isCollectionShellAlbum(DownloadedItem comic) {
+    if (comic is LocalLibraryComicItem) {
+      return comic.sourceDisplayName == '合集图集';
+    }
+    if (comic is RemoteLibraryComicItem) {
+      return comic.metadataSourceDisplayName.trim() == '合集图集';
+    }
+    return false;
+  }
+
+  String _stripCollectionShellPrefix(DownloadedItem comic, String title) {
+    if (!_isCollectionShellAlbum(comic)) {
+      return title;
+    }
+    final itemTitle = comic.name.trim();
+    final normalizedTitle = title.trim();
+    if (itemTitle.isEmpty || !normalizedTitle.startsWith(itemTitle)) {
+      return title;
+    }
+    final rest = normalizedTitle.substring(itemTitle.length).trimLeft();
+    final cleaned = rest.replaceFirst(RegExp(r'^[\s/_\\\-—:：]+'), '').trimLeft();
+    return cleaned.isEmpty ? title : cleaned;
+  }
+
+  String _chapterNumberDisplayName({
+    required int index,
+    required int episodeIndex,
+    required String title,
+  }) {
+    final trimmed = title.trim();
+    if (trimmed.isEmpty) {
+      return '${episodeIndex > 0 ? episodeIndex : index + 1}';
+    }
+    if (RegExp(r'^(第\s*)?\d+\s*(章|话|集|回)?([\s._-]+|$)').hasMatch(trimmed)) {
+      return trimmed;
+    }
+    return '${episodeIndex > 0 ? episodeIndex : index + 1} $trimmed';
+  }
+
+  List<String> _chapterDisplayNamesFor(DownloadedItem comic) {
+    if (comic is LocalLibraryComicItem && comic.isArchiveItem) {
+      return LocalLibraryManager.archiveDisplayChapterNames(comic);
+    }
+    if (comic is LocalLibraryComicItem &&
+        comic.sourceDisplayName == '合集图集') {
+      final titles = comic.eps
+          .map((title) => _stripCollectionShellPrefix(comic, title))
+          .toList(growable: false);
+      if (!readArchiveUseChapterNumber()) {
+        return titles;
+      }
+      return List<String>.generate(titles.length, (index) {
+        return _chapterNumberDisplayName(
+          index: index,
+          episodeIndex: index + 1,
+          title: titles[index],
+        );
+      });
+    }
+    if (comic is RemoteLibraryComicItem) {
+      final titles = comic.eps
+          .map((title) => _stripCollectionShellPrefix(comic, title))
+          .toList(growable: false);
+      if (!comic.isArchive && !comic.isCustomLibraryRoot) {
+        return titles;
+      }
+      if (!readArchiveUseChapterNumber()) {
+        return titles;
+      }
+      return List<String>.generate(titles.length, (index) {
+        final episodeIndex = index < comic.episodesData.length
+            ? comic.episodesData[index].index
+            : index + 1;
+        return _chapterNumberDisplayName(
+          index: index,
+          episodeIndex: episodeIndex,
+          title: titles[index],
+        );
+      });
+    }
+    return comic.eps;
+  }
+
   List<Widget> _buildEpisodes(BuildContext context) {
     final comic = _comic;
     if (comic.eps.isEmpty) return const [];
@@ -1426,9 +1521,9 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
     final LocalLibraryComicItem? archiveComic =
         comic is LocalLibraryComicItem && comic.isArchiveItem ? comic : null;
     final archiveItem = archiveComic != null;
-    final displayNames = archiveComic != null
-        ? LocalLibraryManager.archiveDisplayChapterNames(archiveComic)
-        : comic.eps;
+    final canToggleChapterNumber = _canToggleChapterNumber(comic);
+    final canToggleFullEps = comic.eps.length > 20;
+    final displayNames = _chapterDisplayNamesFor(comic);
 
     return [
       SliverToBoxAdapter(
@@ -1439,25 +1534,34 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
               padding: const EdgeInsets.symmetric(horizontal: 18),
               child: Row(
                 children: [
-                  Text(
-                    '章节'.tl,
-                    style: const TextStyle(
-                      fontWeight: FontWeight.w500,
-                      fontSize: 18,
+                  Expanded(
+                    child: Row(
+                      children: [
+                        Text(
+                          '章节'.tl,
+                          style: const TextStyle(
+                            fontWeight: FontWeight.w500,
+                            fontSize: 18,
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Flexible(
+                          child: Text(
+                            '共${comic.eps.length}章'.tl,
+                            overflow: TextOverflow.ellipsis,
+                            style: Theme.of(context)
+                                .textTheme
+                                .bodyMedium
+                                ?.copyWith(
+                                  color: Theme.of(context).colorScheme.outline,
+                                ),
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                   const SizedBox(width: 8),
-                  Flexible(
-                    child: Text(
-                      '共${comic.eps.length}章'.tl,
-                      overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                            color: Theme.of(context).colorScheme.outline,
-                          ),
-                    ),
-                  ),
-                  const SizedBox(width: 40),
-                  if (archiveItem) ...[
+                  if (canToggleChapterNumber) ...[
                     Text('序号'.tl, style: Theme.of(context).textTheme.bodySmall),
                     Transform.scale(
                       scale: 0.8,
@@ -1541,7 +1645,7 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
           ),
         ),
       ),
-      if (comic.eps.length > 20 && !_showFullEps)
+      if (canToggleFullEps)
         SliverToBoxAdapter(
           child: Align(
             alignment: Alignment.center,
@@ -1553,8 +1657,10 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
                   ),
                 ),
               ),
-              onPressed: () => setState(() => _showFullEps = true),
-              child: Text('${'显示全部'.tl} (${comic.eps.length})'),
+              onPressed: () => setState(() => _showFullEps = !_showFullEps),
+              child: Text(
+                _showFullEps ? '收起'.tl : '${'显示全部'.tl} (${comic.eps.length})',
+              ),
             ),
           ),
         ),

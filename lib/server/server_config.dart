@@ -1,6 +1,8 @@
 import 'dart:convert';
 import 'dart:io';
 
+import '../foundation/local_library_settings.dart';
+
 class PicaKeepServerConfig {
   const PicaKeepServerConfig({
     required this.host,
@@ -8,6 +10,7 @@ class PicaKeepServerConfig {
     required this.currentDownloadRoot,
     required this.originalDownloadRoot,
     required this.customLibraryRoots,
+    required this.customLibraryCollectionShellModes,
     required this.logRequests,
     required this.consolePassword,
   });
@@ -19,6 +22,7 @@ class PicaKeepServerConfig {
   final String currentDownloadRoot;
   final String originalDownloadRoot;
   final List<String> customLibraryRoots;
+  final Map<String, bool> customLibraryCollectionShellModes;
   final bool logRequests;
   final String consolePassword;
 
@@ -34,6 +38,8 @@ class PicaKeepServerConfig {
         'currentDownloadRoot': currentDownloadRoot,
         'originalDownloadRoot': originalDownloadRoot,
         'customLibraryRoots': customLibraryRoots,
+        'customLibraryCollectionShellModes':
+            encodeLocalCollectionShellPathMap(customLibraryCollectionShellModes),
         'logRequests': logRequests,
         'consolePassword': consolePassword,
       };
@@ -44,6 +50,7 @@ class PicaKeepServerConfig {
     String? currentDownloadRoot,
     String? originalDownloadRoot,
     List<String>? customLibraryRoots,
+    Map<String, bool>? customLibraryCollectionShellModes,
     bool? logRequests,
     String? consolePassword,
   }) {
@@ -53,6 +60,8 @@ class PicaKeepServerConfig {
       currentDownloadRoot: currentDownloadRoot ?? this.currentDownloadRoot,
       originalDownloadRoot: originalDownloadRoot ?? this.originalDownloadRoot,
       customLibraryRoots: customLibraryRoots ?? this.customLibraryRoots,
+      customLibraryCollectionShellModes: customLibraryCollectionShellModes ??
+          this.customLibraryCollectionShellModes,
       logRequests: logRequests ?? this.logRequests,
       consolePassword: consolePassword ?? this.consolePassword,
     );
@@ -65,6 +74,7 @@ class PicaKeepServerConfig {
       currentDownloadRoot: '',
       originalDownloadRoot: '',
       customLibraryRoots: [],
+      customLibraryCollectionShellModes: {},
       logRequests: false,
       consolePassword: '',
     );
@@ -80,6 +90,9 @@ class PicaKeepServerConfig {
       originalDownloadRoot:
           json['originalDownloadRoot']?.toString().trim() ?? '',
       customLibraryRoots: _normalizeStringList(json['customLibraryRoots']),
+      customLibraryCollectionShellModes: _normalizeCollectionShellModes(
+        json['customLibraryCollectionShellModes'],
+      ),
       logRequests: json['logRequests'] == true,
       consolePassword: json['consolePassword']?.toString() ?? '',
     );
@@ -114,6 +127,31 @@ class PicaKeepServerConfig {
     );
   }
 
+  bool isCollectionShellEnabledForPath(String path) {
+    final key = normalizeLocalCollectionShellPathKey(path);
+    if (key.isEmpty) {
+      return false;
+    }
+    return customLibraryCollectionShellModes[key] == true;
+  }
+
+  PicaKeepServerConfig setCollectionShellModeForPath(
+    String path,
+    bool enabled,
+  ) {
+    final key = normalizeLocalCollectionShellPathKey(path);
+    if (key.isEmpty) {
+      return this;
+    }
+    final next = Map<String, bool>.from(customLibraryCollectionShellModes);
+    if (enabled) {
+      next[key] = true;
+    } else {
+      next.remove(key);
+    }
+    return copyWith(customLibraryCollectionShellModes: next);
+  }
+
   static int _normalizePort(Object? value) {
     final port = int.tryParse(value?.toString() ?? '');
     if (port == null || port < 1 || port > 65535) {
@@ -130,5 +168,18 @@ class PicaKeepServerConfig {
           .toList();
     }
     return const [];
+  }
+
+  static Map<String, bool> _normalizeCollectionShellModes(Object? value) {
+    if (value is String) {
+      return decodeLocalCollectionShellPathMap(value);
+    }
+    if (value is Map) {
+      return decodeLocalCollectionShellPathMap(jsonEncode(value));
+    }
+    if (value is List) {
+      return decodeLocalCollectionShellPathMap(jsonEncode(value));
+    }
+    return const <String, bool>{};
   }
 }

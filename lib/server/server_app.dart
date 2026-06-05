@@ -14,6 +14,7 @@ import '../foundation/archive/archive_models.dart';
 import '../foundation/archive/archive_reading_service.dart';
 import '../foundation/archive/archive_registry.dart';
 import '../foundation/local_trash_store.dart';
+import '../foundation/local_library_settings.dart';
 import '../foundation/privileged_storage_access.dart';
 import '../foundation/trash.dart';
 import '../foundation/local_favorites.dart';
@@ -622,10 +623,15 @@ class PicaKeepAdminServer {
     if (path.isEmpty || path == 'status' || path == 'api/console/login') {
       return false;
     }
-    if (!path.startsWith('api/')) {
+    if (path == 'api/events' || path == 'api/library') {
       return false;
     }
-    return true;
+    if (path.startsWith('api/library/')) {
+      return false;
+    }
+    return path.startsWith('api/admin/') ||
+        path.startsWith('api/console/') ||
+        path == 'api/remote/proxy';
   }
 
   Future<Response> _handleRequest(Request request) async {
@@ -1188,8 +1194,61 @@ class PicaKeepAdminServer {
     return _jsonResponse({'error': 'not found'}, statusCode: 404);
   }
 
+  Future<Response?> _handleLibraryRootsRequest(Request request) async {
+    final segments = request.url.pathSegments;
+    if (segments.length != 5 || segments[4] != 'collection-shell') {
+      return _jsonResponse({'error': 'not found'}, statusCode: 404);
+    }
+    if (request.method != 'PUT') {
+      return _jsonResponse({'error': 'method not allowed'}, statusCode: 405);
+    }
+    final rootId = segments[3].trim();
+    if (!rootId.startsWith('custom_')) {
+      return _jsonResponse({'error': 'unsupported root'}, statusCode: 400);
+    }
+    final config = _config ?? PicaKeepServerConfig.defaults();
+    final rootPath = _rootPathForRootId(rootId)?.trim() ?? '';
+    if (rootPath.isEmpty) {
+      return _jsonResponse({'error': 'root not found'}, statusCode: 404);
+    }
+    final payload = await _readJsonMapFromBody(request);
+    final enabled = payload['enabled'] == true;
+    final nextConfig = config.setCollectionShellModeForPath(rootPath, enabled);
+    _config = nextConfig;
+    await PicaKeepServerConfig.save(configPath, nextConfig);
+    final refreshed = await rescanResources();
+    final root = refreshed.roots.firstWhere(
+      (entry) => entry.id == rootId,
+      orElse: () => ServerResourceRootSummary(
+        id: rootId,
+        title: rootId,
+        path: rootPath,
+        exists: false,
+        itemCount: 0,
+        totalBytes: 0,
+        supportsCollectionShell: true,
+        collectionShellEnabled: enabled,
+      ),
+    );
+    _state.addLog(
+      'config',
+      '已${enabled ? '开启' : '关闭'}合集外壳目录识别：$rootPath',
+    );
+    return _jsonResponse({
+      'ok': true,
+      'root': _buildLibraryRootPayload(root, refreshed.items),
+      'librarySignature': _librarySignature ?? '',
+    });
+  }
+
   Future<Response?> _handleLibraryRequest(Request request) async {
     final segments = request.url.pathSegments;
+    if (segments.length >= 3 &&
+        segments[0] == 'api' &&
+        segments[1] == 'library' &&
+        segments[2] == 'roots') {
+      return _handleLibraryRootsRequest(request);
+    }
     if (segments.length < 3 ||
         segments[0] != 'api' ||
         segments[1] != 'library' ||
@@ -2063,6 +2122,8 @@ class PicaKeepAdminServer {
       'exists': root.exists,
       'itemCount': root.itemCount,
       'totalBytes': root.totalBytes,
+      'supportsCollectionShell': root.supportsCollectionShell,
+      'collectionShellEnabled': root.collectionShellEnabled,
       'previewCoverUrls': previewCoverUrls,
     };
   }
@@ -2464,6 +2525,8 @@ class PicaKeepAdminServer {
       currentDownloadRoot: config.currentDownloadRoot,
       originalDownloadRoot: config.originalDownloadRoot,
       customLibraryRoots: config.customLibraryRoots,
+      customLibraryCollectionShellModes:
+          config.customLibraryCollectionShellModes,
     );
   }
 
@@ -2520,7 +2583,10 @@ class PicaKeepAdminServer {
     final config = _config ?? PicaKeepServerConfig.defaults();
     buffer
       ..writeln(config.currentDownloadRoot.trim())
-      ..writeln(config.originalDownloadRoot.trim());
+      ..writeln(config.originalDownloadRoot.trim())
+      ..writeln(encodeLocalCollectionShellPathMap(
+        config.customLibraryCollectionShellModes,
+      ));
     for (final root in [...snapshot.roots]..sort((a, b) {
         final idCompare = a.id.compareTo(b.id);
         if (idCompare != 0) {
@@ -2549,6 +2615,34 @@ class PicaKeepAdminServer {
     return hash.toRadixString(16).padLeft(16, '0');
   }
 
+  String _deviceSystem() {
+    return switch (Platform.operatingSystem.toLowerCase()) {
+      'android' => 'Android',
+      'ios' => 'iOS',
+      'macos' => 'macOS',
+      'windows' => 'Windows',
+      'linux' => 'Linux',
+      _ => Platform.operatingSystem.trim().isEmpty
+          ? '未知系统'
+          : Platform.operatingSystem,
+    };
+  }
+
+  String _deviceName() {
+    final hostName = Platform.localHostname.trim();
+    return hostName.isEmpty ? '当前设备' : hostName;
+  }
+
+  String _deviceSummary(String deviceSystem, String deviceName) {
+    if (deviceSystem.trim().isEmpty) {
+      return deviceName;
+    }
+    if (deviceName.trim().isEmpty) {
+      return deviceSystem;
+    }
+    return '$deviceSystem · $deviceName';
+  }
+
   Map<String, dynamic> buildStatusPayload() {
     final config = _config ?? PicaKeepServerConfig.defaults();
     final snapshot = _snapshot;
@@ -2556,8 +2650,13 @@ class PicaKeepAdminServer {
         snapshot?.roots.where((root) => root.exists).length ?? 0;
     final missingLibraryRootCount =
         snapshot?.roots.where((root) => !root.exists).length ?? 0;
+    final deviceSystem = _deviceSystem();
+    final deviceName = _deviceName();
     return {
       'serviceName': 'PicaKeepServer',
+      'deviceSystem': deviceSystem,
+      'deviceName': deviceName,
+      'deviceSummary': _deviceSummary(deviceSystem, deviceName),
       'lifecycle': _state.lifecycle,
       'statusText': _state.isRunning ? '在线' : _runtimeStatusText(),
       'online': _state.isRunning,
