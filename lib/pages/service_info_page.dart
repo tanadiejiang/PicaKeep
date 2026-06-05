@@ -6,6 +6,7 @@ import 'package:picakeep/foundation/app.dart';
 import 'package:picakeep/foundation/app_runtime_mode.dart';
 import 'package:picakeep/foundation/remote_library_data_source.dart';
 import 'package:picakeep/foundation/service_data_source.dart';
+import 'package:picakeep/pages/settings/runtime_service_settings.dart';
 import 'package:picakeep/server/local_server_runtime.dart';
 import 'package:picakeep/tools/android_foreground_service.dart';
 import 'package:picakeep/tools/translations.dart';
@@ -30,16 +31,6 @@ String _buildServerPreviewText(ServerPlatformCapability capability) {
   return '当前平台暂不纳入服务端目标；这里先保留管理后台流程预览。';
 }
 
-String _buildServerModeDescription(ServerPlatformCapability capability) {
-  if (capability.isEnhancedServerTarget) {
-    return '当前按服务端模式展示。Android 目标已接到本地 HTTP 服务、前台通知与保活约束适配，可通过后台网页查看状态。';
-  }
-  if (capability.isFullServerTarget) {
-    return '${capability.displayName} 当前属于完整服务端目标，可持续开服，后台网页是主要管理入口。';
-  }
-  return '当前按服务端模式展示，但当前平台暂不纳入服务端目标。';
-}
-
 class _ServiceInfoPageState extends State<ServiceInfoPage> {
   ServiceInfoSnapshot? _snapshot;
   AndroidForegroundServiceSupportState? _androidSupportState;
@@ -47,6 +38,15 @@ class _ServiceInfoPageState extends State<ServiceInfoPage> {
   bool _discovering = false;
   bool _loadingAndroidSupportState = false;
   bool _refreshingServiceState = false;
+  bool _refreshingStats = false;
+  int _snapshotReloadGeneration = 0;
+
+  String get _discoveryMode => normalizeServiceDiscoveryMode(
+        appdata.settings[serviceDiscoveryModeSettingIndex],
+      );
+
+  String get _discoveryActionLabel =>
+      _discoveryMode == serviceDiscoveryModeMdns ? 'mDNS 发现' : '网段扫描';
 
   String get _serverAddress =>
       appdata.settings[remoteServerAddressSettingIndex].trim();
@@ -90,7 +90,7 @@ class _ServiceInfoPageState extends State<ServiceInfoPage> {
   }
 
   void _handleServiceStatsChanged() {
-    _reloadSnapshot();
+    _reloadStatsSnapshot();
   }
 
   ServiceInfoSnapshot _placeholderSnapshot() {
@@ -111,6 +111,7 @@ class _ServiceInfoPageState extends State<ServiceInfoPage> {
   }
 
   Future<void> _reloadSnapshot() async {
+    final generation = ++_snapshotReloadGeneration;
     if (mounted) {
       setState(() {
         _loading = true;
@@ -118,13 +119,62 @@ class _ServiceInfoPageState extends State<ServiceInfoPage> {
     }
     final snapshot =
         await RuntimeServiceDataSourceResolver.current().fetchSnapshot();
-    if (!mounted) {
+    if (!mounted || generation != _snapshotReloadGeneration) {
       return;
     }
     setState(() {
       _snapshot = snapshot;
       _loading = false;
     });
+  }
+
+  Future<void> _reloadStatsSnapshot() async {
+    if (_refreshingStats || _loading) {
+      return;
+    }
+    _refreshingStats = true;
+    final generation = _snapshotReloadGeneration;
+    try {
+      final snapshot =
+          await RuntimeServiceDataSourceResolver.current().fetchSnapshot();
+      if (!mounted || generation != _snapshotReloadGeneration || _loading) {
+        return;
+      }
+      final current = _snapshot;
+      if (current != null && _sameServiceStats(current, snapshot)) {
+        return;
+      }
+      setState(() {
+        _snapshot = snapshot;
+      });
+    } finally {
+      _refreshingStats = false;
+    }
+  }
+
+  bool _sameServiceStats(
+    ServiceInfoSnapshot previous,
+    ServiceInfoSnapshot next,
+  ) {
+    return previous.mode == next.mode &&
+        previous.connectionState == next.connectionState &&
+        previous.discoveryMode == next.discoveryMode &&
+        previous.addressInput == next.addressInput &&
+        previous.normalizedAddress == next.normalizedAddress &&
+        previous.statusText == next.statusText &&
+        previous.detailText == next.detailText &&
+        previous.statusUrl == next.statusUrl &&
+        previous.adminUrl == next.adminUrl &&
+        previous.httpStatusCode == next.httpStatusCode &&
+        previous.comicCount == next.comicCount &&
+        previous.connectionCount == next.connectionCount &&
+        previous.libraryRootCount == next.libraryRootCount &&
+        previous.resourceBytes == next.resourceBytes &&
+        previous.librarySignature == next.librarySignature &&
+        previous.totalRequests == next.totalRequests &&
+        previous.startedAt == next.startedAt &&
+        previous.deviceSystem == next.deviceSystem &&
+        previous.deviceName == next.deviceName;
   }
 
   Future<void> _reloadAndroidSupportState() async {
@@ -195,56 +245,43 @@ class _ServiceInfoPageState extends State<ServiceInfoPage> {
       _discovering = true;
     });
     try {
-      final result = await LocalNetworkServiceDiscovery().scan(
+      final mode = _discoveryMode;
+      final fallbackToSubnetScan = isServiceDiscoveryMdnsFallbackEnabled(
+        appdata.settings[serviceDiscoveryMdnsFallbackSettingIndex],
+      );
+      final result = await LocalNetworkServiceDiscovery().discover(
+        mode: mode,
         preferredAddress: _serverAddress,
         fallbackPort: _adminPort,
+        fallbackToSubnetScan: fallbackToSubnetScan,
       );
       if (!mounted) {
         return;
       }
       if (result.candidates.isEmpty) {
+        final message = result.fellBackToSubnetScan
+            ? 'mDNS 未发现可用服务，已自动改用网段扫描；仍未发现可用服务，已扫描 ${result.scannedHostCount} 个地址 / ${result.scannedSubnetCount} 个网段'
+            : mode == serviceDiscoveryModeMdns
+                ? '未通过 mDNS 发现可用服务；请确认服务端已启动，且两端在同一局域网并允许组播。'
+                : '未发现可用服务，已扫描 ${result.scannedHostCount} 个地址 / ${result.scannedSubnetCount} 个网段';
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              '未发现可用服务，已扫描 ${result.scannedHostCount} 个地址 / ${result.scannedSubnetCount} 个网段'
-                  .tl,
-            ),
-          ),
+          SnackBar(content: Text(message.tl)),
         );
         return;
       }
 
       final selected = result.candidates.length == 1
           ? result.candidates.first
-          : await showModalBottomSheet<ServiceDiscoveryCandidate>(
-              context: context,
-              showDragHandle: true,
-              builder: (sheetContext) {
-                return SafeArea(
-                  child: ListView.separated(
-                    shrinkWrap: true,
-                    itemCount: result.candidates.length,
-                    separatorBuilder: (_, __) => const Divider(height: 1),
-                    itemBuilder: (context, index) {
-                      final candidate = result.candidates[index];
-                      final countText = candidate.comicCount == null
-                          ? '--'
-                          : candidate.comicCount.toString();
-                      return ListTile(
-                        leading: const Icon(Icons.router_outlined),
-                        title: Text(candidate.address),
-                        subtitle: Text(
-                          '${candidate.detailText} · 漫画 $countText · ${candidate.latencyMs ?? '--'} ms',
-                        ),
-                        trailing: const Icon(Icons.chevron_right),
-                        onTap: () => Navigator.of(sheetContext).pop(candidate),
-                      );
-                    },
-                  ),
-                );
-              },
-            );
-      if (selected == null || !mounted) {
+          : await _showDiscoveryCandidateSheet(result);
+      if (!mounted) {
+        return;
+      }
+      if (result.fellBackToSubnetScan && result.candidates.length == 1) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('mDNS 未发现可用服务，已自动改用网段扫描。'.tl)),
+        );
+      }
+      if (selected == null) {
         return;
       }
       await _applyDiscoveredServer(selected);
@@ -255,6 +292,37 @@ class _ServiceInfoPageState extends State<ServiceInfoPage> {
         });
       }
     }
+  }
+
+  Future<ServiceDiscoveryCandidate?> _showDiscoveryCandidateSheet(
+    LocalNetworkServiceDiscoveryResult result,
+  ) {
+    return showModalBottomSheet<ServiceDiscoveryCandidate>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetContext) {
+        return SafeArea(
+          child: ListView.separated(
+            shrinkWrap: true,
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+            itemCount: result.candidates.length + 1,
+            separatorBuilder: (_, index) => index == 0
+                ? const SizedBox(height: 8)
+                : const Divider(height: 1),
+            itemBuilder: (context, index) {
+              if (index == 0) {
+                return _DiscoveryCandidateSheetHeader(result: result);
+              }
+              final candidate = result.candidates[index - 1];
+              return _DiscoveryCandidateTile(
+                candidate: candidate,
+                onTap: () => Navigator.of(sheetContext).pop(candidate),
+              );
+            },
+          ),
+        );
+      },
+    );
   }
 
   Future<void> _applyDiscoveredServer(
@@ -282,7 +350,8 @@ class _ServiceInfoPageState extends State<ServiceInfoPage> {
       final mode =
           normalizeAppRuntimeMode(appdata.settings[appRuntimeModeSettingIndex]);
       if (mode == appRuntimeModeClient) {
-        final normalizedAddress = normalizeRemoteServerAddressValue(_serverAddress);
+        final normalizedAddress =
+            normalizeRemoteServerAddressValue(_serverAddress);
         if (normalizedAddress.isNotEmpty) {
           await RemoteLibraryClient.fromCurrentSettings().rescanLibrary();
         }
@@ -430,13 +499,6 @@ class _ServiceInfoPageState extends State<ServiceInfoPage> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               _InfoRow(
-                label: '输入地址'.tl,
-                value: snapshot.addressInput.isEmpty
-                    ? '未设置'.tl
-                    : snapshot.addressInput,
-              ),
-              const SizedBox(height: 8),
-              _InfoRow(
                 label: '生效地址'.tl,
                 value: snapshot.normalizedAddress.isEmpty
                     ? '--'
@@ -457,7 +519,7 @@ class _ServiceInfoPageState extends State<ServiceInfoPage> {
               const SizedBox(height: 8),
               _InfoRow(
                 label: '详细信息'.tl,
-                value: snapshot.detailText,
+                value: snapshot.deviceSummary,
               ),
               const SizedBox(height: 8),
               _InfoRow(
@@ -503,7 +565,7 @@ class _ServiceInfoPageState extends State<ServiceInfoPage> {
                   FilledButton.tonal(
                     onPressed: _discovering ? null : _scanLocalNetwork,
                     child: _ActionButtonLabel(
-                      label: '扫描局域网'.tl,
+                      label: _discoveryActionLabel.tl,
                       loading: _discovering,
                     ),
                   ),
@@ -526,12 +588,17 @@ class _ServiceInfoPageState extends State<ServiceInfoPage> {
         _InfoCard(
           icon: Icons.wifi_tethering,
           title: '自动发现策略'.tl,
-          child: Text(
-            snapshot.discoveryMode == serviceDiscoveryModeMdns
-                ? '当前会先按已配置地址端口和当前设备所在私网网段，对 /status 接口做快速探测；后续仍可继续补 mDNS / Bonjour。'
-                    .tl
-                : '当前会按当前私网网段做快速探测；如需更强的零配置发现，后续可继续补 mDNS / Bonjour。'.tl,
+          titleTrailing: SizedBox(
+            width: 124,
+            child: ServiceDiscoveryModeSelector(
+              onChanged: (_) {
+                if (mounted) {
+                  setState(() {});
+                }
+              },
+            ),
           ),
+          child: const _ServiceDiscoveryStrategySummary(),
         ),
       ],
     );
@@ -801,6 +868,69 @@ class _ServiceInfoPageState extends State<ServiceInfoPage> {
   }
 }
 
+class _ServiceDiscoveryStrategySummary extends StatefulWidget {
+  const _ServiceDiscoveryStrategySummary();
+
+  @override
+  State<_ServiceDiscoveryStrategySummary> createState() =>
+      _ServiceDiscoveryStrategySummaryState();
+}
+
+class _ServiceDiscoveryStrategySummaryState
+    extends State<_ServiceDiscoveryStrategySummary> {
+  String get _mode => normalizeServiceDiscoveryMode(
+        appdata.settings[serviceDiscoveryModeSettingIndex],
+      );
+
+  bool get _mdnsFallbackEnabled => isServiceDiscoveryMdnsFallbackEnabled(
+        appdata.settings[serviceDiscoveryMdnsFallbackSettingIndex],
+      );
+
+  Future<void> _setMdnsFallbackEnabled(bool value) async {
+    final nextValue = value ? '1' : '0';
+    if (nextValue ==
+        appdata.settings[serviceDiscoveryMdnsFallbackSettingIndex]) {
+      return;
+    }
+    appdata.settings[serviceDiscoveryMdnsFallbackSettingIndex] = nextValue;
+    await appdata.updateSettings();
+    App.notifyServiceConfigChanged();
+    if (mounted) {
+      setState(() {});
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final mdnsFallbackEnabled = _mdnsFallbackEnabled;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          serviceDiscoveryModeDescription(_mode).tl,
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+        ),
+        const SizedBox(height: 8),
+        SwitchListTile(
+          contentPadding: EdgeInsets.zero,
+          dense: true,
+          title: Text('mDNS 兜底扫描'.tl),
+          subtitle: Text(
+            serviceDiscoveryMdnsFallbackDescription(
+              mdnsFallbackEnabled ? '1' : '0',
+            ).tl,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+          ),
+          value: mdnsFallbackEnabled,
+          onChanged: _setMdnsFallbackEnabled,
+        ),
+      ],
+    );
+  }
+}
+
 class _ServerAddressEditorSheet extends StatefulWidget {
   const _ServerAddressEditorSheet({required this.initialValue});
 
@@ -918,6 +1048,94 @@ class _ServerAddressEditorSheetState extends State<_ServerAddressEditorSheet> {
   }
 }
 
+class _DiscoveryCandidateSheetHeader extends StatelessWidget {
+  const _DiscoveryCandidateSheetHeader({required this.result});
+
+  final LocalNetworkServiceDiscoveryResult result;
+
+  @override
+  Widget build(BuildContext context) {
+    final textTheme = Theme.of(context).textTheme;
+    final fallbackText =
+        result.fellBackToSubnetScan ? 'mDNS 未发现可用服务，已从 mDNS 兜底到网段扫描。'.tl : null;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 4),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            '选择服务端'.tl,
+            style: textTheme.titleMedium,
+          ),
+          const SizedBox(height: 6),
+          Text(
+            '发现 @a 个可用服务，请选择要连接的节点。'.tlParams({
+              'a': result.candidates.length.toString(),
+            }),
+            style: textTheme.bodySmall,
+          ),
+          if (fallbackText != null) ...[
+            const SizedBox(height: 8),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(
+                  Icons.alt_route_outlined,
+                  size: 18,
+                  color: Theme.of(context).colorScheme.primary,
+                ),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    fallbackText,
+                    style: textTheme.bodySmall,
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _DiscoveryCandidateTile extends StatelessWidget {
+  const _DiscoveryCandidateTile({required this.candidate, required this.onTap});
+
+  final ServiceDiscoveryCandidate candidate;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final countText =
+        candidate.comicCount == null ? '--' : candidate.comicCount.toString();
+    final latencyText =
+        candidate.latencyMs == null ? null : '${candidate.latencyMs} ms';
+    final addressText = latencyText == null
+        ? candidate.address
+        : '${candidate.address} · $latencyText';
+    final metaText =
+        '${candidate.sourceLabel} · 端口 ${candidate.port} · 漫画 $countText';
+    final showName = candidate.displayName != candidate.address;
+    return ListTile(
+      contentPadding: EdgeInsets.zero,
+      leading: const Icon(Icons.router_outlined),
+      title: Text(showName ? candidate.displayName : addressText),
+      subtitle: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (showName) Text(addressText),
+          Text(metaText.tl),
+          Text(candidate.deviceSummary),
+        ],
+      ),
+      trailing: const Icon(Icons.chevron_right),
+      onTap: onTap,
+    );
+  }
+}
+
 class AdminLoginPreviewPage extends StatefulWidget {
   const AdminLoginPreviewPage({super.key});
 
@@ -1018,10 +1236,6 @@ class _ModeOverviewCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final modeLabel = snapshot.isServerMode ? '服务端'.tl : '客户端'.tl;
-    final capability = currentServerPlatformCapability();
-    final description = snapshot.isServerMode
-        ? _buildServerModeDescription(capability).tl
-        : '当前按客户端模式展示。当前状态已开始根据服务端地址与 /status 接口实时读取。'.tl;
     return _InfoCard(
       icon: Icons.cloud_sync_outlined,
       title: '服务信息'.tl,
@@ -1034,8 +1248,6 @@ class _ModeOverviewCard extends StatelessWidget {
             label: '当前状态'.tl,
             value: loading ? '刷新中'.tl : snapshot.statusText,
           ),
-          const SizedBox(height: 8),
-          Text(description),
         ],
       ),
     );
@@ -1103,7 +1315,8 @@ class _ActionButtonLabel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final baseStyle = DefaultTextStyle.of(context).style;
-    final textColor = baseStyle.color ?? Theme.of(context).colorScheme.onSurface;
+    final textColor =
+        baseStyle.color ?? Theme.of(context).colorScheme.onSurface;
     return Stack(
       alignment: Alignment.center,
       children: [
@@ -1113,17 +1326,15 @@ class _ActionButtonLabel extends StatelessWidget {
           child: Text(label),
         ),
         IgnorePointer(
-          child: AnimatedOpacity(
-            duration: const Duration(milliseconds: 160),
-            opacity: loading ? 1 : 0,
-            child: SizedBox(
-              width: 16,
-              height: 16,
-              child: CircularProgressIndicator(
-                strokeWidth: 2,
-                color: indicatorColor ?? textColor,
-              ),
-            ),
+          child: SizedBox(
+            width: 16,
+            height: 16,
+            child: loading
+                ? CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: indicatorColor ?? textColor,
+                  )
+                : const SizedBox.shrink(),
           ),
         ),
       ],

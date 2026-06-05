@@ -144,6 +144,8 @@ class Appdata {
     '6', //114 阅读时远程图片并发上限
     '8', //115 浏览时远程图片并发上限
     '980', //116 阅读最大显示宽度 px
+    '1', //117 mDNS 失败时自动网段扫描
+    '{}', //118 图集合集外壳目录识别
   ];
 
   List<String> implicitData = [
@@ -219,6 +221,11 @@ class Appdata {
     settings[localComicPathsSettingIndex] = encodeLocalComicPathList(
       decodeLocalComicPathList(settings[localComicPathsSettingIndex]),
     );
+    settings[localLibraryCollectionShellSettingIndex] =
+        encodeLocalCollectionShellPathMap(
+      decodeLocalCollectionShellPathMap(
+          settings[localLibraryCollectionShellSettingIndex]),
+    );
     settings[localAlbumImageSortSettingIndex] =
         normalizeLocalAlbumImageSort(settings[localAlbumImageSortSettingIndex]);
     settings[localLibraryListSortSettingIndex] = normalizeLocalLibraryListSort(
@@ -248,6 +255,9 @@ class Appdata {
         settings[remoteServerAddressSettingIndex].trim();
     settings[serviceDiscoveryModeSettingIndex] = normalizeServiceDiscoveryMode(
         settings[serviceDiscoveryModeSettingIndex]);
+    settings[serviceDiscoveryMdnsFallbackSettingIndex] =
+        normalizeServiceDiscoveryMdnsFallback(
+            settings[serviceDiscoveryMdnsFallbackSettingIndex]);
     settings[serviceAdminPortSettingIndex] =
         normalizeServiceAdminPortValue(settings[serviceAdminPortSettingIndex]);
     settings[androidRootModeSettingIndex] =
@@ -352,6 +362,11 @@ class Appdata {
       settings[localComicPathsSettingIndex] = encodeLocalComicPathList(
         decodeLocalComicPathList(settings[localComicPathsSettingIndex]),
       );
+      settings[localLibraryCollectionShellSettingIndex] =
+          encodeLocalCollectionShellPathMap(
+        decodeLocalCollectionShellPathMap(
+            settings[localLibraryCollectionShellSettingIndex]),
+      );
       settings[localAlbumImageSortSettingIndex] = normalizeLocalAlbumImageSort(
           settings[localAlbumImageSortSettingIndex]);
       settings[localLibraryListSortSettingIndex] =
@@ -368,6 +383,11 @@ class Appdata {
               settings[downloadedLibraryViewSettingIndex]);
       settings[localLibraryViewSettingIndex] =
           normalizeLocalLibraryView(settings[localLibraryViewSettingIndex]);
+      settings[serviceDiscoveryModeSettingIndex] = normalizeServiceDiscoveryMode(
+          settings[serviceDiscoveryModeSettingIndex]);
+      settings[serviceDiscoveryMdnsFallbackSettingIndex] =
+          normalizeServiceDiscoveryMdnsFallback(
+              settings[serviceDiscoveryMdnsFallbackSettingIndex]);
       settings[deleteBehaviorSettingIndex] =
           normalizeDeleteBehavior(settings[deleteBehaviorSettingIndex]);
       settings[externalToolOrderSettingIndex] =

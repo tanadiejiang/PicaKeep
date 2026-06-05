@@ -160,6 +160,8 @@ class RemoteLibraryRootSummary {
     required this.exists,
     required this.itemCount,
     required this.totalBytes,
+    this.supportsCollectionShell = false,
+    this.collectionShellEnabled = false,
     this.previewCoverUrls = const <String>[],
   });
 
@@ -169,6 +171,8 @@ class RemoteLibraryRootSummary {
   final bool exists;
   final int itemCount;
   final int totalBytes;
+  final bool supportsCollectionShell;
+  final bool collectionShellEnabled;
   final List<String> previewCoverUrls;
 
   bool get isManagedDownloadRoot =>
@@ -199,6 +203,8 @@ class RemoteLibraryRootSummary {
       exists: json['exists'] != false,
       itemCount: _readInt(json['itemCount']) ?? 0,
       totalBytes: _readInt(json['totalBytes']) ?? 0,
+      supportsCollectionShell: json['supportsCollectionShell'] == true,
+      collectionShellEnabled: json['collectionShellEnabled'] == true,
       previewCoverUrls: _readStringList(json['previewCoverUrls'])
           .map(client.resolveUrlString)
           .where((entry) => entry.isNotEmpty)
@@ -281,6 +287,8 @@ class RemoteLibraryRootItem extends DownloadedItem {
         'path': root.path,
         'itemCount': root.itemCount,
         'totalBytes': root.totalBytes,
+        'supportsCollectionShell': root.supportsCollectionShell,
+        'collectionShellEnabled': root.collectionShellEnabled,
         'coverUrl': coverUrl,
         'previewCoverUrls': previewCoverUrls,
       };
@@ -884,11 +892,25 @@ class RemoteLibraryReadingData extends ReadingData {
   @override
   bool get hasEp => item.hasMultipleEpisodes;
 
+  String _displayEpisodeTitle(String title) {
+    if (item.metadataSourceDisplayName.trim() != '合集图集') {
+      return title;
+    }
+    final itemTitle = item.title.trim();
+    final normalizedTitle = title.trim();
+    if (itemTitle.isEmpty || !normalizedTitle.startsWith(itemTitle)) {
+      return title;
+    }
+    final rest = normalizedTitle.substring(itemTitle.length).trimLeft();
+    final cleaned = rest.replaceFirst(RegExp(r'^[\s/_\\\-—:：]+'), '').trimLeft();
+    return cleaned.isEmpty ? title : cleaned;
+  }
+
   @override
   Map<String, String>? get eps => hasEp
       ? {
           for (var i = 0; i < item.episodesData.length; i++)
-            '${i + 1}': item.episodesData[i].title,
+            '${i + 1}': _displayEpisodeTitle(item.episodesData[i].title),
         }
       : null;
 
@@ -1309,6 +1331,24 @@ class RemoteLibraryDataSource {
     );
   }
 
+  Future<RemoteLibraryRootSummary?> fetchRootSummary(
+    String rootId, {
+    bool forceRefresh = false,
+  }) async {
+    return RemoteLibraryClient.fromCurrentSettings().fetchRootSummary(
+      rootId,
+      forceRefresh: forceRefresh,
+    );
+  }
+
+  Future<void> setCollectionShellEnabledForRoot(
+    String rootId,
+    bool enabled,
+  ) async {
+    await RemoteLibraryClient.fromCurrentSettings()
+        .setCollectionShellEnabledForRoot(rootId, enabled);
+  }
+
   Future<RemoteLibraryComicItem?> findByCandidates(
     Iterable<String> candidates, {
     bool fetchDetail = false,
@@ -1521,6 +1561,23 @@ class RemoteLibraryClient {
     );
   }
 
+  Future<RemoteLibraryRootSummary?> fetchRootSummary(
+    String rootId, {
+    bool forceRefresh = false,
+  }) async {
+    final normalized = rootId.trim();
+    if (normalized.isEmpty) {
+      return null;
+    }
+    final snapshot = await _fetchSnapshot(forceRefresh: forceRefresh);
+    for (final root in snapshot.roots) {
+      if (root.id == normalized) {
+        return root;
+      }
+    }
+    return null;
+  }
+
   Future<List<RemoteLibraryTrashItem>> fetchTrashItems() async {
     final payload = await _getJsonMap('/api/library/trash');
     final itemsValue = payload['items'];
@@ -1662,6 +1719,18 @@ class RemoteLibraryClient {
     await _sendRequest(
       'POST',
       '/api/library/items/refresh',
+    );
+    _clearCaches();
+  }
+
+  Future<void> setCollectionShellEnabledForRoot(
+    String rootId,
+    bool enabled,
+  ) async {
+    await _sendRequest(
+      'PUT',
+      '/api/library/roots/${Uri.encodeComponent(rootId)}/collection-shell',
+      body: {'enabled': enabled},
     );
     _clearCaches();
   }
@@ -1911,6 +1980,8 @@ class RemoteLibraryClient {
           exists: root.exists,
           itemCount: root.itemCount,
           totalBytes: root.totalBytes,
+          supportsCollectionShell: root.supportsCollectionShell,
+          collectionShellEnabled: root.collectionShellEnabled,
           previewCoverUrls: previewCoverUrls,
         ),
         coverUrl: coverUrl,

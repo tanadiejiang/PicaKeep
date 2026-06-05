@@ -9,6 +9,7 @@ import android.content.ServiceConnection
 import android.content.pm.PackageManager
 import android.content.res.Configuration
 import android.net.Uri
+import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
@@ -56,6 +57,7 @@ class MainActivity : FlutterActivity() {
     @Volatile
     private var shizukuUserServiceBinding = false
     private var dynamicThemeChannel: MethodChannel? = null
+    private var multicastLock: WifiManager.MulticastLock? = null
     private var lastForwardedNightFlag: Int = Int.MIN_VALUE
 
     private val shizukuUserServiceArgs by lazy {
@@ -235,6 +237,7 @@ class MainActivity : FlutterActivity() {
         runCatching {
             Shizuku.unbindUserService(shizukuUserServiceArgs, shizukuUserServiceConnection, false)
         }
+        releaseMulticastLock()
         clearShizukuUserService()
         super.onDestroy()
     }
@@ -309,6 +312,22 @@ class MainActivity : FlutterActivity() {
                 }
                 "cancel" -> {
                     window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                    result.success(null)
+                }
+                else -> result.notImplemented()
+            }
+        }
+        MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            MULTICAST_LOCK_CHANNEL,
+        ).setMethodCallHandler { call, result ->
+            when (call.method) {
+                "acquire" -> {
+                    acquireMulticastLock()
+                    result.success(null)
+                }
+                "release" -> {
+                    releaseMulticastLock()
                     result.success(null)
                 }
                 else -> result.notImplemented()
@@ -1590,6 +1609,30 @@ class MainActivity : FlutterActivity() {
         }
     }
 
+    private fun acquireMulticastLock() {
+        val existingLock = multicastLock
+        if (existingLock?.isHeld == true) {
+            return
+        }
+        val wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
+            ?: return
+        multicastLock = wifiManager.createMulticastLock("picakeep-mdns").apply {
+            setReferenceCounted(false)
+            acquire()
+        }
+    }
+
+    private fun releaseMulticastLock() {
+        multicastLock?.let { lock ->
+            runCatching {
+                if (lock.isHeld) {
+                    lock.release()
+                }
+            }
+        }
+        multicastLock = null
+    }
+
     private fun currentLauncherIconId(): String {
         val packageManager = packageManager
         return launcherIcons.firstOrNull { icon ->
@@ -1636,6 +1679,8 @@ class MainActivity : FlutterActivity() {
             "lingxue.picakeep/foreground_service"
         private const val KEEP_SCREEN_ON_CHANNEL =
             "lingxue.picakeep/keepScreenOn"
+        private const val MULTICAST_LOCK_CHANNEL =
+            "lingxue.picakeep/multicast_lock"
         private const val APP_ICON_CHANNEL =
             "lingxue.picakeep/app_icon"
         private const val NIGHT_MODE_CHANNEL =

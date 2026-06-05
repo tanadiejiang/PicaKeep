@@ -284,18 +284,208 @@ class _LocalLibraryRemoteRootCard extends StatelessWidget {
   }
 }
 
+class _LocalLibraryRootItem extends DownloadedItem {
+  _LocalLibraryRootItem({required this.entry}) {
+    comicSize = entry.sizeMb;
+  }
+
+  final LocalLibraryStorageEntry entry;
+
+  LocalLibrarySource get source => entry.source;
+
+  @override
+  DownloadType get type => DownloadType.other;
+
+  @override
+  String get name => entry.title;
+
+  @override
+  List<String> get eps => const [];
+
+  @override
+  List<int> get downloadedEps => const [];
+
+  @override
+  String get id => 'local_root::${entry.path}';
+
+  @override
+  String get subTitle => '${entry.comicCount} 个项目';
+
+  @override
+  double? comicSize;
+
+  @override
+  List<String> get tags => const [];
+
+  @override
+  String get sourceDisplayName => _localLibrarySourceLabel(source);
+
+  @override
+  bool get canDelete => false;
+
+  @override
+  String? get fileSystemPath => entry.path;
+
+  @override
+  String? get localCoverPath => null;
+
+  @override
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'title': name,
+        'path': entry.path,
+        'itemCount': entry.comicCount,
+        'sizeMb': entry.sizeMb,
+        'collectionShellEnabled': source.collectionShellEnabled,
+      };
+
+  @override
+  Widget createReadingPage({int? ep, int? page}) {
+    throw StateError('本地目录不支持直接阅读');
+  }
+}
+
+class _LocalLibraryLocalRootCard extends StatelessWidget {
+  const _LocalLibraryLocalRootCard({
+    required this.item,
+    required this.sizeText,
+    required this.onTap,
+    required this.onLongPress,
+    required this.onSecondaryTap,
+  });
+
+  final _LocalLibraryRootItem item;
+  final String sizeText;
+  final VoidCallback onTap;
+  final VoidCallback? onLongPress;
+  final void Function(TapDownDetails details) onSecondaryTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
+      child: Material(
+        color: colorScheme.surface,
+        borderRadius: BorderRadius.circular(8),
+        elevation: 1,
+        child: InkWell(
+          onTap: onTap,
+          onLongPress: onLongPress,
+          onSecondaryTapDown: onSecondaryTap,
+          borderRadius: BorderRadius.circular(8),
+          splashColor: Colors.transparent,
+          highlightColor: Colors.transparent,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(10, 10, 10, 10),
+            child: Row(
+              children: [
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(8),
+                  child: SizedBox(
+                    width: 92,
+                    height: 124,
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        color: colorScheme.secondaryContainer,
+                      ),
+                      child: Icon(
+                        Icons.photo_library_outlined,
+                        size: 42,
+                        color: colorScheme.onSecondaryContainer,
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        item.name,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.titleMedium,
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        item.subTitle,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        sizeText,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                              color: colorScheme.outline,
+                            ),
+                      ),
+                      const SizedBox(height: 8),
+                      Wrap(
+                        spacing: 6,
+                        runSpacing: 6,
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 4,
+                            ),
+                            decoration: BoxDecoration(
+                              color: colorScheme.secondaryContainer,
+                              borderRadius: BorderRadius.circular(999),
+                            ),
+                            child: Text(
+                              item.sourceDisplayName,
+                              style: const TextStyle(fontSize: 12),
+                            ),
+                          ),
+                          if (item.source.collectionShellEnabled)
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 8,
+                                vertical: 4,
+                              ),
+                              decoration: BoxDecoration(
+                                color: colorScheme.primaryContainer,
+                                borderRadius: BorderRadius.circular(999),
+                              ),
+                              child: Text(
+                                '合集'.tl,
+                                style: const TextStyle(fontSize: 12),
+                              ),
+                            ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class LocalLibraryPage extends StatefulWidget {
   const LocalLibraryPage({
     super.key,
     this.albumOnly = false,
     this.preferRemoteView = false,
     this.title,
+    this.localRootPath,
     this.remoteRootId,
   });
 
   final bool albumOnly;
   final bool preferRemoteView;
   final String? title;
+  final String? localRootPath;
   final String? remoteRootId;
 
   @override
@@ -362,11 +552,15 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
   bool _localDataRefreshRequested = false;
   DateTime? _lastManualRemoteRefreshAt;
   List<DownloadedItem> _items = const <DownloadedItem>[];
+  LocalLibrarySource? _localRootSource;
+  RemoteLibraryRootSummary? _remoteRootSummary;
   late _LocalLibraryView _view = widget.preferRemoteView || _isRemoteRootPage
       ? _LocalLibraryView.remote
-      : _localLibraryViewFromSetting(
-          appdata.settings[localLibraryViewSettingIndex],
-        );
+      : _isLocalRootPage
+          ? _LocalLibraryView.local
+          : _localLibraryViewFromSetting(
+              appdata.settings[localLibraryViewSettingIndex],
+            );
 
   bool get _isClientMode =>
       normalizeAppRuntimeMode(appdata.settings[appRuntimeModeSettingIndex]) ==
@@ -378,9 +572,35 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
 
   bool get _isRemoteRootPage => widget.remoteRootId?.trim().isNotEmpty == true;
 
+  bool get _isLocalRootPage => widget.localRootPath?.trim().isNotEmpty == true;
+
   bool get _shouldStrictlyUseRemoteData => _isRemoteRootPage;
 
-  bool get _showSourceSelector => _remoteAvailable && !_isRemoteRootPage;
+  bool get _canToggleCollectionShell {
+    if (!_isAlbumOnly || _searchMode || _selecting) {
+      return false;
+    }
+    if (_isLocalRootPage) {
+      return _localRootSource?.supportsCollectionShell == true;
+    }
+    if (_isRemoteRootPage) {
+      return _remoteRootSummary?.supportsCollectionShell == true;
+    }
+    return false;
+  }
+
+  bool get _collectionShellEnabled {
+    if (_isLocalRootPage) {
+      return _localRootSource?.collectionShellEnabled == true;
+    }
+    if (_isRemoteRootPage) {
+      return _remoteRootSummary?.collectionShellEnabled == true;
+    }
+    return false;
+  }
+
+  bool get _showSourceSelector =>
+      _remoteAvailable && !_isRemoteRootPage && !_isLocalRootPage;
 
   int get _selectedCount => _selectedItemIds.length;
 
@@ -621,6 +841,50 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
     unawaited(_load());
   }
 
+  Future<void> _setCollectionShellEnabled(bool enabled) async {
+    if (!_canToggleCollectionShell) {
+      return;
+    }
+    if (mounted) {
+      setState(() {
+        _loading = true;
+        _errorText = null;
+      });
+    }
+    try {
+      if (_isLocalRootPage) {
+        final path = widget.localRootPath?.trim() ?? '';
+        if (path.isEmpty) {
+          return;
+        }
+        await _manager.setCollectionShellEnabledForLocalComicPath(path, enabled);
+        await _load(forceLocalRefresh: true);
+        App.notifyLocalDataChanged();
+        return;
+      }
+      if (_isRemoteRootPage) {
+        final rootId = widget.remoteRootId?.trim() ?? '';
+        if (rootId.isEmpty) {
+          return;
+        }
+        await _remoteDataSource.setCollectionShellEnabledForRoot(rootId, enabled);
+        _forceRemoteRefreshOnNextLoad = true;
+        await _load();
+      }
+    } catch (e) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _errorText = e.toString().trim();
+        _loading = false;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(_errorText ?? '切换失败'.tl)),
+      );
+    }
+  }
+
   Future<bool> _checkRemoteAvailability() async {
     if (!_isClientMode) {
       return false;
@@ -640,11 +904,52 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
     if (forceRefresh) {
       await _manager.refresh();
     }
-    final items = await _manager.getAll();
-    final visibleItems = _isAlbumOnly
-        ? items.where((item) => item.isAlbum).toList(growable: false)
-        : items.cast<DownloadedItem>().toList(growable: false);
-    return _sortItems(visibleItems);
+    _localRootSource = null;
+    _remoteRootSummary = null;
+    final rootPath = widget.localRootPath?.trim() ?? '';
+    final allItems = await _manager.getAll();
+    if (rootPath.isNotEmpty) {
+      final entries = await _manager.getStorageEntries();
+      final entry = _findLocalStorageEntry(entries, rootPath);
+      if (entry == null) {
+        return const <DownloadedItem>[];
+      }
+      _localRootSource = entry.source;
+      final childIds = entry.children.map((child) => child.id).toSet();
+      final childItems = allItems
+          .where((item) => childIds.contains(item.id))
+          .cast<DownloadedItem>()
+          .toList(growable: false);
+      return _sortItems(childItems);
+    }
+
+    if (_isAlbumOnly) {
+      final entries = await _manager.getStorageEntries();
+      final rootItems = entries
+          .where((entry) => entry.source.supportsCollectionShell)
+          .map((entry) => _LocalLibraryRootItem(entry: entry))
+          .cast<DownloadedItem>()
+          .toList(growable: false);
+      return _sortItems(rootItems);
+    }
+
+    return _sortItems(allItems.cast<DownloadedItem>().toList(growable: false));
+  }
+
+  LocalLibraryStorageEntry? _findLocalStorageEntry(
+    List<LocalLibraryStorageEntry> entries,
+    String rootPath,
+  ) {
+    final key = normalizeLocalCollectionShellPathKey(rootPath);
+    if (key.isEmpty) {
+      return null;
+    }
+    for (final entry in entries) {
+      if (normalizeLocalCollectionShellPathKey(entry.path) == key) {
+        return entry;
+      }
+    }
+    return null;
   }
 
   Future<List<DownloadedItem>> _loadRemoteItems() async {
@@ -653,12 +958,15 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
     final forceRemoteRefresh = _forceRemoteRefreshOnNextLoad;
     _forceRemoteRefreshOnNextLoad = false;
     if (rootId.isNotEmpty) {
-      final items = await _remoteDataSource.fetchItemsForRoot(
+      final summary = await _remoteDataSource.fetchRootSummary(
         rootId,
         forceRefresh: forceRemoteRefresh,
       );
+      _remoteRootSummary = summary;
+      final items = await _remoteDataSource.fetchItemsForRoot(rootId);
       return _sortItems(items.toList());
     }
+    _remoteRootSummary = null;
     final roots = await _remoteDataSource.fetchRootItems(
       customLibraryOnly: true,
       forceRefresh: forceRemoteRefresh,
@@ -884,10 +1192,20 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
     if (item is RemoteLibraryRootItem) {
       App.pushInner(
         () => LocalLibraryPage(
-          albumOnly: widget.albumOnly,
+          albumOnly: true,
           preferRemoteView: true,
           title: item.name,
           remoteRootId: item.root.id,
+        ),
+      );
+      return;
+    }
+    if (item is _LocalLibraryRootItem) {
+      App.pushInner(
+        () => LocalLibraryPage(
+          albumOnly: true,
+          title: item.name,
+          localRootPath: item.entry.path,
         ),
       );
       return;
@@ -897,6 +1215,10 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
 
   void _showItemInfo(DownloadedItem item) {
     if (item is RemoteLibraryRootItem) {
+      _openItem(item);
+      return;
+    }
+    if (item is _LocalLibraryRootItem) {
       _openItem(item);
       return;
     }
@@ -961,7 +1283,7 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
 
   Future<void> _showActions(DownloadedItem item) async {
     final path = item.fileSystemPath?.trim() ?? '';
-    final isRootItem = item is RemoteLibraryRootItem;
+    final isRootItem = item is RemoteLibraryRootItem || item is _LocalLibraryRootItem;
     await showModalBottomSheet<void>(
       context: context,
       builder: (sheetContext) {
@@ -1014,7 +1336,7 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
 
   void _showDesktopMenu(DownloadedItem item, TapDownDetails details) {
     final path = item.fileSystemPath?.trim() ?? '';
-    final isRootItem = item is RemoteLibraryRootItem;
+    final isRootItem = item is RemoteLibraryRootItem || item is _LocalLibraryRootItem;
     showMenu(
       context: context,
       position: RelativeRect.fromLTRB(
@@ -1245,6 +1567,20 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
         ),
       );
     }
+    if (item is _LocalLibraryRootItem) {
+      return Padding(
+        padding: const EdgeInsets.all(2),
+        child: _LocalLibraryLocalRootCard(
+          item: item,
+          sizeText: item.comicSize == null
+              ? '未知大小'.tl
+              : _formatLocalLibrarySize(item.comicSize!),
+          onTap: () => _handleItemTap(item),
+          onLongPress: () => _handleItemLongPress(item),
+          onSecondaryTap: (details) => _handleItemSecondaryTap(item, details),
+        ),
+      );
+    }
     final tile = _LocalLibraryComicTile(
       comicId: item.id,
       enableLongPress: true,
@@ -1285,7 +1621,10 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
                 : _isAlbumOnly
                     ? '可在工具-本地文件管理中添加图集目录'.tl
                     : '可在工具-本地文件管理中添加本地漫画路径'.tl);
-    final refreshLabel = (_view == _LocalLibraryView.remote && _remoteAvailable)
+    final isRemoteRefreshView = (_view == _LocalLibraryView.remote ||
+            _view == _LocalLibraryView.aggregate) &&
+        _remoteAvailable;
+    final refreshLabel = isRemoteRefreshView
         ? (_isAlbumOnly ? '刷新远程图集'.tl : '刷新远程资源库'.tl)
         : (_isAlbumOnly ? '刷新图集'.tl : '刷新资源库'.tl);
     return SliverToBoxAdapter(
@@ -1312,9 +1651,11 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
             ),
             const SizedBox(height: 16),
             FilledButton.icon(
-              onPressed: () async {
-                await _refreshCurrentLibrary();
-              },
+              onPressed: isRemoteRefreshView
+                  ? _triggerManualRemoteRefresh
+                  : () async {
+                      await _refreshCurrentLibrary();
+                    },
               icon: const Icon(Icons.refresh),
               label: Text(refreshLabel),
             ),
@@ -1366,6 +1707,29 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
               _setView(selection.first);
             },
           ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildCollectionShellAction() {
+    final enabled = _collectionShellEnabled;
+    return Tooltip(
+      message: enabled ? '关闭合集识别'.tl : '开启合集识别'.tl,
+      child: Padding(
+        padding: const EdgeInsets.only(left: 2, right: 4),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              '合集'.tl,
+              style: Theme.of(context).textTheme.labelMedium,
+            ),
+            Switch.adaptive(
+              value: enabled,
+              onChanged: _setCollectionShellEnabled,
+            ),
+          ],
         ),
       ),
     );
@@ -1549,6 +1913,8 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
                                     await _refreshCurrentLibrary();
                                   },
                           ),
+                          if (_canToggleCollectionShell)
+                            _buildCollectionShellAction(),
                           if (!widget.albumOnly)
                             IconButton(
                               icon: Icon(

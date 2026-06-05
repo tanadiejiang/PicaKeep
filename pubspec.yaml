@@ -1,7 +1,7 @@
 name: picakeep
 description: "PicaKeep - 本地漫画阅读器 / 收藏管理器"
 publish_to: 'none'
-version: 1.9.16+1
+version: 1.9.17+1
 
 environment:
   sdk: '>=3.3.0'

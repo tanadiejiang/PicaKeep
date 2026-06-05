@@ -8,6 +8,7 @@ import 'package:picakeep/foundation/local_data_source.dart';
 import 'package:picakeep/foundation/local_library_settings.dart';
 import 'package:picakeep/foundation/local_favorites.dart';
 import 'package:picakeep/foundation/image_favorites.dart';
+import 'package:picakeep/foundation/picakeep_mdns.dart';
 
 import 'local_resource_scanner.dart';
 import 'library_trash_store.dart';
@@ -76,6 +77,7 @@ class LocalServerRuntime {
   Timer? _pendingStatsNotifyTimer;
 
   final LocalResourceScanner _scanner = LocalResourceScanner();
+  final PicaKeepMdnsAdvertiser _mdnsAdvertiser = PicaKeepMdnsAdvertiser();
   PicaKeepAdminServer? _server;
   ServerResourceSnapshot? _standaloneSnapshot;
   String? _standaloneSnapshotKey;
@@ -241,6 +243,7 @@ class LocalServerRuntime {
         await server.start(config: config);
       } catch (e) {
         _server = null;
+        await _stopMdnsAdvertisement();
         if (_isPortAlreadyBoundError(e)) {
           _state.markError('端口 ${config.port} 已被占用');
           _notify();
@@ -249,6 +252,7 @@ class LocalServerRuntime {
         _notify();
         rethrow;
       }
+      await _startMdnsAdvertisement(config);
       _notify();
     });
   }
@@ -263,6 +267,7 @@ class LocalServerRuntime {
         return;
       }
       try {
+        await _stopMdnsAdvertisement();
         await server.stop();
       } finally {
         _server = null;
@@ -370,6 +375,10 @@ class LocalServerRuntime {
         appdata.settings[originalDownloadDirSettingIndex].trim();
     final customLibraryRoots =
         decodeLocalComicPathList(appdata.settings[localComicPathsSettingIndex]);
+    final customLibraryCollectionShellModes =
+        decodeLocalCollectionShellPathMap(
+      appdata.settings[localLibraryCollectionShellSettingIndex],
+    );
     final port = int.tryParse(
           normalizeServiceAdminPortValue(
             appdata.settings[serviceAdminPortSettingIndex],
@@ -396,6 +405,7 @@ class LocalServerRuntime {
         _ => '',
       },
       customLibraryRoots: customLibraryRoots,
+      customLibraryCollectionShellModes: customLibraryCollectionShellModes,
     );
   }
 
@@ -421,6 +431,7 @@ class LocalServerRuntime {
     final server = _server;
     if (server != null) {
       try {
+        await _stopMdnsAdvertisement();
         await server.stop();
       } finally {
         _server = null;
@@ -440,6 +451,7 @@ class LocalServerRuntime {
       await nextServer.start(config: config);
     } catch (e) {
       _server = null;
+      await _stopMdnsAdvertisement();
       if (_isPortAlreadyBoundError(e)) {
         _state.markError('端口 ${config.port} 已被占用');
         _notify();
@@ -448,6 +460,7 @@ class LocalServerRuntime {
       _notify();
       rethrow;
     }
+    await _startMdnsAdvertisement(config);
   }
 
   Future<ServerResourceSnapshot> _readStandaloneSnapshot(
@@ -462,6 +475,8 @@ class LocalServerRuntime {
       currentDownloadRoot: config.currentDownloadRoot,
       originalDownloadRoot: config.originalDownloadRoot,
       customLibraryRoots: config.customLibraryRoots,
+      customLibraryCollectionShellModes:
+          config.customLibraryCollectionShellModes,
     );
     _standaloneSnapshot = nextSnapshot;
     _standaloneSnapshotKey = cacheKey;
@@ -472,6 +487,9 @@ class LocalServerRuntime {
     return [
       config.currentDownloadRoot.trim(),
       config.originalDownloadRoot.trim(),
+      encodeLocalCollectionShellPathMap(
+        config.customLibraryCollectionShellModes,
+      ),
       ...config.customLibraryRoots.map((path) => path.trim()),
     ].where((path) => path.isNotEmpty).join('\n');
   }
@@ -530,6 +548,26 @@ class LocalServerRuntime {
       return state.lastMessage!.trim();
     }
     return '当前本地服务尚未启动。配置文件与资源路径已准备，可直接在设置或服务信息页启动本地服务。';
+  }
+
+  Future<void> _startMdnsAdvertisement(PicaKeepServerConfig config) async {
+    try {
+      await _mdnsAdvertiser.start(
+        host: config.host,
+        port: config.port,
+      );
+      _state.addLog('mdns', '已发布 mDNS 服务 _picakeep._tcp.local:${config.port}');
+    } catch (error) {
+      _state.addLog('mdns', 'mDNS 服务发布失败：$error');
+    }
+  }
+
+  Future<void> _stopMdnsAdvertisement() async {
+    try {
+      await _mdnsAdvertiser.stop();
+    } catch (error) {
+      _state.addLog('mdns', 'mDNS 服务撤销失败：$error');
+    }
   }
 
   String _buildStatusUrl(PicaKeepServerConfig config) {

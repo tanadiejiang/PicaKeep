@@ -2460,14 +2460,111 @@ class _DownloadedComicInfoViewState extends State<DownloadedComicInfoView> {
   List<String> eps = [];
   List<int> downloadedEps = [];
 
-  bool get _isArchive =>
-      _comic is LocalLibraryComicItem &&
-      (_comic as LocalLibraryComicItem).isArchiveItem;
+  bool get _isArchive {
+    final comic = _comic;
+    if (comic is LocalLibraryComicItem) {
+      return comic.isArchiveItem;
+    }
+    if (comic is RemoteLibraryComicItem) {
+      return comic.isArchive;
+    }
+    return false;
+  }
+
+  bool get _canToggleChapterNumber {
+    final comic = _comic;
+    if (comic is LocalLibraryComicItem) {
+      return comic.isArchiveItem ||
+          (comic.sourceDisplayName == '合集图集' && comic.eps.length > 1);
+    }
+    if (comic is RemoteLibraryComicItem) {
+      return comic.isArchive ||
+          (comic.isCustomLibraryRoot && comic.hasMultipleEpisodes);
+    }
+    return false;
+  }
+
+  bool get _isCollectionShellAlbum {
+    final comic = _comic;
+    if (comic is LocalLibraryComicItem) {
+      return comic.sourceDisplayName == '合集图集';
+    }
+    if (comic is RemoteLibraryComicItem) {
+      return comic.metadataSourceDisplayName.trim() == '合集图集';
+    }
+    return false;
+  }
+
+  String _stripCollectionShellPrefix(String title) {
+    if (!_isCollectionShellAlbum) {
+      return title;
+    }
+    final itemTitle = _comic.name.trim();
+    final normalizedTitle = title.trim();
+    if (itemTitle.isEmpty || !normalizedTitle.startsWith(itemTitle)) {
+      return title;
+    }
+    final rest = normalizedTitle.substring(itemTitle.length).trimLeft();
+    final cleaned = rest.replaceFirst(RegExp(r'^[\s/_\\\-—:：]+'), '').trimLeft();
+    return cleaned.isEmpty ? title : cleaned;
+  }
+
+  String _chapterNumberDisplayName({
+    required int index,
+    required int episodeIndex,
+    required String title,
+  }) {
+    final trimmed = title.trim();
+    if (trimmed.isEmpty) {
+      return '${episodeIndex > 0 ? episodeIndex : index + 1}';
+    }
+    if (RegExp(r'^(第\s*)?\d+\s*(章|话|集|回)?([\s._-]+|$)').hasMatch(trimmed)) {
+      return trimmed;
+    }
+    return '${episodeIndex > 0 ? episodeIndex : index + 1} $trimmed';
+  }
 
   List<String> get _displayNames {
     final comic = _comic;
     if (comic is LocalLibraryComicItem && comic.isArchiveItem) {
       return LocalLibraryManager.archiveDisplayChapterNames(comic);
+    }
+    if (comic is LocalLibraryComicItem &&
+        comic.sourceDisplayName == '合集图集') {
+      final titles = eps
+          .map((title) => _stripCollectionShellPrefix(title))
+          .toList(growable: false);
+      if (!readArchiveUseChapterNumber()) {
+        return titles;
+      }
+      return List<String>.generate(titles.length, (index) {
+        return _chapterNumberDisplayName(
+          index: index,
+          episodeIndex: index + 1,
+          title: titles[index],
+        );
+      });
+    }
+    if (comic is RemoteLibraryComicItem) {
+      final titles = eps
+          .map((title) => _stripCollectionShellPrefix(title))
+          .toList(growable: false);
+      if (!comic.isArchive && !comic.isCustomLibraryRoot) {
+        return titles;
+      }
+      if (!readArchiveUseChapterNumber()) {
+        return titles;
+      }
+      return List<String>.generate(titles.length, (index) {
+        final episodeIndex = index < comic.episodesData.length
+            ? comic.episodesData[index].index
+            : index + 1;
+        return _chapterNumberDisplayName(
+          index: index,
+          episodeIndex: episodeIndex,
+          title: titles[index],
+        );
+      });
     }
     return eps;
   }
@@ -2680,7 +2777,7 @@ class _DownloadedComicInfoViewState extends State<DownloadedComicInfoView> {
         children: [
           Text('章节'.tl, style: theme.textTheme.titleMedium),
           const Spacer(),
-          if (_isArchive) ...[
+          if (_canToggleChapterNumber) ...[
             Text('序号', style: theme.textTheme.bodySmall),
             Transform.scale(
               scale: 0.8,
@@ -2776,9 +2873,9 @@ class _DownloadedComicInfoViewState extends State<DownloadedComicInfoView> {
           Padding(
             padding: EdgeInsets.fromLTRB(
               16,
-              0,
+              12,
               16,
-              math.max(mediaQuery.padding.bottom, 12),
+              math.max(mediaQuery.padding.bottom, 16),
             ),
             child: SizedBox(
               height: 56,
