@@ -164,7 +164,9 @@ class PicaKeepMdnsAdvertiser {
             continue;
           }
           if (_shouldAnswer(packet, snapshot)) {
-            _sendResponse(ttl: 120);
+            final sourceAddr = datagram.address;
+            final sourcePort = datagram.port;
+            _sendResponse(ttl: 120, address: sourceAddr, port: sourcePort);
           }
         }
       });
@@ -224,14 +226,18 @@ class PicaKeepMdnsAdvertiser {
     return false;
   }
 
-  void _sendResponse({required int ttl}) {
+  void _sendResponse({required int ttl, InternetAddress? address, int? port}) {
     final socket = _socket;
     final snapshot = _snapshot;
     if (socket == null || snapshot == null) {
       return;
     }
     final response = _MdnsPacketBuilder.serviceResponse(snapshot, ttl: ttl);
-    socket.send(response, _mdnsIpv4Address, picaKeepMdnsServicePort);
+    socket.send(
+      response,
+      address ?? _mdnsIpv4Address,
+      port ?? picaKeepMdnsServicePort,
+    );
   }
 }
 
@@ -394,7 +400,7 @@ class _MdnsPacketBuilder {
       ..writeUint16(0)
       ..writeName(name)
       ..writeUint16(type)
-      ..writeUint16(_MdnsRecordClass.internet);
+      ..writeUint16(_MdnsRecordClass.internetWithCacheFlush); // QU bit: request unicast response
     return writer.toBytes();
   }
 
@@ -901,6 +907,18 @@ Future<List<InternetAddress>> _resolveAdvertisedIpv4Addresses(
     includeLoopback: false,
     includeLinkLocal: false,
   );
+  // 优先选择常见局域网地址（192.168.x.x, 172.16-31.x.x），排除VPN/虚拟网卡（100.x.x, Tailscale等）
+  for (final networkInterface in interfaces) {
+    for (final address in networkInterface.addresses) {
+      if (_isCommonPrivateIpv4(address.address) && seen.add(address.address)) {
+        addresses.add(address);
+      }
+    }
+  }
+  if (addresses.isNotEmpty) {
+    return addresses;
+  }
+  // 回退：如果没有常见局域网地址，使用所有私有地址
   for (final networkInterface in interfaces) {
     for (final address in networkInterface.addresses) {
       if (_isPrivateIpv4(address.address) && seen.add(address.address)) {
@@ -911,6 +929,7 @@ Future<List<InternetAddress>> _resolveAdvertisedIpv4Addresses(
   if (addresses.isNotEmpty) {
     return addresses;
   }
+  // 最后回退：使用任意地址
   for (final networkInterface in interfaces) {
     for (final address in networkInterface.addresses) {
       if (seen.add(address.address)) {
@@ -954,6 +973,23 @@ String _buildStableHostToken(List<InternetAddress> addresses) {
     hash = (hash * 0x01000193) & 0xffffffff;
   }
   return hash.toRadixString(16).padLeft(8, '0');
+}
+
+bool _isCommonPrivateIpv4(String value) {
+  final parts = value.split('.');
+  if (parts.length != 4) {
+    return false;
+  }
+  final numbers = parts.map(int.tryParse).toList(growable: false);
+  if (numbers.any((number) => number == null)) {
+    return false;
+  }
+  final first = numbers[0]!;
+  final second = numbers[1]!;
+  // 优先 192.168.x.x（最常见的家用局域网），其次 172.16-31.x.x
+  // 排除 10.x.x.x（可能是VPN）和 100.x.x.x（Tailscale/CGNAT）
+  return (first == 192 && second == 168) ||
+      (first == 172 && second >= 16 && second <= 31);
 }
 
 bool _isPrivateIpv4(String value) {
