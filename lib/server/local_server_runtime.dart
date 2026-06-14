@@ -575,7 +575,7 @@ class LocalServerRuntime {
   }
 
   String _buildAdminUrl(PicaKeepServerConfig config) {
-    return 'http://${_buildDisplayHost(config.host)}:${config.port}/admin';
+    return 'http://${_buildDisplayHost(config.host)}:${config.port}/admin-view';
   }
 
   String _buildDisplayHost(String host) {

@@ -1,0 +1,10 @@
+{
+  "host": "0.0.0.0",
+  "port": 9527,
+  "currentDownloadRoot": "",
+  "originalDownloadRoot": "",
+  "customLibraryRoots": [],
+  "customLibraryCollectionShellModes": "{}",
+  "logRequests": false,
+  "consolePassword": ""
+}

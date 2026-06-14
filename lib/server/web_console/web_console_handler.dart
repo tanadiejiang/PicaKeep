@@ -9,7 +9,7 @@ Future<Response?> handleWebConsoleRequest(Request request) async {
   }
 
   if (path == 'admin') {
-    return Response.movedPermanently('/');
+    return Response.movedPermanently('/admin-view');
   }
 
   if (request.method != 'GET' && request.method != 'HEAD') {

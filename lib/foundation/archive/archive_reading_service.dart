@@ -1,10 +1,7 @@
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:path_provider/path_provider.dart';
-
 import 'archive_errors.dart';
-import 'archive_image_provider.dart';
 import 'archive_memory_cache.dart';
 import 'archive_models.dart';
 import 'archive_password_store.dart';
@@ -114,20 +111,6 @@ class ArchiveReadingService {
     }
   }
 
-  ArchiveImageProvider imageProviderFor(
-    String archivePath,
-    String entryPath,
-    int fileSize,
-    int mtimeMillis,
-  ) {
-    return ArchiveImageProvider(
-      archivePath: archivePath,
-      entryPath: entryPath,
-      fileSize: fileSize,
-      mtimeMillis: mtimeMillis,
-    );
-  }
-
   Future<Uint8List> readEntryBytesByUri(String uriString) async {
     final parsed = parseArchiveUri(uriString);
     if (parsed == null) {
@@ -231,8 +214,13 @@ class ArchiveReadingService {
   }
 
   Future<Directory> _archiveCoverCacheDir() async {
-    final support = await getApplicationSupportDirectory();
-    return Directory('${support.path}/local_library_cache/archive_covers');
+    final root = Platform.environment['PICAKEEP_CACHE_DIR']?.trim();
+    final base = root == null || root.isEmpty
+        ? '${Directory.systemTemp.path}${Platform.pathSeparator}picakeep'
+        : root;
+    return Directory(
+      '$base${Platform.pathSeparator}local_library_cache${Platform.pathSeparator}archive_covers',
+    );
   }
 
   void _clearArchiveCoverCache() async {

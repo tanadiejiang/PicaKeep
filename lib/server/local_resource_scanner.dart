@@ -1,13 +1,11 @@
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:path_provider/path_provider.dart';
 import 'package:sqlite3/sqlite3.dart';
 import 'package:picakeep/foundation/archive/archive_episode_builder.dart';
 import 'package:picakeep/foundation/archive/archive_models.dart';
 import 'package:picakeep/foundation/archive/archive_password_store.dart';
 import 'package:picakeep/foundation/archive/archive_reading_service.dart';
-import 'package:picakeep/foundation/download_model.dart';
 import 'package:picakeep/foundation/local_library_settings.dart';
 import 'package:picakeep/foundation/privileged_storage_access.dart';
 
@@ -126,6 +124,32 @@ class _ManagedRootRecord {
   final String directoryPath;
   final _ServerResourceMetadata metadata;
   final double? comicSizeMb;
+}
+
+class _ParsedDownloadRecord {
+  const _ParsedDownloadRecord({
+    required this.id,
+    required this.name,
+    required this.subtitle,
+    required this.directory,
+    required this.tags,
+    required this.episodeTitles,
+    required this.coverPath,
+    required this.sourceDisplayName,
+    required this.comicSizeMb,
+    required this.data,
+  });
+
+  final String id;
+  final String name;
+  final String subtitle;
+  final String directory;
+  final List<String> tags;
+  final List<String> episodeTitles;
+  final String coverPath;
+  final String sourceDisplayName;
+  final double? comicSizeMb;
+  final Map<String, dynamic> data;
 }
 
 class ServerResourceItemSummary {
@@ -1060,11 +1084,13 @@ class LocalResourceScanner {
             ? null
             : DateTime.fromMillisecondsSinceEpoch(rawTime);
         final data = _decodeJsonMap(rawJson);
-        final parsedItem = parseDownloadedItemRecordJson(
+        final parsedItem = _parseDownloadedRecord(
           rawId,
-          rawJson,
-          time: itemTime,
+          data,
           directory: rawDirectory,
+          fallbackTitle: row['title']?.toString() ?? '',
+          fallbackSubtitle: row['subtitle']?.toString() ?? '',
+          fallbackSourceDisplayName: rootTitle,
         );
         final metadata = await _extractDownloadMetadata(
           id: rawId,
@@ -1084,8 +1110,7 @@ class LocalResourceScanner {
         if (directoryPath.isEmpty) {
           continue;
         }
-        final comicSizeMb = _normalizeComicSizeMb(parsedItem?.comicSize) ??
-            _extractComicSizeMb(data);
+        final comicSizeMb = parsedItem?.comicSizeMb ?? _extractComicSizeMb(data);
         results.add(
           _ManagedRootRecord(
             rawId: rawId,
@@ -1109,9 +1134,13 @@ class LocalResourceScanner {
   Future<File?> _writeDatabaseSnapshot(
       String rootPath, List<int> dbBytes) async {
     try {
-      final supportDir = await getApplicationSupportDirectory();
+      final configuredRoot = Platform.environment['PICAKEEP_CACHE_DIR']?.trim();
+      final cacheRoot = configuredRoot == null || configuredRoot.isEmpty
+          ? '${Directory.systemTemp.path}${Platform.pathSeparator}picakeep'
+          : configuredRoot;
       final dbDir = Directory(
-          '${supportDir.path}${Platform.pathSeparator}server_db_snapshots');
+        '$cacheRoot${Platform.pathSeparator}server_db_snapshots',
+      );
       await dbDir.create(recursive: true);
       final safeName = _safeCacheName(rootPath);
       final snapshotFile =
@@ -1134,14 +1163,13 @@ class LocalResourceScanner {
     required String subtitle,
     required DateTime? updatedAt,
     required Map<String, dynamic>? data,
-    required DownloadedItem? parsedItem,
+    required _ParsedDownloadRecord? parsedItem,
     required String fallbackSourceDisplayName,
   }) async {
     final comicItem = data?['comicItem'];
     final comicItemMap = comicItem is Map
         ? comicItem.map((key, value) => MapEntry(key.toString(), value))
         : null;
-    final parsedJson = parsedItem?.toJson();
     final parsedTags = parsedItem?.tags
             .map((entry) => entry.trim())
             .where((entry) => entry.isNotEmpty)
@@ -1156,7 +1184,7 @@ class LocalResourceScanner {
         comicItemMap?['title']?.toString(),
       ]),
       subtitle: _firstNonEmptyValue([
-        parsedItem?.subTitle,
+        parsedItem?.subtitle,
         subtitle,
         data?['subtitle']?.toString(),
         data?['subTitle']?.toString(),
@@ -1167,9 +1195,9 @@ class LocalResourceScanner {
       displayId: _firstNonEmptyValue([
         data?['displayId']?.toString(),
         data?['comicId']?.toString(),
-        parsedJson?['displayId']?.toString(),
-        parsedJson?['comicId']?.toString(),
-        parsedJson?['comicID']?.toString(),
+        parsedItem?.data['displayId']?.toString(),
+        parsedItem?.data['comicId']?.toString(),
+        parsedItem?.data['comicID']?.toString(),
         comicItemMap?['displayId']?.toString(),
         comicItemMap?['comicId']?.toString(),
         comicItemMap?['id']?.toString(),
@@ -1197,11 +1225,11 @@ class LocalResourceScanner {
     required String rootPath,
     required String rawId,
     required String rawDirectory,
-    required DownloadedItem? parsedItem,
+    required _ParsedDownloadRecord? parsedItem,
   }) {
     final candidates = <String>[
       rawDirectory.trim(),
-      parsedItem?.directory?.trim() ?? '',
+      parsedItem?.directory.trim() ?? '',
       rawId.trim(),
       parsedItem?.id.trim() ?? '',
       _basename(rawDirectory),
@@ -1562,11 +1590,11 @@ class LocalResourceScanner {
     return null;
   }
 
-  List<String> _parsedEpisodeTitles(DownloadedItem? parsedItem) {
+  List<String> _parsedEpisodeTitles(_ParsedDownloadRecord? parsedItem) {
     if (parsedItem == null) {
       return const <String>[];
     }
-    final titles = parsedItem.eps
+    final titles = parsedItem.episodeTitles
         .map((entry) => entry.trim())
         .where((entry) => entry.isNotEmpty)
         .toList(growable: false);
@@ -1577,6 +1605,69 @@ class LocalResourceScanner {
       return const <String>[];
     }
     return titles;
+  }
+
+  _ParsedDownloadRecord? _parseDownloadedRecord(
+    String id,
+    Map<String, dynamic>? data, {
+    required String directory,
+    required String fallbackTitle,
+    required String fallbackSubtitle,
+    required String fallbackSourceDisplayName,
+  }) {
+    if (data == null) {
+      return null;
+    }
+    final comicItemMap = _asStringDynamicMap(data['comicItem']);
+    final name = _firstNonEmptyValue([
+      data['name']?.toString(),
+      data['title']?.toString(),
+      data['galleryTitle']?.toString(),
+      data['comicTitle']?.toString(),
+      comicItemMap?['title']?.toString(),
+      fallbackTitle,
+    ]);
+    final subtitle = _firstNonEmptyValue([
+      data['subtitle']?.toString(),
+      data['subTitle']?.toString(),
+      data['author']?.toString(),
+      comicItemMap?['subTitle']?.toString(),
+      comicItemMap?['author']?.toString(),
+      fallbackSubtitle,
+    ]);
+    final parsedDirectory = _firstNonEmptyValue([
+      directory,
+      data['directory']?.toString(),
+      data['path']?.toString(),
+      data['localPath']?.toString(),
+      data['downloadPath']?.toString(),
+    ]);
+    final tags = _extractTagValues(data, comicItemMap);
+    final episodeTitles = _extractEpisodeTitles(data, comicItemMap);
+    final coverPath = _extractCoverPath(data, comicItemMap, null);
+    return _ParsedDownloadRecord(
+      id: _firstNonEmptyValue([
+        data['id']?.toString(),
+        data['comicId']?.toString(),
+        data['comicID']?.toString(),
+        comicItemMap?['id']?.toString(),
+        comicItemMap?['comicId']?.toString(),
+        id,
+      ]),
+      name: name,
+      subtitle: subtitle,
+      directory: parsedDirectory,
+      tags: tags,
+      episodeTitles: episodeTitles,
+      coverPath: coverPath,
+      sourceDisplayName: _firstNonEmptyValue([
+        data['sourceDisplayName']?.toString(),
+        _inferSourceDisplayName(id, data),
+        fallbackSourceDisplayName,
+      ]),
+      comicSizeMb: _extractComicSizeMb(data),
+      data: data,
+    );
   }
 
   Iterable<Map<String, dynamic>> _candidateMetadataMaps(
@@ -1885,9 +1976,9 @@ class LocalResourceScanner {
   String _extractCoverPath(
     Map<String, dynamic>? data,
     Map<String, dynamic>? comicItemMap,
-    DownloadedItem? parsedItem,
+    _ParsedDownloadRecord? parsedItem,
   ) {
-    final parsedCover = parsedItem?.localCoverPath?.trim() ?? '';
+    final parsedCover = parsedItem?.coverPath.trim() ?? '';
     if (parsedCover.isNotEmpty) {
       return parsedCover;
     }

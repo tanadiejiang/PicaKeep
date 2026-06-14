@@ -12,6 +12,7 @@ import 'package:picakeep/pages/reader/comic_reading_page.dart';
 
 import '../base.dart';
 import 'archive/archive_episode_builder.dart';
+import 'archive/archive_image_provider.dart';
 import 'archive/archive_models.dart';
 import 'archive/archive_password_store.dart';
 import 'archive/archive_reading_service.dart';
@@ -569,11 +570,11 @@ class LocalPathReadingData extends ReadingData {
           .fingerprintCachedFor(parsed.archivePath);
       final fileSize = fp?.fileSize ?? 0;
       final mtimeMillis = fp?.mtimeMillis ?? 0;
-      return ArchiveReadingService.instance.imageProviderFor(
-        parsed.archivePath,
-        parsed.entryPath,
-        fileSize,
-        mtimeMillis,
+      return ArchiveImageProvider(
+        archivePath: parsed.archivePath,
+        entryPath: parsed.entryPath,
+        fileSize: fileSize,
+        mtimeMillis: mtimeMillis,
       );
     }
     return LocalLibraryManager.instance.imageProviderForLocalPath(url);

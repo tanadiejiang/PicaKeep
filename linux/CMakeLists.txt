@@ -70,6 +70,14 @@ set_target_properties(${BINARY_NAME}
 )
 
 
+# Pre-bundled sqlite3 amalgamation to avoid downloading from sqlite.org
+# (sqlite.org is unreachable from some regions). The bundled sqlite3.c/h
+# are located in linux/sqlite3/.
+set(sqlite3_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/sqlite3" CACHE PATH
+  "Pre-bundled sqlite3 amalgamation source directory")
+set(sqlite3_POPULATED TRUE CACHE INTERNAL
+  "Skip FetchContent download for sqlite3")
+
 # Generated plugin build rules, which manage building the plugins and adding
 # them to the application.
 include(flutter/generated_plugins.cmake)

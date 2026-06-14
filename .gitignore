@@ -19,10 +19,9 @@ plan/
 *.iws
 .idea/
 
-# The .vscode folder contains launch configuration and tasks you configure in
-# VS Code which you may wish to be included in version control, so this line
-# is commented out by default.
-#.vscode/
+.vscode/
+.codegraph/
+.reasonix/
 
 # Flutter/Dart/Pub related
 **/doc/api/
@@ -33,6 +32,7 @@ plan/
 .pub/
 /build/
 /coverage/
+build/cli/
 
 # Symbolication related
 app.*.symbols

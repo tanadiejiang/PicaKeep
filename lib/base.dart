@@ -3,6 +3,8 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'foundation/archive/archive_memory_cache.dart';
+import 'foundation/archive/archive_password_store.dart';
 import 'foundation/app.dart';
 import 'foundation/app_runtime_mode.dart';
 import 'foundation/local_data_source.dart';
@@ -272,9 +274,28 @@ class Appdata {
         normalizeExternalToolVisibilitySetting(
             settings[externalToolVisibilitySettingIndex]);
     setManagedDataSourceMode(settings[managedDataSourceModeSettingIndex]);
+    _syncArchiveRuntimeSettings();
+  }
+
+  void _syncArchiveRuntimeSettings() {
+    ArchivePasswordStore.instance.configureFromRawSettings(
+      defaultPasswordsJson: settings[archiveDefaultPasswordsSettingIndex],
+      autoUnlockEnabledValue: settings[archiveAutoUnlockEnabledSettingIndex],
+      persist: (defaultPasswords, autoUnlockEnabled) async {
+        settings[archiveDefaultPasswordsSettingIndex] =
+            ArchivePasswordStore.encodeDefaultPasswords(defaultPasswords);
+        settings[archiveAutoUnlockEnabledSettingIndex] =
+            autoUnlockEnabled ? '1' : '0';
+        await updateSettings(false);
+      },
+    );
+    ArchiveMemoryCache.instance.setLimitMB(
+      int.tryParse(settings[archiveReadingCacheLimitMbSettingIndex]) ?? 32,
+    );
   }
 
   Future<void> updateSettings([bool syncData = true]) async {
+    _syncArchiveRuntimeSettings();
     var settingsFile = File("${App.dataPath}/settings");
     await settingsFile.writeAsString(jsonEncode(settings));
     if (syncData) {}
