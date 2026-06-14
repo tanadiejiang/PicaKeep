@@ -1,6 +1,5 @@
+import 'dart:io';
 import 'dart:typed_data';
-
-import 'package:flutter/services.dart' show rootBundle;
 
 class WebAsset {
   const WebAsset({
@@ -17,14 +16,55 @@ Future<WebAsset?> loadWebAsset(String relativePath) async {
   if (normalized == null) {
     return null;
   }
-  try {
-    final data = await rootBundle.load('assets/web_console/$normalized');
-    final bytes =
-        data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes);
-    return WebAsset(bytes: bytes, contentType: _contentTypeForPath(normalized));
-  } catch (_) {
-    return null;
+
+  final roots = _candidateAssetRoots();
+  for (final root in roots) {
+    final file = File(_joinPath(root, normalized));
+    try {
+      if (!await file.exists()) {
+        continue;
+      }
+      return WebAsset(
+        bytes: await file.readAsBytes(),
+        contentType: _contentTypeForPath(normalized),
+      );
+    } catch (_) {}
   }
+  return null;
+}
+
+List<String> _candidateAssetRoots() {
+  final roots = <String>[];
+  final seen = <String>{};
+
+  void addRoot(String? value) {
+    final trimmed = value?.trim() ?? '';
+    if (trimmed.isEmpty) {
+      return;
+    }
+    final absolute = Directory(trimmed).absolute.path;
+    if (seen.add(absolute)) {
+      roots.add(absolute);
+    }
+  }
+
+  addRoot(Platform.environment['PICAKEEP_WEB_CONSOLE_ROOT']);
+  addRoot(Platform.environment['PICAKEEP_ASSET_ROOT']);
+
+  final cwd = Directory.current.absolute.path;
+  addRoot(_joinPath(cwd, 'assets/web_console'));
+  addRoot(_joinPath(cwd, 'data/flutter_assets/assets/web_console'));
+  addRoot(_joinPath(cwd, 'flutter_assets/assets/web_console'));
+
+  final scriptDir = File.fromUri(Platform.script).parent.absolute.path;
+  addRoot(_joinPath(scriptDir, 'assets/web_console'));
+  addRoot(_joinPath(scriptDir, '../assets/web_console'));
+  addRoot(_joinPath(scriptDir, '../../assets/web_console'));
+  addRoot(_joinPath(scriptDir, '../../../assets/web_console'));
+  addRoot(_joinPath(scriptDir, 'data/flutter_assets/assets/web_console'));
+  addRoot(_joinPath(scriptDir, 'flutter_assets/assets/web_console'));
+
+  return roots;
 }
 
 String? _normalizeRelativePath(String relativePath) {
@@ -49,6 +89,15 @@ String? _normalizeRelativePath(String relativePath) {
   return parts.join('/');
 }
 
+String _joinPath(String root, String child) {
+  final separator = Platform.pathSeparator;
+  final normalizedChild = child.replaceAll('/', separator);
+  if (root.endsWith('/') || root.endsWith('\\')) {
+    return '$root$normalizedChild';
+  }
+  return '$root$separator$normalizedChild';
+}
+
 String _contentTypeForPath(String path) {
   final lower = path.toLowerCase();
   if (lower.endsWith('.html')) {
@@ -62,6 +111,9 @@ String _contentTypeForPath(String path) {
   }
   if (lower.endsWith('.json')) {
     return 'application/json; charset=utf-8';
+  }
+  if (lower.endsWith('.webmanifest')) {
+    return 'application/manifest+json; charset=utf-8';
   }
   if (lower.endsWith('.png')) {
     return 'image/png';

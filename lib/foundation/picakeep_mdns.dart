@@ -146,7 +146,7 @@ class PicaKeepMdnsAdvertiser {
           'app': 'PicaKeep',
           'service': 'library',
           'status': '/status',
-          'admin': '/admin',
+          'admin': '/admin-view',
           'deviceSystem': deviceSystem,
           'deviceName': deviceName,
         },

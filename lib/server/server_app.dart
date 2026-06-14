@@ -2673,6 +2673,7 @@ class PicaKeepAdminServer {
       'resourceBytes': snapshot?.totalBytes ?? 0,
       'resourceGeneratedAt': snapshot?.generatedAt.toIso8601String(),
       'librarySignature': _librarySignature ?? '',
+      'appUrl': _buildAppUrl(),
       'statusUrl': _buildStatusUrl(),
       'adminUrl': _buildAdminUrl(),
       'consolePasswordEmpty': config.consolePassword.trim().isEmpty,
@@ -2702,10 +2703,16 @@ class PicaKeepAdminServer {
     return 'http://${_buildDisplayHost(config.host)}:$port/status';
   }
 
-  String _buildAdminUrl() {
+  String _buildAppUrl() {
     final config = _config ?? PicaKeepServerConfig.defaults();
     final port = _server?.port ?? config.port;
     return 'http://${_buildDisplayHost(config.host)}:$port/';
+  }
+
+  String _buildAdminUrl() {
+    final config = _config ?? PicaKeepServerConfig.defaults();
+    final port = _server?.port ?? config.port;
+    return 'http://${_buildDisplayHost(config.host)}:$port/admin-view';
   }
 
   String _buildDisplayHost(String host) {

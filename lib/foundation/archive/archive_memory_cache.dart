@@ -1,9 +1,6 @@
 import 'dart:collection';
 import 'dart:typed_data';
 
-import '../../base.dart';
-import '../local_library_settings.dart';
-
 class ArchiveIndexCacheEntry {
   ArchiveIndexCacheEntry({
     required this.archivePath,
@@ -33,15 +30,14 @@ class ArchiveMemoryCache {
       LinkedHashMap<String, Uint8List>();
   int _entryCacheBytes = 0;
 
+  int _limitMb = 32;
+
   int get limitBytes {
-    final raw = appdata.settings[archiveReadingCacheLimitMbSettingIndex];
-    final mb = int.tryParse(raw) ?? 32;
-    return mb.clamp(8, 256) * 1024 * 1024;
+    return _limitMb.clamp(8, 256) * 1024 * 1024;
   }
 
   void setLimitMB(int mb) {
-    appdata.settings[archiveReadingCacheLimitMbSettingIndex] =
-        mb.clamp(8, 256).toString();
+    _limitMb = mb.clamp(8, 256);
     _evictEntriesToLimit();
   }
 

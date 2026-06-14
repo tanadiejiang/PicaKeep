@@ -96,7 +96,7 @@ String buildRemoteServiceStatusUrl(String value) {
 String buildServiceAdminUrl(String host, {String? port}) {
   final safeHost = host.trim().isEmpty ? '<host>' : host.trim();
   final safePort = normalizeServiceAdminPortValue(port ?? defaultServiceAdminPort);
-  return 'http://$safeHost:$safePort/admin';
+  return 'http://$safeHost:$safePort/admin-view';
 }
 
 ServerPlatformCapability currentServerPlatformCapability() {

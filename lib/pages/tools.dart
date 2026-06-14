@@ -310,6 +310,8 @@ class _ToolsPageState extends State<ToolsPage> {
     );
     if (value != null) {
       final clamped = value.clamp(8, 256);
+      appdata.settings[archiveReadingCacheLimitMbSettingIndex] = clamped.toString();
+      await appdata.updateSettings();
       ArchiveMemoryCache.instance.setLimitMB(clamped);
       if (mounted) setState(() {});
     }
