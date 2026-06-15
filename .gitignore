@@ -12,6 +12,8 @@
 .swiftpm/
 migrate_working_dir/
 plan/
+Z-plan/
+Z_性能数据/
 
 # IntelliJ related
 *.iml

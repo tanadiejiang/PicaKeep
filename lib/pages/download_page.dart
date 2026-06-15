@@ -644,7 +644,16 @@ class DownloadPageLogic extends StateController {
       direction = 'asc';
     }
     _loadIssue = null;
-    remoteAvailable = await _checkRemoteAvailability();
+    // 远程可用性探测（fetchSnapshot）远程离线时会走到 ~3s 超时。local 视图的
+    // _loadComics 完全不读 remoteAvailable，showSourceSelector 也用
+    // _hasConfiguredRemoteServer 兜底，因此 local 视图无需等待该探测——
+    // 否则本地几千部漫画的加载会被一个注定失败的远程探测白白阻塞 3 秒。
+    // 仅 aggregate/remote 视图（真正依赖 remoteAvailable）才同步等待。
+    if (_view == _DownloadedLibraryView.local) {
+      remoteAvailable = false;
+    } else {
+      remoteAvailable = await _checkRemoteAvailability();
+    }
     final loadResult = await _loadComics(
       order,
       direction,
@@ -1445,13 +1454,10 @@ class _DownloadPageState extends State<DownloadPage>
       },
       builder: (logic) {
         _logic = logic;
-        Widget page = logic.loading
-            ? const Scaffold(
-                body: Center(
-                  child: CircularProgressIndicator(),
-                ),
-              )
-            : Scaffold(
+        // loading 态不再整页替换成转圈（那样会盖住 AppBar 与视图选择器，
+        // 切远程档时整屏一片转圈）。改为始终渲染正常骨架，由 _buildComics
+        // 在 loading && 无数据时只让列表区显示转圈。
+        Widget page = Scaffold(
                 floatingActionButton: _buildFAB(context, logic),
                 body: NotificationListener<ScrollNotification>(
                   onNotification: (notification) {
@@ -1608,6 +1614,15 @@ class _DownloadPageState extends State<DownloadPage>
   Widget _buildComics(BuildContext context, DownloadPageLogic logic) {
     final comics = logic.comics;
     if (comics.isEmpty) {
+      // 加载中且尚无数据：只在列表区显示转圈，保留上方 AppBar 与视图选择器。
+      // 任何档位（本地/远程/聚合）切换或首次加载都走这里，加载完成后
+      // update() 刷新即显示列表，无需整页覆盖。
+      if (logic.loading) {
+        return const SliverFillRemaining(
+          hasScrollBody: false,
+          child: Center(child: CircularProgressIndicator()),
+        );
+      }
       return SliverToBoxAdapter(
         child: _buildEmptyState(context, logic),
       );
