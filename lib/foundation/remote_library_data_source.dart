@@ -1115,6 +1115,22 @@ class _RemoteLibraryCoverDiskCache {
     }
   }
 
+  /// 手动触发一次 trim（工具页等）。与下载触发的 trim 用同一个 _trimInFlight
+  /// 串行保护避免并发，但忽略 _trimMinInterval 节流（用户主动操作应立即生效），
+  /// 也没有 protectedPath（非下载场景无正在写入的文件）。
+  static Future<void> trimToLimitNow() async {
+    if (_trimInFlight) {
+      return;
+    }
+    _trimInFlight = true;
+    try {
+      await _trimToLimitInner(protectedPath: '');
+    } finally {
+      _lastTrimAt = DateTime.now();
+      _trimInFlight = false;
+    }
+  }
+
   static Future<void> _trimToLimit({required String protectedPath}) async {
     // This walks the entire cache tree (twice) reading every file's size. It is
     // invoked after every cover download, so when a grid loads dozens of covers
@@ -1144,14 +1160,22 @@ class _RemoteLibraryCoverDiskCache {
 
   static Future<void> _trimToLimitInner({required String protectedPath}) async {
     final limitBytes = appdata.appSettings.cacheLimit * 1024 * 1024;
-    if (limitBytes <= 0 || !await _cacheDirectory.exists()) {
+    if (limitBytes <= 0) {
       return;
     }
+    // 可删文件池覆盖全部缓存根目录（与工具页统计、eraseCache 范围一致），
+    // 而非只远程封面目录——否则占大头的 App.cachePath 图片缓存够不着，
+    // 缓存会一直超限不降。全局按修改时间 LRU，从最旧删到刚好低于限制即停，
+    // 保留较新的，不清空。protectedPath（正在使用的文件）始终保留。
     final files = <File>[];
-    var totalBytes = await _directorySize(Directory(App.cachePath));
+    var totalBytes = await _directorySize(
+      Directory(App.cachePath),
+      collectFilesUnder: App.cachePath,
+      collectedFiles: files,
+    );
     totalBytes += await _directorySize(
       Directory('${App.dataPath}${Platform.pathSeparator}cache'),
-      collectFilesUnder: _cacheDirectory.path,
+      collectFilesUnder: '${App.dataPath}${Platform.pathSeparator}cache',
       collectedFiles: files,
     );
     if (totalBytes <= limitBytes || files.isEmpty) {
@@ -1267,6 +1291,18 @@ class _RemoteLibraryCoverImageProvider
   @override
   String get key => 'remote_cover::$url';
 
+  // 封面在列表里显示宽度约 150~200px，高 DPI 下放大到 480px 已足够清晰。
+  // 远程封面原图可能数千像素，全尺寸解码是滚动卡顿（UI isolate 解码回调）
+  // 与内存的主因，按此宽度缩放解码。
+  @override
+  int? get targetDecodeWidth => 480;
+
+  // 远程封面已有磁盘缓存（_RemoteLibraryCoverDiskCache），不需要再把原始
+  // 压缩字节缓存进堆——避免滚动时大量封面字节驻留堆触发老年代 GC（实测
+  // 滚动卡顿主要是 CollectOldGeneration 暂停）。
+  @override
+  bool get cacheRawBytes => false;
+
   @override
   Future<_RemoteLibraryCoverImageProvider> obtainKey(
     ImageConfiguration configuration,
@@ -1300,6 +1336,13 @@ class _RemoteLibraryCoverImageProvider
 
 class RemoteLibraryDataSource {
   const RemoteLibraryDataSource();
+
+  /// 手动按 cacheLimit 清理全部缓存目录（LRU 删最旧的到限制内）。
+  /// 供工具页"缓存管理"等非远程浏览场景主动触发——平时 trim 只在远程封面
+  /// 下载后跑，不浏览远程时缓存会一直超限不降，这里提供一个独立入口。
+  static Future<void> trimCacheToLimit() {
+    return _RemoteLibraryCoverDiskCache.trimToLimitNow();
+  }
 
   Future<List<RemoteLibraryComicItem>> fetchItems({
     bool forceRefresh = false,

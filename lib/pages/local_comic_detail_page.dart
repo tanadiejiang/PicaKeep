@@ -59,6 +59,15 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
   int _recommendationPage = 0;
   double _bottomPullDistance = 0;
 
+  // 推荐结果缓存：_buildRecommendations() 对全库做正则相似度+排序，开销大
+  // （profile 实测单次 ~150ms）。原先放在 build() 里每次 setState 都重算，
+  // 导致下滑切标题/进入/退出详情页掉帧。改为缓存，仅当依赖变化时重算。
+  // 依赖 = _comic 实例 + 推荐模式设置；_localItems 内容变化时在 _loadLocalItems
+  // 里显式置 _recommendationsCache=null 失效。
+  List<_LocalRecommendation>? _recommendationsCache;
+  DownloadedItem? _recCacheComic;
+  String? _recCacheMode;
+
   static const _recommendationPageSize = 10;
 
   @override
@@ -107,6 +116,7 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
       _localItems
         ..clear()
         ..addAll(items);
+      _recommendationsCache = null; // _localItems 内容已变，失效推荐缓存
     });
   }
 
@@ -266,6 +276,7 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
     }
     await App.openReader(
       () => _comic.createReadingPage(ep: ep, page: page),
+      context: context,
     );
     await Future<void>.delayed(const Duration(milliseconds: 50));
     if (mounted) {
@@ -676,6 +687,21 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
     final mode = normalizeLocalDetailRecommendationMode(
       appdata.settings[localDetailRecommendationSettingIndex],
     );
+    // 命中缓存：_comic 实例与推荐模式未变、且未被显式失效（_localItems 变化时
+    // 在 _loadLocalItems 里置 null）时直接复用。
+    if (_recommendationsCache != null &&
+        identical(_recCacheComic, _comic) &&
+        _recCacheMode == mode) {
+      return _recommendationsCache!;
+    }
+    final result = _computeRecommendations(mode);
+    _recommendationsCache = result;
+    _recCacheComic = _comic;
+    _recCacheMode = mode;
+    return result;
+  }
+
+  List<_LocalRecommendation> _computeRecommendations(String mode) {
     if (mode == '5') return const [];
 
     final current = _comic;
@@ -1170,9 +1196,7 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
     return InkWell(
       borderRadius: BorderRadius.circular(12),
       onTap: () {
-        Navigator.of(context).push(
-          MaterialPageRoute(builder: (_) => LocalComicDetailPage(comic: item)),
-        );
+        App.pushInner(() => LocalComicDetailPage(comic: item));
       },
       child: Padding(
         padding: const EdgeInsets.fromLTRB(14, 8, 18, 8),

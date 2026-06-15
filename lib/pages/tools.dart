@@ -8,6 +8,7 @@ import 'package:picakeep/foundation/app.dart';
 import 'package:picakeep/foundation/archive/archive_memory_cache.dart';
 import 'package:picakeep/foundation/archive/archive_reading_service.dart';
 import 'package:picakeep/foundation/local_library_settings.dart';
+import 'package:picakeep/foundation/remote_library_data_source.dart';
 import 'package:picakeep/pages/app_capabilities_page.dart';
 import 'package:picakeep/pages/local_library_page.dart';
 import 'package:picakeep/pages/service_info_page.dart';
@@ -111,6 +112,9 @@ class _ToolsPageState extends State<ToolsPage> {
     setState(() {
       _loadingCacheSize = true;
     });
+    // 先按 cacheLimit 清理超限的旧缓存（LRU），再统计——否则 trim 只在远程
+    // 封面下载后触发，平时缓存会一直超限不降，工具页显示的"当前"也下不来。
+    await RemoteLibraryDataSource.trimCacheToLimit();
     final size = await _calculateCacheSize();
     if (!mounted) {
       return;
@@ -201,6 +205,8 @@ class _ToolsPageState extends State<ToolsPage> {
     await appdata.updateSettings();
     if (mounted) {
       setState(() {});
+      // 新限制立即生效：按新值清理超限旧缓存并刷新显示。
+      unawaited(_refreshCacheSize());
     }
   }
 
@@ -510,9 +516,16 @@ class _ToolsPageState extends State<ToolsPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: _buildAppBar(context),
-      body: _customizingExternalTools
-          ? _buildCustomizeBody(context)
-          : _buildNormalBody(context),
+      // 预返回动画（predictive back）会缩放整页。工具页 body 内有多张
+      // Card.outlined(Clip.antiAlias) + AnimatedCrossFade，动画期间每张卡片
+      // 各自触发离屏 saveLayer（profile 录制见 saveLayer×52），120Hz 下 raster
+      // 超 8.33ms 预算导致返回动画卡顿。用 RepaintBoundary 把整页栅格化成单层，
+      // 返回缩放只合成这一层纹理，避免每帧重做几十个 saveLayer。
+      body: RepaintBoundary(
+        child: _customizingExternalTools
+            ? _buildCustomizeBody(context)
+            : _buildNormalBody(context),
+      ),
     );
   }
 }
