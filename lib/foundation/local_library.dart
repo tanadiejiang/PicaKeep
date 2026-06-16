@@ -181,6 +181,27 @@ class _LocalLibrarySourceCache {
     items[_cacheItemKey(rawId, directoryPath)] = item;
   }
 
+  /// 清除所有"无封面"标记（coverPath == noCoverSentinel），使下次加载重新探测。
+  /// 用于用户主动刷新/重扫——可能手动添加了封面文件。
+  bool clearNoCoverSentinels() {
+    bool changed = false;
+    final keysToUpdate = <String>[];
+    for (final entry in items.entries) {
+      if (entry.value.coverPath == LocalLibraryManager.noCoverSentinel) {
+        keysToUpdate.add(entry.key);
+      }
+    }
+    for (final key in keysToUpdate) {
+      final existing = items[key]!;
+      items[key] = _LocalLibraryCachedItem(
+        coverPath: null,
+        episodeFiles: existing.episodeFiles,
+      );
+      changed = true;
+    }
+    return changed;
+  }
+
   Future<void> save() async {
     try {
       await file.parent.create(recursive: true);
@@ -421,7 +442,6 @@ class LocalLibraryComicItem extends DownloadedItem {
 
   @override
   Widget createReadingPage({int? ep, int? page}) {
-    LocalLibraryManager.pauseBackgroundCoverCache();
     final hasEp = hasMultipleEpisodes;
     final epsMap = hasEp
         ? {
@@ -617,6 +637,11 @@ class LocalLibraryManager {
   static const MethodChannel _storageAccessChannel =
       MethodChannel('lingxue.picakeep/storage_access');
 
+  /// 持久化标记：source cache 的 coverPath 存此值表示"已探测、确认无可用封面"。
+  /// 下次加载读到此值即跳过解析，直接渲染占位图标，不走 root 特权通道。
+  /// 只有显式刷新/重扫时清除（reload 重建 cache 或手动 invalidate）。
+  static const String noCoverSentinel = '__no_cover__';
+
   factory LocalLibraryManager() => instance;
 
   LocalLibraryManager._();
@@ -624,7 +649,6 @@ class LocalLibraryManager {
   bool _loaded = false;
   Future<void>? _refreshTask;
   Future<List<LocalLibraryComicItem>>? _managedDownloadsLoadTask;
-  Future<void> _backgroundCacheTask = Future<void>.value();
   final List<LocalLibraryComicItem> _items = [];
   final List<LocalLibraryStorageEntry> _storageEntries = [];
   final Map<String, LocalLibraryComicItem> _idIndex = {};
@@ -825,64 +849,6 @@ class LocalLibraryManager {
     return file;
   }
 
-  void _warmManagedDownloadCache(
-    LocalLibrarySource source,
-    _LocalLibrarySourceCache cache,
-    List<LocalLibraryComicItem> items, {
-    required int eagerCount,
-  }) {
-    Future<void> run() async {
-      var changed = false;
-      for (int i = 0; i < items.length; i++) {
-        if (_isCoverCachePaused) {
-          await Future<void>.delayed(const Duration(milliseconds: 500));
-          i--;
-          continue;
-        }
-        final item = items[i];
-        final rawId = item.originalId;
-        final dirPath = item.fileSystemPath?.trim() ?? '';
-        if (dirPath.isEmpty || !item.localStorageExists) {
-          continue;
-        }
-        final existing = cache.itemFor(rawId, dirPath);
-        if (await _hasUsableManagedCoverCache(
-            item, existing?.coverPath?.trim())) {
-          continue;
-        }
-        await Future<void>.delayed(
-          Duration(milliseconds: i < eagerCount ? 1500 : 5000),
-        );
-        if (_isCoverCachePaused) {
-          i--;
-          continue;
-        }
-        final coverPath = await _resolveCoverPathForCacheOnly(item, existing);
-        if (coverPath == null || coverPath.trim().isEmpty) {
-          continue;
-        }
-        cache.setItem(
-          rawId,
-          dirPath,
-          _LocalLibraryCachedItem(
-            coverPath: coverPath,
-            episodeFiles: existing?.episodeFiles ?? const <int, List<String>>{},
-          ),
-        );
-        changed = true;
-        if (i % 8 == 0) {
-          await cache.save();
-          changed = false;
-        }
-      }
-      if (changed) {
-        await cache.save();
-      }
-    }
-
-    _backgroundCacheTask = _backgroundCacheTask.then((_) => run());
-  }
-
   Future<String?> _resolveNamedCoverPath(String dirPath) async {
     for (final candidate in const [
       'cover.jpg',
@@ -965,68 +931,27 @@ class LocalLibraryManager {
     await cache.save();
   }
 
-  static DateTime? _coverCachePausedUntil;
-
-  static bool get _isCoverCachePaused {
-    final until = _coverCachePausedUntil;
-    return until != null && DateTime.now().isBefore(until);
-  }
-
-  static void pauseBackgroundCoverCache({
-    Duration duration = const Duration(minutes: 30),
-  }) {
-    _coverCachePausedUntil = DateTime.now().add(duration);
-  }
-
-  static void resumeBackgroundCoverCache() {
-    _coverCachePausedUntil = null;
-  }
-
-  Future<String?> _resolveCoverPathForCacheOnly(
-    LocalLibraryComicItem item,
-    _LocalLibraryCachedItem? existing,
-  ) async {
-    if (item.isManagedDownloadItem) {
-      return _ensureManagedDownloadCoverCache(
-          item, existing?.coverPath?.trim());
-    }
-    final dirPath = item.fileSystemPath?.trim() ?? '';
-    if (dirPath.isEmpty || !item.localStorageExists) {
-      return null;
-    }
-    for (final candidate in const [
-      'cover.jpg',
-      'cover.jpeg',
-      'cover.png',
-      'cover.webp',
-    ]) {
-      final path = _joinPath(dirPath, candidate);
-      if (await _fileExists(path)) {
-        return path;
-      }
-    }
-    final ep = item.hasMultipleEpisodes ? 1 : 0;
-    final files = await _buildDownloadedEpisodeFilesForEp(dirPath, ep);
-    if (files.isEmpty) {
-      return null;
-    }
-    return files.first;
-  }
-
   Future<String?> _ensureManagedDownloadCoverCache(
     LocalLibraryComicItem item,
     String? existingCachePath,
   ) async {
     final normalizedExisting = existingCachePath?.trim() ?? '';
+    // 已持久化"无封面"标记：跳过全部 root 探测，直接返回 null（调用方渲染占位）。
+    if (normalizedExisting == noCoverSentinel) {
+      return null;
+    }
     if (await _hasUsableManagedCoverCache(item, normalizedExisting)) {
       return normalizedExisting;
     }
     final sourcePath = await _resolveManagedDownloadSourceCoverPath(item);
     if (sourcePath == null || sourcePath.isEmpty) {
+      // 源目录没有任何可用封面，持久化标记避免下次进页面再走 root 通道。
+      await _persistManagedDownloadCoverCachePath(item, noCoverSentinel);
       return null;
     }
     final bytes = await _readFileBytes(sourcePath);
     if (bytes == null || bytes.isEmpty) {
+      await _persistManagedDownloadCoverCachePath(item, noCoverSentinel);
       return null;
     }
     final target = await _managedDownloadCoverCacheFile(item, sourcePath);
@@ -1237,6 +1162,20 @@ class LocalLibraryManager {
     _loaded = false;
   }
 
+  /// 清除所有源缓存中的"无封面"标记，使下次加载重新探测。
+  /// 在用户主动下拉刷新时调用——可能手动添加了封面文件到漫画目录。
+  Future<void> invalidateNoCoverSentinels() async {
+    for (final source in await _buildSources()) {
+      if (!source.isManagedDownload) {
+        continue;
+      }
+      final cache = await _loadSourceCache(source);
+      if (cache.clearNoCoverSentinels()) {
+        await cache.save();
+      }
+    }
+  }
+
   Future<void> refresh() {
     final activeTask = _refreshTask;
     if (activeTask != null) {
@@ -1335,13 +1274,55 @@ class LocalLibraryManager {
     return path;
   }
 
+  /// 为本地漫画项返回封面 provider，与「异步预解析时序」解耦。
+  ///
+  /// 退出再进列表时，item 的 localCoverPath 可能尚未被 _prefetchLocalCovers 回写
+  /// （首帧为 null），若此时 provider 取空就会出现「有时不显示封面」。这里改为
+  /// 惰性 provider：localCoverPath 已有值时直接用；为空时返回一个 StreamImageProvider，
+  /// 其 loader 内部先 resolveCoverPathForItem（含目录扫描兜底、走特权通道、并回写
+  /// item._localCoverPath）再读字节——封面由 provider 自拉，不再依赖外部 setState 时序。
+  /// key 用稳定的 item.id，imageCache 跨进出页面命中，避免重复解析与闪烁。
+  ImageProvider<Object>? coverImageProviderForItem(LocalLibraryComicItem item) {
+    if (!item.localStorageExists) {
+      return null;
+    }
+    final cached = item.localCoverPath?.trim();
+    if (cached == noCoverSentinel) {
+      return null;
+    }
+    if (cached != null && cached.isNotEmpty) {
+      return imageProviderForLocalPath(cached);
+    }
+    return StreamImageProvider(
+      () async {
+        final resolved = await resolveCoverPathForItem(item);
+        if (resolved == null || resolved.isEmpty) {
+          return Stream<List<int>>.value(const <int>[]);
+        }
+        final bytes = await _readFileBytes(resolved);
+        return Stream<List<int>>.value(bytes ?? const <int>[]);
+      },
+      'local_cover::${item.id}',
+    );
+  }
+
   ImageProvider<Object> imageProviderForLocalPath(String path) {
-    try {
-      final file = File(path);
-      if (file.existsSync()) {
-        return FileImage(file);
-      }
-    } catch (_) {}
+    // 关键：root/shizuku 模式下，对 /storage/emulated/0/... 外部路径，
+    // File.existsSync() 会因挂载点可见而返回 true，但 FileImage 内部的
+    // readAsBytes() 受 scoped storage 限制静默失败 → 破图。若此时按 existsSync
+    // 走 FileImage 快路径，特权通道（StreamImageProvider → _readFileBytes）就
+    // 永远不触发——这正是「封面没能用上 root/shizuku 权限」的根因。
+    // 因此特权模式启用时一律走 StreamImageProvider：其 _readFileBytes 已是
+    // dart:io 优先、读到空再回退特权通道（见第六轮修正），full-access / 应用
+    // 沙箱内仍走 dart:io 命中，无回归；root/shizuku 下才真正落到特权通道。
+    if (!_isAndroidPrivilegedAccessEnabled()) {
+      try {
+        final file = File(path);
+        if (file.existsSync()) {
+          return FileImage(file);
+        }
+      } catch (_) {}
+    }
     return StreamImageProvider(
       () async {
         final bytes = await _readFileBytes(path);
@@ -1357,11 +1338,21 @@ class LocalLibraryManager {
     }
     final cached = item.localCoverPath?.trim();
     if (item.isManagedDownloadItem) {
+      // noCoverSentinel 已在 _ensureManagedDownloadCoverCache 内处理（直接返回 null），
+      // 同时该标记意味着后续 _resolveNamedCoverPath / _sortedImageFilesForPath 也不
+      // 可能有结果（同目录、同设备——不可能 dart:io 失败而 root 通道也失败后突然能
+      // 用 dart:io 读到），因此直接终止，不再走后续 fallback。
+      if (cached == noCoverSentinel) {
+        return null;
+      }
       final managedCached =
           await _ensureManagedDownloadCoverCache(item, cached);
       if (managedCached != null && managedCached.isNotEmpty) {
         return managedCached;
       }
+      // _ensureManagedDownloadCoverCache 已在失败时持久化 noCoverSentinel，
+      // 后续 fallback 对同目录做相同探测不会有不同结果，跳过。
+      return null;
     } else if (cached != null && cached.isNotEmpty) {
       return cached;
     }
@@ -1369,6 +1360,21 @@ class LocalLibraryManager {
     if (dirPath == null || dirPath.isEmpty) {
       return null;
     }
+    // 非 managed 项（图集 / 本地扫描）：目录扫描兜底解析封面。解析成功后
+    // 回写 item._localCoverPath，使同步路径（详情页 resolveLocalComicCoverPath、
+    // 图集页 _coverFile）下次能直接命中——否则那些项首帧 episodeFiles 可能为空、
+    // localCoverPath 为 null，同步路径找不到封面而破图，只有本异步路径能扫出来。
+    final resolved = await _resolveNonManagedCoverPath(item, dirPath);
+    if (resolved != null && resolved.isNotEmpty) {
+      item._localCoverPath = resolved;
+    }
+    return resolved;
+  }
+
+  Future<String?> _resolveNonManagedCoverPath(
+    LocalLibraryComicItem item,
+    String dirPath,
+  ) async {
     final namedCover = await _resolveNamedCoverPath(dirPath);
     if (namedCover != null && namedCover.isNotEmpty) {
       return namedCover;
@@ -1384,6 +1390,29 @@ class LocalLibraryManager {
     );
     if (flatImages.isNotEmpty) {
       return flatImages.first;
+    }
+    return null;
+  }
+
+  /// 解析一个本地目录（source 子项）的预览封面路径，供外层 source 卡片拼贴使用。
+  /// 走特权通道（root/shizuku 下也能读外部存储）：先找命名封面，再取首张内容图，
+  /// 都没有则递归取第一张图。返回 null 表示该目录下无可用图片。
+  Future<String?> resolveChildCoverPath(String dirPath) async {
+    final normalized = dirPath.trim();
+    if (normalized.isEmpty) {
+      return null;
+    }
+    final namedCover = await _resolveNamedCoverPath(normalized);
+    if (namedCover != null && namedCover.isNotEmpty) {
+      return namedCover;
+    }
+    final contentImages = await _sortedContentImagesForPath(normalized);
+    if (contentImages.isNotEmpty) {
+      return contentImages.first;
+    }
+    final recursive = await _sortedRecursiveContentImagesForPath(normalized);
+    if (recursive.isNotEmpty) {
+      return recursive.first;
     }
     return null;
   }
@@ -1647,8 +1676,17 @@ class LocalLibraryManager {
                 ? List<int>.from(baseItem.downloadedEps)
                 : List<int>.generate(eps.length, (index) => index);
             final cachedItem = cache.itemFor(rawId, itemDirectory);
+            // trustStorageFromDatabase=true（root 模式）时：
+            // 不再一律标 true，而是用加载开头已经列出的 sourceDirectoryNames
+            // 做纯内存匹配——目录名在 set 里的才是真正有本地内容的项，不在的
+            // 是 db 有记录但本地已删除/不存在的，标为 false 使其只显示不走通道。
+            // 这个检查不走 root 通道（纯字符串比对），零额外 I/O。
             final localStorageExists = trustStorageFromDatabase
-                ? true
+                ? _managedDownloadDirectoryExistsInIndex(
+                    source.path,
+                    itemDirectory,
+                    sourceDirectoryNames,
+                  )
                 : await _managedDownloadDirectoryExists(
                     source.path,
                     itemDirectory,
@@ -1701,7 +1739,6 @@ class LocalLibraryManager {
     if (items.isEmpty && trustStorageFromDatabase) {
       return _loadDirectoryOnlyDownloadSourceMetadata(source);
     }
-    _warmManagedDownloadCache(source, cache, items, eagerCount: 24);
     return items;
   }
 
@@ -1858,7 +1895,11 @@ class LocalLibraryManager {
             : const <int>[0];
         final cachedItem = cache.itemFor(rawId, itemDirectory);
         final localStorageExists = trustStorageFromDatabase
-            ? true
+            ? _managedDownloadDirectoryExistsInIndex(
+                source.path,
+                itemDirectory,
+                sourceDirectoryNames,
+              )
             : await _managedDownloadDirectoryExists(
                 source.path,
                 itemDirectory,
@@ -1924,7 +1965,6 @@ class LocalLibraryManager {
     } finally {
       db.dispose();
     }
-    _warmManagedDownloadCache(source, cache, sourceItems, eagerCount: 24);
   }
 
   Future<void> _scanDirectoryOnlyDownloadSource(
