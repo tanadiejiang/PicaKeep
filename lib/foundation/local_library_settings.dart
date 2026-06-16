@@ -95,7 +95,7 @@ String normalizeLocalDetailRecommendationMode(String? value) {
 }
 
 String normalizeLocalLibraryShowAllDatabaseRecords(String? value) {
-  return value == '1' ? '1' : '0';
+  return value == '0' ? '0' : '1';
 }
 
 String normalizeDownloadedLibraryView(String? value) {

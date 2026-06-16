@@ -59,6 +59,12 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
   int _recommendationPage = 0;
   double _bottomPullDistance = 0;
 
+  // 异步解析出的封面路径：本地项首帧可能 episodeFiles 为空、localCoverPath 为 null
+  // （图集 / 本地扫描项按需补全），同步的 resolveLocalComicCover 找不到封面会破图。
+  // initState 里异步走 LocalLibraryManager().resolveCoverPathForItem（含目录扫描兜底）
+  // 补上，与底栏侧栏 _resolveCoverIfNeeded 同思路。
+  String? _resolvedCoverPath;
+
   // 推荐结果缓存：_buildRecommendations() 对全库做正则相似度+排序，开销大
   // （profile 实测单次 ~150ms）。原先放在 build() 里每次 setState 都重算，
   // 导致下滑切标题/进入/退出详情页掉帧。改为缓存，仅当依赖变化时重算。
@@ -77,6 +83,29 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
     _scrollController.addListener(_handleScroll);
     _loadRemoteDetailIfNeeded();
     _loadLocalItems();
+    _resolveCoverIfNeeded();
+  }
+
+  Future<void> _resolveCoverIfNeeded() async {
+    final comic = _comic;
+    if (comic is! LocalLibraryComicItem) {
+      return;
+    }
+    // 同步路径已能拿到封面就不必异步解析。
+    final cached = comic.localCoverPath?.trim();
+    if (cached != null &&
+        cached.isNotEmpty &&
+        cached != LocalLibraryManager.noCoverSentinel &&
+        File(cached).existsSync()) {
+      return;
+    }
+    final path = await LocalLibraryManager().resolveCoverPathForItem(comic);
+    if (!mounted || path == null || path.trim().isEmpty) {
+      return;
+    }
+    setState(() {
+      _resolvedCoverPath = path.trim();
+    });
   }
 
   @override
@@ -955,19 +984,34 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
       _comic,
       legacyTargets: legacyTargets,
     );
-    final coverProvider = _comic is RemoteLibraryComicItem
+    // 同步解析不到（图集/本地扫描项首帧）时，回退到异步补出的封面路径。
+    final resolvedExtra = _resolvedCoverPath?.trim();
+    final effectiveCoverPath = cover.path.isNotEmpty
+        ? cover.path
+        : (resolvedExtra != null && resolvedExtra.isNotEmpty
+            ? resolvedExtra
+            : '');
+    // 本地项一律走 privileged-aware 的 imageProviderForLocalPath：root/shizuku 模式
+    // 无 MANAGE_EXTERNAL_STORAGE，裸 Image.file / existsSync 读外部路径会失败破图，
+    // 该 provider 在 dart:io 读不到时回退特权通道补字节。existsSync 同样不可靠
+    // （root/shizuku 下对外部路径恒 false），故不再用它判定 hasLocalCover。
+    final remoteProvider = _comic is RemoteLibraryComicItem
         ? (_comic as RemoteLibraryComicItem).coverImageProvider
         : _comic is RemoteLibraryRootItem
             ? (_comic as RemoteLibraryRootItem).coverImageProvider
             : null;
-    final hasLocalCover = cover.existsSync();
+    final ImageProvider<Object>? coverProvider = remoteProvider ??
+        (effectiveCoverPath.isNotEmpty
+            ? LocalLibraryManager().imageProviderForLocalPath(effectiveCoverPath)
+            : _comic is LocalLibraryComicItem
+                ? LocalLibraryManager()
+                    .coverImageProviderForItem(_comic as LocalLibraryComicItem)
+                : null);
     final heroTag = 'local-cover-${_comic.id}';
     return GestureDetector(
-      onTap: hasLocalCover
-          ? () => _showCoverPreviewFile(cover)
-          : coverProvider != null
-              ? () => _showCoverPreviewProvider(coverProvider)
-              : null,
+      onTap: coverProvider != null
+          ? () => _showCoverPreviewProvider(coverProvider)
+          : null,
       child: Container(
         width: width,
         height: height,
@@ -976,44 +1020,24 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
           borderRadius: BorderRadius.circular(12),
         ),
         clipBehavior: Clip.antiAlias,
-        child: hasLocalCover
+        child: coverProvider != null
             ? Hero(
                 tag: heroTag,
-                child: Image.file(
-                  cover,
+                child: Image(
+                  image: coverProvider,
                   fit: BoxFit.cover,
                   filterQuality: FilterQuality.medium,
                   isAntiAlias: true,
                   errorBuilder: (_, __, ___) => _placeholderCover(),
                 ),
               )
-            : coverProvider != null
-                ? Hero(
-                    tag: heroTag,
-                    child: Image(
-                      image: coverProvider,
-                      fit: BoxFit.cover,
-                      filterQuality: FilterQuality.medium,
-                      isAntiAlias: true,
-                      errorBuilder: (_, __, ___) => _placeholderCover(),
-                    ),
-                  )
-                : _placeholderCover(),
+            : _placeholderCover(),
       ),
     );
   }
 
   Widget _placeholderCover() {
     return const Center(child: Icon(Icons.image_not_supported, size: 36));
-  }
-
-  void _showCoverPreviewFile(File cover) {
-    App.globalTo(
-      () => _CoverPreviewPage(
-        imageProvider: FileImage(cover),
-        heroTag: 'local-cover-${_comic.id}',
-      ),
-    );
   }
 
   void _showCoverPreviewProvider(ImageProvider<Object> coverProvider) {
@@ -1187,11 +1211,17 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
       item,
       legacyTargets: _historyTargetsFor(item),
     );
-    final coverProvider = item is RemoteLibraryComicItem
+    // 本地项走 privileged-aware provider（root/shizuku 下裸 Image.file/existsSync
+    // 读外部路径会破图）；远程项用其自带 provider。
+    final remoteProvider = item is RemoteLibraryComicItem
         ? item.coverImageProvider
         : item is RemoteLibraryRootItem
             ? item.coverImageProvider
             : null;
+    final ImageProvider<Object>? coverProvider = remoteProvider ??
+        (item is LocalLibraryComicItem && cover.path.isNotEmpty
+            ? LocalLibraryManager().imageProviderForLocalPath(cover.path)
+            : null);
     final author = _recommendationAuthor(item);
     return InkWell(
       borderRadius: BorderRadius.circular(12),
@@ -1211,16 +1241,14 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
                 borderRadius: BorderRadius.circular(8),
               ),
               clipBehavior: Clip.antiAlias,
-              child: cover.existsSync()
-                  ? Image.file(cover, fit: BoxFit.cover)
-                  : coverProvider != null
-                      ? Image(
-                          image: coverProvider,
-                          fit: BoxFit.cover,
-                          errorBuilder: (_, __, ___) =>
-                              const Icon(Icons.image_not_supported),
-                        )
-                      : const Icon(Icons.image_not_supported),
+              child: coverProvider != null
+                  ? Image(
+                      image: coverProvider,
+                      fit: BoxFit.cover,
+                      errorBuilder: (_, __, ___) =>
+                          const Icon(Icons.image_not_supported),
+                    )
+                  : const Icon(Icons.image_not_supported),
             ),
             const SizedBox(width: 12),
             Expanded(

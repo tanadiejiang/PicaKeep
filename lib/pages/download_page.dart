@@ -356,7 +356,7 @@ class _DownloadedPageComicTile extends DownloadedComicTile {
     required super.onTap,
     required super.onLongTap,
     required super.onSecondaryTap,
-  });
+  }) : super(optimizeCoverDecode: true);
 
   final String comicId;
 
@@ -410,6 +410,12 @@ class DownloadPageLogic extends StateController {
   final Map<String, ImageProvider<Object>> _coverImageProviders = {};
   final Map<String, _DownloadedTileViewModel> _tileViewModels = {};
   final Set<String> _queuedCoverIds = <String>{};
+  // 解析结果为「无封面」的 managed 下载项 id：其源目录没有任何可用封面
+  // （cover.* 全部命中失败、剧集图片枚举也为空），resolveCoverPathForItem 每次都
+  // 返回 null 且不写缓存。若不记忆，列表折返时它们会被反复重新入队、每次重走
+  // ~11 次 root 特权通道（exists×8 + listDir×3），造成滚动期周期性卡顿。记下后
+  // 只渲染占位图标、不再触发通道。reload 时随队列一起清空，真正刷新仍会重试。
+  final Set<String> _coverResolveFailedIds = <String>{};
   final Queue<LocalLibraryComicItem> _coverResolveQueue =
       Queue<LocalLibraryComicItem>();
   bool _coverResolveQueueRunning = false;
@@ -605,6 +611,7 @@ class DownloadPageLogic extends StateController {
     _tileViewModels.clear();
     _queuedCoverIds.clear();
     _coverResolveQueue.clear();
+    _coverResolveFailedIds.clear();
     _coverResolveQueueRunning = false;
     _coverRefreshScheduled = false;
     _loadIssue = null;
@@ -627,6 +634,8 @@ class DownloadPageLogic extends StateController {
   Future<void> reload() async {
     final forceRemoteRefresh = _forceRemoteRefreshOnNextReload;
     _forceRemoteRefreshOnNextReload = false;
+    // 用户主动刷新时清除持久化的"无封面"标记，使有新增封面文件的项得以重新探测。
+    await LocalLibraryManager().invalidateNoCoverSentinels();
     var order = '', direction = 'desc';
     switch (appdata.settings[26][0]) {
       case "0":
@@ -827,6 +836,11 @@ class DownloadPageLogic extends StateController {
         return;
       }
       _isScrollInteracting = false;
+      // 滚动停止：重启被暂停的封面解析队列，把可见区缺图项的封面补齐
+      // （活跃滚动时 _drainCoverResolveQueue 只入队、break 出循环，未清空队列）。
+      if (_coverResolveQueue.isNotEmpty && !_coverResolveQueueRunning) {
+        unawaited(_drainCoverResolveQueue());
+      }
       if (_pendingCoverRefresh) {
         _pendingCoverRefresh = false;
         _scheduleCoverRefresh();
@@ -1282,13 +1296,20 @@ class DownloadPageLogic extends StateController {
       provider = item.coverImageProvider;
     } else if (item is LocalLibraryComicItem) {
       final coverPath = item.localCoverPath?.trim();
-      if (coverPath != null && coverPath.isNotEmpty) {
-        if (item.isManagedDownloadItem) {
-          provider = LocalLibraryManager().imageProviderForLocalPath(coverPath);
-          _queueLocalCoverResolve(item);
-        } else {
-          provider = FileImage(File(coverPath));
-        }
+      if (coverPath != null &&
+          coverPath.isNotEmpty &&
+          coverPath != LocalLibraryManager.noCoverSentinel) {
+        // 本地项封面（managed 下载项 + non-managed 图集项）一律走
+        // privileged-aware 的 imageProviderForLocalPath，而非裸 FileImage(File(...))：
+        // root/shizuku 模式无 MANAGE_EXTERNAL_STORAGE，裸 FileImage 读外部路径会静默
+        // 失败破图，此 provider 在 dart:io 读不到时回退特权通道（_readFileBytes）补字节。
+        // full-access 模式下 dart:io 直接命中，行为不变。managed 项不再排后台迁移队列：
+        // 那个队列每个 item 至少两次特权通道，对已缓存封面只为得出"无事可做"，滚动时在
+        // 帧间隙持续打通道，是 root 模式列表滚动卡顿的来源。缺图项走下面 else 按需排队。
+        provider = LocalLibraryManager().imageProviderForLocalPath(coverPath);
+      } else if (coverPath == LocalLibraryManager.noCoverSentinel) {
+        // 已持久化「无封面」标记——不入队、不走 root 通道，直接渲染占位图标。
+        // 用户添加封面文件后做一次刷新/重新加载即可清除标记、重新探测。
       } else {
         _queueLocalCoverResolve(item);
       }
@@ -1306,6 +1327,7 @@ class DownloadPageLogic extends StateController {
 
   void _queueLocalCoverResolve(LocalLibraryComicItem item) {
     if (!item.localStorageExists ||
+        _coverResolveFailedIds.contains(item.id) ||
         _coverImageProviders.containsKey(item.id) ||
         !_queuedCoverIds.add(item.id)) {
       return;
@@ -1323,6 +1345,14 @@ class DownloadPageLogic extends StateController {
     _coverResolveQueueRunning = true;
     try {
       while (_coverResolveQueue.isNotEmpty) {
+        // 活跃滚动时暂停解析：占位图标已即时展示，封面解析会经 root 特权通道
+        // 读源字节+写缓存（managed 下载项），在滚动帧间隙跑会造成 vsync 帧外
+        // 阻塞（卡顿）。手指还在滑就只入队不打通道，由 setScrollInteracting
+        // 的 idle 回调在滚动停止后重启本 drain 补齐——即"没内容也照常展示，
+        // 滚动保持流畅，停下再补封面"。break 在 removeFirst 之前，不丢队列项。
+        if (_isScrollInteracting) {
+          break;
+        }
         final item = _coverResolveQueue.removeFirst();
         if (!baseComics.any((comic) => comic.id == item.id)) {
           _queuedCoverIds.remove(item.id);
@@ -1330,10 +1360,15 @@ class DownloadPageLogic extends StateController {
         }
         final path = await LocalLibraryManager().resolveCoverPathForItem(item);
         if (path != null && path.trim().isNotEmpty) {
-          _coverImageProviders[item.id] = item.isManagedDownloadItem
-              ? LocalLibraryManager().imageProviderForLocalPath(path)
-              : FileImage(File(path));
+          // 统一走 privileged-aware provider（含 non-managed 图集项）：root/shizuku
+          // 下裸 FileImage 读外部路径会破图，此 provider 会回退特权通道补字节。
+          _coverImageProviders[item.id] =
+              LocalLibraryManager().imageProviderForLocalPath(path);
           _scheduleCoverRefresh();
+        } else {
+          // 无可用封面：记下 id，避免折返到此项时反复重走 root 特权通道。
+          // 占位图标已是其最终态，无封面可补（见 _coverResolveFailedIds 注释）。
+          _coverResolveFailedIds.add(item.id);
         }
         _queuedCoverIds.remove(item.id);
         await Future<void>.delayed(const Duration(milliseconds: 80));
@@ -2112,6 +2147,27 @@ class _DownloadPageState extends State<DownloadPage>
                                   });
                                   appdata.settings[26] = appdata.settings[26]
                                       .replaceRange(1, 2, b ? "1" : "0");
+                                  appdata.updateSettings();
+                                  changed = true;
+                                },
+                              ),
+                            ),
+                            ListTile(
+                              title: Text("显示数据库全部记录".tl),
+                              subtitle: Text(
+                                "包含本地已删除但数据库仍有记录的项".tl,
+                                style: Theme.of(context).textTheme.bodySmall,
+                              ),
+                              trailing: Switch(
+                                value: appdata.settings[
+                                        localLibraryShowAllDatabaseRecordsSettingIndex] ==
+                                    '1',
+                                onChanged: (b) {
+                                  setDialogState(() {
+                                    appdata.settings[
+                                            localLibraryShowAllDatabaseRecordsSettingIndex] =
+                                        b ? '1' : '0';
+                                  });
                                   appdata.updateSettings();
                                   changed = true;
                                 },
@@ -2959,25 +3015,24 @@ class _DownloadedComicInfoViewState extends State<DownloadedComicInfoView> {
   }
 
   Widget _buildCover(ThemeData theme) {
+    // 底栏/侧栏面板封面。本地项一律走 privileged-aware provider，而非裸 Image.file：
+    // root/shizuku 模式无 MANAGE_EXTERNAL_STORAGE，Image.file(File(path)) 读外部路径
+    // 会静默失败破图——这正是「底栏/侧栏封面只有这两个权限下不显示」的根因。
+    // _resolvedCoverPath 有值 → imageProviderForLocalPath（特权通道）；为空且是本地项
+    // → coverImageProviderForItem（惰性解析+特权通道）；其余非本地项走原 file 回退。
     final resolvedCoverPath = _resolvedCoverPath?.trim();
+    final comic = _comic;
+    ImageProvider<Object>? coverProvider;
     if (resolvedCoverPath != null && resolvedCoverPath.isNotEmpty) {
-      return ClipRRect(
-        borderRadius: const BorderRadius.all(Radius.circular(16)),
-        child: Container(
-          width: 92,
-          height: 124,
-          color: theme.colorScheme.surfaceContainerHighest,
-          child: Image.file(
-            File(resolvedCoverPath),
-            fit: BoxFit.cover,
-            errorBuilder: (_, __, ___) => _buildCoverPlaceholder(theme),
-          ),
-        ),
-      );
+      coverProvider =
+          LocalLibraryManager().imageProviderForLocalPath(resolvedCoverPath);
+    } else if (comic is LocalLibraryComicItem) {
+      coverProvider = LocalLibraryManager().coverImageProviderForItem(comic);
+    } else {
+      coverProvider = widget.logic.coverImageProviderFor(comic);
     }
 
-    final imageProvider = widget.logic.coverImageProviderFor(_comic);
-    final file = widget.logic.coverFor(_comic);
+    final file = widget.logic.coverFor(comic);
     final hasFile = file.path.trim().isNotEmpty;
     return ClipRRect(
       borderRadius: const BorderRadius.all(Radius.circular(16)),
@@ -2985,9 +3040,9 @@ class _DownloadedComicInfoViewState extends State<DownloadedComicInfoView> {
         width: 92,
         height: 124,
         color: theme.colorScheme.surfaceContainerHighest,
-        child: imageProvider != null
+        child: coverProvider != null
             ? Image(
-                image: imageProvider,
+                image: coverProvider,
                 fit: BoxFit.cover,
                 errorBuilder: (_, __, ___) => _buildCoverPlaceholder(theme),
               )

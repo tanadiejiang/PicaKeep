@@ -85,7 +85,13 @@ class PrivilegedStorageAccess {
     try {
       final file = File(path);
       if (file.existsSync()) {
-        return await file.readAsBytes();
+        final bytes = await file.readAsBytes();
+        // 同 listDirectoryEntries：root/shizuku 下 existsSync()=true 但读到空字节
+        // 可能是 scoped storage 静默拦截，回退特权通道。真正的空文件极少见，
+        // 回退在通道未启用时返回 null，调用方按读取失败处理，无副作用。
+        if (bytes.isNotEmpty) {
+          return bytes;
+        }
       }
     } catch (_) {}
     return _readFileWithPrivilegedAccess(path);
@@ -101,7 +107,7 @@ class PrivilegedStorageAccess {
     try {
       final directory = Directory(path);
       if (directory.existsSync()) {
-        return directory
+        final entries = directory
             .listSync(followLinks: false)
             .where((entity) => entity is Directory || entity is File)
             .map(
@@ -112,6 +118,14 @@ class PrivilegedStorageAccess {
               ),
             )
             .toList();
+        // dart:io 列出非空才直接采用。root/shizuku 模式下，受 scoped storage 限制的
+        // 任意外部路径（如用户自定义图集目录）常出现 existsSync()=true 但 listSync()
+        // 静默返回空（不抛异常）的情况——此时必须回退到特权通道，否则图集扫不到内容、
+        // 连阅读都打不开。空目录与"被静默拦截"无法区分，故空时一律尝试特权通道；
+        // 通道未启用（非 root/shizuku）会返回空，结果等价于原空列表，无副作用。
+        if (entries.isNotEmpty) {
+          return entries;
+        }
       }
     } catch (_) {}
     return _listDirectoryEntriesWithPrivilegedAccess(path);

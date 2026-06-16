@@ -177,6 +177,117 @@ class _RemoteRootCollage extends StatelessWidget {
   }
 }
 
+class _LocalRootCollage extends StatefulWidget {
+  const _LocalRootCollage({required this.item});
+
+  final _LocalLibraryRootItem item;
+
+  @override
+  State<_LocalRootCollage> createState() => _LocalRootCollageState();
+}
+
+class _LocalRootCollageState extends State<_LocalRootCollage> {
+  // path → resolved cover path（null 表示已解析但无封面）。用 path 作 key 避免
+  // 同一 source 内不同子项 id 冲突，且换页/重建后能按 path 复用。
+  static final Map<String, String?> _coverCache = <String, String?>{};
+  List<ImageProvider<Object>?> _providers = const [];
+
+  @override
+  void initState() {
+    super.initState();
+    _resolveCovers();
+  }
+
+  List<LocalLibraryStorageChildEntry> get _previewChildren =>
+      widget.item.entry.children
+          .where((child) => child.path.trim().isNotEmpty)
+          .take(4)
+          .toList(growable: false);
+
+  Future<void> _resolveCovers() async {
+    final children = _previewChildren;
+    if (children.isEmpty) {
+      return;
+    }
+    final manager = LocalLibraryManager();
+    final resolved = <ImageProvider<Object>?>[];
+    for (final child in children) {
+      final path = child.path;
+      String? cover;
+      if (_coverCache.containsKey(path)) {
+        cover = _coverCache[path];
+      } else {
+        cover = await manager.resolveChildCoverPath(path);
+        _coverCache[path] = cover;
+      }
+      resolved.add(
+        cover != null && cover.isNotEmpty
+            ? manager.imageProviderForLocalPath(cover)
+            : null,
+      );
+    }
+    if (mounted) {
+      setState(() {
+        _providers = resolved;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final children = _previewChildren;
+    if (children.isEmpty) {
+      return Icon(
+        Icons.photo_library_outlined,
+        size: 42,
+        color: colorScheme.onSecondaryContainer,
+      );
+    }
+    // 解析未完成时先占位（保持原有图标观感），完成后渲染 2x2 拼贴。
+    if (_providers.length != children.length) {
+      return Icon(
+        Icons.photo_library_outlined,
+        size: 42,
+        color: colorScheme.onSecondaryContainer,
+      );
+    }
+    final hasAnyCover = _providers.any((provider) => provider != null);
+    if (!hasAnyCover) {
+      return Icon(
+        Icons.photo_library_outlined,
+        size: 42,
+        color: colorScheme.onSecondaryContainer,
+      );
+    }
+    return GridView.builder(
+      physics: const NeverScrollableScrollPhysics(),
+      padding: EdgeInsets.zero,
+      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: 2,
+        mainAxisSpacing: 1.5,
+        crossAxisSpacing: 1.5,
+        childAspectRatio: 0.74,
+      ),
+      itemCount: math.min(4, _providers.length),
+      itemBuilder: (context, index) {
+        final provider = _providers[index];
+        if (provider == null) {
+          return Container(color: colorScheme.secondaryContainer);
+        }
+        return Image(
+          image: provider,
+          fit: BoxFit.cover,
+          gaplessPlayback: true,
+          filterQuality: FilterQuality.medium,
+          errorBuilder: (_, __, ___) =>
+              Container(color: colorScheme.secondaryContainer),
+        );
+      },
+    );
+  }
+}
+
 class _LocalLibraryRemoteRootCard extends StatelessWidget {
   const _LocalLibraryRemoteRootCard({
     required this.item,
@@ -389,11 +500,7 @@ class _LocalLibraryLocalRootCard extends StatelessWidget {
                       decoration: BoxDecoration(
                         color: colorScheme.secondaryContainer,
                       ),
-                      child: Icon(
-                        Icons.photo_library_outlined,
-                        size: 42,
-                        color: colorScheme.onSecondaryContainer,
-                      ),
+                      child: _LocalRootCollage(item: item),
                     ),
                   ),
                 ),
@@ -885,6 +992,33 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
     }
   }
 
+  // 本地项首帧可能 localCoverPath 为 null（图集/本地扫描项按需补全），
+  // tile 同步的 _coverFile→resolveLocalComicCover 找不到封面会破图。这里加载后
+  // 异步对这些项走 resolveCoverPathForItem（含目录扫描兜底，会回写 item._localCoverPath），
+  // 完成后 setState 刷新让 tile 拿到回写后的封面。一次性、低频，不在滚动帧间隙跑。
+  Future<void> _prefetchLocalCovers(List<DownloadedItem> items) async {
+    final manager = LocalLibraryManager();
+    var changed = false;
+    for (final item in items) {
+      if (item is! LocalLibraryComicItem || !item.localStorageExists) {
+        continue;
+      }
+      final cover = item.localCoverPath?.trim();
+      if (cover != null &&
+          cover.isNotEmpty &&
+          cover != LocalLibraryManager.noCoverSentinel) {
+        continue;
+      }
+      final resolved = await manager.resolveCoverPathForItem(item);
+      if (resolved != null && resolved.trim().isNotEmpty) {
+        changed = true;
+      }
+    }
+    if (changed && mounted) {
+      setState(() {});
+    }
+  }
+
   Future<bool> _checkRemoteAvailability() async {
     if (!_isClientMode) {
       return false;
@@ -1025,6 +1159,7 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
         _clearSelectionState();
         _loading = false;
       });
+      unawaited(_prefetchLocalCovers(items));
     } catch (e) {
       if (!mounted) {
         return;
@@ -1101,6 +1236,12 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
   ImageProvider<Object>? _coverImageProvider(DownloadedItem item) {
     if (item is RemoteLibraryComicItem) {
       return item.coverImageProvider;
+    }
+    if (item is LocalLibraryComicItem) {
+      // 惰性 provider：localCoverPath 未回写（退出再进首帧为 null）时，由 provider
+      // 自身异步解析+读字节，不再依赖 _prefetchLocalCovers 的 setState 时序——
+      // 这是「有时退出再进不显示封面」的修复。走特权通道，root/shizuku 下可读。
+      return LocalLibraryManager().coverImageProviderForItem(item);
     }
     return null;
   }
