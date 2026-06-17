@@ -1,238 +1,149 @@
-# PicaKeep CLI
+# PicaKeep
 
-PicaKeep 仓库已经包含 CLI 入口 [bin/picakeep.dart](/D:/Flutter_Projucts/PicaComic/PicaKeep/bin/picakeep.dart)，但系统要能直接执行 `picakeep`，还需要额外的构建或安装步骤。
+本地漫画阅读器 / 收藏管理器。基于 [PicaComic](https://github.com/Pacalini/PicaComic) 二次开发，使用 Flutter 构建，在原有PicaComic客户端基础上重做为以本地漫画管理为主线的工具，完全兼容原项目的下载内容和数据库读取，支持客户端/服务端双模式、加密压缩包直接阅读、局域网远程阅览与浏览器网页后台。
 
-当前仓库的 CLI 依赖链里仍包含部分 Flutter / native-asset 依赖，所以不同 Dart SDK 上可用的构建方式并不完全一致：
+## 功能概览
 
-- 优先尝试 `dart build cli`
-- 旧版环境再尝试 `dart compile exe`
-- 只有在 `dart run bin/picakeep.dart` 本身可运行时，才会回退到 `dart run` launcher
+- **原项目兼容** — 完全兼容 PicaComic 的下载内容和数据库，已有数据无缝迁移
+- **本地漫画管理** — 导入文件夹，自动识别封面
+- **加密压缩包** — 直接阅读加密 ZIP/CBZ，支持 AES 和 ZipCrypto
+- **服务端模式** — 可切换为 headless 服务端，局域网内其他设备远程阅览
+- **局域网发现** — mDNS 广播 + 网段扫描，自动发现服务端
+- **网页后台** — 内置 Web Console，浏览器管理漫画库和阅读历史
+- **CLI 工具** — 独立命令行入口，后台启动服务端
 
-如果三条路径都失败，说明当前 CLI 依赖链里还有 Flutter-only 模块需要继续剥离；这时脚本会直接失败，并把详细日志写入 `build/cli/build.log`。
+## 快速安装
 
-## 1. 开发期运行
+从 [Releases](https://github.com/tanadiejiang/PicaKeep/releases) 下载对应平台的安装包：
 
-直接从源码运行：
+| 平台 | 安装方式 |
+|------|---------|
+| **Windows** | 运行 `PicaKeep-x.x.x-windows-amd64-setup.exe` |
+| **Linux (Debian/Ubuntu)** | `sudo dpkg -i PicaKeep-x.x.x-linux-amd64.deb` |
+| **Linux (通用)** | `chmod +x PicaKeep-x.x.x-linux-amd64.AppImage && ./PicaKeep-x.x.x-linux-amd64.AppImage` |
+| **Android** | 安装 `PicaKeep-x.x.x-android-arm64-v8a.apk` |
 
-```bash
-dart run bin/picakeep.dart -h
-dart run bin/picakeep.dart -v
-dart run bin/picakeep.dart run
-```
+安装后 GUI 和 CLI 均可直接使用，终端输入 `picakeep` 即可。
 
-这条路径最适合开发、调试和排查 CLI 参数问题。
+## 构建指引
 
-## 2. 构建可执行入口
+### 环境要求
 
-Linux / Debian：
+- Flutter SDK ≥ 3.3.0
+- Android: Android SDK + 签名密钥
+- Linux: `libgtk-3-dev`
+- Windows: Visual Studio 2022+
 
-```bash
-bash tool/build_cli.sh
-```
-
-Windows PowerShell：
-
-```powershell
-.\tool\build_cli.ps1
-```
-
-脚本会统一生成 CLI launcher：
-
-```text
-Linux:   build/cli/picakeep
-Windows: build\cli\picakeep.cmd
-```
-
-它的行为如下：
-
-- 如果 `dart build cli` 成功，launcher 会启动原生 CLI bundle
-- 如果 `dart compile exe` 成功，launcher 会启动编译出的单文件二进制
-- 如果两种原生构建都不可用，但源码运行可用，launcher 会回退到 `dart run bin/picakeep.dart`
-- 如果源码运行本身也不可用，脚本会失败，不会生成伪可用 launcher
-
-验证：
+### 拉取依赖
 
 ```bash
-./build/cli/picakeep -h
-./build/cli/picakeep -v
+flutter pub get
 ```
 
-```powershell
-.\build\cli\picakeep.cmd -h
-.\build\cli\picakeep.cmd -v
-```
-
-构建日志会写到：
-
-```text
-build/cli/build.log
-```
-
-注意：`build/linux/x64/debug/bundle/` 和 `build/windows/x64/runner/Debug/` 是 Flutter App bundle，不是 CLI 安装目录。即使里面有 `picakeep` / `picakeep.exe`，它也是 App 入口，不是本 CLI launcher。
-
-## 3. 安装到 PATH
-
-Linux / Debian：
+### 构建各平台
 
 ```bash
-bash tool/install_cli.sh
+# Windows
+flutter build windows --release
+
+# Linux
+flutter build linux --release
+
+# Android (需要配置 android/key.properties 签名)
+flutter build apk --split-per-abi --release
 ```
 
-默认安装位置：
+### 构建 CLI
 
-```text
-~/.local/bin/picakeep
-```
-
-Windows PowerShell：
-
-```powershell
-.\tool\install_cli.ps1
-```
-
-默认安装位置：
-
-```text
-%LOCALAPPDATA%\PicaKeepCLI\bin\picakeep.cmd
-```
-
-默认运行数据：
-
-- 原生构建成功时：同时安装运行 bundle 到 `~/.local/share/picakeep-cli` 或 `%LOCALAPPDATA%\PicaKeepCLI`
-- Web Console 静态资源会安装到运行数据目录下的 `assets/web_console`
-- 原生构建失败但源码运行可用时：安装一个 launcher，回到当前仓库执行 `dart run`
-
-安装后验证：
+CLI 是独立的纯 Dart 入口，需要单独构建：
 
 ```bash
-command -v picakeep
-picakeep -h
-picakeep -v
+# Linux
+dart build cli --target=bin/picakeep.dart --output=build/cli
+
+# Windows
+dart build cli --target=bin/picakeep.dart --output=build/cli
 ```
 
-```powershell
-Get-Command picakeep
-picakeep -h
-picakeep -v
-```
-
-如果 Linux 上曾经误用 `root` / `su` 执行安装，仓库里的 `build/cli` 可能会变成 root 所有，普通用户再次安装会出现 `权限不够`。切回普通用户后执行：
+或使用脚本一键构建 + 安装到 PATH：
 
 ```bash
-cd /home/azusa/picakeep_linux_build
-sudo chown -R "$USER:$USER" build/cli
-sudo chown -R "$USER:$USER" "$HOME/.local/bin" "$HOME/.local/share/picakeep-cli" 2>/dev/null || true
-bash tool/install_cli.sh
+# Linux
+bash tool/build_cli.sh && bash tool/install_cli.sh
+
+# Windows
+.\tool\build_cli.ps1; .\tool\install_cli.ps1
 ```
 
-如果 Linux 上 `command -v picakeep` 没有输出，说明 `~/.local/bin` 还不在 PATH。可将下面这行加入 `~/.bashrc`、`~/.zshrc` 或当前 shell 配置：
+### CI 自动构建
+
+推送 tag 即触发 GitHub Actions 自动构建 Windows + Linux ARM64 安装包：
 
 ```bash
-export PATH="$HOME/.local/bin:$PATH"
+git tag v1.0.0
+git push origin v1.0.0
 ```
 
-然后重新打开终端或执行：
+产物在仓库 Actions 页面下载。
 
-```bash
-source ~/.bashrc
+## CLI 命令参考
+
+安装后终端直接使用 `picakeep`：
+
+| 命令 | 说明 |
+|------|------|
+| `picakeep -h` | 查看帮助 |
+| `picakeep -v` | 查看版本和系统信息 |
+| `picakeep run` | 后台启动 headless 服务端 |
+| `picakeep run --foreground` | 前台启动（调试用） |
+| `picakeep stop` | 停止后台服务端 |
+| `picakeep status` | 查看目标服务状态 |
+
+启动后会输出：
+
+```
+网页应用:   http://127.0.0.1:9527/
+管理后台:   http://127.0.0.1:9527/admin-view
+状态接口:   http://127.0.0.1:9527/status
 ```
 
-如果 Windows 上 `Get-Command picakeep` 没有输出，先确认安装目录是否可直接运行：
+运行数据目录：
 
-```powershell
-& "$env:LOCALAPPDATA\PicaKeepCLI\bin\picakeep.cmd" -v
+| 平台 | 路径 |
+|------|------|
+| Linux | `~/.local/share/picakeep-cli/` |
+| Windows | `%LOCALAPPDATA%\PicaKeepCLI\` |
+
+## 项目结构
+
+```
+├── lib/                    # Flutter 应用主体
+│   ├── pages/              # 页面
+│   ├── foundation/         # 基础库（加密、网络、存储）
+│   └── server/             # 服务端模式
+├── bin/                    # CLI 入口（纯 Dart）
+├── assets/                 # 静态资源
+│   └── web_console/        # 网页后台前端
+├── windows/                # Windows 平台配置
+├── linux/                  # Linux 平台配置
+├── android/                # Android 平台配置
+└── tool/                   # 构建脚本
 ```
 
-安装脚本会自动把 `%LOCALAPPDATA%\PicaKeepCLI\bin` 写入用户 PATH。已经打开的旧 PowerShell 不一定会立即拿到新的用户 PATH；关闭后重新打开终端即可。当前终端也可以临时执行：
+## 致谢
 
-```powershell
-$env:Path = "$env:LOCALAPPDATA\PicaKeepCLI\bin;$env:Path"
-picakeep -v
-```
+### 项目
 
-PowerShell 从当前目录直接运行文件时必须带 `./` 或 `.\` 前缀，例如 `picakeep.exe` 不正确，应该是：
+[![Readme Card](https://github-readme-stats.vercel.app/api/pin/?username=Pacalini&repo=PicaComic)](https://github.com/Pacalini/PicaComic)
 
-```powershell
-.\picakeep.exe -v
-```
+本项目基于 PicaComic 二次开发，感谢原作者的杰出工作。
 
-## 4. 三条运行路径
+### 标签翻译
 
-开发运行：
+[![Readme Card](https://github-readme-stats.vercel.app/api/pin/?username=EhTagTranslation&repo=Database)](https://github.com/EhTagTranslation/Database)
 
-```bash
-dart run bin/picakeep.dart -v
-```
+漫画标签中文翻译数据来自此项目。
 
-构建后运行：
+## 许可证
 
-```bash
-./build/cli/picakeep -v
-```
-
-```powershell
-.\build\cli\picakeep.cmd -v
-```
-
-安装后运行：
-
-```bash
-picakeep -v
-picakeep help
-picakeep run
-picakeep stop
-```
-
-```powershell
-picakeep -v
-picakeep help
-picakeep run
-picakeep stop
-```
-
-默认情况下，`picakeep` / `picakeep run` 会后台启动服务端并立即返回终端，不会占住当前 shell。启动后会输出 PID、日志文件、网页应用、管理后台和状态接口地址。
-
-前台调试时使用：
-
-```bash
-picakeep run --foreground
-```
-
-停止后台服务：
-
-```bash
-picakeep stop
-```
-
-默认日志位置：
-
-```text
-Linux:   ~/.local/share/picakeep-cli/server.log
-Windows: %LOCALAPPDATA%\PicaKeepCLI\server.log
-```
-
-当前目录直接运行时必须带路径前缀：
-
-```bash
-./picakeep -v
-```
-
-```powershell
-.\picakeep.exe -v
-```
-
-只输入 `picakeep -v` 会走 PATH 搜索；如果还没安装到 PATH，就会显示“未找到命令”。
-
-## 6. 纯 Dart 边界
-
-CLI 入口和 headless 服务端必须保持纯 Dart 依赖边界，不能直接 import Flutter UI、`dart:ui`、`rootBundle`、`MethodChannel` 或 App 全局状态。
-
-当前 CLI 第一版只提供：
-
-- 后台启动 headless 服务端
-- 停止后台服务端
-- 查看版本、系统和目标服务状态
-- 输出网页应用、管理后台 `/admin-view`、`/status` 地址、PID 和日志路径
-- 提供网页后台静态资源、状态接口、配置接口和基础空资源视图
-
-完整本地漫画业务仍由 Flutter App 端既有服务端保留。
+Apache-2.0

@@ -35,6 +35,12 @@ Z_性能数据/
 /build/
 /coverage/
 build/cli/
+installer_output/
+android/key.properties
+installer.iss
+android/build/
+android/app/build/
+.tmp_remote/
 
 # Symbolication related
 app.*.symbols
