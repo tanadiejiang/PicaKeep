@@ -1427,10 +1427,17 @@ class LocalLibraryManager {
 
   int get cachedAlbumCount => _items.where((item) => item.isAlbum).length;
 
+  /// 图集列表页每个源卡片点进去展示的就是 `entry.children`，此处对所有作为
+  /// 卡片出现的源（`supportsCollectionShell`）的子项数求和，使「我」页面计数
+  /// 与列表卡片子项之和一致（例如 `.qq` 合集源算它的 8 个子项，而非算 1 个源）。
+  int get cachedAlbumChildrenCount => _storageEntries
+      .where((entry) => entry.source.supportsCollectionShell)
+      .fold<int>(0, (sum, entry) => sum + entry.comicCount);
+
   int get cachedVisibleCount {
     final albumOnly =
         appdata.settings[localLibraryAlbumOnlySettingIndex] != '0';
-    return albumOnly ? cachedAlbumCount : cachedCount;
+    return albumOnly ? cachedAlbumChildrenCount : cachedCount;
   }
 
   Future<List<LocalLibraryStorageEntry>> getStorageEntries() async {

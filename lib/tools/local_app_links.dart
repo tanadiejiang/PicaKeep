@@ -169,9 +169,35 @@ Future<void> handleLocalAppLinks(String url) async {
   }
 }
 
+/// 原生剪贴板读取通道。
+///
+/// 不用 Flutter 内置的 [Clipboard.getData]：后者走 flutter/platform 通道、
+/// 以 JSONMethodCodec 编码返回值，剪贴板里若有超大文本（如截图、复制长文）
+/// 会被整段塞进 JSON success envelope，在主线程逐字符转义，造成数秒级 ANR。
+/// 原生侧先按 MIME 过滤非纯文本、再按 [maxChars] 截断后才返回，envelope 极小。
+const MethodChannel _clipboardChannel =
+    MethodChannel('lingxue.picakeep/clipboard');
+
+Future<String?> _readClipboardTextTruncated({int maxChars = 10000}) async {
+  try {
+    return await _clipboardChannel.invokeMethod<String>(
+      'getText',
+      {'maxChars': maxChars},
+    );
+  } on MissingPluginException {
+    // 非 Android（桌面/其它）无此原生通道，回退 Flutter 内置实现。
+    final data = await Clipboard.getData(Clipboard.kTextPlain);
+    final text = data?.text;
+    if (text == null) return null;
+    return text.length > maxChars ? text.substring(0, maxChars) : text;
+  } catch (_) {
+    return null;
+  }
+}
+
 Future<void> checkLocalClipboard() async {
-  final data = await Clipboard.getData(Clipboard.kTextPlain);
-  final text = data?.text;
+  // URL 通常远小于该上限，截断后判定 isURL 不受影响。
+  final text = await _readClipboardTextTruncated(maxChars: 10000);
   if (text == null || !text.isURL) return;
   if (canHandleLocal(text)) await handleLocalAppLinks(text);
 }

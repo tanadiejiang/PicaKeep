@@ -317,7 +317,7 @@ class _MePageState extends State<MePage> {
       }
       if (mounted) {
         setState(() {
-          _localLibraryCount = LocalLibraryManager().cachedAlbumCount;
+          _localLibraryCount = LocalLibraryManager().cachedAlbumChildrenCount;
           _localLibraryCountLoaded = true;
         });
         _cacheCurrentState();

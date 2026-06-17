@@ -260,6 +260,21 @@ class _LocalRootCollageState extends State<_LocalRootCollage> {
         color: colorScheme.onSecondaryContainer,
       );
     }
+    final covers =
+        _providers.where((provider) => provider != null).toList(growable: false);
+    // 单项内容直接铺满整块封面区，不走 2x2 拼贴网格（避免右侧大片留白）。
+    if (covers.length == 1) {
+      return Image(
+        image: covers.first!,
+        fit: BoxFit.cover,
+        width: double.infinity,
+        height: double.infinity,
+        gaplessPlayback: true,
+        filterQuality: FilterQuality.medium,
+        errorBuilder: (_, __, ___) =>
+            Container(color: colorScheme.secondaryContainer),
+      );
+    }
     return GridView.builder(
       physics: const NeverScrollableScrollPhysics(),
       padding: EdgeInsets.zero,
@@ -1342,6 +1357,16 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
       return;
     }
     if (item is _LocalLibraryRootItem) {
+      // 单项 source 直接进该项详情，不再套一层「合集列表」外壳——只有 1 个子项时
+      // 中间列表毫无意义。child.id 即 _items 里的 itemId，findCachedById 同步可取。
+      final children = item.entry.children;
+      if (children.length == 1) {
+        final comic = LocalLibraryManager().findCachedById(children.first.id);
+        if (comic != null) {
+          App.pushInner(() => LocalComicDetailPage(comic: comic));
+          return;
+        }
+      }
       App.pushInner(
         () => LocalLibraryPage(
           albumOnly: true,
