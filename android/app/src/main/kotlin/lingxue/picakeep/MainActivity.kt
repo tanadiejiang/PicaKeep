@@ -2,6 +2,8 @@ package lingxue.picakeep
 
 import android.Manifest
 import android.app.UiModeManager
+import android.content.ClipDescription
+import android.content.ClipboardManager
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
@@ -373,6 +375,24 @@ class MainActivity : FlutterActivity() {
         )
         MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
+            CLIPBOARD_CHANNEL,
+        ).setMethodCallHandler { call, result ->
+            when (call.method) {
+                // 只读纯文本剪贴板，且在原生侧按 maxChars 截断后再返回。
+                // 目的：规避 Flutter 内置 Clipboard.getData 走 flutter/platform
+                // 通道（JSONMethodCodec）时，把整段超大剪贴板文本塞进 JSON
+                // success envelope、在主线程逐字符 Formatter.format 转义导致的
+                // 数秒级 ANR（截图等会向剪贴板写入极大且无意义的文本/非文本数据）。
+                "getText" -> {
+                    val maxChars = (call.argument<Int>("maxChars") ?: 10000)
+                        .coerceAtLeast(0)
+                    result.success(readClipboardText(maxChars))
+                }
+                else -> result.notImplemented()
+            }
+        }
+        MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
             STORAGE_ACCESS_CHANNEL,
         ).setMethodCallHandler { call, result ->
             when (call.method) {
@@ -637,6 +657,29 @@ class MainActivity : FlutterActivity() {
                 else -> result.notImplemented()
             }
         }
+    }
+
+    private fun readClipboardText(maxChars: Int): String? {
+        if (maxChars <= 0) {
+            return null
+        }
+        val clipboard =
+            getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+                ?: return null
+        // 非纯文本（如截图写入的 image/*）直接短路：不取 .text，避免触碰大对象。
+        val description = clipboard.primaryClipDescription
+        if (description != null &&
+            !description.hasMimeType(ClipDescription.MIMETYPE_TEXT_PLAIN) &&
+            !description.hasMimeType(ClipDescription.MIMETYPE_TEXT_HTML)
+        ) {
+            return null
+        }
+        val clip = clipboard.primaryClip ?: return null
+        if (clip.itemCount == 0) {
+            return null
+        }
+        val text = clip.getItemAt(0)?.coerceToText(this)?.toString() ?: return null
+        return if (text.length > maxChars) text.substring(0, maxChars) else text
     }
 
     private fun <T> runStorageTask(
@@ -1689,6 +1732,8 @@ class MainActivity : FlutterActivity() {
             "lingxue.picakeep/dynamic_theme"
         private const val STORAGE_ACCESS_CHANNEL =
             "lingxue.picakeep/storage_access"
+        private const val CLIPBOARD_CHANNEL =
+            "lingxue.picakeep/clipboard"
         private const val REQUEST_CODE_POST_NOTIFICATIONS = 1001
         private const val REQUEST_CODE_SHIZUKU = 1002
         private const val PRIVILEGED_PROCESS_TIMEOUT_MS = 5_000L
