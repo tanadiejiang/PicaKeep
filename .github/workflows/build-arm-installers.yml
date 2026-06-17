@@ -1,0 +1,143 @@
+name: Build ARM Installers
+
+on:
+  workflow_dispatch:
+
+jobs:
+  # ===== Linux ARM64 (.deb package) =====
+  linux-arm64-deb:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          sudo apt-get update
+          sudo apt-get install -y clang cmake curl dpkg-dev git libgtk-3-dev liblzma-dev libstdc++-12-dev ninja-build pkg-config unzip xz-utils zip
+      - run: |
+          git clone --depth 1 --branch master https://github.com/flutter/flutter.git "$RUNNER_TEMP/flutter"
+          echo "$RUNNER_TEMP/flutter/bin" >> "$GITHUB_PATH"
+      - run: flutter doctor -v
+      - run: flutter pub get
+      - run: flutter build linux --release
+      - run: dart build cli --target=bin/picakeep.dart --output=build/cli
+      - run: |
+          set -e
+          ver="$(sed -n 's/^version: //p' pubspec.yaml | head -n 1 | cut -d+ -f1)"
+          pkg="picakeep_${ver}_arm64"
+          appdir="$pkg/opt/PicaKeep"
+
+          mkdir -p "$appdir/cli" "$pkg/DEBIAN" "$pkg/usr/share/applications" "$pkg/usr/local/bin"
+          cp -r build/linux/*/release/bundle/* "$appdir/"
+          cp build/cli/bundle/bin/picakeep "$appdir/cli/"
+          cp -r assets/web_console "$appdir/cli/assets"
+          chmod +x "$appdir/picakeep" "$appdir/cli/picakeep"
+
+          ln -s /opt/PicaKeep/cli/picakeep "$pkg/usr/local/bin/picakeep"
+
+          cat > "$pkg/usr/share/applications/picakeep.desktop" << DESKTOP
+          [Desktop Entry]
+          Type=Application
+          Name=PicaKeep
+          Exec=/opt/PicaKeep/picakeep
+          Icon=/opt/PicaKeep/data/flutter_assets/assets/web_console/pica-icon.svg
+          Terminal=false
+          Categories=Graphics;
+          DESKTOP
+
+          cat > "$pkg/DEBIAN/control" << CONTROL
+          Package: picakeep
+          Version: $ver
+          Section: graphics
+          Priority: optional
+          Architecture: arm64
+          Maintainer: PicaComic
+          Depends: libgtk-3-0
+          Description: PicaKeep desktop app and CLI
+          CONTROL
+
+          dpkg-deb --build "$pkg"
+          mkdir -p artifacts
+          mv "$pkg.deb" artifacts/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: picakeep-linux-arm64-deb
+          path: artifacts/*.deb
+
+  # ===== Windows ARM64 (Inno Setup installer) =====
+  windows-arm64-installer:
+    runs-on: windows-11-arm
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          git clone --depth 1 --branch master https://github.com/flutter/flutter.git "$env:RUNNER_TEMP\flutter"
+          Add-Content $env:GITHUB_PATH "$env:RUNNER_TEMP\flutter\bin"
+      - run: flutter doctor -v
+      - run: flutter pub get
+      - run: flutter build windows --release
+      - run: dart build cli --target=bin/picakeep.dart --output=build/cli
+      - run: |
+          New-Item -ItemType Directory -Force publish/cli
+          Copy-Item -Recurse build/windows/arm64/runner/Release/* publish/
+          Copy-Item build/cli/bundle/bin/picakeep.exe publish/cli/
+          Copy-Item -Recurse assets/web_console publish/cli/assets/
+      - run: |
+          $ver = (Get-Content pubspec.yaml | Where-Object { $_ -match 'version:\s*(\S+)' } | ForEach-Object { $Matches[1] } | Select-Object -First 1)
+          @"
+          [Setup]
+          AppId={{B8F4A3D2-7E6C-4A1B-9D5F-8E2C7A3B1F04}}
+          AppName=PicaKeep
+          AppVersion=$ver
+          AppPublisher=PicaComic
+          DefaultDirName={autopf}\PicaKeep
+          DefaultGroupName=PicaKeep
+          OutputDir=.\artifacts
+          OutputBaseFilename=PicaKeep_ARM64_Setup_v$ver
+          SetupIconFile=.\windows\runner\resources\app_icon.ico
+          Compression=lzma2
+          SolidCompression=yes
+          WizardStyle=modern
+          PrivilegesRequired=lowest
+          ArchitecturesAllowed=arm64
+          ArchitecturesInstallIn64BitMode=arm64
+          MinVersion=10.0
+
+          [Tasks]
+          Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: "额外快捷方式:"; Flags: checkedonce
+          Name: "clitopath"; Description: "将 picakeep 命令行工具添加到 PATH"; GroupDescription: "其他选项:"; Flags: checkedonce
+
+          [Files]
+          Source: "publish\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+
+          [Icons]
+          Name: "{group}\PicaKeep"; Filename: "{app}\picakeep.exe"
+          Name: "{group}\卸载 PicaKeep"; Filename: "{uninstallexe}"
+          Name: "{autodesktop}\PicaKeep"; Filename: "{app}\picakeep.exe"; Tasks: desktopicon
+
+          [Run]
+          Filename: "{app}\picakeep.exe"; Description: "运行 PicaKeep"; Flags: nowait postinstall skipifsilent
+
+          [Code]
+          const EnvironmentKey = 'Environment';
+          procedure AddToPath(const NewPath: string);
+          var OldPath: string;
+          begin
+            if not RegQueryStringValue(HKCU, EnvironmentKey, 'PATH', OldPath) then OldPath := '';
+            if Pos(';' + Uppercase(NewPath) + ';', ';' + Uppercase(OldPath) + ';') > 0 then Exit;
+            if OldPath <> '' then OldPath := OldPath + ';';
+            RegWriteStringValue(HKCU, EnvironmentKey, 'PATH', OldPath + NewPath);
+          end;
+          procedure CurStepChanged(CurStep: TSetupStep);
+          begin
+            if CurStep = ssPostInstall then
+              if WizardIsTaskSelected('clitopath') then
+                AddToPath(ExpandConstant('{app}\cli'));
+          end;
+          "@ | Out-File -FilePath installer.iss -Encoding Default
+      - run: choco install innosetup -y --no-progress
+      - run: |
+          New-Item -ItemType Directory -Force artifacts
+          $iscc = (Get-ChildItem -Path "C:\Program Files*\Inno Setup*\ISCC.exe" | Select-Object -First 1).FullName
+          & $iscc installer.iss
+      - uses: actions/upload-artifact@v4
+        with:
+          name: picakeep-windows-arm64-installer
+          path: artifacts/PicaKeep_ARM64_Setup_v*.exe
