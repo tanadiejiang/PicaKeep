@@ -24,5 +24,11 @@ subprojects {
 }
 
 tasks.register<Delete>("clean") {
-    delete(rootProject.layout.buildDirectory)
+    // Flutter keeps outputs for multiple platforms under the shared root build/
+    // directory. Limit Android clean to Android subprojects so a running Windows
+    // build does not block `assembleDebug` or `clean`.
+    delete(
+        subprojects.map { it.layout.buildDirectory },
+        rootProject.layout.buildDirectory.dir("reports"),
+    )
 }
