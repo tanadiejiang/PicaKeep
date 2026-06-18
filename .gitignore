@@ -41,6 +41,7 @@ installer.iss
 android/build/
 android/app/build/
 .tmp_remote/
+publish/
 
 # Symbolication related
 app.*.symbols
