@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:dynamic_color/dynamic_color.dart';
 import 'package:flutter/material.dart';
@@ -14,15 +15,25 @@ import 'foundation/local_favorites.dart';
 import 'foundation/remote_library_event_channel.dart';
 import 'pages/auth_page.dart';
 import 'pages/main_page.dart';
+import 'server/local_server_runtime.dart';
 import 'server/local_server_runtime_sync.dart';
 import 'tools/block_screenshot.dart';
 import 'tools/dynamic_theme_channel.dart';
 import 'tools/translations.dart';
 
-Future<void> main() async {
+Future<void> main(List<String> args) async {
   AppStartupTrace.log('main.start');
   WidgetsFlutterBinding.ensureInitialized();
   AppStartupTrace.log('widgetsBinding.ready');
+
+  // Headless 服务端模式：无界面、直接启动本地服务（供无显示器环境如 NAS 使用，
+  // 由 xvfb 包裹运行）。不调用 runApp / window_manager，仅复用与桌面版完全相同的
+  // PicaKeepAdminServer，保证能力一致。
+  if (args.contains('--server')) {
+    await _runHeadlessServer(args);
+    return;
+  }
+
   _configureGlobalImageCache();
   AppStartupTrace.log('imageCache.configured');
 
@@ -34,6 +45,77 @@ Future<void> main() async {
   if (App.isDesktop) {
     unawaited(_showDesktopWindowWhenReady());
   }
+}
+
+Future<void> _runHeadlessServer(List<String> args) async {
+  await App.init();
+  await appdata.readEssentialData();
+  ArchiveRegistry.initDefaults();
+
+  final runtime = LocalServerRuntime.instance;
+  final configPath = _parseConfigPathArg(args);
+  if (configPath != null) {
+    runtime.configPathOverride = configPath;
+  }
+
+  try {
+    await runtime.start();
+  } catch (e, s) {
+    stderr.writeln('PicaKeep headless 服务端启动失败: $e');
+    stderr.writeln(s);
+    exitCode = 1;
+    return;
+  }
+
+  final snapshot = await runtime.readSnapshot();
+  stdout.writeln('PicaKeep headless 服务端已启动');
+  stdout.writeln('配置文件: ${snapshot.configPath}');
+  stdout.writeln('监听: ${snapshot.host}:${snapshot.port}');
+  if (snapshot.statusUrl != null) {
+    stdout.writeln('状态接口: ${snapshot.statusUrl}');
+  }
+  if (snapshot.adminUrl != null) {
+    stdout.writeln('管理后台: ${snapshot.adminUrl}');
+  }
+  stdout.writeln('停止服务: Ctrl+C');
+
+  final completer = Completer<void>();
+  var stopping = false;
+  Future<void> shutdown(String signalName) async {
+    if (stopping) {
+      return;
+    }
+    stopping = true;
+    stdout.writeln('\n收到 $signalName，正在停止服务...');
+    try {
+      await runtime.stop();
+    } finally {
+      if (!completer.isCompleted) {
+        completer.complete();
+      }
+    }
+  }
+
+  ProcessSignal.sigint.watch().listen((_) => unawaited(shutdown('Ctrl+C')));
+  if (!Platform.isWindows) {
+    ProcessSignal.sigterm.watch().listen((_) => unawaited(shutdown('SIGTERM')));
+  }
+  await completer.future;
+}
+
+String? _parseConfigPathArg(List<String> args) {
+  for (var i = 0; i < args.length; i++) {
+    final arg = args[i];
+    if (arg.startsWith('--config=')) {
+      final value = arg.substring('--config='.length).trim();
+      return value.isEmpty ? null : value;
+    }
+    if (arg == '--config' && i + 1 < args.length) {
+      final value = args[i + 1].trim();
+      return value.isEmpty ? null : value;
+    }
+  }
+  return null;
 }
 
 Future<void> _initializeApplication() async {
