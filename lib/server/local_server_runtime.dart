@@ -84,7 +84,18 @@ class LocalServerRuntime {
 
   bool get isRunning => _server?.isRunning == true;
 
+  /// CLI headless 模式可注入配置文件路径，使数据落在 `--config=` 指定目录
+  /// （配置文件同级目录）。GUI 模式不设置，沿用 [App.dataPath] 下的默认路径。
+  String? _configPathOverride;
+
+  /// 覆盖配置文件路径。传入空串/null 清除覆盖、恢复默认。
+  set configPathOverride(String? value) {
+    final trimmed = value?.trim();
+    _configPathOverride = (trimmed != null && trimmed.isNotEmpty) ? trimmed : null;
+  }
+
   String get configPath =>
+      _configPathOverride ??
       '${App.dataPath}${Platform.pathSeparator}${PicaKeepServerConfig.defaultFileName}';
 
   void markResourceStateDirty() {

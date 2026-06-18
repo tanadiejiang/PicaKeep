@@ -9,7 +9,9 @@ import 'package:picakeep/pages/history_page.dart';
 import 'package:picakeep/pages/image_favorites.dart';
 import 'package:picakeep/pages/local_search_page.dart';
 import 'package:picakeep/pages/settings/settings_page.dart';
+import 'package:picakeep/server/local_server_runtime.dart';
 import 'package:picakeep/tools/translations.dart';
+import 'package:picakeep/tools/tray_controller.dart';
 import 'package:window_manager/window_manager.dart';
 
 export 'side_bar.dart' show showSideBar;
@@ -641,6 +643,37 @@ Future<void> initWindowManagerIfDesktop() async {
   );
   await windowManager.setBackgroundColor(Colors.transparent);
   await windowManager.setMinimumSize(const Size(500, 600));
+
+  // Windows:关闭窗口时——若服务端正在运行则缩到系统托盘后台常驻(服务继续提供),
+  // 若没有服务运行则正常退出。判断在 _WindowsTrayCloseListener.onWindowClose 完成。
+  // 其它平台不启用,关窗行为不变。
+  if (Platform.isWindows) {
+    await windowManager.setPreventClose(true);
+    windowManager.addListener(_WindowsTrayCloseListener());
+    await initTray();
+  }
+}
+
+/// Windows 专用:拦截关窗 ->
+///   - 服务端运行中:隐藏到托盘后台常驻(由托盘菜单「退出」真正结束进程);
+///   - 服务端未运行:解除拦截并真正退出。
+class _WindowsTrayCloseListener with WindowListener {
+  @override
+  void onWindowClose() {
+    () async {
+      try {
+        if (!await windowManager.isPreventClose()) {
+          return;
+        }
+        if (LocalServerRuntime.instance.isRunning) {
+          await windowManager.hide();
+        } else {
+          await windowManager.setPreventClose(false);
+          await windowManager.destroy();
+        }
+      } catch (_) {}
+    }();
+  }
 }
 
 Future<void> showWindowWhenReady() async {

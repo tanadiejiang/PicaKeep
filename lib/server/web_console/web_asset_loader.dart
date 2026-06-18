@@ -51,6 +51,16 @@ List<String> _candidateAssetRoots() {
   addRoot(Platform.environment['PICAKEEP_WEB_CONSOLE_ROOT']);
   addRoot(Platform.environment['PICAKEEP_ASSET_ROOT']);
 
+  // 基于真实可执行文件定位:Flutter 编译产物里 Platform.script 往往为空/无意义,
+  // 而 resolvedExecutable 指向二进制本身(如 /opt/PicaKeep/picakeep),其旁的
+  // data/flutter_assets/assets/web_console 即 web 控制台资源,绝对可靠。
+  try {
+    final exeDir = File(Platform.resolvedExecutable).parent.absolute.path;
+    addRoot(_joinPath(exeDir, 'data/flutter_assets/assets/web_console'));
+    addRoot(_joinPath(exeDir, 'flutter_assets/assets/web_console'));
+    addRoot(_joinPath(exeDir, 'assets/web_console'));
+  } catch (_) {}
+
   final cwd = Directory.current.absolute.path;
   addRoot(_joinPath(cwd, 'assets/web_console'));
   addRoot(_joinPath(cwd, 'data/flutter_assets/assets/web_console'));
