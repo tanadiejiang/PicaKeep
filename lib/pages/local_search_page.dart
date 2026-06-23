@@ -112,6 +112,7 @@ class _LocalSearchPageState extends State<LocalSearchPage> {
 
     await favManager.init();
     await localManager.ensureLoaded();
+    final showAllDatabaseRecords = localManager.showAllDatabaseRecords;
 
     if (widget.searchType != LocalSearchType.downloadsOnly) {
       final favResults = favManager.search(normalizedKeyword);
@@ -139,6 +140,9 @@ class _LocalSearchPageState extends State<LocalSearchPage> {
 
     if (widget.searchType != LocalSearchType.favoritesOnly) {
       for (final item in await localManager.getAll()) {
+        if (_shouldHideDownloadedItem(item, showAllDatabaseRecords)) {
+          continue;
+        }
         final idKey = 'local_${item.id}';
         if (seenIds.contains(idKey)) continue;
         if (_matches(item, normalizedKeyword)) {
@@ -239,6 +243,16 @@ class _LocalSearchPageState extends State<LocalSearchPage> {
     return words.every((word) => terms.any((term) => term.contains(word)));
   }
 
+  bool _shouldHideDownloadedItem(
+    DownloadedItem item,
+    bool showAllDatabaseRecords,
+  ) {
+    return !showAllDatabaseRecords &&
+        item is LocalLibraryComicItem &&
+        item.isManagedDownloadItem &&
+        !item.localStorageExists;
+  }
+
   String _downloadLabel(DownloadedItem item) {
     if (item is LocalLibraryComicItem) {
       if (item.isAlbum) {
@@ -284,6 +298,7 @@ class _LocalSearchPageState extends State<LocalSearchPage> {
           return file;
         }
       }
+      return File('');
     }
     return DownloadManager().getCover(item.id);
   }

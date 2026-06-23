@@ -28,6 +28,8 @@ class AppStartupTrace {
 }
 
 class App {
+  static const String serverDataDirEnvKey = 'PICAKEEP_DATA_DIR';
+
   static bool get isAndroid => Platform.isAndroid;
   static bool get isIOS => Platform.isIOS;
   static bool get isWindows => Platform.isWindows;
@@ -111,9 +113,22 @@ class App {
 
   static late final String dataPath;
 
-  static Future<void> init() async {
+  static Future<void> init({
+    String? dataPathOverride,
+    bool migrateExistingData = false,
+  }) async {
     cachePath = (await getApplicationCacheDirectory()).path;
-    dataPath = (await getApplicationSupportDirectory()).path;
+    final supportDirectory = await getApplicationSupportDirectory();
+    final resolvedDataPath = dataPathOverride?.trim();
+    if (resolvedDataPath != null && resolvedDataPath.isNotEmpty) {
+      dataPath = Directory(resolvedDataPath).absolute.path;
+      await Directory(dataPath).create(recursive: true);
+      if (migrateExistingData) {
+        await _migrateAppDataIfNeeded(supportDirectory.path, dataPath);
+      }
+      return;
+    }
+    dataPath = supportDirectory.path;
   }
 
   static back(BuildContext context) {
@@ -181,6 +196,84 @@ class App {
       {bool preventDuplicates = false}) {
     return Navigator.of(globalContext!)
         .push<T>(AppPageRoute(builder: (context) => page()));
+  }
+
+  static Future<void> _migrateAppDataIfNeeded(
+    String sourcePath,
+    String targetPath,
+  ) async {
+    final sourceDir = Directory(sourcePath);
+    if (!await sourceDir.exists()) {
+      return;
+    }
+    final targetDir = Directory(targetPath);
+    await targetDir.create(recursive: true);
+    if (_normalizedPath(sourceDir.path) == _normalizedPath(targetDir.path)) {
+      return;
+    }
+    final targetNormalized = _normalizedPath(targetDir.path);
+    await for (final entity in sourceDir.list(followLinks: false)) {
+      if (_containsPathBranch(_normalizedPath(entity.path), targetNormalized)) {
+        continue;
+      }
+      final destination =
+          '${targetDir.path}${Platform.pathSeparator}${_leafName(entity.path)}';
+      try {
+        if (entity is File) {
+          if (!File(destination).existsSync()) {
+            await entity.copy(destination);
+          }
+        } else if (entity is Directory) {
+          await _copyDirectoryIfMissing(entity, Directory(destination));
+        }
+      } catch (_) {}
+    }
+  }
+
+  static Future<void> _copyDirectoryIfMissing(
+    Directory source,
+    Directory destination,
+  ) async {
+    if (_normalizedPath(source.path) == _normalizedPath(destination.path)) {
+      return;
+    }
+    await destination.create(recursive: true);
+    await for (final entity in source.list(followLinks: false)) {
+      final nextPath =
+          '${destination.path}${Platform.pathSeparator}${_leafName(entity.path)}';
+      try {
+        if (entity is File) {
+          if (!File(nextPath).existsSync()) {
+            await entity.copy(nextPath);
+          }
+        } else if (entity is Directory) {
+          await _copyDirectoryIfMissing(entity, Directory(nextPath));
+        }
+      } catch (_) {}
+    }
+  }
+
+  static String _normalizedPath(String path) {
+    try {
+      return Directory(path).absolute.path;
+    } catch (_) {
+      return path.trim();
+    }
+  }
+
+  static bool _containsPathBranch(String branchPath, String targetPath) {
+    if (branchPath == targetPath) {
+      return true;
+    }
+    final separator = Platform.pathSeparator;
+    return targetPath.startsWith('$branchPath$separator');
+  }
+
+  static String _leafName(String path) {
+    final normalized = path.replaceAll('\\', '/');
+    final parts =
+        normalized.split('/').where((entry) => entry.isNotEmpty).toList();
+    return parts.isEmpty ? normalized : parts.last;
   }
 
   static Future<T?> openReader<T extends Object?>(

@@ -13,6 +13,7 @@ import '../foundation/archive/archive_errors.dart';
 import '../foundation/archive/archive_models.dart';
 import '../foundation/archive/archive_reading_service.dart';
 import '../foundation/archive/archive_registry.dart';
+import '../foundation/app.dart';
 import '../foundation/local_trash_store.dart';
 import '../foundation/local_library_settings.dart';
 import '../foundation/privileged_storage_access.dart';
@@ -35,7 +36,7 @@ class PicaKeepAdminServer {
     ServerRuntimeState? runtimeState,
   })  : _state = runtimeState ?? ServerRuntimeState(),
         _trashStore = LibraryTrashStore(
-          '${File(configPath).parent.path}${Platform.pathSeparator}library_trash.json',
+          '${App.dataPath}${Platform.pathSeparator}library_trash.json',
         );
 
   final String configPath;
@@ -835,8 +836,37 @@ class PicaKeepAdminServer {
         addRoot('/storage/emulated/0');
         addRoot('/sdcard');
       }
+      for (final volume in _linuxStorageVolumeRoots()) {
+        addRoot(volume);
+      }
+    }
+    final config = _config ?? PicaKeepServerConfig.defaults();
+    for (final root in config.allLibraryRoots) {
+      addRoot(root);
     }
 
+    return roots;
+  }
+
+  List<String> _linuxStorageVolumeRoots() {
+    if (!Platform.isLinux) {
+      return const <String>[];
+    }
+    final roots = <String>[];
+    try {
+      for (final entity in Directory('/').listSync(followLinks: false)) {
+        final name = _basename(entity.path);
+        if (!RegExp(r'^vol\d+$', caseSensitive: false).hasMatch(name)) {
+          continue;
+        }
+        try {
+          if (Directory('/$name/1000').existsSync()) {
+            roots.add('/$name');
+          }
+        } catch (_) {}
+      }
+    } catch (_) {}
+    roots.sort((a, b) => a.compareTo(b));
     return roots;
   }
 
@@ -2689,6 +2719,7 @@ class PicaKeepAdminServer {
       'port': _server?.port ?? config.port,
       'logRequests': config.logRequests,
       'configPath': configPath,
+      'dataPath': App.dataPath,
       'currentDownloadRoot': config.currentDownloadRoot,
       'originalDownloadRoot': config.originalDownloadRoot,
       'customLibraryRoots': config.customLibraryRoots,

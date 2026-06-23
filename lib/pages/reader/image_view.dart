@@ -580,8 +580,12 @@ extension ImageExt on ComicReadingPage {
   /// create a image provider
   ImageProvider createImageProvider(
       ReadingType type, ComicReadingPageLogic logic, int index, String target) {
-    return logic.data
-        .createImageProvider(logic.order, index, logic.urls[index]);
+    return logic.data.createImageProvider(
+      logic.order,
+      index,
+      logic.urls[index],
+      abortSignal: logic.imageAbortSignal,
+    );
   }
 
   /// check current location of [PageView], update location when it is out of range.
