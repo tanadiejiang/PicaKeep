@@ -1,0 +1,42 @@
+name: Build Linux amd64 Installer
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  linux-amd64-deb:
+    name: linux-amd64-deb
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang cmake curl dpkg-dev git libgtk-3-dev liblzma-dev libstdc++-12-dev ninja-build pkg-config unzip xz-utils zip libayatana-appindicator3-dev
+
+      - name: Install Flutter
+        run: |
+          git clone --depth 1 --branch master https://github.com/flutter/flutter.git "$RUNNER_TEMP/flutter"
+          echo "$RUNNER_TEMP/flutter/bin" >> "$GITHUB_PATH"
+
+      - name: Flutter doctor
+        run: flutter doctor -v
+
+      - name: Get dependencies
+        run: flutter pub get
+
+      - name: Build Linux release
+        run: flutter build linux --release
+
+      - name: Package .deb
+        run: bash .github/scripts/package_linux_deb.sh amd64
+
+      - name: Upload Linux amd64 installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: picakeep-linux-amd64-deb
+          path: artifacts/*.deb

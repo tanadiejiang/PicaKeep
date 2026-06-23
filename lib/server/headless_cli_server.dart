@@ -146,7 +146,8 @@ class PicaKeepHeadlessCliServer {
       if (request.method == 'PUT') {
         final payload = await _readJsonMap(request);
         final nextConfig = PicaKeepServerConfig.fromJson(payload);
-        final passwordChanged = nextConfig.consolePassword != _config.consolePassword;
+        final passwordChanged =
+            nextConfig.consolePassword != _config.consolePassword;
         _config = nextConfig;
         await PicaKeepServerConfig.save(configPath, _config);
         _snapshot = await _scanResources();
@@ -185,7 +186,9 @@ class PicaKeepHeadlessCliServer {
     }
     if (path == 'api/console/users') {
       if (request.method == 'GET') {
-        return _jsonResponse({'users': [user.toJson()]});
+        return _jsonResponse({
+          'users': [user.toJson()]
+        });
       }
       return _jsonResponse({
         'ok': false,
@@ -384,7 +387,8 @@ class PicaKeepHeadlessCliServer {
   Map<String, dynamic> buildSummaryPayload() {
     final urls = _localUrls();
     final rootCount = _snapshot.roots.length;
-    final availableRootCount = _snapshot.roots.where((root) => root.exists).length;
+    final availableRootCount =
+        _snapshot.roots.where((root) => root.exists).length;
     final missingRootCount = rootCount - availableRootCount;
     return {
       'serviceName': 'PicaKeep Headless Server',
@@ -411,6 +415,7 @@ class PicaKeepHeadlessCliServer {
       'appUrl': urls.app,
       'consolePasswordEmpty': _config.consolePassword.trim().isEmpty,
       'logRequests': _config.logRequests,
+      'configPath': configPath,
     };
   }
 
@@ -555,6 +560,9 @@ class PicaKeepHeadlessCliServer {
         addRoot('/storage/emulated/0');
         addRoot('/sdcard');
       }
+      for (final volume in _linuxStorageVolumeRoots()) {
+        addRoot(volume);
+      }
     }
     for (final root in _config.allLibraryRoots) {
       addRoot(root);
@@ -562,9 +570,32 @@ class PicaKeepHeadlessCliServer {
     return roots;
   }
 
+  List<String> _linuxStorageVolumeRoots() {
+    if (!Platform.isLinux) {
+      return const <String>[];
+    }
+    final roots = <String>[];
+    try {
+      for (final entity in Directory('/').listSync(followLinks: false)) {
+        final name = _basename(entity.path);
+        if (!RegExp(r'^vol\d+$', caseSensitive: false).hasMatch(name)) {
+          continue;
+        }
+        try {
+          if (Directory('/$name/1000').existsSync()) {
+            roots.add('/$name');
+          }
+        } catch (_) {}
+      }
+    } catch (_) {}
+    roots.sort((a, b) => a.compareTo(b));
+    return roots;
+  }
+
   String _adminBrowseRootName(String path) {
     final normalized = _normalizeBrowsePath(path);
-    if (Platform.isWindows && normalized.endsWith(':${Platform.pathSeparator}')) {
+    if (Platform.isWindows &&
+        normalized.endsWith(':${Platform.pathSeparator}')) {
       return normalized;
     }
     if (normalized == '/') {
@@ -600,7 +631,8 @@ class PicaKeepHeadlessCliServer {
 
   String _basename(String path) {
     final normalized = path.replaceAll('\\', '/');
-    final parts = normalized.split('/').where((part) => part.isNotEmpty).toList();
+    final parts =
+        normalized.split('/').where((part) => part.isNotEmpty).toList();
     return parts.isEmpty ? normalized : parts.last;
   }
 

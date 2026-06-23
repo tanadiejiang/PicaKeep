@@ -32,19 +32,19 @@ abstract class ReadingData {
   Future<void> setLocalImageSortMode(String value) async {}
 
   bool checkEpDownloaded(int ep) {
-    return !hasEp || downloadedEps.contains(ep-1);
+    return !hasEp || downloadedEps.contains(ep - 1);
   }
 
   Future<List<String>> loadEp(int ep) async {
-    if(downloaded && downloadedEps.isEmpty){
+    if (downloaded && downloadedEps.isEmpty) {
       var comic = await downloadManager.getComicOrNull(downloadId);
       if (comic != null) {
         downloadedEps = comic.downloadedEps;
       }
     }
-    if (downloaded && checkEpDownloaded(ep)){
+    if (downloaded && checkEpDownloaded(ep)) {
       int length;
-      if(hasEp) {
+      if (hasEp) {
         length = downloadManager.getEpLength(downloadId, ep);
       } else {
         length = downloadManager.getComicLength(downloadId);
@@ -67,11 +67,20 @@ abstract class ReadingData {
     }
   }
 
-  ImageProvider createImageProvider(int ep, int page, String url){
-    if (downloaded && checkEpDownloaded(ep)){
+  ImageProvider createImageProvider(
+    int ep,
+    int page,
+    String url, {
+    StreamImageAbortSignal? abortSignal,
+  }) {
+    if (downloaded && checkEpDownloaded(ep)) {
       return FileImageProvider(downloadId, hasEp ? ep : 0, page);
     } else {
-      return StreamImageProvider(() => loadImage(ep, page, url), buildImageKey(ep, page, url));
+      return StreamImageProvider(
+        () => loadImage(ep, page, url),
+        buildImageKey(ep, page, url),
+        abortSignal: abortSignal,
+      );
     }
   }
 

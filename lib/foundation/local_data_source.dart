@@ -8,6 +8,7 @@ const managedDataSourceModeOriginalOnly = '2';
 const managedDataSourceModeSettingIndex = 75;
 
 String _managedDataSourceMode = managedDataSourceModeCurrentOnly;
+String? _managedDataRootOverride;
 
 String normalizeManagedDataSourceMode([String? value]) {
   switch (value) {
@@ -25,7 +26,16 @@ void setManagedDataSourceMode(String value) {
 
 String get managedDataSourceMode => _managedDataSourceMode;
 
+void setManagedDataRootOverride(String? value) {
+  final path = value?.trim();
+  _managedDataRootOverride = path != null && path.isNotEmpty ? path : null;
+}
+
 Future<String> getCurrentManagedDataRoot() async {
+  final override = _managedDataRootOverride?.trim();
+  if (override != null && override.isNotEmpty) {
+    return Directory(override).absolute.path;
+  }
   return (await getApplicationSupportDirectory()).path;
 }
 

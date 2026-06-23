@@ -177,6 +177,7 @@ class ComicReadingPage extends StatelessWidget {
                 ?.setDarkTheme());
       }
     }, dispose: (logic) {
+      logic.abortActiveImageLoads();
       //清除缓存并减小最大缓存
       logic.restoreReaderCacheLimits();
       logic.clearPhotoViewControllers();
@@ -243,7 +244,8 @@ class ComicReadingPage extends StatelessWidget {
                 ),
                 floatingActionButton: buildEpChangeButton(logic),
                 body: StateBuilder<ComicReadingPageLogic>(builder: (logic) {
-                  print('[PicaKeep][build] isLoading=${logic.isLoading} urls=${logic.urls.length} errorMessage=${logic.errorMessage}');
+                  print(
+                      '[PicaKeep][build] isLoading=${logic.isLoading} urls=${logic.urls.length} errorMessage=${logic.errorMessage}');
                   if (logic.isLoading) {
                     history?.readEpisode.add(logic.order);
                     loadInfo(logic);
@@ -459,7 +461,8 @@ class ComicReadingPage extends StatelessWidget {
       }
       logic.urls = urls;
       logic.isLoading = false;
-      print('[PicaKeep][loadInfo] set urls=${urls.length} requestId=$requestId chapterLoadRequestId=${logic.chapterLoadRequestId} order=$order logicOrder=${logic.order}');
+      print(
+          '[PicaKeep][loadInfo] set urls=${urls.length} requestId=$requestId chapterLoadRequestId=${logic.chapterLoadRequestId} order=$order logicOrder=${logic.order}');
       logic.update();
     } catch (e) {
       if (StateController.findOrNull<ComicReadingPageLogic>() != logic ||

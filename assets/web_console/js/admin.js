@@ -1004,6 +1004,7 @@
               <tr><th>后台地址</th><td>${escapeHtml(summary.adminUrl || '/')}</td></tr>
               <tr><th>状态接口</th><td>${escapeHtml(summary.statusUrl || '/status')}</td></tr>
               <tr><th>配置文件</th><td>${escapeHtml(summary.configPath || '--')}</td></tr>
+              <tr><th>服务数据目录</th><td>${escapeHtml(summary.dataPath || '--')}</td></tr>
               <tr><th>日志记录</th><td>${summary.logRequests ? '开启' : '关闭'}</td></tr>
             </tbody>
           </table>

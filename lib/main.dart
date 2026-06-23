@@ -11,6 +11,7 @@ import 'components/window_frame.dart';
 import 'foundation/app.dart';
 import 'foundation/archive/archive_registry.dart';
 import 'foundation/history.dart';
+import 'foundation/local_data_source.dart';
 import 'foundation/local_favorites.dart';
 import 'foundation/remote_library_event_channel.dart';
 import 'pages/auth_page.dart';
@@ -48,7 +49,12 @@ Future<void> main(List<String> args) async {
 }
 
 Future<void> _runHeadlessServer(List<String> args) async {
-  await App.init();
+  final dataPathOverride = _resolveHeadlessDataPathOverride(args);
+  await App.init(
+    dataPathOverride: dataPathOverride,
+    migrateExistingData: true,
+  );
+  setManagedDataRootOverride(App.dataPath);
   await appdata.readEssentialData();
   ArchiveRegistry.initDefaults();
 
@@ -101,6 +107,18 @@ Future<void> _runHeadlessServer(List<String> args) async {
     ProcessSignal.sigterm.watch().listen((_) => unawaited(shutdown('SIGTERM')));
   }
   await completer.future;
+}
+
+String? _resolveHeadlessDataPathOverride(List<String> args) {
+  final envOverride = Platform.environment[App.serverDataDirEnvKey]?.trim();
+  if (envOverride != null && envOverride.isNotEmpty) {
+    return envOverride;
+  }
+  final configPath = _parseConfigPathArg(args);
+  if (configPath != null) {
+    return File(configPath).parent.path;
+  }
+  return null;
 }
 
 String? _parseConfigPathArg(List<String> args) {
@@ -310,7 +328,8 @@ class _PicaKeepAppState extends State<PicaKeepApp> with WidgetsBindingObserver {
   }
 
   Future<void> _refreshDynamicColors({bool force = false}) async {
-    if (!_usesDynamicTheme || _shouldThrottleDynamicColorRefresh(force: force)) {
+    if (!_usesDynamicTheme ||
+        _shouldThrottleDynamicColorRefresh(force: force)) {
       return;
     }
     final requestVersion = ++_dynamicColorRequestVersion;

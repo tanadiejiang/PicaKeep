@@ -436,7 +436,8 @@ class LocalLibraryComicItem extends DownloadedItem {
       return title;
     }
     final rest = normalizedTitle.substring(itemTitle.length).trimLeft();
-    final cleaned = rest.replaceFirst(RegExp(r'^[\s/_\\\-—:：]+'), '').trimLeft();
+    final cleaned =
+        rest.replaceFirst(RegExp(r'^[\s/_\\\-—:：]+'), '').trimLeft();
     return cleaned.isEmpty ? title : cleaned;
   }
 
@@ -583,7 +584,12 @@ class LocalPathReadingData extends ReadingData {
   }
 
   @override
-  ImageProvider createImageProvider(int ep, int page, String url) {
+  ImageProvider createImageProvider(
+    int ep,
+    int page,
+    String url, {
+    StreamImageAbortSignal? abortSignal,
+  }) {
     if (isArchiveUri(url)) {
       final parsed = parseArchiveUri(url)!;
       final fp = ArchiveReadingService.instance
@@ -2399,7 +2405,8 @@ class LocalLibraryManager {
         .toList()
       ..sort((a, b) => _naturalCompare(a.name, b.name));
     for (final chapterEntry in chapterEntries) {
-      final files = await _sortedRecursiveContentImagesForPath(chapterEntry.path);
+      final files =
+          await _sortedRecursiveContentImagesForPath(chapterEntry.path);
       if (files.isEmpty) {
         continue;
       }
@@ -2432,11 +2439,13 @@ class LocalLibraryManager {
   String _stripCollectionShellParentPrefix(String shellTitle, String title) {
     final normalizedShell = shellTitle.trim();
     final normalizedTitle = title.trim();
-    if (normalizedShell.isEmpty || !normalizedTitle.startsWith(normalizedShell)) {
+    if (normalizedShell.isEmpty ||
+        !normalizedTitle.startsWith(normalizedShell)) {
       return title;
     }
     final rest = normalizedTitle.substring(normalizedShell.length).trimLeft();
-    final cleaned = rest.replaceFirst(RegExp(r'^[\s/_\\\-—:：]+'), '').trimLeft();
+    final cleaned =
+        rest.replaceFirst(RegExp(r'^[\s/_\\\-—:：]+'), '').trimLeft();
     return cleaned.isEmpty ? title : cleaned;
   }
 
@@ -2449,7 +2458,8 @@ class LocalLibraryManager {
     return parentTitle.isEmpty ? leafTitle : parentTitle;
   }
 
-  static String _episodeTitleForLeafDirectory(String dirPath, String displayTitle) {
+  static String _episodeTitleForLeafDirectory(
+      String dirPath, String displayTitle) {
     final leafTitle = _basename(dirPath).trim();
     final normalizedDisplay = displayTitle.trim();
     if (_isPlainNumericTitle(leafTitle)) {

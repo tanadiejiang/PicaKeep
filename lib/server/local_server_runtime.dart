@@ -91,7 +91,8 @@ class LocalServerRuntime {
   /// 覆盖配置文件路径。传入空串/null 清除覆盖、恢复默认。
   set configPathOverride(String? value) {
     final trimmed = value?.trim();
-    _configPathOverride = (trimmed != null && trimmed.isNotEmpty) ? trimmed : null;
+    _configPathOverride =
+        (trimmed != null && trimmed.isNotEmpty) ? trimmed : null;
   }
 
   String get configPath =>
@@ -132,7 +133,7 @@ class LocalServerRuntime {
   }
 
   String get _trashIndexPath =>
-      '${File(configPath).parent.path}${Platform.pathSeparator}library_trash.json';
+      '${App.dataPath}${Platform.pathSeparator}library_trash.json';
 
   Future<LibraryTrashEntry> restoreTrashItem(String trashId) {
     return _runExclusive(() async {
@@ -386,8 +387,7 @@ class LocalServerRuntime {
         appdata.settings[originalDownloadDirSettingIndex].trim();
     final customLibraryRoots =
         decodeLocalComicPathList(appdata.settings[localComicPathsSettingIndex]);
-    final customLibraryCollectionShellModes =
-        decodeLocalCollectionShellPathMap(
+    final customLibraryCollectionShellModes = decodeLocalCollectionShellPathMap(
       appdata.settings[localLibraryCollectionShellSettingIndex],
     );
     final port = int.tryParse(

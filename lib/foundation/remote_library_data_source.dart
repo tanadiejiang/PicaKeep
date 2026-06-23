@@ -902,7 +902,8 @@ class RemoteLibraryReadingData extends ReadingData {
       return title;
     }
     final rest = normalizedTitle.substring(itemTitle.length).trimLeft();
-    final cleaned = rest.replaceFirst(RegExp(r'^[\s/_\\\-—:：]+'), '').trimLeft();
+    final cleaned =
+        rest.replaceFirst(RegExp(r'^[\s/_\\\-—:：]+'), '').trimLeft();
     return cleaned.isEmpty ? title : cleaned;
   }
 
@@ -938,10 +939,19 @@ class RemoteLibraryReadingData extends ReadingData {
   }
 
   @override
-  ImageProvider createImageProvider(int ep, int page, String url) {
+  ImageProvider createImageProvider(
+    int ep,
+    int page,
+    String url, {
+    StreamImageAbortSignal? abortSignal,
+  }) {
     return StreamImageProvider.withProgress(
-      () => item.client.loadImageWithProgress(url),
+      () => item.client.loadImageWithProgress(
+        url,
+        abortSignal: abortSignal,
+      ),
       buildImageKey(ep, page, url),
+      abortSignal: abortSignal,
     );
   }
 
@@ -2183,10 +2193,53 @@ class RemoteLibraryClient {
     );
   }
 
+  static Future<T> _withAbort<T>(
+    Future<T> future,
+    StreamImageAbortSignal? abortSignal,
+    void Function() onAbort,
+  ) {
+    if (abortSignal == null) {
+      return future;
+    }
+    final completer = Completer<T>();
+    future.then(
+      (value) {
+        if (!completer.isCompleted) {
+          completer.complete(value);
+        }
+      },
+      onError: (Object error, StackTrace stackTrace) {
+        if (!completer.isCompleted) {
+          completer.completeError(error, stackTrace);
+        }
+      },
+    );
+    void abort() {
+      if (completer.isCompleted) {
+        return;
+      }
+      try {
+        onAbort();
+      } catch (_) {}
+      completer.completeError(
+        StateError('Image load aborted'),
+        StackTrace.current,
+      );
+    }
+
+    if (abortSignal.isAborted) {
+      abort();
+    } else {
+      unawaited(abortSignal.aborted.then((_) => abort()));
+    }
+    return completer.future;
+  }
+
   Future<StreamImageLoadResult> loadImageWithProgress(
     String url, {
     bool lightweight = false,
     bool isCover = false,
+    StreamImageAbortSignal? abortSignal,
   }) async {
     final client = lightweight ? _controlClient : _httpClient;
     // Acquire a concurrency permit BEFORE touching getUrl. This is the core
@@ -2197,10 +2250,10 @@ class RemoteLibraryClient {
     // every remote tab dies. Capping here means getUrl is only ever called when
     // a connection is actually available, so it returns promptly.
     final limiter = isCover ? _browseImageLimiter : _readerImageLimiter;
-    await limiter.acquire();
+    var permitAcquired = false;
     var permitReleased = false;
     void releasePermit() {
-      if (!permitReleased) {
+      if (permitAcquired && !permitReleased) {
         permitReleased = true;
         limiter.release();
       }
@@ -2208,13 +2261,61 @@ class RemoteLibraryClient {
 
     HttpClientRequest? request;
     try {
-      request = await _openWithTimeout(
-        client.getUrl(resolveUri(url)),
+      if (abortSignal?.isAborted == true) {
+        throw StateError('Image load aborted');
+      }
+      final acquirePermit = limiter.acquire();
+      await _withAbort<void>(
+        acquirePermit,
+        abortSignal,
+        () {
+          unawaited(acquirePermit.then(
+            (_) {
+              permitAcquired = true;
+              if (abortSignal?.isAborted == true) {
+                releasePermit();
+              }
+            },
+            onError: (_) {},
+          ));
+        },
+      );
+      permitAcquired = true;
+      if (abortSignal?.isAborted == true) {
+        releasePermit();
+        throw StateError('Image load aborted');
+      }
+
+      final connecting = client.getUrl(resolveUri(url));
+      final opening = _openWithTimeout(
+        connecting,
         const Duration(seconds: 5),
       );
-      final response = await request.close().timeout(
-            const Duration(seconds: 10),
-          );
+      request = await _withAbort<HttpClientRequest>(
+        opening,
+        abortSignal,
+        () {
+          unawaited(opening.then(
+            (openedRequest) {
+              try {
+                openedRequest.abort();
+              } catch (_) {}
+            },
+            onError: (_) {},
+          ));
+        },
+      );
+      final response = await _withAbort<HttpClientResponse>(
+        request.close().timeout(
+              const Duration(seconds: 10),
+            ),
+        abortSignal,
+        () {
+          try {
+            request?.abort();
+          } catch (_) {}
+        },
+      );
       if (response.statusCode < 200 || response.statusCode >= 300) {
         // A non-2xx response (e.g. a 404 for a missing cover) STILL has a live
         // body and an attached socket. dart:io only returns that socket to the
