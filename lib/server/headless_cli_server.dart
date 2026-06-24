@@ -7,6 +7,7 @@ import 'package:shelf/shelf.dart';
 import 'package:shelf/shelf_io.dart' as shelf_io;
 
 import 'server_config.dart';
+import 'managed_data_root_resolver.dart';
 import 'server_runtime_state.dart';
 import 'web_console/web_console_handler.dart';
 
@@ -31,6 +32,7 @@ class PicaKeepHeadlessCliServer {
   Future<void> start({required PicaKeepServerConfig config}) async {
     _state.markStarting('正在启动 headless 服务端');
     _config = config;
+    await applyManagedDataRootForServerConfig(_config);
     _snapshot = await _scanResources();
     try {
       final server = await shelf_io.serve(
@@ -141,7 +143,7 @@ class PicaKeepHeadlessCliServer {
     }
     if (path == 'api/admin/config') {
       if (request.method == 'GET') {
-        return _jsonResponse(_config.toJson());
+        return _jsonResponse(_configPayload());
       }
       if (request.method == 'PUT') {
         final payload = await _readJsonMap(request);
@@ -150,6 +152,7 @@ class PicaKeepHeadlessCliServer {
             nextConfig.consolePassword != _config.consolePassword;
         _config = nextConfig;
         await PicaKeepServerConfig.save(configPath, _config);
+        await applyManagedDataRootForServerConfig(_config);
         _snapshot = await _scanResources();
         _state.addLog('config', '配置已保存');
         if (passwordChanged) {
@@ -159,7 +162,7 @@ class PicaKeepHeadlessCliServer {
         return _jsonResponse({
           'ok': true,
           'message': '配置已保存，host/port 改动重启后完全生效',
-          'config': _config.toJson(),
+          'config': _configPayload(),
         });
       }
       return _jsonResponse({'error': 'method not allowed'}, statusCode: 405);
@@ -318,14 +321,14 @@ class PicaKeepHeadlessCliServer {
         'parent': '',
         'entries': roots
             .map(
-              (path) => {
-                'name': _adminBrowseRootName(path),
-                'path': path,
+              (root) => {
+                'name': root.label,
+                'path': root.jumpPath,
                 'isDirectory': true,
               },
             )
             .toList(),
-        'roots': roots,
+        'roots': roots.map((root) => root.toJson()).toList(),
       });
     }
 
@@ -356,7 +359,7 @@ class PicaKeepHeadlessCliServer {
         'path': normalizedPath,
         'parent': _parentBrowsePath(normalizedPath),
         'entries': entries,
-        'roots': roots,
+        'roots': roots.map((root) => root.toJson()).toList(),
       });
     } catch (error) {
       return _jsonResponse({'error': '无法读取目录：$error'}, statusCode: 400);
@@ -416,6 +419,11 @@ class PicaKeepHeadlessCliServer {
       'consolePasswordEmpty': _config.consolePassword.trim().isEmpty,
       'logRequests': _config.logRequests,
       'configPath': configPath,
+      'currentDownloadRoot': _config.currentDownloadRoot,
+      'originalDownloadRoot': _config.originalDownloadRoot,
+      'customLibraryRoots': _config.customLibraryRoots,
+      'managedDataRoot': _config.managedDataRoot,
+      'effectiveManagedDataRoot': resolveManagedDataRoot(_config),
     };
   }
 
@@ -535,14 +543,18 @@ class PicaKeepHeadlessCliServer {
     };
   }
 
-  List<String> _adminBrowseRoots() {
-    final roots = <String>[];
-    void addRoot(String path) {
+  List<_HeadlessBrowseRoot> _adminBrowseRoots() {
+    final roots = <_HeadlessBrowseRoot>[];
+    final seen = <String>{};
+    void addRoot(String path, [String? label]) {
       final normalized = _normalizeBrowsePath(path);
-      if (normalized.isEmpty || roots.contains(normalized)) {
+      if (normalized.isEmpty || !seen.add(normalized)) {
         return;
       }
-      roots.add(normalized);
+      roots.add(_HeadlessBrowseRoot(
+        label: label ?? _adminBrowseRootName(normalized),
+        jumpPath: normalized,
+      ));
     }
 
     if (Platform.isWindows) {
@@ -554,43 +566,63 @@ class PicaKeepHeadlessCliServer {
           }
         } catch (_) {}
       }
-    } else {
-      addRoot('/');
-      if (Platform.isAndroid) {
-        addRoot('/storage/emulated/0');
-        addRoot('/sdcard');
-      }
-      for (final volume in _linuxStorageVolumeRoots()) {
-        addRoot(volume);
-      }
+      return roots;
     }
-    for (final root in _config.allLibraryRoots) {
-      addRoot(root);
+
+    if (Platform.isLinux) {
+      roots.addAll(_linuxStorageVolumeRoots());
+      return roots;
     }
+
+    if (Platform.isAndroid) {
+      addRoot('/storage/emulated/0');
+      addRoot('/sdcard');
+      return roots;
+    }
+
+    addRoot('/');
     return roots;
   }
 
-  List<String> _linuxStorageVolumeRoots() {
+  List<_HeadlessBrowseRoot> _linuxStorageVolumeRoots() {
     if (!Platform.isLinux) {
-      return const <String>[];
+      return const <_HeadlessBrowseRoot>[];
     }
-    final roots = <String>[];
+    final roots = <_HeadlessBrowseRoot>[];
     try {
       for (final entity in Directory('/').listSync(followLinks: false)) {
         final name = _basename(entity.path);
-        if (!RegExp(r'^vol\d+$', caseSensitive: false).hasMatch(name)) {
+        final match =
+            RegExp(r'^vol([1-9]\d*)$', caseSensitive: false).firstMatch(name);
+        if (match == null) {
           continue;
         }
+        final volumeNumber = match.group(1)!;
+        final jumpPath = '/$name/1000';
         try {
-          if (Directory('/$name/1000').existsSync()) {
-            roots.add('/$name');
+          if (Directory(jumpPath).existsSync()) {
+            roots.add(_HeadlessBrowseRoot(
+              label: '存储空间 $volumeNumber',
+              jumpPath: _normalizeBrowsePath(jumpPath),
+            ));
           }
         } catch (_) {}
       }
     } catch (_) {}
-    roots.sort((a, b) => a.compareTo(b));
+    roots.sort((a, b) {
+      final aNumber =
+          int.tryParse(RegExp(r'\d+').firstMatch(a.label)?.group(0) ?? '') ?? 0;
+      final bNumber =
+          int.tryParse(RegExp(r'\d+').firstMatch(b.label)?.group(0) ?? '') ?? 0;
+      return aNumber.compareTo(bNumber);
+    });
     return roots;
   }
+
+  Map<String, dynamic> _configPayload() => {
+        ..._config.toJson(),
+        'effectiveManagedDataRoot': resolveManagedDataRoot(_config),
+      };
 
   String _adminBrowseRootName(String path) {
     final normalized = _normalizeBrowsePath(path);
@@ -796,5 +828,20 @@ class _HeadlessRootSummary {
         'exists': exists,
         'itemCount': itemCount,
         'totalBytes': totalBytes,
+      };
+}
+
+class _HeadlessBrowseRoot {
+  const _HeadlessBrowseRoot({
+    required this.label,
+    required this.jumpPath,
+  });
+
+  final String label;
+  final String jumpPath;
+
+  Map<String, dynamic> toJson() => {
+        'label': label,
+        'jumpPath': jumpPath,
       };
 }

@@ -11,7 +11,6 @@ import 'components/window_frame.dart';
 import 'foundation/app.dart';
 import 'foundation/archive/archive_registry.dart';
 import 'foundation/history.dart';
-import 'foundation/local_data_source.dart';
 import 'foundation/local_favorites.dart';
 import 'foundation/remote_library_event_channel.dart';
 import 'pages/auth_page.dart';
@@ -54,7 +53,6 @@ Future<void> _runHeadlessServer(List<String> args) async {
     dataPathOverride: dataPathOverride,
     migrateExistingData: true,
   );
-  setManagedDataRootOverride(App.dataPath);
   await appdata.readEssentialData();
   ArchiveRegistry.initDefaults();
 

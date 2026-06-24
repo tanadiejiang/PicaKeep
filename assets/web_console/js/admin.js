@@ -294,6 +294,7 @@
           port,
           currentDownloadRoot: rootEl.querySelector('#cfg-current-root').value.trim(),
           originalDownloadRoot: rootEl.querySelector('#cfg-original-root').value.trim(),
+          managedDataRoot: rootEl.querySelector('#cfg-managed-data-root').value.trim(),
           customLibraryRoots: rootEl.querySelector('#cfg-custom-roots').value
             .split('\n')
             .map((item) => item.trim())
@@ -974,6 +975,16 @@
                 <button class="ghost admin-path-pick" type="button" data-pick-target="cfg-original-root" title="浏览服务端目录">+</button>
               </div>
             </label>
+            <label>收藏 / 数据库存放路径
+              <div class="admin-path-field">
+                <input id="cfg-managed-data-root" value="${escapeAttr(config.managedDataRoot || '')}" placeholder="${escapeAttr(config.effectiveManagedDataRoot || '未配置时按 download.db 所在目录上一层自动定位')}">
+                <button class="ghost admin-path-pick" type="button" data-pick-target="cfg-managed-data-root" title="浏览服务端目录">+</button>
+              </div>
+            </label>
+          </div>
+          <div class="admin-config-note">
+            <strong>当前生效 DB 路径</strong>
+            <span>${escapeHtml(config.effectiveManagedDataRoot || '未找到 download.db，暂使用应用默认数据目录。')}</span>
           </div>
           <div style="margin-top:14px">
             <label>自定义资源根（每行一个）
@@ -1115,7 +1126,16 @@
 
       function render() {
         const entries = (payload && payload.entries) || [];
-        const roots = (payload && payload.roots) || [];
+        const roots = ((payload && payload.roots) || []).map((root) => {
+          if (root && typeof root === 'object') {
+            return {
+              label: String(root.label || pathName(root.jumpPath || root.path || '')),
+              jumpPath: String(root.jumpPath || root.path || ''),
+            };
+          }
+          const value = String(root || '');
+          return { label: pathName(value), jumpPath: value };
+        }).filter((root) => root.jumpPath);
         const parent = (payload && payload.parent) || '';
         const crumbs = pathBreadcrumbs(currentPath);
         modal.innerHTML = `
@@ -1133,13 +1153,13 @@
               ${crumbs.length ? crumbs.map((crumb) => `<button class="ghost" type="button" data-path-jump="${escapeAttr(crumb.path)}">${escapeHtml(crumb.label)}</button>`).join('<span>/</span>') : '<span class="muted">根列表</span>'}
             </div>
             <div class="admin-path-roots">
-              ${roots.map((root) => `<button class="ghost" type="button" data-path-jump="${escapeAttr(root)}">${escapeHtml(pathName(root))}</button>`).join('') || '<span class="muted">暂无快捷根</span>'}
+              ${roots.map((root) => `<button class="ghost" type="button" data-path-jump="${escapeAttr(root.jumpPath)}">${escapeHtml(root.label)}</button>`).join('') || '<span class="muted">暂无快捷根</span>'}
             </div>
             <div class="admin-path-list">
               ${loading ? '<div class="admin-path-message muted">正在读取目录...</div>' : ''}
               ${!loading && error ? `<div class="admin-path-message admin-inline-error">${escapeHtml(error)}<div style="margin-top:10px"><button class="ghost" type="button" data-path-retry>重试</button></div></div>` : ''}
-              ${!loading && !error && parent ? `<button class="admin-path-item" type="button" data-path-jump="${escapeAttr(parent)}"><span>↰</span><strong>..</strong><small>上一层</small></button>` : ''}
-              ${!loading && !error ? entries.map((entry) => `<button class="admin-path-item" type="button" data-path-jump="${escapeAttr(entry.path)}"><span>📁</span><strong>${escapeHtml(entry.name || pathName(entry.path))}</strong><small>${escapeHtml(entry.path || '')}</small></button>`).join('') : ''}
+              ${!loading && !error && parent ? `<button class="admin-path-item" type="button" data-path-jump="${escapeAttr(parent)}"><span class="admin-path-up" aria-hidden="true">..</span><strong>..</strong><small>上一层</small></button>` : ''}
+              ${!loading && !error ? entries.map((entry) => `<button class="admin-path-item" type="button" data-path-jump="${escapeAttr(entry.path)}"><span class="admin-path-glyph" aria-hidden="true"></span><strong>${escapeHtml(entry.name || pathName(entry.path))}</strong><small>${escapeHtml(entry.path || '')}</small></button>`).join('') : ''}
               ${!loading && !error && !entries.length ? '<div class="admin-path-message muted">当前目录没有可进入的子目录。</div>' : ''}
             </div>
             <div class="admin-path-actions">

@@ -29,7 +29,7 @@ Future<void> main(List<String> args) async {
 }
 
 const _fallbackVersion = 'unknown';
-const _defaultConfigFileName = 'picakeep_server.json';
+const _defaultConfigFileName = 'picakeep_server.data';
 const _versionFileName = 'picakeep.version';
 const _compiledVersion = String.fromEnvironment('PICAKEEP_VERSION');
 
@@ -176,7 +176,9 @@ String _defaultServerRuntimeDir() {
     return '$envHome/.local/share/picakeep-cli';
   }
   final localAppData = io.Platform.environment['LOCALAPPDATA']?.trim();
-  if (io.Platform.isWindows && localAppData != null && localAppData.isNotEmpty) {
+  if (io.Platform.isWindows &&
+      localAppData != null &&
+      localAppData.isNotEmpty) {
     return '$localAppData${io.Platform.pathSeparator}PicaKeepCLI';
   }
   return '${io.Directory.systemTemp.path}${io.Platform.pathSeparator}picakeep-cli';
@@ -198,19 +200,22 @@ bool _looksLikeDartExecutable(String executable) {
 Future<int> _stopServer(_CliOptions options, String version) async {
   final pidFile = io.File(_defaultServerPidPath());
   if (!await pidFile.exists()) {
-    return _printStopResult(options, version, stopped: false, message: '未找到 PID 文件');
+    return _printStopResult(options, version,
+        stopped: false, message: '未找到 PID 文件');
   }
   final rawPid = (await pidFile.readAsString()).trim();
   final pid = int.tryParse(rawPid);
   if (pid == null || pid <= 0) {
     await pidFile.delete();
-    return _printStopResult(options, version, stopped: false, message: 'PID 文件无效，已清理');
+    return _printStopResult(options, version,
+        stopped: false, message: 'PID 文件无效，已清理');
   }
 
   final killed = io.Process.killPid(pid);
   if (!killed) {
     await pidFile.delete();
-    return _printStopResult(options, version, stopped: false, message: '进程不存在，已清理 PID 文件');
+    return _printStopResult(options, version,
+        stopped: false, message: '进程不存在，已清理 PID 文件');
   }
 
   for (var index = 0; index < 20; index++) {
@@ -220,7 +225,8 @@ Future<int> _stopServer(_CliOptions options, String version) async {
       if (await pidFile.exists()) {
         await pidFile.delete();
       }
-      return _printStopResult(options, version, stopped: true, message: '后台服务已停止');
+      return _printStopResult(options, version,
+          stopped: true, message: '后台服务已停止');
     }
   }
 
@@ -489,8 +495,8 @@ Uri _normalizeTargetUri(String value) {
   final trimmed = value.trim();
   final candidate =
       trimmed.startsWith('http://') || trimmed.startsWith('https://')
-      ? trimmed
-      : 'http://$trimmed';
+          ? trimmed
+          : 'http://$trimmed';
   final uri = Uri.tryParse(candidate);
   if (uri == null || !uri.hasAuthority || uri.host.trim().isEmpty) {
     throw _CliUsageException('无效的服务地址: $value');
@@ -527,8 +533,10 @@ Future<String> _readPackageVersion() async {
     io.File.fromUri(io.Platform.script.resolve('../$_versionFileName')),
     io.File.fromUri(io.Platform.script.resolve('../../$_versionFileName')),
     io.File.fromUri(io.Platform.script.resolve('../../../$_versionFileName')),
-    io.File('${io.Directory.current.path}${io.Platform.pathSeparator}$_versionFileName'),
-    io.File('${io.Directory.current.path}${io.Platform.pathSeparator}pubspec.yaml'),
+    io.File(
+        '${io.Directory.current.path}${io.Platform.pathSeparator}$_versionFileName'),
+    io.File(
+        '${io.Directory.current.path}${io.Platform.pathSeparator}pubspec.yaml'),
     io.File.fromUri(io.Platform.script.resolve('../pubspec.yaml')),
   ];
   final seen = <String>{};
@@ -665,7 +673,8 @@ class _CliOptions {
         continue;
       }
       if (arg.startsWith('--config=')) {
-        configPath = _parseOptionValue(arg.substring('--config='.length), 'config');
+        configPath =
+            _parseOptionValue(arg.substring('--config='.length), 'config');
         configPath = _resolveAbsolutePath(configPath);
         continue;
       }
