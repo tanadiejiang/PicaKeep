@@ -23,6 +23,7 @@ import '../foundation/image_favorites.dart';
 import 'library_event_bus.dart';
 import 'library_trash_store.dart';
 import 'local_resource_scanner.dart';
+import 'managed_data_root_resolver.dart';
 import 'server_config.dart';
 import 'server_runtime_state.dart';
 import 'web_console/remote_proxy_handler.dart';
@@ -91,6 +92,7 @@ class PicaKeepAdminServer {
     try {
       _config = config ?? await PicaKeepServerConfig.load(configPath);
       ArchiveRegistry.initDefaults();
+      await reloadManagedDataStoresForServerConfig(_config!);
       await _webUserStore.init(_config!);
       _setSnapshot(await _scanResources(), emitEvent: true);
       final handler = const Pipeline()
@@ -158,6 +160,7 @@ class PicaKeepAdminServer {
     PicaKeepServerConfig newConfig,
   ) async {
     _config = newConfig;
+    await reloadManagedDataStoresForServerConfig(newConfig);
     final snapshot = await _scanResources();
     _setSnapshot(snapshot, emitEvent: true);
     _restartLibraryWatchers();
@@ -709,8 +712,7 @@ class PicaKeepAdminServer {
     }
     if (path == 'api/admin/config') {
       if (request.method == 'GET') {
-        return _jsonResponse(
-            (_config ?? PicaKeepServerConfig.defaults()).toJson());
+        return _jsonResponse(_configPayload());
       }
       if (request.method == 'PUT') {
         final body = await request.readAsString();
@@ -723,13 +725,14 @@ class PicaKeepAdminServer {
         );
         _config = nextConfig;
         await PicaKeepServerConfig.save(configPath, _config!);
+        await reloadManagedDataStoresForServerConfig(_config!);
         await _webUserStore.ensureAdmin(_config!.consolePassword);
         _setSnapshot(await _scanResources(), emitEvent: true);
         _state.addLog('config', '配置已更新');
         return _jsonResponse({
           'ok': true,
           'message': '配置已保存，host/port 改动重启后完全生效',
-          'config': _config!.toJson(),
+          'config': _configPayload(),
         });
       }
     }
@@ -763,14 +766,14 @@ class PicaKeepAdminServer {
         'parent': '',
         'entries': roots
             .map(
-              (path) => {
-                'name': _adminBrowseRootName(path),
-                'path': path,
+              (root) => {
+                'name': root.label,
+                'path': root.jumpPath,
                 'isDirectory': true,
               },
             )
             .toList(),
-        'roots': roots,
+        'roots': roots.map((root) => root.toJson()).toList(),
       });
     }
 
@@ -801,7 +804,7 @@ class PicaKeepAdminServer {
               },
             )
             .toList(),
-        'roots': roots,
+        'roots': roots.map((root) => root.toJson()).toList(),
       });
     } catch (error) {
       return _jsonResponse(
@@ -811,14 +814,18 @@ class PicaKeepAdminServer {
     }
   }
 
-  List<String> _adminBrowseRoots() {
-    final roots = <String>[];
-    void addRoot(String path) {
+  List<_AdminBrowseRoot> _adminBrowseRoots() {
+    final roots = <_AdminBrowseRoot>[];
+    final seen = <String>{};
+    void addRoot(String path, [String? label]) {
       final normalized = _normalizeBrowsePath(path);
-      if (normalized.isEmpty || roots.contains(normalized)) {
+      if (normalized.isEmpty || !seen.add(normalized)) {
         return;
       }
-      roots.add(normalized);
+      roots.add(_AdminBrowseRoot(
+        label: label ?? _adminBrowseRootName(normalized),
+        jumpPath: normalized,
+      ));
     }
 
     if (Platform.isWindows) {
@@ -830,44 +837,65 @@ class PicaKeepAdminServer {
           }
         } catch (_) {}
       }
-    } else {
-      addRoot('/');
-      if (Platform.isAndroid) {
-        addRoot('/storage/emulated/0');
-        addRoot('/sdcard');
-      }
-      for (final volume in _linuxStorageVolumeRoots()) {
-        addRoot(volume);
-      }
-    }
-    final config = _config ?? PicaKeepServerConfig.defaults();
-    for (final root in config.allLibraryRoots) {
-      addRoot(root);
+      return roots;
     }
 
+    if (Platform.isLinux) {
+      roots.addAll(_linuxStorageVolumeRoots());
+      return roots;
+    }
+
+    if (Platform.isAndroid) {
+      addRoot('/storage/emulated/0');
+      addRoot('/sdcard');
+      return roots;
+    }
+
+    addRoot('/');
     return roots;
   }
 
-  List<String> _linuxStorageVolumeRoots() {
+  List<_AdminBrowseRoot> _linuxStorageVolumeRoots() {
     if (!Platform.isLinux) {
-      return const <String>[];
+      return const <_AdminBrowseRoot>[];
     }
-    final roots = <String>[];
+    final roots = <_AdminBrowseRoot>[];
     try {
       for (final entity in Directory('/').listSync(followLinks: false)) {
         final name = _basename(entity.path);
-        if (!RegExp(r'^vol\d+$', caseSensitive: false).hasMatch(name)) {
+        final match =
+            RegExp(r'^vol([1-9]\d*)$', caseSensitive: false).firstMatch(name);
+        if (match == null) {
           continue;
         }
+        final volumeNumber = match.group(1)!;
+        final jumpPath = '/$name/1000';
         try {
-          if (Directory('/$name/1000').existsSync()) {
-            roots.add('/$name');
+          if (Directory(jumpPath).existsSync()) {
+            roots.add(_AdminBrowseRoot(
+              label: '存储空间 $volumeNumber',
+              jumpPath: _normalizeBrowsePath(jumpPath),
+            ));
           }
         } catch (_) {}
       }
     } catch (_) {}
-    roots.sort((a, b) => a.compareTo(b));
+    roots.sort((a, b) {
+      final aNumber =
+          int.tryParse(RegExp(r'\d+').firstMatch(a.label)?.group(0) ?? '') ?? 0;
+      final bNumber =
+          int.tryParse(RegExp(r'\d+').firstMatch(b.label)?.group(0) ?? '') ?? 0;
+      return aNumber.compareTo(bNumber);
+    });
     return roots;
+  }
+
+  Map<String, dynamic> _configPayload() {
+    final config = _config ?? PicaKeepServerConfig.defaults();
+    return {
+      ...config.toJson(),
+      'effectiveManagedDataRoot': resolveManagedDataRoot(config),
+    };
   }
 
   String _adminBrowseRootName(String path) {
@@ -2723,6 +2751,8 @@ class PicaKeepAdminServer {
       'currentDownloadRoot': config.currentDownloadRoot,
       'originalDownloadRoot': config.originalDownloadRoot,
       'customLibraryRoots': config.customLibraryRoots,
+      'managedDataRoot': config.managedDataRoot,
+      'effectiveManagedDataRoot': resolveManagedDataRoot(config),
       'rootSummaries':
           snapshot?.roots.map((root) => root.toJson()).toList() ?? const [],
     };
@@ -2869,4 +2899,19 @@ class PicaKeepAdminServer {
     }
     return int.tryParse(value?.toString() ?? '');
   }
+}
+
+class _AdminBrowseRoot {
+  const _AdminBrowseRoot({
+    required this.label,
+    required this.jumpPath,
+  });
+
+  final String label;
+  final String jumpPath;
+
+  Map<String, dynamic> toJson() => {
+        'label': label,
+        'jumpPath': jumpPath,
+      };
 }

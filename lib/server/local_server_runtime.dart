@@ -12,6 +12,7 @@ import 'package:picakeep/foundation/picakeep_mdns.dart';
 
 import 'local_resource_scanner.dart';
 import 'library_trash_store.dart';
+import 'managed_data_root_resolver.dart';
 import 'server_app.dart';
 import 'server_config.dart';
 import 'server_runtime_state.dart';
@@ -245,6 +246,7 @@ class LocalServerRuntime {
       _invalidateStandaloneSnapshot();
       final config = await _resolveEffectiveConfig();
       await PicaKeepServerConfig.save(configPath, config);
+      await reloadManagedDataStoresForServerConfig(config);
       final server = PicaKeepAdminServer(
         configPath: configPath,
         runtimeState: _state,
@@ -382,6 +384,17 @@ class LocalServerRuntime {
 
   Future<PicaKeepServerConfig> _resolveEffectiveConfig() async {
     final baseConfig = await _loadBaseConfig();
+
+    // 服务端 / headless 运行态：配置文件是唯一权威源。
+    // 网页后台保存只写配置文件、不写 appdata.settings；若此处再用 appdata 的
+    // 空值（headless 下 GUI 设置位全空）覆盖文件值，会把网页保存的
+    // currentDownloadRoot / customLibraryRoots 等冲掉，重启即丢（详见
+    // Z-plan/新需求-修复第一轮/04 与构建结果.md）。因此服务端态直接以文件
+    // baseConfig 为准，不读 appdata。客户端 GUI 态维持原有 appdata 行为。
+    if (_isServerAuthoritativeMode) {
+      return baseConfig;
+    }
+
     final currentDownloadRoot = _resolveCurrentDownloadRoot();
     final originalDownloadRoot =
         appdata.settings[originalDownloadDirSettingIndex].trim();
@@ -420,6 +433,20 @@ class LocalServerRuntime {
     );
   }
 
+  /// 是否处于「配置文件为权威源」的服务端运行态：
+  /// - headless / CLI 注入了 `--config`（`_configPathOverride` 非空）；或
+  /// - GUI 运行模式被显式设为服务端（`appRuntimeModeSettingIndex == server`）。
+  /// 两者任一成立即视为服务端态，配置以文件为准、不被 appdata 覆盖。
+  bool get _isServerAuthoritativeMode {
+    if (_configPathOverride != null) {
+      return true;
+    }
+    return normalizeAppRuntimeMode(
+          appdata.settings[appRuntimeModeSettingIndex],
+        ) ==
+        appRuntimeModeServer;
+  }
+
   Future<PicaKeepServerConfig> _loadBaseConfig() async {
     final file = File(configPath);
     if (!await file.exists()) {
@@ -452,6 +479,7 @@ class LocalServerRuntime {
     }
     _invalidateStandaloneSnapshot();
     await PicaKeepServerConfig.save(configPath, config);
+    await reloadManagedDataStoresForServerConfig(config);
     final nextServer = PicaKeepAdminServer(
       configPath: configPath,
       runtimeState: _state,
@@ -538,7 +566,7 @@ class LocalServerRuntime {
     if (configuredPath.isNotEmpty) {
       return configuredPath;
     }
-    return '${App.dataPath}${Platform.pathSeparator}download';
+    return '';
   }
 
   String _statusTextForLifecycle(String lifecycle) {

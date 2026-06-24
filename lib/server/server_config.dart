@@ -11,11 +11,14 @@ class PicaKeepServerConfig {
     required this.originalDownloadRoot,
     required this.customLibraryRoots,
     required this.customLibraryCollectionShellModes,
+    required this.managedDataRoot,
     required this.logRequests,
     required this.consolePassword,
   });
 
-  static const defaultFileName = 'picakeep_server.json';
+  // 配置文件名用 .data 后缀（内容仍为 JSON），避免被其他程序/扫描器
+  // 当成普通 json 误扫。旧 picakeep_server.json 不做迁移（按计划 04 决策）。
+  static const defaultFileName = 'picakeep_server.data';
 
   final String host;
   final int port;
@@ -23,6 +26,7 @@ class PicaKeepServerConfig {
   final String originalDownloadRoot;
   final List<String> customLibraryRoots;
   final Map<String, bool> customLibraryCollectionShellModes;
+  final String managedDataRoot;
   final bool logRequests;
   final String consolePassword;
 
@@ -38,8 +42,9 @@ class PicaKeepServerConfig {
         'currentDownloadRoot': currentDownloadRoot,
         'originalDownloadRoot': originalDownloadRoot,
         'customLibraryRoots': customLibraryRoots,
-        'customLibraryCollectionShellModes':
-            encodeLocalCollectionShellPathMap(customLibraryCollectionShellModes),
+        'customLibraryCollectionShellModes': encodeLocalCollectionShellPathMap(
+            customLibraryCollectionShellModes),
+        'managedDataRoot': managedDataRoot,
         'logRequests': logRequests,
         'consolePassword': consolePassword,
       };
@@ -51,6 +56,7 @@ class PicaKeepServerConfig {
     String? originalDownloadRoot,
     List<String>? customLibraryRoots,
     Map<String, bool>? customLibraryCollectionShellModes,
+    String? managedDataRoot,
     bool? logRequests,
     String? consolePassword,
   }) {
@@ -62,6 +68,7 @@ class PicaKeepServerConfig {
       customLibraryRoots: customLibraryRoots ?? this.customLibraryRoots,
       customLibraryCollectionShellModes: customLibraryCollectionShellModes ??
           this.customLibraryCollectionShellModes,
+      managedDataRoot: managedDataRoot ?? this.managedDataRoot,
       logRequests: logRequests ?? this.logRequests,
       consolePassword: consolePassword ?? this.consolePassword,
     );
@@ -75,6 +82,7 @@ class PicaKeepServerConfig {
       originalDownloadRoot: '',
       customLibraryRoots: [],
       customLibraryCollectionShellModes: {},
+      managedDataRoot: '',
       logRequests: false,
       consolePassword: '',
     );
@@ -93,6 +101,10 @@ class PicaKeepServerConfig {
       customLibraryCollectionShellModes: _normalizeCollectionShellModes(
         json['customLibraryCollectionShellModes'],
       ),
+      managedDataRoot: json['managedDataRoot']?.toString().trim() ??
+          json['favoritesDbRoot']?.toString().trim() ??
+          json['historyDbRoot']?.toString().trim() ??
+          '',
       logRequests: json['logRequests'] == true,
       consolePassword: json['consolePassword']?.toString() ?? '',
     );
