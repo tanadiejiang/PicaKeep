@@ -9,6 +9,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:picakeep/base.dart';
 import 'package:picakeep/foundation/app.dart';
+import 'package:picakeep/foundation/app_page_route.dart';
 import 'package:picakeep/foundation/app_runtime_mode.dart';
 import 'package:picakeep/foundation/download.dart';
 import 'package:picakeep/foundation/download_model.dart';
@@ -34,12 +35,12 @@ import 'package:picakeep/tools/read_history_helper.dart';
 import 'package:picakeep/tools/tags_translation.dart';
 import 'local_comic_detail_page.dart';
 
-Future<bool> _ensureRemoteArchiveUnlockedFor(
+Future<RemoteLibraryComicItem?> _ensureRemoteArchiveUnlockedFor(
   BuildContext context,
   RemoteLibraryComicItem item,
 ) async {
   if (!item.needsArchivePassword) {
-    return true;
+    return item;
   }
   final result = await showArchivePasswordDialog(
     context: context,
@@ -50,10 +51,15 @@ Future<bool> _ensureRemoteArchiveUnlockedFor(
     onVerify: (password) => item.client.unlockArchive(item.id, password),
   );
   if (result == null) {
-    return false;
+    return null;
   }
   item.archivePasswordMatched = true;
-  return true;
+  try {
+    return (await item.client.fetchItemDetail(item.id))
+        .copyWith(archivePasswordMatched: true);
+  } catch (_) {
+    return item.copyWith(archivePasswordMatched: true);
+  }
 }
 
 void _toComicInfoPage(DownloadedItem comic) {
@@ -71,19 +77,40 @@ void _toComicInfoPage(DownloadedItem comic) {
 
 extension ReadComic on DownloadedItem {
   Future<void> read({int? ep, int? page, BuildContext? context}) async {
+    final contextNavigator = context == null ? null : Navigator.of(context);
+    DownloadedItem itemToRead = this;
     if (this is RemoteLibraryComicItem) {
       final item = this as RemoteLibraryComicItem;
       final unlockContext = context ?? App.globalContext;
       if (item.needsArchivePassword && unlockContext == null) {
         return;
       }
-      if (unlockContext != null &&
-          !await _ensureRemoteArchiveUnlockedFor(unlockContext, item)) {
-        return;
+      if (unlockContext != null) {
+        final unlocked = await _ensureRemoteArchiveUnlockedFor(
+          unlockContext,
+          item,
+        );
+        if (unlocked == null) {
+          return;
+        }
+        itemToRead = unlocked;
       }
     }
-    await ensureHistoryBeforeRead(this);
-    await App.openReader(() => createReadingPage(ep: ep, page: page));
+    await ensureHistoryBeforeRead(itemToRead);
+    if (contextNavigator != null) {
+      if (!contextNavigator.mounted) {
+        return;
+      }
+      await contextNavigator.push(
+        AppPageRoute(
+          builder: (context) =>
+              itemToRead.createReadingPage(ep: ep, page: page),
+        ),
+      );
+    } else {
+      await App.pushInner(
+          () => itemToRead.createReadingPage(ep: ep, page: page));
+    }
   }
 }
 
@@ -1493,33 +1520,33 @@ class _DownloadPageState extends State<DownloadPage>
         // 切远程档时整屏一片转圈）。改为始终渲染正常骨架，由 _buildComics
         // 在 loading && 无数据时只让列表区显示转圈。
         Widget page = Scaffold(
-                floatingActionButton: _buildFAB(context, logic),
-                body: NotificationListener<ScrollNotification>(
-                  onNotification: (notification) {
-                    if (notification is ScrollStartNotification ||
-                        (notification is UserScrollNotification &&
-                            notification.direction != ScrollDirection.idle)) {
-                      logic.setScrollInteracting(true);
-                    } else if (notification is ScrollEndNotification ||
-                        (notification is UserScrollNotification &&
-                            notification.direction == ScrollDirection.idle)) {
-                      logic.setScrollInteracting(false);
-                    }
-                    return false;
-                  },
-                  child: SmoothCustomScrollView(
-                    cacheExtent: App.isMobile
-                        ? MediaQuery.of(context).size.height
-                        : MediaQuery.of(context).size.height,
-                    slivers: [
-                      _buildAppbar(context, logic),
-                      if (logic.showSourceSelector)
-                        _buildSourceSelector(context, logic),
-                      _buildComics(context, logic)
-                    ],
-                  ),
-                ),
-              );
+          floatingActionButton: _buildFAB(context, logic),
+          body: NotificationListener<ScrollNotification>(
+            onNotification: (notification) {
+              if (notification is ScrollStartNotification ||
+                  (notification is UserScrollNotification &&
+                      notification.direction != ScrollDirection.idle)) {
+                logic.setScrollInteracting(true);
+              } else if (notification is ScrollEndNotification ||
+                  (notification is UserScrollNotification &&
+                      notification.direction == ScrollDirection.idle)) {
+                logic.setScrollInteracting(false);
+              }
+              return false;
+            },
+            child: SmoothCustomScrollView(
+              cacheExtent: App.isMobile
+                  ? MediaQuery.of(context).size.height
+                  : MediaQuery.of(context).size.height,
+              slivers: [
+                _buildAppbar(context, logic),
+                if (logic.showSourceSelector)
+                  _buildSourceSelector(context, logic),
+                _buildComics(context, logic)
+              ],
+            ),
+          ),
+        );
         if (logic.isDeleteOperationRunning) {
           page = Stack(
             fit: StackFit.expand,
@@ -1719,14 +1746,19 @@ class _DownloadPageState extends State<DownloadPage>
                     _toComicInfoPage(item);
                   } else if (item is RemoteLibraryComicItem &&
                       item.needsArchivePassword) {
-                    final unlocked =
+                    final unlockedItem =
                         await _ensureRemoteArchiveUnlockedFor(context, item);
                     if (!context.mounted) {
                       return;
                     }
-                    if (unlocked) {
+                    if (unlockedItem != null) {
                       logic.refresh();
-                      _showInfo(index, logic, context);
+                      _showInfo(
+                        index,
+                        logic,
+                        context,
+                        itemOverride: unlockedItem,
+                      );
                     }
                   } else {
                     _showInfo(index, logic, context);
@@ -1879,8 +1911,13 @@ class _DownloadPageState extends State<DownloadPage>
     }
   }
 
-  void _showInfo(int index, DownloadPageLogic logic, BuildContext context) {
-    final item = logic.comics[index];
+  void _showInfo(
+    int index,
+    DownloadPageLogic logic,
+    BuildContext context, {
+    DownloadedItem? itemOverride,
+  }) {
+    final item = itemOverride ?? logic.comics[index];
     if (UiMode.m1(context)) {
       final screenHeight = MediaQuery.of(context).size.height;
       final maxSize = screenHeight > 0
@@ -2576,7 +2613,8 @@ class _DownloadedComicInfoViewState extends State<DownloadedComicInfoView> {
       return title;
     }
     final rest = normalizedTitle.substring(itemTitle.length).trimLeft();
-    final cleaned = rest.replaceFirst(RegExp(r'^[\s/_\\\-—:：]+'), '').trimLeft();
+    final cleaned =
+        rest.replaceFirst(RegExp(r'^[\s/_\\\-—:：]+'), '').trimLeft();
     return cleaned.isEmpty ? title : cleaned;
   }
 
@@ -2600,8 +2638,7 @@ class _DownloadedComicInfoViewState extends State<DownloadedComicInfoView> {
     if (comic is LocalLibraryComicItem && comic.isArchiveItem) {
       return LocalLibraryManager.archiveDisplayChapterNames(comic);
     }
-    if (comic is LocalLibraryComicItem &&
-        comic.sourceDisplayName == '合集图集') {
+    if (comic is LocalLibraryComicItem && comic.sourceDisplayName == '合集图集') {
       final titles = eps
           .map((title) => _stripCollectionShellPrefix(title))
           .toList(growable: false);
@@ -3083,10 +3120,13 @@ class _DownloadedComicInfoViewState extends State<DownloadedComicInfoView> {
   }
 
   Future<void> read() async {
-    final comic = _comic;
-    if (comic is RemoteLibraryComicItem &&
-        !await _ensureRemoteArchiveUnlockedFor(context, comic)) {
-      return;
+    var comic = _comic;
+    if (comic is RemoteLibraryComicItem) {
+      final unlocked = await _ensureRemoteArchiveUnlockedFor(context, comic);
+      if (unlocked == null) {
+        return;
+      }
+      comic = unlocked;
     }
     if (!mounted) {
       return;
@@ -3098,10 +3138,13 @@ class _DownloadedComicInfoViewState extends State<DownloadedComicInfoView> {
   }
 
   Future<void> readSpecifiedEps(int i) async {
-    final comic = _comic;
-    if (comic is RemoteLibraryComicItem &&
-        !await _ensureRemoteArchiveUnlockedFor(context, comic)) {
-      return;
+    var comic = _comic;
+    if (comic is RemoteLibraryComicItem) {
+      final unlocked = await _ensureRemoteArchiveUnlockedFor(context, comic);
+      if (unlocked == null) {
+        return;
+      }
+      comic = unlocked;
     }
     if (!mounted) {
       return;

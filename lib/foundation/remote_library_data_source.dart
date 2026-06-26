@@ -374,6 +374,8 @@ class RemoteFavoriteFolder {
 
 class RemoteFavoriteItem {
   const RemoteFavoriteItem({
+    required this.itemId,
+    required this.displayId,
     required this.name,
     required this.author,
     required this.type,
@@ -383,6 +385,8 @@ class RemoteFavoriteItem {
     required this.coverUrl,
   });
 
+  final String itemId;
+  final String displayId;
   final String name;
   final String author;
   final FavoriteType type;
@@ -406,7 +410,10 @@ class RemoteFavoriteItem {
     Map<String, dynamic> json,
     RemoteLibraryClient client,
   ) {
+    final itemId = _readText(json['itemId']);
     return RemoteFavoriteItem(
+      itemId: itemId.isEmpty ? _readText(json['id']) : itemId,
+      displayId: _readText(json['displayId']),
       name: _readText(json['name']),
       author: _readText(json['author']),
       type: FavoriteType(_readInt(json['type']) ?? 0),
@@ -418,6 +425,9 @@ class RemoteFavoriteItem {
   }
 
   Map<String, dynamic> toJson() => {
+        'itemId': itemId,
+        'id': itemId,
+        'displayId': displayId,
         'name': name,
         'author': author,
         'type': type.key,

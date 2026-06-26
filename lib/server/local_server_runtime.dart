@@ -385,16 +385,91 @@ class LocalServerRuntime {
   Future<PicaKeepServerConfig> _resolveEffectiveConfig() async {
     final baseConfig = await _loadBaseConfig();
 
-    // 服务端 / headless 运行态：配置文件是唯一权威源。
-    // 网页后台保存只写配置文件、不写 appdata.settings；若此处再用 appdata 的
-    // 空值（headless 下 GUI 设置位全空）覆盖文件值，会把网页保存的
-    // currentDownloadRoot / customLibraryRoots 等冲掉，重启即丢（详见
-    // Z-plan/新需求-修复第一轮/04 与构建结果.md）。因此服务端态直接以文件
-    // baseConfig 为准，不读 appdata。客户端 GUI 态维持原有 appdata 行为。
-    if (_isServerAuthoritativeMode) {
+    // Headless / CLI 服务端：配置文件是唯一权威源。网页后台保存只写配置
+    // 文件、不写 appdata.settings；若此处再用 appdata 的空值覆盖文件值，
+    // 会把网页保存的路径冲掉，重启即丢（详见第一轮 04）。
+    if (_isHeadlessConfigOverrideMode) {
+      return baseConfig;
+    }
+    // 桌面同进程 GUI+服务端：只在文件字段为空时，用 GUI appdata 的非空
+    // 路径做一次单向播种，并写回配置文件；文件已有值绝不覆盖。
+    if (_isDesktopGuiServerMode) {
+      return _seedDesktopGuiPathsIntoEmptyServerConfig(baseConfig);
+    }
+
+    return _resolveAppdataConfigOverlay(baseConfig);
+  }
+
+  bool get _isHeadlessConfigOverrideMode => _configPathOverride != null;
+
+  bool get _isDesktopGuiServerMode =>
+      !_isHeadlessConfigOverrideMode &&
+      normalizeAppRuntimeMode(
+            appdata.settings[appRuntimeModeSettingIndex],
+          ) ==
+          appRuntimeModeServer;
+
+  Future<PicaKeepServerConfig> _seedDesktopGuiPathsIntoEmptyServerConfig(
+    PicaKeepServerConfig baseConfig,
+  ) async {
+    final appdataConfig = _resolveAppdataConfigOverlay(baseConfig);
+    var changed = false;
+
+    var currentDownloadRoot = baseConfig.currentDownloadRoot;
+    final appdataCurrentDownloadRoot = appdataConfig.currentDownloadRoot.trim();
+    if (currentDownloadRoot.trim().isEmpty &&
+        appdataCurrentDownloadRoot.isNotEmpty) {
+      currentDownloadRoot = appdataCurrentDownloadRoot;
+      changed = true;
+    }
+
+    var originalDownloadRoot = baseConfig.originalDownloadRoot;
+    final appdataOriginalDownloadRoot =
+        appdataConfig.originalDownloadRoot.trim();
+    if (originalDownloadRoot.trim().isEmpty &&
+        appdataOriginalDownloadRoot.isNotEmpty) {
+      originalDownloadRoot = appdataOriginalDownloadRoot;
+      changed = true;
+    }
+
+    var customLibraryRoots = baseConfig.customLibraryRoots;
+    if (customLibraryRoots.every((path) => path.trim().isEmpty)) {
+      final appdataCustomLibraryRoots = appdataConfig.customLibraryRoots
+          .map((path) => path.trim())
+          .where((path) => path.isNotEmpty)
+          .toList(growable: false);
+      if (appdataCustomLibraryRoots.isNotEmpty) {
+        customLibraryRoots = appdataCustomLibraryRoots;
+        changed = true;
+      }
+    }
+
+    var customLibraryCollectionShellModes =
+        baseConfig.customLibraryCollectionShellModes;
+    if (customLibraryCollectionShellModes.isEmpty &&
+        appdataConfig.customLibraryCollectionShellModes.isNotEmpty) {
+      customLibraryCollectionShellModes =
+          appdataConfig.customLibraryCollectionShellModes;
+      changed = true;
+    }
+
+    if (!changed) {
       return baseConfig;
     }
 
+    final nextConfig = baseConfig.copyWith(
+      currentDownloadRoot: currentDownloadRoot,
+      originalDownloadRoot: originalDownloadRoot,
+      customLibraryRoots: customLibraryRoots,
+      customLibraryCollectionShellModes: customLibraryCollectionShellModes,
+    );
+    await PicaKeepServerConfig.save(configPath, nextConfig);
+    return nextConfig;
+  }
+
+  PicaKeepServerConfig _resolveAppdataConfigOverlay(
+    PicaKeepServerConfig baseConfig,
+  ) {
     final currentDownloadRoot = _resolveCurrentDownloadRoot();
     final originalDownloadRoot =
         appdata.settings[originalDownloadDirSettingIndex].trim();
@@ -431,20 +506,6 @@ class LocalServerRuntime {
       customLibraryRoots: customLibraryRoots,
       customLibraryCollectionShellModes: customLibraryCollectionShellModes,
     );
-  }
-
-  /// 是否处于「配置文件为权威源」的服务端运行态：
-  /// - headless / CLI 注入了 `--config`（`_configPathOverride` 非空）；或
-  /// - GUI 运行模式被显式设为服务端（`appRuntimeModeSettingIndex == server`）。
-  /// 两者任一成立即视为服务端态，配置以文件为准、不被 appdata 覆盖。
-  bool get _isServerAuthoritativeMode {
-    if (_configPathOverride != null) {
-      return true;
-    }
-    return normalizeAppRuntimeMode(
-          appdata.settings[appRuntimeModeSettingIndex],
-        ) ==
-        appRuntimeModeServer;
   }
 
   Future<PicaKeepServerConfig> _loadBaseConfig() async {

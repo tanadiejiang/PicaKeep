@@ -851,7 +851,7 @@ class _MePageState extends State<MePage> {
           _cacheCurrentState();
         }
         if (!context.mounted) return;
-        await App.openReader(
+        await App.pushInner(
           () => comic!.createReadingPage(ep: history.ep, page: history.page),
         );
       } else if (context.mounted) {
