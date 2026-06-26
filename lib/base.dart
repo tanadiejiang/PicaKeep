@@ -129,7 +129,7 @@ class Appdata {
     "client", //97 运行模式
     "", //98 客户端服务端地址
     "mdns", //99 局域网发现方式
-    "9527", //100 服务端后台端口
+    "9527", //100 服务端后台端口（默认值应与 defaultServiceAdminPort 保持一致）
     "0", //101 安卓 Root 浏览模式
     "0", //102 安卓 Shizuku 浏览模式
     "local", //103 已下载页来源视图
@@ -404,8 +404,9 @@ class Appdata {
               settings[downloadedLibraryViewSettingIndex]);
       settings[localLibraryViewSettingIndex] =
           normalizeLocalLibraryView(settings[localLibraryViewSettingIndex]);
-      settings[serviceDiscoveryModeSettingIndex] = normalizeServiceDiscoveryMode(
-          settings[serviceDiscoveryModeSettingIndex]);
+      settings[serviceDiscoveryModeSettingIndex] =
+          normalizeServiceDiscoveryMode(
+              settings[serviceDiscoveryModeSettingIndex]);
       settings[serviceDiscoveryMdnsFallbackSettingIndex] =
           normalizeServiceDiscoveryMdnsFallback(
               settings[serviceDiscoveryMdnsFallbackSettingIndex]);

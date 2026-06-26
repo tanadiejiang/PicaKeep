@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import '../foundation/app_runtime_mode.dart';
 import '../foundation/local_library_settings.dart';
 
 class PicaKeepServerConfig {
@@ -77,7 +78,7 @@ class PicaKeepServerConfig {
   static PicaKeepServerConfig defaults() {
     return const PicaKeepServerConfig(
       host: '0.0.0.0',
-      port: 9527,
+      port: defaultServiceAdminPortInt,
       currentDownloadRoot: '',
       originalDownloadRoot: '',
       customLibraryRoots: [],
@@ -167,7 +168,7 @@ class PicaKeepServerConfig {
   static int _normalizePort(Object? value) {
     final port = int.tryParse(value?.toString() ?? '');
     if (port == null || port < 1 || port > 65535) {
-      return 9527;
+      return defaultServiceAdminPortInt;
     }
     return port;
   }
