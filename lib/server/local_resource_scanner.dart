@@ -268,13 +268,15 @@ class LocalResourceScanner {
     required String currentDownloadRoot,
     required String originalDownloadRoot,
     required List<String> customLibraryRoots,
-    Map<String, bool> customLibraryCollectionShellModes = const <String, bool>{},
+    Map<String, bool> customLibraryCollectionShellModes =
+        const <String, bool>{},
   }) async {
     _metadataCacheByRoot.clear();
     final roots = <ServerResourceRootSummary>[];
     final items = <ServerResourceItemSummary>[];
 
-    final allRoots = <({String id, String title, String path, bool collectionShellEnabled})>[
+    final allRoots =
+        <({String id, String title, String path, bool collectionShellEnabled})>[
       (
         id: 'current_download',
         title: '本应用下载目录',
@@ -570,7 +572,8 @@ class LocalResourceScanner {
     for (final directory in directories) {
       final images = await _listDirectVisibleImages(directory);
       final displayTitle = _albumDisplayTitleForLeafDirectory(directory);
-      final episodeTitle = _episodeTitleForLeafDirectory(directory, displayTitle);
+      final episodeTitle =
+          _episodeTitleForLeafDirectory(directory, displayTitle);
       final episode = await _buildEpisodeSummary(
         index: 1,
         title: episodeTitle,
@@ -761,11 +764,13 @@ class LocalResourceScanner {
   String _stripCollectionShellParentPrefix(String shellTitle, String title) {
     final normalizedShell = shellTitle.trim();
     final normalizedTitle = title.trim();
-    if (normalizedShell.isEmpty || !normalizedTitle.startsWith(normalizedShell)) {
+    if (normalizedShell.isEmpty ||
+        !normalizedTitle.startsWith(normalizedShell)) {
       return title;
     }
     final rest = normalizedTitle.substring(normalizedShell.length).trimLeft();
-    final cleaned = rest.replaceFirst(RegExp(r'^[\s/_\\\-—:：]+'), '').trimLeft();
+    final cleaned =
+        rest.replaceFirst(RegExp(r'^[\s/_\\\-—:：]+'), '').trimLeft();
     return cleaned.isEmpty ? title : cleaned;
   }
 
@@ -778,7 +783,8 @@ class LocalResourceScanner {
     return parentTitle.isEmpty ? leafTitle : parentTitle;
   }
 
-  String _episodeTitleForLeafDirectory(String directoryPath, String displayTitle) {
+  String _episodeTitleForLeafDirectory(
+      String directoryPath, String displayTitle) {
     final leafTitle = _directoryTitle(directoryPath).trim();
     final normalizedDisplay = displayTitle.trim();
     if (_isPlainNumericTitle(leafTitle)) {
@@ -1110,7 +1116,8 @@ class LocalResourceScanner {
         if (directoryPath.isEmpty) {
           continue;
         }
-        final comicSizeMb = parsedItem?.comicSizeMb ?? _extractComicSizeMb(data);
+        final comicSizeMb =
+            parsedItem?.comicSizeMb ?? _extractComicSizeMb(data);
         results.add(
           _ManagedRootRecord(
             rawId: rawId,

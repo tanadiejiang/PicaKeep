@@ -11,7 +11,8 @@ String _joinServerTrashPath(String parent, String child) {
 
 String _basenameServerTrashPath(String path) {
   final normalized = path.replaceAll('\\', '/');
-  final segments = normalized.split('/').where((entry) => entry.isNotEmpty).toList();
+  final segments =
+      normalized.split('/').where((entry) => entry.isNotEmpty).toList();
   return segments.isEmpty ? normalized : segments.last;
 }
 
@@ -98,8 +99,9 @@ class LibraryTrashEntry {
       coverRelativePath: (json['coverRelativePath'] as String? ?? '').trim(),
       imageCount: (json['imageCount'] as num?)?.toInt() ?? 0,
       totalBytes: (json['totalBytes'] as num?)?.toInt() ?? 0,
-      deletedAt: DateTime.tryParse((json['deletedAt'] as String? ?? '').trim()) ??
-          DateTime.fromMillisecondsSinceEpoch(0),
+      deletedAt:
+          DateTime.tryParse((json['deletedAt'] as String? ?? '').trim()) ??
+              DateTime.fromMillisecondsSinceEpoch(0),
     );
   }
 }
@@ -112,8 +114,7 @@ class LibraryTrashStore {
 
   Future<List<LibraryTrashEntry>> listEntries() async {
     final loaded = await _load();
-    return loaded.toList()
-      ..sort((a, b) => b.deletedAt.compareTo(a.deletedAt));
+    return loaded.toList()..sort((a, b) => b.deletedAt.compareTo(a.deletedAt));
   }
 
   Future<LibraryTrashEntry?> findById(String id) async {
@@ -138,7 +139,8 @@ class LibraryTrashStore {
     if (!sourceDir.existsSync()) {
       throw const FileSystemException('item path not found');
     }
-    final trashRoot = Directory(_joinServerTrashPath(rootPath, serverTrashDirectoryName));
+    final trashRoot =
+        Directory(_joinServerTrashPath(rootPath, serverTrashDirectoryName));
     trashRoot.createSync(recursive: true);
     final entryId = _generateEntryId();
     final trashedPath = _joinServerTrashPath(trashRoot.path, entryId);
@@ -277,7 +279,8 @@ class LibraryTrashStore {
 
   Future<void> _copyDirectory(Directory source, Directory destination) async {
     destination.createSync(recursive: true);
-    await for (final entity in source.list(recursive: false, followLinks: false)) {
+    await for (final entity
+        in source.list(recursive: false, followLinks: false)) {
       if (entity is Directory) {
         await _copyDirectory(
           entity,
@@ -288,7 +291,8 @@ class LibraryTrashStore {
         );
       } else if (entity is File) {
         await entity.copy(
-          _joinServerTrashPath(destination.path, _basenameServerTrashPath(entity.path)),
+          _joinServerTrashPath(
+              destination.path, _basenameServerTrashPath(entity.path)),
         );
       }
     }

@@ -408,7 +408,7 @@ class LocalServerRuntime {
             appdata.settings[serviceAdminPortSettingIndex],
           ),
         ) ??
-        9527;
+        defaultServiceAdminPortInt;
     final mode = normalizeManagedDataSourceMode(
       appdata.settings[managedDataSourceModeSettingIndex],
     );

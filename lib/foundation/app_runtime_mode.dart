@@ -59,14 +59,16 @@ String normalizeRemoteServerAddressValue(String value) {
   if (trimmed.isEmpty) {
     return '';
   }
-  final withScheme = trimmed.startsWith('http://') || trimmed.startsWith('https://')
-      ? trimmed
-      : 'http://$trimmed';
+  final withScheme =
+      trimmed.startsWith('http://') || trimmed.startsWith('https://')
+          ? trimmed
+          : 'http://$trimmed';
   final uri = Uri.tryParse(withScheme);
   if (uri == null || !uri.hasAuthority || uri.host.trim().isEmpty) {
     return '';
   }
-  final normalizedPath = uri.path == '/' ? '' : uri.path.replaceFirst(RegExp(r'/+$'), '');
+  final normalizedPath =
+      uri.path == '/' ? '' : uri.path.replaceFirst(RegExp(r'/+$'), '');
   return Uri(
     scheme: uri.scheme.isEmpty ? 'http' : uri.scheme,
     userInfo: uri.userInfo,
@@ -95,7 +97,8 @@ String buildRemoteServiceStatusUrl(String value) {
 
 String buildServiceAdminUrl(String host, {String? port}) {
   final safeHost = host.trim().isEmpty ? '<host>' : host.trim();
-  final safePort = normalizeServiceAdminPortValue(port ?? defaultServiceAdminPort);
+  final safePort =
+      normalizeServiceAdminPortValue(port ?? defaultServiceAdminPort);
   return 'http://$safeHost:$safePort/admin-view';
 }
 
@@ -178,6 +181,9 @@ const serviceDiscoveryModeSubnetScan = 'subnet_scan';
 const serviceDiscoveryModeScanLegacy = 'scan';
 const serviceDiscoveryModeUdp = 'udp';
 const defaultServiceAdminPort = '9527';
+// 同一个默认端口的 int 形态，供服务端配置（port 字段为 int）复用，
+// 避免 9527 在 server_config / local_server_runtime 等处各写一遍裸字面量。
+const defaultServiceAdminPortInt = 9527;
 
 const serverPlatformTierFull = 'full';
 const serverPlatformTierEnhanced = 'enhanced';
