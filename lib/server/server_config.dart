@@ -2,7 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import '../foundation/app_runtime_mode.dart';
-import '../foundation/local_library_settings.dart';
+import 'package:picakeep/foundation/local_library_settings.dart';
 
 class PicaKeepServerConfig {
   const PicaKeepServerConfig({
