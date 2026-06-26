@@ -6,7 +6,8 @@ import 'package:picakeep/foundation/archive/archive_episode_builder.dart';
 import 'package:picakeep/foundation/archive/archive_models.dart';
 import 'package:picakeep/foundation/archive/archive_password_store.dart';
 import 'package:picakeep/foundation/archive/archive_reading_service.dart';
-import 'package:picakeep/foundation/local_library_settings.dart';
+import 'package:picakeep/foundation/local_library_settings.dart'
+    show normalizeLocalCollectionShellPathKey;
 import 'package:picakeep/foundation/privileged_storage_access.dart';
 
 const _serverTrashDirectoryName = '.picakeep_trash';

@@ -3,7 +3,7 @@ import 'dart:io';
 import 'package:flutter/services.dart';
 
 import '../base.dart';
-import 'local_library_settings.dart';
+import 'package:picakeep/foundation/local_library_settings.dart';
 
 /// Lightweight, cross-file descriptor returned by [PrivilegedStorageAccess.listDirectoryEntries].
 ///
