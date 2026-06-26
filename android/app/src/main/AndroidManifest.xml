@@ -25,11 +25,15 @@
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
             android:hardwareAccelerated="true"
             android:windowSoftInputMode="adjustResize">
-            <!-- The launcher entry intentionally lives only on the
-                 <activity-alias> declarations below so that the icon-switching
-                 feature can enable exactly one alias at a time. If MainActivity
-                 itself also carried a MAIN/LAUNCHER intent-filter, the home
-                 screen would show two icons (this activity + the active alias). -->
+            <!-- Keep a standard launcher entry on MainActivity so Flutter's
+                 Android tooling can resolve the package and launch activity.
+                 Release builds remove this intent-filter in the release
+                 manifest overlay; the user-facing launcher entries remain the
+                 icon-switching <activity-alias> declarations below. -->
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN"/>
+                <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
             <!-- Specifies an Android theme to apply to this Activity as soon as
                  the Android process has started. This theme is visible to the user
                  while the Flutter UI initializes. After that, this theme continues

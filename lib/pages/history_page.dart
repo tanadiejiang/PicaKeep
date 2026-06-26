@@ -140,8 +140,8 @@ class _HistoryPageState extends State<HistoryPage> {
     if (cover.isNotEmpty && (cover.startsWith('/') || cover.contains(':\\'))) {
       return FileImage(File(cover));
     }
-    final localComic =
-        LocalLibraryManager().findCachedByCandidates(item.candidateDownloadIds());
+    final localComic = LocalLibraryManager()
+        .findCachedByCandidates(item.candidateDownloadIds());
     if (localComic != null) {
       final coverPath = resolveLocalComicCoverPath(
         localComic,
@@ -239,7 +239,8 @@ class _HistoryPageState extends State<HistoryPage> {
         await localLibraryManager.shouldUseDirectCurrentDownloadManager()) {
       final dm = DownloadManager();
       await dm.init();
-      comic = await dm.getComicOrNullFromCandidates(item.candidateDownloadIds());
+      comic =
+          await dm.getComicOrNullFromCandidates(item.candidateDownloadIds());
     }
     comic ??= await const RemoteLibraryDataSource()
         .findByCandidates(item.candidateDownloadIds());
@@ -269,7 +270,7 @@ class _HistoryPageState extends State<HistoryPage> {
           item.cover = coverPath;
         }
       });
-      await App.openReader(
+      await App.pushInner(
           () => comic!.createReadingPage(ep: item.ep, page: item.page));
     } else {
       if (!mounted) return;

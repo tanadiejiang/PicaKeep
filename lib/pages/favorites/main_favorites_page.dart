@@ -198,7 +198,8 @@ class _MainFavoritesPageState extends State<MainFavoritesPage> {
       final folders = await client.fetchFavoriteFolders();
       final nextItems = <String, List<RemoteFavoriteItem>>{};
       for (final folder in folders) {
-        nextItems[folder.name] = await client.fetchFavoritesInFolder(folder.name);
+        nextItems[folder.name] =
+            await client.fetchFavoritesInFolder(folder.name);
       }
       if (!mounted) {
         return;
@@ -746,7 +747,8 @@ class _MainFavoritesPageState extends State<MainFavoritesPage> {
       return _RemoteFavoritesComicsPageView(
         key: ValueKey('remote:$_currentFolder:$_contentVersion'),
         folder: _currentFolder!,
-        items: _remoteFolderItems[_currentFolder!] ?? const <RemoteFavoriteItem>[],
+        items:
+            _remoteFolderItems[_currentFolder!] ?? const <RemoteFavoriteItem>[],
         client: _remoteClient,
         onDelete: (item) async {
           await _remoteClient?.deleteRemoteFavorite(_currentFolder!, item);
@@ -876,10 +878,15 @@ class _RemoteFavoriteTile extends StatelessWidget {
     }
     RemoteLibraryComicItem? resolved;
     try {
-      resolved = await remoteClient.findItemByCandidates(
-        item.toLocalFavoriteItem().candidateDownloadIds(),
-        fetchDetail: true,
-      );
+      final itemId = item.itemId.trim();
+      if (itemId.isNotEmpty) {
+        resolved = await remoteClient.fetchItemDetail(itemId);
+      } else {
+        resolved = await remoteClient.findItemByCandidates(
+          item.toLocalFavoriteItem().candidateDownloadIds(),
+          fetchDetail: true,
+        );
+      }
     } on RemoteLibraryDataSourceException catch (e) {
       // Without this catch a lookup timeout escapes as an unhandled exception,
       // which tears down the current route — the user sees "tap does nothing,
