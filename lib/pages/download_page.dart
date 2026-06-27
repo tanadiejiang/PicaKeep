@@ -19,12 +19,14 @@ import 'package:picakeep/foundation/local_data_source.dart';
 import 'package:picakeep/foundation/local_favorites.dart';
 import 'package:picakeep/foundation/local_library.dart';
 import 'package:picakeep/foundation/local_library_settings.dart';
+import 'package:picakeep/foundation/online_download_manager.dart';
 import 'package:picakeep/foundation/remote_library_event_channel.dart';
 import 'package:picakeep/foundation/remote_library_data_source.dart';
 import 'package:picakeep/foundation/service_data_source.dart';
 import 'package:picakeep/foundation/trash.dart';
 import 'package:picakeep/foundation/ui_mode.dart';
 import 'package:picakeep/tools/translations.dart';
+import 'downloading/downloading_page.dart';
 import 'package:picakeep/components/comic_tile.dart';
 import 'package:picakeep/components/scrollable.dart';
 import 'package:picakeep/components/layout.dart';
@@ -1201,6 +1203,18 @@ class _DownloadPageState extends State<DownloadPage>
           child: IconButton(
             icon: const Icon(Icons.refresh),
             onPressed: logic.triggerManualRemoteRefresh,
+          ),
+        ),
+      if (!logic.selecting && !logic.searchMode)
+        Tooltip(
+          message: '下载队列'.tl,
+          child: IconButton(
+            icon: const Icon(Icons.downloading_outlined),
+            onPressed: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const DownloadingPage()),
+              );
+            },
           ),
         ),
       if (!logic.selecting && !logic.searchMode)

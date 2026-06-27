@@ -19,6 +19,7 @@ import 'package:picakeep/tools/translations.dart';
 import '../../components/scrollable.dart';
 import '../local_search_page.dart';
 import 'local_favorites.dart';
+import 'network_favorites_page.dart';
 
 const _kSecondaryTopBarHeight = 48.0;
 const _kDrawerAnimationDuration = Duration(milliseconds: 220);
@@ -648,6 +649,17 @@ class _MainFavoritesPageState extends State<MainFavoritesPage> {
                             icon: Icons.manage_search,
                             label: '搜索全部'.tl,
                             onTap: _openDownloadedSearch,
+                          ),
+                          _ActionItem(
+                            icon: Icons.cloud_queue,
+                            label: '网络'.tl,
+                            onTap: () {
+                              Navigator.of(context).push(
+                                MaterialPageRoute(
+                                  builder: (_) => const NetworkFavoritesPage(),
+                                ),
+                              );
+                            },
                           ),
                           _ActionItem(
                             icon: Icons.reorder,

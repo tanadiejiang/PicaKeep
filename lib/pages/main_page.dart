@@ -12,10 +12,12 @@ import '../components/components.dart';
 import 'favorites/main_favorites_page.dart';
 import 'local_search_page.dart';
 import 'me_page.dart';
+import 'online_search/online_search_page.dart';
 import 'service_info_page.dart';
 import 'settings/settings_page.dart';
 
 enum _MainPaneActionPage {
+  onlineSearch,
   search,
   settings,
 }
@@ -68,6 +70,9 @@ class _MainPageState extends State<MainPage> {
     }
     final currentRoute =
         observer.routes.last.settings.name ?? observer.routes.last.toString();
+    if (currentRoute.contains('OnlineSearchPage')) {
+      return _MainPaneActionPage.onlineSearch;
+    }
     if (currentRoute.contains('LocalSearchPage')) {
       return _MainPaneActionPage.search;
     }
@@ -78,6 +83,9 @@ class _MainPageState extends State<MainPage> {
   }
 
   _MainPaneActionPage? _paneActionTypeOf(Widget page) {
+    if (page is OnlineSearchPage) {
+      return _MainPaneActionPage.onlineSearch;
+    }
     if (page is LocalSearchPage) {
       return _MainPaneActionPage.search;
     }
@@ -179,6 +187,13 @@ class _MainPageState extends State<MainPage> {
       observer: observer,
       paneItems: paneItems,
       paneActions: [
+        PaneActionEntry(
+          label: '在线搜索',
+          icon: Icons.travel_explore,
+          onTap: () {
+            _openHubPage(() => const OnlineSearchPage());
+          },
+        ),
         PaneActionEntry(
           label: '搜索',
           icon: Icons.search,

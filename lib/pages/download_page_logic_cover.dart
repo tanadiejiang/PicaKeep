@@ -187,6 +187,10 @@ extension DownloadPageLogicCover on DownloadPageLogic {
       }
       return File('');
     }
+    final localCoverPath = item.localCoverPath?.trim();
+    if (localCoverPath != null && localCoverPath.isNotEmpty) {
+      return File(localCoverPath);
+    }
     return DownloadManager().getCover(item.id);
   }
 
