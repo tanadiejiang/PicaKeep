@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:picakeep/base.dart';
+import 'package:picakeep/comic_source/comic_source.dart';
 import 'package:picakeep/foundation/app.dart';
 import 'package:picakeep/foundation/app_runtime_mode.dart';
 import 'package:picakeep/foundation/history.dart';
@@ -15,6 +16,8 @@ import 'package:picakeep/foundation/service_data_source.dart';
 import 'package:picakeep/tools/translations.dart';
 import 'package:picakeep/tools/read_history_helper.dart';
 import 'package:picakeep/foundation/image_favorites.dart';
+import 'package:picakeep/foundation/online_download_manager.dart';
+import 'accounts/accounts_page.dart';
 import 'tool_display_config.dart';
 import 'history_page.dart';
 import 'image_favorites.dart';
@@ -23,6 +26,7 @@ import 'service_info_page.dart';
 import 'trash_page.dart';
 import 'tools.dart';
 import 'download_page.dart';
+import 'downloading/downloading_page.dart';
 import 'local_library_page.dart';
 
 class MePage extends StatefulWidget {
@@ -103,6 +107,7 @@ class _MePageState extends State<MePage> {
     App.serviceConfigVersion.addListener(_handleServiceStateChanged);
     App.serviceRuntimeVersion.addListener(_handleServiceStateChanged);
     App.toolDisplayConfigVersion.addListener(_handleToolDisplayConfigChanged);
+    OnlineDownloadManager.instance.version.addListener(_handleDownloadVersionChanged);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       AppStartupTrace.log('MePage.firstPostFrame');
       if (!mounted) {
@@ -122,6 +127,8 @@ class _MePageState extends State<MePage> {
     App.serviceRuntimeVersion.removeListener(_handleServiceStateChanged);
     App.toolDisplayConfigVersion
         .removeListener(_handleToolDisplayConfigChanged);
+    OnlineDownloadManager.instance.version
+        .removeListener(_handleDownloadVersionChanged);
     StateController.remove<SimpleController>("me_page");
     super.dispose();
   }
@@ -218,6 +225,10 @@ class _MePageState extends State<MePage> {
 
   void _handleLocalDataChanged() {
     _scheduleProgressiveLoads(forceRefresh: true);
+  }
+
+  void _handleDownloadVersionChanged() {
+    if (mounted) setState(() {});
   }
 
   void _handleServiceStateChanged() {
@@ -657,7 +668,14 @@ class _MePageState extends State<MePage> {
                         child: Column(
                           children: [
                             const SizedBox(height: 12),
-                            _buildDownloadCard(context),
+                            Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Expanded(child: _buildDownloadCard(context)),
+                                const SizedBox(width: 12),
+                                Expanded(child: _buildDownloadingCard(context)),
+                              ],
+                            ),
                             const SizedBox(height: 12),
                             _buildLibraryAccessSection(
                               context,
@@ -671,7 +689,7 @@ class _MePageState extends State<MePage> {
                         child: Column(
                           children: [
                             const SizedBox(height: 12),
-                            _buildImageFavoriteCard(context),
+                            _buildAlbumAndImageFavoriteSection(context),
                             const SizedBox(height: 12),
                             _buildToolsCard(context),
                             const SizedBox(
@@ -684,14 +702,21 @@ class _MePageState extends State<MePage> {
                   )
                 else ...[
                   const SizedBox(height: 12),
-                  _buildDownloadCard(context),
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Expanded(child: _buildDownloadCard(context)),
+                      const SizedBox(width: 12),
+                      Expanded(child: _buildDownloadingCard(context)),
+                    ],
+                  ),
                   const SizedBox(height: 12),
                   _buildLibraryAccessSection(
                     context,
                     horizontal: false,
                   ),
                   const SizedBox(height: 12),
-                  _buildImageFavoriteCard(context),
+                  _buildAlbumAndImageFavoriteSection(context),
                   const SizedBox(height: 12),
                   _buildToolsCard(context),
                   const SizedBox(
@@ -864,6 +889,26 @@ class _MePageState extends State<MePage> {
     }
   }
 
+  Widget _buildDownloadingCard(BuildContext context) {
+    final manager = OnlineDownloadManager.instance;
+    final activeTasks = manager.tasks
+        .where((t) => !t.completed && !t.cancelled && t.error == null)
+        .length;
+    final description = activeTasks == 0
+        ? _buildCardDescriptionText('暂无下载任务')
+        : _buildCardDescriptionText('$activeTasks 个任务进行中');
+    return _MePageCard(
+      icon: const Icon(Icons.downloading),
+      title: '下载队列',
+      description: description,
+      onTap: () => Navigator.of(context)
+          .push(MaterialPageRoute(builder: (_) => const DownloadingPage()))
+          .then((_) {
+        if (mounted) setState(() {});
+      }),
+    );
+  }
+
   Widget _buildDownloadCard(BuildContext context) {
     return _MePageCard(
       icon: const Icon(Icons.download_for_offline),
@@ -876,6 +921,57 @@ class _MePageState extends State<MePage> {
       onTap: () => Navigator.of(context).push(
         MaterialPageRoute(builder: (_) => const DownloadPage()),
       ),
+    );
+  }
+
+  Widget _buildAccountCard(BuildContext context) {
+    final loggedSources = ComicSource.sources
+        .where((source) => source.account != null && source.isLoggedIn)
+        .toList(growable: false);
+    return _MePageCard(
+      icon: const Icon(Icons.account_circle_outlined),
+      title: '账号'.tl,
+      description: loggedSources.isEmpty
+          ? _buildCardDescriptionText('未登录 · 点击管理'.tl)
+          : Wrap(
+              spacing: 8,
+              runSpacing: 6,
+              children: [
+                for (final source in loggedSources)
+                  Builder(
+                    builder: (context) {
+                      final cs = Theme.of(context).colorScheme;
+                      return Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 10, vertical: 3),
+                        decoration: BoxDecoration(
+                          color: cs.primaryContainer,
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Text(
+                          source.name,
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: cs.onPrimaryContainer,
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+              ],
+            ),
+      onTap: () => Navigator.of(context)
+          .push(
+        MaterialPageRoute(
+          settings: const RouteSettings(name: 'AccountsPage'),
+          builder: (_) => const AccountsPage(),
+        ),
+      )
+          .then((_) {
+        if (mounted) {
+          setState(() {});
+        }
+      }),
     );
   }
 
@@ -892,6 +988,7 @@ class _MePageState extends State<MePage> {
     );
   }
 
+  // ignore: unused_element
   Widget _buildRemoteLibraryCard(BuildContext context) {
     final available = _showRemoteLibraryEntry;
     final isLoading = !_remoteSummaryResolved;
@@ -918,12 +1015,17 @@ class _MePageState extends State<MePage> {
     BuildContext context, {
     required bool horizontal,
   }) {
+    // 资源库卡按当前产品要求暂时隐藏；_buildRemoteLibraryCard 保留，后续恢复入口时复用。
+    return _buildAccountCard(context);
+  }
+
+  Widget _buildAlbumAndImageFavoriteSection(BuildContext context) {
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Expanded(child: _buildLocalLibraryCard(context)),
         const SizedBox(width: 12),
-        Expanded(child: _buildRemoteLibraryCard(context)),
+        Expanded(child: _buildImageFavoriteCard(context)),
       ],
     );
   }
@@ -1216,13 +1318,10 @@ class _MePageCard extends StatelessWidget {
               ),
               Padding(
                 padding: const EdgeInsets.only(
-                    left: 16, right: 16, bottom: 16, top: 8),
-                child: SizedBox(
-                  height: 20,
-                  child: Align(
-                    alignment: Alignment.centerLeft,
-                    child: description,
-                  ),
+                    left: 16, right: 16, bottom: 16, top: 4),
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: description,
                 ),
               ),
             ],

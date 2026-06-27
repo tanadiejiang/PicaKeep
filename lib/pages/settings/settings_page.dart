@@ -14,6 +14,7 @@ import 'package:picakeep/components/scrollable.dart';
 import 'package:picakeep/foundation/app.dart';
 import 'package:picakeep/foundation/download.dart';
 import 'package:picakeep/foundation/history.dart';
+import 'package:picakeep/foundation/online_download_manager.dart';
 import 'package:picakeep/foundation/local_data_source.dart';
 import 'package:picakeep/foundation/local_favorites.dart';
 import 'package:picakeep/foundation/local_library.dart';
@@ -38,6 +39,7 @@ part 'app_capabilities_settings.dart';
 part 'explore_settings.dart';
 part 'reading_settings.dart';
 part 'local_favorite_settings.dart';
+part 'download_settings.dart';
 
 void refreshLocalDataCaches() {
   // Managers are reinitialized in place so mounted widgets never observe
@@ -97,7 +99,7 @@ class _SettingsPageState extends State<SettingsPage> {
       !UiMode.m1(context) &&
       MediaQuery.of(context).size.width >= _settingsWideLayoutBreakpoint;
 
-  final categories = <String>["浏览", "阅读", "外观", "本地收藏", "APP", "APP能力", "关于"];
+  final categories = <String>["浏览", "阅读", "外观", "本地收藏", "APP", "下载", "APP能力", "关于"];
 
   final icons = <IconData>[
     Icons.explore,
@@ -105,6 +107,7 @@ class _SettingsPageState extends State<SettingsPage> {
     Icons.color_lens,
     Icons.collections_bookmark_rounded,
     Icons.apps,
+    Icons.download_outlined,
     Icons.cloud_sync_outlined,
     Icons.info
   ];
@@ -417,8 +420,9 @@ class _SettingsPageState extends State<SettingsPage> {
         2 => buildAppearanceSettings(width),
         3 => LocalFavoritesSettings(width: width),
         4 => buildAppSettings(width, context),
-        5 => buildAppCapabilitiesSettings(width, context),
-        6 => buildAbout(width),
+        5 => _buildDownloadSettings(width),
+        6 => buildAppCapabilitiesSettings(width, context),
+        7 => buildAbout(width),
         _ => throw UnimplementedError()
       };
     }

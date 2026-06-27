@@ -27,6 +27,8 @@ import 'package:picakeep/tools/keep_screen_on.dart';
 import 'package:picakeep/foundation/image_manager.dart';
 import 'package:picakeep/foundation/history.dart';
 import 'package:picakeep/foundation/local_library_settings.dart';
+import 'package:picakeep/network/online_image/online_image_manager.dart';
+import 'package:picakeep/network/picacg_network/picacg_network.dart';
 import 'package:picakeep/tools/save_image.dart';
 import 'package:picakeep/tools/time.dart';
 import 'package:picakeep/foundation/app.dart';
@@ -52,6 +54,8 @@ part 'reading_type.dart';
 part 'reading_settings.dart';
 
 part 'reading_data.dart';
+
+part '../online_comic/picacg_reading_data.dart';
 
 SystemUiOverlayStyle _readerOverlayStyle(bool useDarkBackground) {
   final isDark = useDarkBackground;

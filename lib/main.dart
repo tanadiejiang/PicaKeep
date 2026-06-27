@@ -7,12 +7,15 @@ import 'package:flutter/services.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 
 import 'base.dart';
+import 'comic_source/comic_source.dart';
 import 'components/window_frame.dart';
 import 'foundation/app.dart';
 import 'foundation/archive/archive_registry.dart';
 import 'foundation/history.dart';
 import 'foundation/local_favorites.dart';
+import 'foundation/online_download_manager.dart';
 import 'foundation/remote_library_event_channel.dart';
+import 'network/cookie_jar.dart';
 import 'pages/auth_page.dart';
 import 'pages/main_page.dart';
 import 'server/local_server_runtime.dart';
@@ -55,6 +58,7 @@ Future<void> _runHeadlessServer(List<String> args) async {
   );
   await appdata.readEssentialData();
   ArchiveRegistry.initDefaults();
+  await _initializeOnlineFoundation();
 
   final runtime = LocalServerRuntime.instance;
   final configPath = _parseConfigPathArg(args);
@@ -142,6 +146,7 @@ Future<void> _initializeApplication() async {
 
   await appdata.readEssentialData();
   ArchiveRegistry.initDefaults();
+  await _initializeOnlineFoundation();
   if (_shouldLoadTranslationsBeforeRunApp()) {
     await loadTranslations();
   } else {
@@ -151,6 +156,12 @@ Future<void> _initializeApplication() async {
   if (App.isDesktop) {
     await initWindowManagerIfDesktop();
   }
+}
+
+Future<void> _initializeOnlineFoundation() async {
+  SingleInstanceCookieJar('${App.dataPath}${Platform.pathSeparator}cookies.db');
+  await ComicSource.init();
+  unawaited(OnlineDownloadManager.instance.loadQueue());
 }
 
 Future<void> _showDesktopWindowWhenReady() async {

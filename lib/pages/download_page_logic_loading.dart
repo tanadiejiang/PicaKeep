@@ -249,7 +249,15 @@ extension DownloadPageLogicLoading on DownloadPageLogic {
         return downloads;
       }
       await DownloadManager().init();
-      return DownloadManager().getAll(order, direction);
+      final downloads = DownloadManager().getAll(order, direction);
+      final onlineDownloads =
+          await OnlineDownloadManager.instance.loadCompletedDownloads();
+      final seenIds = downloads.map((item) => item.id).toSet();
+      downloads.addAll(
+        onlineDownloads.where((item) => seenIds.add(item.id)),
+      );
+      _sortItems(downloads, order, direction);
+      return downloads;
     }
     final items = await LocalLibraryManager().getManagedDownloads();
     final downloads = items.cast<DownloadedItem>().toList();
