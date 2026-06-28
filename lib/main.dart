@@ -13,9 +13,11 @@ import 'foundation/app.dart';
 import 'foundation/archive/archive_registry.dart';
 import 'foundation/history.dart';
 import 'foundation/local_favorites.dart';
+import 'foundation/log_file_service.dart';
 import 'foundation/online_download_manager.dart';
 import 'foundation/remote_library_event_channel.dart';
 import 'network/cookie_jar.dart';
+import 'network/jm_network/jm_network.dart';
 import 'pages/auth_page.dart';
 import 'pages/main_page.dart';
 import 'server/local_server_runtime.dart';
@@ -58,6 +60,8 @@ Future<void> _runHeadlessServer(List<String> args) async {
   );
   await appdata.readEssentialData();
   ArchiveRegistry.initDefaults();
+  // 初始化日志文件服务（每次启动创建新日志文件）
+  await LogFileService.instance.init();
   await _initializeOnlineFoundation();
 
   final runtime = LocalServerRuntime.instance;
@@ -146,6 +150,8 @@ Future<void> _initializeApplication() async {
 
   await appdata.readEssentialData();
   ArchiveRegistry.initDefaults();
+  // 初始化日志文件服务（每次启动创建新日志文件）
+  await LogFileService.instance.init();
   await _initializeOnlineFoundation();
   if (_shouldLoadTranslationsBeforeRunApp()) {
     await loadTranslations();
@@ -162,6 +168,8 @@ Future<void> _initializeOnlineFoundation() async {
   SingleInstanceCookieJar('${App.dataPath}${Platform.pathSeparator}cookies.db');
   await ComicSource.init();
   unawaited(OnlineDownloadManager.instance.loadQueue());
+  // jm 动态域名：启动时对现有域名做一次活域名重选（轻量，不打 bytepluses）
+  JmNetwork().maybeSelectDomainOnStartup();
 }
 
 Future<void> _showDesktopWindowWhenReady() async {

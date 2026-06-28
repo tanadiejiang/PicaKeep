@@ -306,6 +306,7 @@ class _ComicImageState extends State<ComicImage> with WidgetsBindingObserver {
                   child: Listener(
                     onPointerDown: (details){
                       TapController.ignoreNextTap = true;
+                      widget.image.evict();  // 清除缓存，确保重试真正重新加载
                       _resolveImage();
                     },
                     child: const SizedBox(

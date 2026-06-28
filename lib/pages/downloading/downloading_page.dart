@@ -287,7 +287,7 @@ class _DownloadingTile extends StatelessWidget {
               ),
               clipBehavior: Clip.antiAlias,
               child: Image.network(
-                task.comic.cover,
+                task.taskCover,
                 fit: BoxFit.cover,
                 errorBuilder: (_, __, ___) =>
                     const Center(child: Icon(Icons.broken_image_outlined)),
@@ -300,7 +300,7 @@ class _DownloadingTile extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    task.comic.title,
+                    task.taskTitle,
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(

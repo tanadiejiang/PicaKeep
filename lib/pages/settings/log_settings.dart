@@ -9,28 +9,58 @@ class LogSetting extends StatefulWidget {
 
 class _LogSettingState extends State<LogSetting> {
   Future<void> _exportLogs() async {
-    final directory = Directory('${App.dataPath}/logs');
-    if (!directory.existsSync()) {
-      directory.createSync(recursive: true);
-    }
-    final timestamp = DateTime.now().toIso8601String().replaceAll(':', '-');
-    final file = File('${directory.path}/picakeep-log-$timestamp.txt');
-    await file.writeAsString(LogManager().toString());
-
-    if (App.isDesktop) {
-      final location =
-          await getSaveLocation(suggestedName: file.uri.pathSegments.last);
-      if (location == null) {
-        return;
-      }
-      await XFile(file.path).saveTo(location.path);
-      if (mounted) {
-        _showSettingMessage(context, '日志已导出'.tl);
-      }
+    final path = await LogFileService.instance.exportCurrent();
+    if (path == null) {
+      if (mounted) _showSettingMessage(context, '当前日志文件不存在'.tl);
       return;
     }
 
-    await Share.shareXFiles([XFile(file.path)], text: 'PicaKeep Logs');
+    if (App.isDesktop) {
+      final location = await getSaveLocation(
+        suggestedName: path.split(Platform.pathSeparator).last,
+      );
+      if (location == null) return;
+      await XFile(path).saveTo(location.path);
+      if (mounted) _showSettingMessage(context, '日志已导出'.tl);
+      return;
+    }
+
+    await Share.shareXFiles([XFile(path)], text: 'PicaKeep Log');
+  }
+
+  Future<void> _copyAll() async {
+    final text = await LogFileService.instance.copyAll();
+    await Clipboard.setData(ClipboardData(text: text));
+    if (mounted) _showSettingMessage(context, '已复制到剪贴板'.tl);
+  }
+
+  Future<void> _exportAllAsZip() async {
+    final zipPath = await LogFileService.instance.exportAllAsZip();
+    if (zipPath == null) {
+      if (mounted) _showSettingMessage(context, '无可导出的日志'.tl);
+      return;
+    }
+
+    if (App.isDesktop) {
+      final location = await getSaveLocation(
+        suggestedName: zipPath.split(Platform.pathSeparator).last,
+      );
+      if (location == null) return;
+      await XFile(zipPath).saveTo(location.path);
+      if (mounted) _showSettingMessage(context, '日志已打包导出'.tl);
+      return;
+    }
+
+    await Share.shareXFiles([XFile(zipPath)], text: 'PicaKeep Logs');
+  }
+
+  void _showHistory() {
+    showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      isScrollControlled: true,
+      builder: (_) => const _LogHistorySheet(),
+    );
   }
 
   Color _levelColor(ColorScheme scheme, LogLevel level) {
@@ -173,6 +203,12 @@ class _LogSettingState extends State<LogSetting> {
                 _showSettingMessage(context, '仅在本次运行时有效'.tl);
               } else if (value == 'export') {
                 await _exportLogs();
+              } else if (value == 'copyAll') {
+                await _copyAll();
+              } else if (value == 'exportZip') {
+                await _exportAllAsZip();
+              } else if (value == 'history') {
+                _showHistory();
               }
             },
             itemBuilder: (context) => [
@@ -184,15 +220,164 @@ class _LogSettingState extends State<LogSetting> {
                 value: 'ignore',
                 child: Text('禁用长度限制'.tl),
               ),
+              const PopupMenuDivider(),
+              PopupMenuItem<String>(
+                value: 'copyAll',
+                child: Text('复制全部'.tl),
+              ),
               PopupMenuItem<String>(
                 value: 'export',
-                child: Text('导出'.tl),
+                child: Text('导出当前日志'.tl),
+              ),
+              PopupMenuItem<String>(
+                value: 'exportZip',
+                child: Text('打包所有日志为 ZIP'.tl),
+              ),
+              const PopupMenuDivider(),
+              PopupMenuItem<String>(
+                value: 'history',
+                child: Text('历史日志'.tl),
               ),
             ],
           ),
         ],
       ),
       body: LogManager.logs.isEmpty ? _buildEmptyState() : _buildLogList(),
+    );
+  }
+}
+
+/// 历史日志弹窗
+class _LogHistorySheet extends StatefulWidget {
+  const _LogHistorySheet();
+
+  @override
+  State<_LogHistorySheet> createState() => _LogHistorySheetState();
+}
+
+class _LogHistorySheetState extends State<_LogHistorySheet> {
+  late Future<List<LogFileInfo>> _historyFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    _historyFuture = LogFileService.instance.listHistory();
+  }
+
+  void _reload() {
+    setState(() {
+      _historyFuture = LogFileService.instance.listHistory();
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<List<LogFileInfo>>(
+      future: _historyFuture,
+      builder: (context, snapshot) {
+        final files = snapshot.data ?? const <LogFileInfo>[];
+        if (files.isEmpty) {
+          return SizedBox(
+            height: 200,
+            child: Center(child: Text('暂无历史日志'.tl)),
+          );
+        }
+        return SizedBox(
+          height: MediaQuery.of(context).size.height * 0.7,
+          child: SafeArea(
+            child: ListView.separated(
+              padding: const EdgeInsets.all(16),
+              itemCount: files.length,
+              separatorBuilder: (_, __) => const Divider(),
+              itemBuilder: (context, index) {
+                final file = files[index];
+                return ListTile(
+                  leading: const Icon(Icons.description),
+                  title: Text(file.name),
+                  subtitle: Text('${(file.sizeBytes / 1024).toStringAsFixed(1)} KB · ${_formatDate(file.modified)}'),
+                  onTap: () => Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                      builder: (_) => _LogFileViewerPage(file: file),
+                    ),
+                  ),
+                  trailing: Wrap(
+                    spacing: 0,
+                    children: [
+                      IconButton(
+                        tooltip: '分享'.tl,
+                        onPressed: () async {
+                          await Share.shareXFiles(
+                            [XFile(file.path)],
+                            text: file.name,
+                          );
+                        },
+                        icon: const Icon(Icons.share),
+                      ),
+                      IconButton(
+                        tooltip: '删除'.tl,
+                        onPressed: () async {
+                          await LogFileService.instance.deleteHistory(file.path);
+                          if (context.mounted) _reload();
+                        },
+                        icon: const Icon(Icons.delete_outline),
+                      ),
+                    ],
+                  ),
+                );
+              },
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  String _formatDate(DateTime dt) {
+    return '${dt.year}-${_pad(dt.month)}-${_pad(dt.day)} '
+        '${_pad(dt.hour)}:${_pad(dt.minute)}';
+  }
+
+  String _pad(int v) => v.toString().padLeft(2, '0');
+}
+
+/// 历史日志文件查看页
+class _LogFileViewerPage extends StatelessWidget {
+  const _LogFileViewerPage({required this.file});
+
+  final LogFileInfo file;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(file.name),
+        actions: [
+          IconButton(
+            tooltip: '分享'.tl,
+            onPressed: () => Share.shareXFiles(
+              [XFile(file.path)],
+              text: file.name,
+            ),
+            icon: const Icon(Icons.share),
+          ),
+        ],
+      ),
+      body: FutureBuilder<String>(
+        future: LogFileService.instance.readHistoryFile(file.path),
+        builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return const Center(child: CircularProgressIndicator());
+          }
+          final text = snapshot.data ?? '';
+          return SingleChildScrollView(
+            padding: const EdgeInsets.all(16),
+            child: SelectableText(
+              text,
+              style: const TextStyle(fontFamily: 'monospace', fontSize: 13),
+            ),
+          );
+        },
+      ),
     );
   }
 }

@@ -17,6 +17,10 @@ import 'package:picakeep/foundation/local_library_settings.dart';
 import 'package:picakeep/foundation/remote_library_data_source.dart';
 import 'package:picakeep/foundation/trash.dart';
 import 'package:picakeep/tools/read_history_helper.dart';
+import 'package:picakeep/network/jm_network/jm_models.dart';
+import 'package:picakeep/network/picacg_network/models.dart';
+import 'package:picakeep/pages/online_comic/jm_comic_detail_page.dart';
+import 'package:picakeep/pages/online_comic/online_comic_detail_page.dart';
 import 'package:picakeep/tools/tags_translation.dart';
 import 'package:picakeep/tools/translations.dart';
 
@@ -632,7 +636,9 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
     return comic.id;
   }
 
-  String? _displayPathFor(DownloadedItem comic) {
+  // 路径不再在详情信息区显示（按用户要求隐藏），方法保留待恢复。
+  // ignore: unused_element
+  String? _displayPathForRemoved(DownloadedItem comic) {
     String? fullPath;
     final fileSystemPath = comic.fileSystemPath?.trim();
     if (fileSystemPath != null && fileSystemPath.isNotEmpty) {
@@ -688,9 +694,7 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
 
     add('ID', [_displayIdFor(comic)]);
     add('作者', [comic.subTitle]);
-    add('漫画源', [comic.sourceDisplayName]);
     add('时间', [_formatTime(comic.time)]);
-    add('路径', [_displayPathFor(comic)]);
     if (comic is LocalLibraryComicItem && comic.isArchiveItem) {
       add('格式', [comic.archiveFormatDisplay]);
       final path = comic.fileSystemPath;
@@ -1186,6 +1190,35 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
     );
   }
 
+  void _onVisitOnline() {
+    final comic = _comic;
+    if (comic.type == DownloadType.jm) {
+      final numericId =
+          comic.id.startsWith('jm') ? comic.id.substring(2) : comic.id;
+      App.pushInner(() => JmComicDetailPage(
+            comic: JmComicBrief(
+              id: numericId,
+              title: comic.name,
+              author: comic.subTitle,
+              tags: comic.tags,
+              coverUrl: '',
+            ),
+          ));
+    } else if (comic.type == DownloadType.picacg) {
+      final thumb = comic is DownloadedComic ? comic.thumbUrl : '';
+      App.pushInner(() => OnlineComicDetailPage(
+            comic: PicacgComicItemBrief(
+              id: comic.id,
+              title: comic.name,
+              author: comic.subTitle,
+              likes: 0,
+              path: thumb,
+              tags: comic.tags,
+            ),
+          ));
+    }
+  }
+
   Widget _buildActionItem(String title, IconData icon, VoidCallback? onTap) {
     return InkWell(
       onTap: onTap,
@@ -1410,6 +1443,9 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
             () => _onRead(ep: comic.eps.length > 1 ? 1 : 0),
           ),
           _buildActionItem('分享', Icons.share, () => _copyText(comic.name)),
+          if (_comic.type == DownloadType.jm ||
+              _comic.type == DownloadType.picacg)
+            _buildActionItem('在线详情', Icons.public, _onVisitOnline),
           if (comic is LocalLibraryComicItem &&
               comic.isArchiveItem &&
               comic.archivePasswordMatched)

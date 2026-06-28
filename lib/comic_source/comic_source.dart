@@ -10,6 +10,7 @@ import 'package:picakeep/network/base_comic.dart';
 import 'package:picakeep/network/res.dart';
 
 import 'built_in/picacg.dart';
+import 'built_in/jm.dart';
 
 typedef LoginHandler = Future<Res<bool>> Function(
   String username,
@@ -43,7 +44,7 @@ class ComicSource {
 
   static final List<ComicSource> sources = <ComicSource>[];
 
-  static List<ComicSource> get builtIn => <ComicSource>[picacg];
+  static List<ComicSource> get builtIn => <ComicSource>[picacg, jm];
 
   static Future<void> init() async {
     sources

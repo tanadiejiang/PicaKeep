@@ -252,6 +252,13 @@ extension DownloadPageLogicLoading on DownloadPageLogic {
       final downloads = DownloadManager().getAll(order, direction);
       final onlineDownloads =
           await OnlineDownloadManager.instance.loadCompletedDownloads();
+      // Online 下载（picacg/jm）与旧 DownloadManager 共用同一个 download.db，
+      // 同一条记录会被两边各解析一次：旧系统得到基类 DownloadedComic/DownloadedJmComic
+      // （阅读走 LocalReadingData→getImage 0-based 索引，与 1-based 落盘文件错位、封面解析也不同），
+      // Online 系统得到 OnlineDownloadedComic/OnlineDownloadedJmComic（走绝对路径读图+网络回退，正确）。
+      // 因此对同 id 让 Online 版优先覆盖基类版。
+      final onlineIds = onlineDownloads.map((item) => item.id).toSet();
+      downloads.removeWhere((item) => onlineIds.contains(item.id));
       final seenIds = downloads.map((item) => item.id).toSet();
       downloads.addAll(
         onlineDownloads.where((item) => seenIds.add(item.id)),
