@@ -1,5 +1,7 @@
 import 'package:collection/collection.dart';
 
+import 'log_file_service.dart';
+
 class LogManager {
   static final List<Log> _logs = <Log>[];
 
@@ -36,6 +38,9 @@ class LogManager {
         _logs.removeAt(0);
       }
     }
+
+    // 同时写入文件
+    LogFileService.instance.writeLine(newLog.toFileLine());
   }
 
   static void clear() => _logs.clear();
@@ -58,6 +63,14 @@ class Log {
 
   @override
   toString() => "${level.name} $title $time \n$content\n\n";
+
+  /// 输出到文件的格式（单行，便于解析）
+  String toFileLine() {
+    final timeText = '${_pad(time.hour)}:${_pad(time.minute)}:${_pad(time.second)}.${time.millisecond.toString().padLeft(3, '0')}';
+    return '$timeText [${level.name.toUpperCase()}] [$title] $content';
+  }
+
+  String _pad(int v) => v.toString().padLeft(2, '0');
 
   Log(this.level, this.title, this.content);
 

@@ -488,45 +488,81 @@ class DownloadManager with _DownloadDb {
 
   File getImage(String id, int ep, int index) {
     final dir = getDirectory(id);
-    final downloadPath = ep == 0
-        ? '${_comicPath(dir)}$pathSep'
-        : '${_comicPath(dir)}$pathSep$ep$pathSep';
-    try {
-      for (var file in Directory(downloadPath).listSync()) {
-        if (file is File &&
-            file.uri.pathSegments.last.replaceFirst(RegExp(r"\..+"), "") ==
-                index.toString()) {
-          return file;
-        }
-      }
-    } catch (_) {}
+    final base = _comicPath(dir);
+    // 候选图片目录：
+    //  - 有 ep（ep>0）：固定 {base}/{ep}/
+    //  - 无 ep（ep==0）：先根目录 {base}/；若根目录无数字图片，回退 {base}/1/
+    //    （JmNetwork 下载即便单章也会把图放进 1/ 子目录，根目录仅 cover.jpg）。
+    final candidateDirs = ep == 0
+        ? ['$base$pathSep', '$base${pathSep}1$pathSep']
+        : ['$base$pathSep$ep$pathSep'];
+    for (final downloadPath in candidateDirs) {
+      final file = _findImageInDir(downloadPath, index);
+      if (file != null) return file;
+    }
     throw Exception("File not found");
   }
 
+  /// 在 [downloadPath] 内按 0/1-based 自适应查找第 [index]（0-based）张图。
+  /// 找不到返回 null。
+  File? _findImageInDir(String downloadPath, int index) {
+    try {
+      // 收集目录内所有「纯数字文件名」的图片文件，按数字 stem 建索引。
+      // 历史遗留下载为 0-based（0.jpg 起），OnlineDownloadManager 落盘为 1-based（1.png 起）。
+      // 同一个 download.db 被新旧两套读取，索引基准不一致会导致整本错位 + 首页 File not found。
+      // 这里按目录实际最小 stem 自适应：0-based 用 index，1-based 用 index+1。
+      final byStem = <int, File>{};
+      var minStem = 1 << 30;
+      for (var file in Directory(downloadPath).listSync()) {
+        if (file is! File) continue;
+        final stem =
+            file.uri.pathSegments.last.replaceFirst(RegExp(r"\..+"), "");
+        final n = int.tryParse(stem);
+        if (n == null) continue;
+        byStem[n] = file;
+        if (n < minStem) minStem = n;
+      }
+      if (byStem.isNotEmpty) {
+        // index 为 reader 的 0-based 页序号。
+        final base = minStem <= 0 ? 0 : 1;
+        final target = byStem[index + base];
+        if (target != null) return target;
+        // 兜底：精确 index 命中（极少数混合命名）。
+        final exact = byStem[index];
+        if (exact != null) return exact;
+      }
+    } catch (_) {}
+    return null;
+  }
+
   int getComicLength(String id) {
-    final downloadPath = '${_comicPath(getDirectory(id))}$pathSep';
+    final base = _comicPath(getDirectory(id));
+    // 无 ep 漫画：图通常在根目录；但 JmNetwork 下载即便单章也放进 1/ 子目录，
+    // 根目录仅 cover.jpg。根目录无图时回退 1/ 子目录计数，保持与 getImage 一致。
+    final root = _countImagesInDir('$base$pathSep');
+    if (root > 0) return root;
+    return _countImagesInDir('$base${pathSep}1$pathSep');
+  }
+
+  int _countImagesInDir(String downloadPath) {
     int count = 0;
     try {
       for (var file in Directory(downloadPath).listSync()) {
-        if (file is File && _isImageFile(file)) {
-          count++;
-        }
+        if (file is! File || !_isImageFile(file)) continue;
+        // 只统计「纯数字文件名」的页图片，排除 cover.jpg 等非页文件，
+        // 否则根目录的封面会被误计为 1 张，导致单章 jm（图在 1/ 子目录）页数只剩 1。
+        final stem =
+            file.uri.pathSegments.last.replaceFirst(RegExp(r"\..+"), "");
+        if (int.tryParse(stem) == null) continue;
+        count++;
       }
     } catch (_) {}
     return count;
   }
 
   int getEpLength(String id, int ep) {
-    final downloadPath = '${_comicPath(getDirectory(id))}$pathSep$ep$pathSep';
-    int count = 0;
-    try {
-      for (var file in Directory(downloadPath).listSync()) {
-        if (file is File && _isImageFile(file)) {
-          count++;
-        }
-      }
-    } catch (_) {}
-    return count;
+    return _countImagesInDir(
+        '${_comicPath(getDirectory(id))}$pathSep$ep$pathSep');
   }
 
   int scanDirectoryForComics() {

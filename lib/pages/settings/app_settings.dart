@@ -1783,10 +1783,11 @@ class _DownloadDirTileState extends State<_DownloadDirTile> {
   @override
   Widget build(BuildContext context) {
     final path = appdata.settings[22];
-    final display = path.isEmpty ? '未设置'.tl : path;
+    final display = path.isEmpty ? '未设置 (应用内)'.tl : path;
     return buildResponsiveSettingTile(
       leading: const Icon(Icons.folder),
       title: Text('本应用下载目录'.tl),
+      subtitle: path.isEmpty ? Text('将使用应用私有目录 (文件管理器不可见)'.tl, style: const TextStyle(fontSize: 12)) : null,
       trailingWidth: 220,
       onTap: _showBrowseDialog,
       trailing: _buildPathDisplay(context, display),

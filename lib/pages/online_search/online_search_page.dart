@@ -2,7 +2,9 @@ import 'package:flutter/material.dart';
 
 import 'package:picakeep/comic_source/comic_source.dart';
 import 'package:picakeep/foundation/app_page_route.dart';
+import 'package:picakeep/network/jm_network/jm_models.dart';
 import 'package:picakeep/pages/accounts/accounts_page.dart';
+import 'package:picakeep/pages/online_comic/jm_comic_detail_page.dart';
 
 import 'online_search_logic.dart';
 import 'online_search_result_page.dart';
@@ -170,6 +172,33 @@ class _SearchConfigBody extends StatelessWidget {
           ),
         ),
 
+        // ── ID 直跳提示（输入纯数字或 jmXXX 时显示）──
+        ValueListenableBuilder<TextEditingValue>(
+          valueListenable: keywordController,
+          builder: (context, value, _) {
+            final sug = _jmIdSuggestion(value.text.trim());
+            if (sug == null) return const SizedBox.shrink();
+            return Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: ActionChip(
+                avatar: const Icon(Icons.open_in_new, size: 16),
+                label: Text(sug.label),
+                onPressed: () => Navigator.of(context).push(AppPageRoute(
+                  builder: (_) => JmComicDetailPage(
+                    comic: JmComicBrief(
+                      id: sug.id,
+                      title: sug.label,
+                      author: '',
+                      tags: const [],
+                      coverUrl: '',
+                    ),
+                  ),
+                )),
+              ),
+            );
+          },
+        ),
+
         const SizedBox(height: 28),
 
         // ── 目标源 ──
@@ -285,4 +314,13 @@ class _NoLoggedInSourceView extends StatelessWidget {
       ),
     );
   }
+}
+
+/// 检测输入是否为 JM ID 格式（纯数字 或 jm/JM 前缀+数字），返回跳转建议
+({String id, String label})? _jmIdSuggestion(String text) {
+  if (text.isEmpty) return null;
+  if (RegExp(r'^\d+$').hasMatch(text)) return (id: text, label: 'jm $text');
+  final m = RegExp(r'^[Jj][Mm](\d+)$').firstMatch(text);
+  if (m != null) return (id: m.group(1)!, label: 'jm ${m.group(1)}');
+  return null;
 }

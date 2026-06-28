@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
+import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
 import 'package:flutter/widgets.dart';
@@ -11,17 +12,42 @@ import 'package:sqlite3/sqlite3.dart';
 import 'package:picakeep/base.dart';
 import 'package:picakeep/foundation/app.dart';
 import 'package:picakeep/foundation/download_model.dart';
+import 'package:picakeep/foundation/image_loader/jm_image_recombine.dart';
 import 'package:picakeep/foundation/local_favorites.dart';
 import 'package:picakeep/foundation/log.dart';
 import 'package:picakeep/network/app_dio.dart';
+import 'package:picakeep/network/jm_network/jm_network.dart';
 import 'package:picakeep/network/picacg_network/picacg_network.dart';
 import 'package:picakeep/network/res.dart';
 import 'package:picakeep/pages/reader/comic_reading_page.dart';
 
 class OnlineDownloadTask {
-  OnlineDownloadTask({required this.comic});
+  OnlineDownloadTask.picacg({required PicacgComicItem comic})
+      : _comic = comic,
+        _jmInfo = null,
+        sourceKey = 'picacg';
 
-  final PicacgComicItem comic;
+  OnlineDownloadTask.jm({required JmComicInfo jmInfo})
+      : _comic = null,
+        _jmInfo = jmInfo,
+        sourceKey = 'jm';
+
+  final PicacgComicItem? _comic;
+  final JmComicInfo? _jmInfo;
+  final String sourceKey;
+
+  // 向前兼容的 comic getter（仅 picacg 任务有效）
+  PicacgComicItem get comic => _comic!;
+
+  /// 通用 display getters
+  String get taskId => sourceKey == 'jm' ? 'jm${_jmInfo!.id}' : _comic!.id;
+  String get taskTitle =>
+      sourceKey == 'jm' ? _jmInfo!.title : _comic!.title;
+  String get taskCover =>
+      sourceKey == 'jm' ? _jmInfo!.coverUrl : _comic!.cover;
+
+  // 并发下载时每张图各自的 token
+  final _cancelTokens = <CancelToken>{};
   CancelToken? cancelToken;
   int currentEp = 0;
   int totalEps = 0;
@@ -32,6 +58,17 @@ class OnlineDownloadTask {
   bool cancelled = false;
   bool paused = false;
   String? error;
+
+  void addToken(CancelToken token) => _cancelTokens.add(token);
+  void removeToken(CancelToken token) => _cancelTokens.remove(token);
+
+  void cancelAllTokens() {
+    for (final t in _cancelTokens) {
+      if (!t.isCancelled) t.cancel('task cancelled');
+    }
+    _cancelTokens.clear();
+    cancelToken?.cancel('task cancelled');
+  }
 
   // 测速
   int currentSpeed = 0;
@@ -57,7 +94,7 @@ class OnlineDownloadTask {
     currentSpeed = 0;
   }
 
-  String get id => comic.id;
+  String get id => taskId;
 
   double get progress {
     if (totalEps <= 0) {
@@ -113,7 +150,15 @@ class OnlineDownloadManager {
                   : DateTime.fromMillisecondsSinceEpoch(timeMs),
               directory: directory,
             );
-            if (parsed is DownloadedComic) {
+            if (parsed is DownloadedJmComic) {
+              items.add(
+                OnlineDownloadedJmComic.fromDownloadedJmComic(
+                  parsed,
+                  rootPath: root,
+                  directoryName: directory,
+                ),
+              );
+            } else if (parsed is DownloadedComic) {
               items.add(
                 OnlineDownloadedComic.fromDownloadedComic(
                   parsed,
@@ -141,7 +186,7 @@ class OnlineDownloadManager {
     final task = _tasks[id];
     if (task == null || task.completed || task.cancelled) return;
     task.cancelled = true;
-    task.cancelToken?.cancel('cancelled');
+    task.cancelAllTokens();
     unawaited(_saveQueue());
     _scheduleNext();
     _notify();
@@ -174,6 +219,7 @@ class OnlineDownloadManager {
     _tasks
       ..clear()
       ..addAll(reordered);
+    unawaited(_saveQueue());
     _scheduleNext();
     _notify();
   }
@@ -236,11 +282,24 @@ class OnlineDownloadManager {
   }
 
   Future<Res<bool>> enqueuePicacg(PicacgComicItem comic) async {
-    if (_tasks.containsKey(comic.id)) {
+    if (_tasks.containsKey('picacg${comic.id}') || _tasks.containsKey(comic.id)) {
       return const Res(true);
     }
-    final task = OnlineDownloadTask(comic: comic)..totalEps = comic.eps.length;
-    _tasks[comic.id] = task;
+    final task = OnlineDownloadTask.picacg(comic: comic)
+      ..totalEps = comic.eps.length;
+    _tasks[task.id] = task;
+    _notify();
+    unawaited(_saveQueue());
+    _scheduleNext();
+    return const Res(true);
+  }
+
+  Future<Res<bool>> enqueueJm(JmComicInfo info) async {
+    final key = 'jm${info.id}';
+    if (_tasks.containsKey(key)) return const Res(true);
+    final task = OnlineDownloadTask.jm(jmInfo: info)
+      ..totalEps = info.series.length;
+    _tasks[task.id] = task;
     _notify();
     unawaited(_saveQueue());
     _scheduleNext();
@@ -253,9 +312,17 @@ class OnlineDownloadManager {
     for (final task in _tasks.values) {
       if (!task.completed && !task.cancelled && !task.paused &&
           task.error == null) {
-        unawaited(_runPicacgTask(task));
+        unawaited(_runTask(task));
         return;
       }
+    }
+  }
+
+  Future<void> _runTask(OnlineDownloadTask task) async {
+    if (task.sourceKey == 'jm') {
+      await _runJmTask(task);
+    } else {
+      await _runPicacgTask(task);
     }
   }
 
@@ -373,6 +440,239 @@ class OnlineDownloadManager {
     }
   }
 
+  Future<void> _runJmTask(OnlineDownloadTask task) async {
+    if (_running) return;
+    _running = true;
+    task.startSpeedTimer(_notify);
+    final info = task._jmInfo!;
+    try {
+      final downloadRoot = await _resolveOnlineDownloadRoot();
+      final safeDirectory = _safeName(info.title);
+      final root = Directory('$downloadRoot${Platform.pathSeparator}$safeDirectory');
+      await root.create(recursive: true);
+      // 封面（不重组，直接存原始字节）
+      if (info.coverUrl.isNotEmpty) {
+        await _downloadJmFile(task, info.coverUrl,
+            '${root.path}${Platform.pathSeparator}cover',
+            chapterId: info.id,
+            pictureName: 'cover',
+            originalExtension: _imageExtension(info.coverUrl),
+            allowRecombine: false);
+      }
+      final downloadedEps = <int>[];
+      final sortedSeries = info.series.entries.toList()
+        ..sort((a, b) => a.key.compareTo(b.key));
+      for (var i = 0; i < sortedSeries.length; i++) {
+        final epKey = i + 1;
+        final chapterId = sortedSeries[i].value;
+        task.currentEp = epKey;
+        task.currentEpName = i < info.epNames.length
+            ? info.epNames[i]
+            : '第$epKey章';
+        task.currentPage = 0;
+        task.totalPages = 0;
+        _notify();
+        final content = await JmNetwork().getChapter(chapterId);
+        if (content.error) throw Exception(content.errorMessageWithoutNull);
+        final epDir = Directory('${root.path}${Platform.pathSeparator}$epKey');
+        await epDir.create(recursive: true);
+        task.totalPages = content.data.length;
+        var completedPages = 0;
+        final concurrency = int.tryParse(appdata.settings[79]) ?? 6;
+        final semaphore = _Semaphore(concurrency);
+        final errors = <String>[];
+        final futures = <Future<void>>[];
+        for (var pi = 0; pi < content.data.length; pi++) {
+          _throwIfCancelled(task);
+          final url = content.data[pi];
+          final fileName = Uri.parse(url).pathSegments.last;
+          final pictureName = fileName.replaceFirst(RegExp(r'\.[^.]+$'), '');
+          // 基础路径（不含扩展名）；最终扩展名由重组结果决定（重组→.png，不重组→原始）
+          final basePath =
+              '${epDir.path}${Platform.pathSeparator}${pi + 1}';
+          futures.add(semaphore.run(() async {
+            _throwIfCancelled(task);
+            try {
+              await _downloadJmFile(task, url, basePath,
+                  chapterId: chapterId,
+                  pictureName: pictureName,
+                  originalExtension: _imageExtension(url));
+            } catch (e) {
+              errors.add(e.toString());
+              return;
+            }
+            completedPages++;
+            task.currentPage = completedPages;
+            _notify();
+          }));
+        }
+        await Future.wait(futures);
+        _throwIfCancelled(task);
+        if (errors.isNotEmpty && completedPages == 0) {
+          throw Exception(errors.first);
+        }
+
+        // 验证：扫描缺失页，顺序重试（应对并发批次中的偶发失败）
+        for (var pi = 0; pi < content.data.length; pi++) {
+          final basePath = '${epDir.path}${Platform.pathSeparator}${pi + 1}';
+          bool exists = false;
+          for (final ext in const ['.png', '.webp', '.jpg', '.jpeg']) {
+            if (File('$basePath$ext').existsSync()) { exists = true; break; }
+          }
+          if (!exists) {
+            _throwIfCancelled(task);
+            final url = content.data[pi];
+            final fileName = Uri.parse(url).pathSegments.last;
+            final pictureName = fileName.replaceFirst(RegExp(r'\.[^.]+$'), '');
+            try {
+              await _downloadJmFile(task, url, basePath,
+                  chapterId: chapterId,
+                  pictureName: pictureName,
+                  originalExtension: _imageExtension(url));
+              completedPages++;
+              task.currentPage = completedPages;
+              _notify();
+            } catch (e) {
+              LogManager.addLog(LogLevel.warning, 'OnlineDownload',
+                  'Page ${pi + 1} retry failed: $e');
+            }
+          }
+        }
+
+        downloadedEps.add(i);
+        unawaited(_saveQueue());
+      }
+      final item = DownloadedJmComic(
+        comicId: info.id,
+        name: info.title,
+        author: info.authors.join(', '),
+        size: _directoryMb(root),
+        downloadedChapters: downloadedEps,
+        epNames: info.epNames,
+        tagList: info.tags,
+      )
+        ..directory = safeDirectory
+        ..time = DateTime.now();
+      await _upsertDownloadRecord(
+          rootPath: downloadRoot, item: item, directory: safeDirectory);
+      task.completed = true;
+      App.notifyLocalDataChanged();
+    } on _OnlineDownloadCancelled catch (_) {
+      if (!task.paused) task.cancelled = true;
+    } catch (error, stackTrace) {
+      task.error = error.toString();
+      LogManager.addLog(LogLevel.error, 'OnlineDownload', '$error\n$stackTrace');
+    } finally {
+      _running = false;
+      task.stopSpeedTimer();
+      unawaited(_saveQueue());
+      _notify();
+      _scheduleNext();
+    }
+  }
+
+  /// jm 专用下载：下载字节 → 图块重组 → 写盘
+  /// [basePath] 不含扩展名；最终扩展名由重组结果决定（重组→.png，不重组→原始）
+  /// [allowRecombine] false 时直接存原始字节，不重组（封面用）
+  Future<void> _downloadJmFile(
+    OnlineDownloadTask task,
+    String url,
+    String basePath, {
+    required String chapterId,
+    required String pictureName,
+    required String originalExtension,
+    bool allowRecombine = true,
+  }) async {
+    _throwIfCancelled(task);
+    // 已存在检查：任一可能的扩展名命中即视为已下载
+    for (final ext in const ['.png', '.webp', '.jpg', '.jpeg']) {
+      final existing = File('$basePath$ext');
+      if (await existing.exists() && await existing.length() > 0) return;
+    }
+    await Directory(basePath).parent.create(recursive: true);
+
+    // 下载原始字节（带重试）
+    Uint8List? raw;
+    var attempt = 0;
+    while (true) {
+      attempt++;
+      try {
+        raw = await _downloadJmBytes(task, url);
+        break;
+      } catch (error) {
+        _throwIfCancelled(task);
+        if (attempt >= 3) rethrow;
+        final msg = error.toString();
+        final retryable = error is TimeoutException ||
+            msg.contains('HandshakeException') ||
+            msg.contains('SocketException') ||
+            msg.contains('Connection');
+        if (!retryable) rethrow;
+        await Future<void>.delayed(const Duration(seconds: 2));
+      }
+    }
+    if (raw.isEmpty) return;
+
+    // 图块重组（若允许）
+    final Uint8List bytes;
+    final String extension;
+    if (allowRecombine) {
+      final result = await JmRecombine.recombine(
+        raw,
+        epsId: chapterId,
+        scrambleId: kJmScrambleId,
+        pictureName: pictureName,
+        originalExtension: originalExtension,
+      );
+      bytes = result.bytes;
+      extension = result.extension;
+    } else {
+      // 封面等不重组的：直接存原始
+      bytes = raw;
+      extension = originalExtension;
+    }
+    final file = File('$basePath$extension');
+    await file.writeAsBytes(bytes, flush: true);
+  }
+
+  Future<Uint8List> _downloadJmBytes(
+      OnlineDownloadTask task, String url) async {
+    final dio = logDio(BaseOptions(headers: getJmImgHeaders()));
+    final cancelToken = CancelToken();
+    task.addToken(cancelToken);
+    try {
+      final res = await dio.get<ResponseBody>(
+        url,
+        cancelToken: cancelToken,
+        options: Options(
+          responseType: ResponseType.stream,
+          sendTimeout: const Duration(seconds: 15),
+          receiveTimeout: const Duration(seconds: 30),
+        ),
+      );
+      _throwIfCancelled(task);
+      final body = res.data;
+      if (body == null) throw Exception('Empty response: $url');
+      final expectedLength = int.tryParse(res.headers.value('content-length') ?? '');
+      final bytes = <int>[];
+      await for (final chunk in body.stream.timeout(
+        const Duration(seconds: 20),
+        onTimeout: (_) => throw TimeoutException('stream timeout'),
+      )) {
+        _throwIfCancelled(task);
+        task.onData(chunk.length);
+        bytes.addAll(chunk);
+      }
+      if (expectedLength != null && bytes.length < expectedLength) {
+        throw TimeoutException(
+            'Incomplete download: ${bytes.length}/$expectedLength bytes');
+      }
+      return Uint8List.fromList(bytes);
+    } finally {
+      task.removeToken(cancelToken);
+    }
+  }
+
   Future<void> _downloadFile(
     OnlineDownloadTask task,
     String url,
@@ -419,19 +719,19 @@ class OnlineDownloadManager {
   ) async {
     final dio = logDio();
     final cancelToken = CancelToken();
-    task.cancelToken = cancelToken;
-    final response = await dio.get<ResponseBody>(
-      url,
-      cancelToken: cancelToken,
-      options: Options(
-        responseType: ResponseType.stream,
-        sendTimeout: const Duration(seconds: 15),
-        receiveTimeout: const Duration(seconds: 30),
-      ),
-    );
-    task.cancelToken = null;
-    _throwIfCancelled(task);
-    final body = response.data;
+    task.addToken(cancelToken);
+    try {
+      final response = await dio.get<ResponseBody>(
+        url,
+        cancelToken: cancelToken,
+        options: Options(
+          responseType: ResponseType.stream,
+          sendTimeout: const Duration(seconds: 15),
+          receiveTimeout: const Duration(seconds: 30),
+        ),
+      );
+      _throwIfCancelled(task);
+      final body = response.data;
     if (body == null) {
       throw Exception('Empty image response: $url');
     }
@@ -453,6 +753,9 @@ class OnlineDownloadManager {
       rethrow;
     }
     await sink.close();
+    } finally {
+      task.removeToken(cancelToken);
+    }
   }
 
   void _throwIfCancelled(OnlineDownloadTask task) {
@@ -507,11 +810,23 @@ class OnlineDownloadManager {
       await Directory(rootPath).create(recursive: true);
       final pending = _tasks.values
           .where((t) => !t.completed && !t.cancelled && t.error == null)
-          .map((t) => {
-                'comicJson': t.comic.toQueueJson(),
+          .map((t) {
+            if (t.sourceKey == 'jm') {
+              return {
+                'sourceKey': 'jm',
+                'jmJson': _jmComicInfoToQueueJson(t._jmInfo!),
                 'currentEp': t.currentEp,
                 'paused': t.paused,
-              })
+              };
+            } else {
+              return {
+                'sourceKey': 'picacg',
+                'comicJson': t._comic!.toQueueJson(),
+                'currentEp': t.currentEp,
+                'paused': t.paused,
+              };
+            }
+          })
           .toList();
       final json = jsonEncode(pending);
       final path = _queueFilePath(rootPath);
@@ -539,14 +854,27 @@ class OnlineDownloadManager {
       final list = jsonDecode(content) as List;
       for (final item in list) {
         try {
-          final comicJson = item['comicJson'] as Map;
-          final comic = PicacgComicItem.fromQueueJson(comicJson);
-          if (_tasks.containsKey(comic.id)) continue;
-          final task = OnlineDownloadTask(comic: comic)
-            ..totalEps = comic.eps.length
-            ..currentEp = (item['currentEp'] as int?) ?? 0
-            ..paused = true;
-          _tasks[comic.id] = task;
+          final sourceKey = item['sourceKey']?.toString() ?? 'picacg';
+          if (sourceKey == 'jm') {
+            final jmJson = item['jmJson'] as Map;
+            final info = _jmComicInfoFromQueueJson(jmJson);
+            final key = 'jm${info.id}';
+            if (_tasks.containsKey(key)) continue;
+            final task = OnlineDownloadTask.jm(jmInfo: info)
+              ..totalEps = info.series.length
+              ..currentEp = (item['currentEp'] as int?) ?? 0
+              ..paused = true;
+            _tasks[task.id] = task;
+          } else {
+            final comicJson = item['comicJson'] as Map;
+            final comic = PicacgComicItem.fromQueueJson(comicJson);
+            if (_tasks.containsKey(comic.id)) continue;
+            final task = OnlineDownloadTask.picacg(comic: comic)
+              ..totalEps = comic.eps.length
+              ..currentEp = (item['currentEp'] as int?) ?? 0
+              ..paused = true;
+            _tasks[task.id] = task;
+          }
         } catch (e) {
           LogManager.addLog(
               LogLevel.warning, 'OnlineDownload', 'loadQueue item error: $e');
@@ -576,6 +904,11 @@ class OnlineDownloadManager {
       try {
         await Directory(root).create(recursive: true);
         _openDownloadDb(root).dispose();
+        LogManager.addLog(
+          LogLevel.info,
+          'OnlineDownload',
+          'Using download root: $root',
+        );
         return root;
       } catch (error, stackTrace) {
         lastError = error;
@@ -613,6 +946,17 @@ class OnlineDownloadManager {
         item.comicSize,
         jsonEncode(item.toJson()),
       ]);
+
+      // 验证记录确实写入（防止只读 db 静默失败）
+      final check = db.select('select count(*) as c from download where id = ?', [item.id]);
+      final count = check.isNotEmpty ? (check.first['c'] as int?) ?? 0 : 0;
+      if (count == 0) {
+        throw Exception(
+          '下载记录写入失败：数据库未保存该条目 (id=${item.id})。\n'
+          '数据库可能为只读，请检查文件权限：\n'
+          '$rootPath${Platform.pathSeparator}download.db',
+        );
+      }
     } finally {
       db.dispose();
     }
@@ -620,6 +964,39 @@ class OnlineDownloadManager {
 
   Database _openDownloadDb(String rootPath) {
     final dbPath = '$rootPath${Platform.pathSeparator}download.db';
+
+    // 检测并修复只读文件
+    final dbFile = File(dbPath);
+    if (dbFile.existsSync()) {
+      var needRebuild = false;
+      try {
+        // 尝试写测试：如果只读会抛异常
+        final raf = dbFile.openSync(mode: FileMode.append);
+        raf.closeSync();
+      } catch (e) {
+        // 文件只读或权限异常，尝试删除重建
+        LogManager.addLog(
+          LogLevel.warning,
+          'OnlineDownload',
+          'download.db is readonly or locked, trying to remove: $e',
+        );
+        needRebuild = true;
+      }
+      if (needRebuild) {
+        try {
+          dbFile.deleteSync();
+        } catch (delErr) {
+          // 删除失败（通常是 root 拥有的文件，应用无权删除）
+          // 必须明确抛错，否则后续 insert 会静默失败导致下载记录丢失
+          throw Exception(
+            '数据库文件无法写入且无法删除，可能被 root 权限污染。\n'
+            '请手动删除该文件后重试：\n$dbPath\n'
+            '原始错误: $delErr',
+          );
+        }
+      }
+    }
+
     final db = sqlite3.open(dbPath);
     db.execute('''
       create table if not exists download (
@@ -635,7 +1012,53 @@ class OnlineDownloadManager {
     return db;
   }
 
-  /// 将旧式（纯ID）文件夹名修正为新式（标题_ID），同步更新 DB 的 directory 字段。
+  static Map<String, dynamic> _jmComicInfoToQueueJson(JmComicInfo info) => {
+        'id': info.id,
+        'title': info.title,
+        'authors': info.authors,
+        'description': info.description,
+        'tags': info.tags,
+        'works': info.works,
+        'epNames': info.epNames,
+        'series': {
+          for (final e in info.series.entries) e.key.toString(): e.value,
+        },
+        'coverUrl': info.coverUrl,
+      };
+
+  static JmComicInfo _jmComicInfoFromQueueJson(Map json) {
+    final series = <int, String>{};
+    final rawSeries = (json['series'] as Map?) ?? {};
+    for (final e in rawSeries.entries) {
+      final k = int.tryParse(e.key.toString());
+      if (k != null) series[k] = e.value.toString();
+    }
+    final epNames =
+        (json['epNames'] as List?)?.map((e) => e.toString()).toList() ?? [];
+    if (series.isEmpty) {
+      series[1] = json['id'].toString();
+      if (epNames.isEmpty) epNames.add('第1章');
+    }
+    return JmComicInfo(
+      id: json['id']?.toString() ?? '',
+      title: json['title']?.toString() ?? '',
+      authors: (json['authors'] as List?)?.map((e) => e.toString()).toList() ?? [],
+      description: json['description']?.toString() ?? '',
+      likes: 0,
+      views: 0,
+      comments: 0,
+      tags: (json['tags'] as List?)?.map((e) => e.toString()).toList() ?? [],
+      works: (json['works'] as List?)?.map((e) => e.toString()).toList() ?? [],
+      actors: (json['actors'] as List?)?.map((e) => e.toString()).toList() ?? [],
+      series: series,
+      epNames: epNames,
+      isFavourite: false,
+      isLiked: false,
+      coverUrl: json['coverUrl']?.toString() ?? '',
+    );
+  }
+
+  /// 将旧式（纯ID）文件夹名修正为新式（标题），同步更新 DB 的 directory 字段。
   /// 返回 (fixed, failed, skipped) 三元组。
   Future<({int fixed, int failed, int skipped})> fixDirectoryNames() async {
     int fixed = 0, failed = 0, skipped = 0;
@@ -836,12 +1259,94 @@ class OnlineDownloadedComic extends DownloadedComic {
   }
 }
 
+/// jm 在线下载漫画的本地包装：提供磁盘路径、封面、阅读页。
+/// 与 OnlineDownloadedComic 平行（picacg 专用），区别在 id 带 jm 前缀、来源为禁漫。
+class OnlineDownloadedJmComic extends DownloadedJmComic {
+  OnlineDownloadedJmComic({
+    required this.rootPath,
+    required this.directoryName,
+    required super.comicId,
+    required super.name,
+    super.author,
+    super.size,
+    required super.downloadedChapters,
+    super.epNames,
+    super.tagList,
+  });
+
+  factory OnlineDownloadedJmComic.fromDownloadedJmComic(
+    DownloadedJmComic comic, {
+    required String rootPath,
+    required String directoryName,
+  }) {
+    return OnlineDownloadedJmComic(
+      rootPath: rootPath,
+      directoryName: directoryName,
+      comicId: comic.comicId,
+      name: comic.name,
+      author: comic.author,
+      size: comic.size,
+      downloadedChapters: comic.downloadedChapters,
+      epNames: comic.epNames,
+      tagList: comic.tagList,
+    )
+      ..time = comic.time
+      ..directory = directoryName;
+  }
+
+  final String rootPath;
+  final String directoryName;
+
+  String get rootDirectoryPath =>
+      '$rootPath${Platform.pathSeparator}$directoryName';
+
+  @override
+  String? get fileSystemPath => rootDirectoryPath;
+
+  @override
+  String? get localCoverPath {
+    for (final name in const ['cover.jpg', 'cover.webp', 'cover.png']) {
+      final path = '$rootDirectoryPath${Platform.pathSeparator}$name';
+      if (File(path).existsSync()) {
+        return path;
+      }
+    }
+    return null;
+  }
+
+  @override
+  bool get canDelete => false;
+
+  @override
+  Widget createReadingPage({int? ep, int? page}) {
+    final epsMap = <String, String>{};
+    final epList = eps;
+    for (var i = 0; i < epList.length; i++) {
+      epsMap[(i + 1).toString()] = epList[i];
+    }
+    return ComicReadingPage(
+      OnlineLocalReadingData(
+        title: name,
+        id: id,
+        rootDirectoryPath: rootDirectoryPath,
+        chapters: epsMap,
+        isJm: true,
+        jmComicId: comicId,
+      ),
+      page ?? 1,
+      ep ?? 1,
+    );
+  }
+}
+
 class OnlineLocalReadingData extends ReadingData {
   OnlineLocalReadingData({
     required this.title,
     required this.id,
     required this.rootDirectoryPath,
     required this.chapters,
+    this.isJm = false,
+    this.jmComicId,
   });
 
   @override
@@ -853,6 +1358,16 @@ class OnlineLocalReadingData extends ReadingData {
   final String rootDirectoryPath;
 
   final Map<String, String> chapters;
+
+  /// 是否为禁漫源；为 true 时缺图/坏图可走网络回退重下（含图块重组）。
+  final bool isJm;
+
+  /// 禁漫数字 id（不含 jm 前缀），用于回退时拉取在线章节图片列表。
+  final String? jmComicId;
+
+  /// 缓存每个 ep 的在线章节信息，避免重复网络请求。
+  /// key = ep 序号(1-based)，value = (chapterId, urls)。
+  final Map<int, ({String chapterId, List<String> urls})> _jmEpCache = {};
 
   @override
   String get downloadId => id;
@@ -896,7 +1411,153 @@ class OnlineLocalReadingData extends ReadingData {
 
   @override
   Stream<List<int>> loadImageNetwork(int ep, int page, String url) async* {
-    yield await File(url).readAsBytes();
+    // url 是 loadEpNetwork 返回的本地文件路径。
+    final file = File(url);
+    // 1) 先尝试本地：文件存在且非空即直接返回。
+    if (await file.exists()) {
+      final bytes = await file.readAsBytes();
+      if (bytes.isNotEmpty) {
+        yield bytes;
+        return;
+      }
+    }
+    // 2) 本地缺失/损坏：仅 jm 支持网络回退重下（含图块重组）。
+    if (!isJm || jmComicId == null || jmComicId!.isEmpty) {
+      // 非 jm 或缺少在线身份信息：无法回退，抛错让重试 UI 显示。
+      throw Exception('图片缺失且无法重新下载: $url');
+    }
+    final bytes = await _refetchJmPage(url);
+    yield bytes;
+  }
+
+  /// 从本地路径解析 ep/页序号，拉取在线章节图片列表，下载该页（含重组）写回磁盘并返回字节。
+  Future<Uint8List> _refetchJmPage(String localPath) async {
+    final f = File(localPath);
+    final sep = Platform.pathSeparator;
+    // 文件名形如 "{pageIndex+1}.{ext}"；上级目录名为 ep 序号（hasEp 时）。
+    final fileName = f.uri.pathSegments.isNotEmpty
+        ? f.uri.pathSegments.last
+        : localPath.split(sep).last;
+    final stem = fileName.replaceFirst(RegExp(r'\.[^.]+$'), '');
+    final pageNo = int.tryParse(stem);
+    if (pageNo == null || pageNo < 1) {
+      throw Exception('无法解析页序号: $localPath');
+    }
+    // ep 序号：父目录名（数字）；无 ep 结构时回退为 1。
+    final parentPath = f.parent.path;
+    final parentName = parentPath
+        .split(RegExp(r'[\\/]'))
+        .where((s) => s.isNotEmpty)
+        .lastOrNull ??
+        '';
+    final epNo = hasEp ? (int.tryParse(parentName) ?? 1) : 1;
+
+    final info = await _ensureJmEp(epNo);
+    final urls = info.urls;
+    final idx = pageNo - 1;
+    if (idx < 0 || idx >= urls.length) {
+      throw Exception('页序号超出范围: $pageNo / ${urls.length}');
+    }
+    final onlineUrl = urls[idx];
+    final onlineFileName = Uri.parse(onlineUrl).pathSegments.last;
+    final pictureName = onlineFileName.replaceFirst(RegExp(r'\.[^.]+$'), '');
+    final originalExt = _onlineExt(onlineUrl);
+
+    // 下载原始字节（带重试）。
+    final raw = await _downloadJmRawWithRetry(onlineUrl);
+    if (raw.isEmpty) {
+      throw Exception('下载到空字节: $onlineUrl');
+    }
+    final result = await JmRecombine.recombine(
+      raw,
+      epsId: info.chapterId,
+      scrambleId: kJmScrambleId,
+      pictureName: pictureName,
+      originalExtension: originalExt,
+    );
+    // 写回磁盘：用解析出的 basePath（去掉原扩展名）+ 重组结果扩展名。
+    final basePath = '${f.parent.path}$sep$pageNo';
+    // 清掉同名残留的坏文件（任意扩展名）。
+    for (final ext in const ['.png', '.webp', '.jpg', '.jpeg']) {
+      final old = File('$basePath$ext');
+      if (await old.exists()) {
+        try {
+          await old.delete();
+        } catch (_) {}
+      }
+    }
+    final out = File('$basePath${result.extension}');
+    await out.writeAsBytes(result.bytes, flush: true);
+    return result.bytes;
+  }
+
+  /// 拉取并缓存某 ep 的在线章节信息（chapterId + 图片 url 列表）。
+  Future<({String chapterId, List<String> urls})> _ensureJmEp(int epNo) async {
+    final cached = _jmEpCache[epNo];
+    if (cached != null) return cached;
+    final infoRes = await JmNetwork().getComicInfo(jmComicId!);
+    if (infoRes.error) {
+      throw Exception('获取漫画信息失败: ${infoRes.errorMessageWithoutNull}');
+    }
+    final series = infoRes.data.series;
+    String chapterId;
+    if (series.isEmpty) {
+      // 单章漫画：chapterId 即漫画 id。
+      chapterId = jmComicId!;
+    } else {
+      final sorted = series.entries.toList()
+        ..sort((a, b) => a.key.compareTo(b.key));
+      final i = epNo - 1;
+      if (i < 0 || i >= sorted.length) {
+        throw Exception('章节序号超出范围: $epNo / ${sorted.length}');
+      }
+      chapterId = sorted[i].value;
+    }
+    final chapRes = await JmNetwork().getChapter(chapterId);
+    if (chapRes.error) {
+      throw Exception('获取章节失败: ${chapRes.errorMessageWithoutNull}');
+    }
+    final entry = (chapterId: chapterId, urls: chapRes.data);
+    _jmEpCache[epNo] = entry;
+    return entry;
+  }
+
+  Future<Uint8List> _downloadJmRawWithRetry(String url) async {
+    var attempt = 0;
+    while (true) {
+      attempt++;
+      try {
+        final dio = logDio(BaseOptions(headers: getJmImgHeaders()));
+        final res = await dio.get<List<int>>(
+          url,
+          options: Options(
+            responseType: ResponseType.bytes,
+            sendTimeout: const Duration(seconds: 15),
+            receiveTimeout: const Duration(seconds: 30),
+          ),
+        );
+        final data = res.data;
+        if (data == null || data.isEmpty) {
+          throw Exception('空响应: $url');
+        }
+        final expectedLength =
+            int.tryParse(res.headers.value('content-length') ?? '');
+        if (expectedLength != null && data.length < expectedLength) {
+          throw Exception('下载不完整: ${data.length}/$expectedLength');
+        }
+        return Uint8List.fromList(data);
+      } catch (error) {
+        if (attempt >= 3) rethrow;
+        await Future<void>.delayed(const Duration(seconds: 2));
+      }
+    }
+  }
+
+  static String _onlineExt(String url) {
+    final name = Uri.parse(url).pathSegments.last.toLowerCase();
+    final dot = name.lastIndexOf('.');
+    if (dot < 0) return '.jpg';
+    return name.substring(dot);
   }
 
   @override
