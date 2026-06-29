@@ -1303,6 +1303,10 @@ class _MePageCard extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               ListTile(
+                contentPadding:
+                    const EdgeInsets.symmetric(horizontal: 12),
+                horizontalTitleGap: 8,
+                minLeadingWidth: 0,
                 leading: icon,
                 title: Text(title),
                 trailing: Icon(

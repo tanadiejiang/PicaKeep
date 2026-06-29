@@ -12,6 +12,7 @@ import 'package:picakeep/tools/translations.dart';
 import 'package:picakeep/components/select.dart' hide AnimatedContainer;
 import 'package:picakeep/components/scrollable.dart';
 import 'package:picakeep/foundation/app.dart';
+import 'package:picakeep/foundation/appearance_settings.dart';
 import 'package:picakeep/foundation/download.dart';
 import 'package:picakeep/foundation/history.dart';
 import 'package:picakeep/foundation/online_download_manager.dart';
@@ -505,6 +506,18 @@ class _SettingsPageState extends State<SettingsPage> {
             },
           ),
           if (App.isAndroid) _AppIconSetting(),
+          SelectSetting(
+            leading: const Icon(Icons.format_size),
+            title: "字号".tl,
+            settingsIndex: appTextScaleSettingIndex,
+            values: const ["0", "1", "2", "3", "4"],
+            titles: ["跟随系统".tl, "小".tl, "标准".tl, "大".tl, "特大".tl],
+            controlWidth: 120,
+            tailing: const Icon(Icons.arrow_drop_down),
+            onChanged: (value) {
+              App.updater?.call();
+            },
+          ),
           SelectSetting(
             leading: const Icon(Icons.dark_mode),
             title: "深色模式".tl,

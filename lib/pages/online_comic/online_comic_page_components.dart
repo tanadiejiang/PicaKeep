@@ -182,6 +182,128 @@ class OnlineComicActionButton extends StatelessWidget {
 // 信息 chip
 // ============================================================
 
+/// 详情页顶部图标动作（无底描边圆形图标 + 下方标签）。
+///
+/// 对齐上游 PicaComic：从头开始 / 分享 / 收藏 / 赞 / 评论。
+/// [label] 可传数字（如赞数），[active] 用于收藏/已赞高亮。
+class OnlineComicIconAction extends StatelessWidget {
+  const OnlineComicIconAction({
+    super.key,
+    required this.icon,
+    required this.label,
+    required this.onTap,
+    this.busy = false,
+    this.active = false,
+  });
+
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+  final bool busy;
+  final bool active;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    // 图标统一跟随主题色；active（如已收藏）用更实的描边/底色区分。
+    final color = cs.primary;
+    return InkWell(
+      onTap: busy ? null : onTap,
+      borderRadius: BorderRadius.circular(40),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 44,
+              height: 44,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                // 圆底始终无色（透明）；图标恒为主题色。
+                // active（已收藏/已赞）只把描边加实区分，不填充底色。
+                border: Border.all(
+                  color: cs.primary.withValues(alpha: active ? 1.0 : 0.5),
+                ),
+              ),
+              alignment: Alignment.center,
+              child: busy
+                  ? const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : Icon(
+                      icon,
+                      size: 22,
+                      color: color,
+                    ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(context)
+                  .textTheme
+                  .labelSmall
+                  ?.copyWith(color: color),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// 详情页主操作大胶囊按钮（下载 / 阅读）。
+///
+/// [filled] 为 true 时用 FilledButton（阅读），false 用 tonal（下载）。
+class OnlineComicPillButton extends StatelessWidget {
+  const OnlineComicPillButton({
+    super.key,
+    required this.label,
+    required this.onTap,
+    this.busy = false,
+    this.filled = false,
+  });
+
+  final String label;
+  final VoidCallback onTap;
+  final bool busy;
+  final bool filled;
+
+  @override
+  Widget build(BuildContext context) {
+    final child = busy
+        ? const SizedBox(
+            width: 20,
+            height: 20,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          )
+        : Text(label);
+    final style = ButtonStyle(
+      padding: const WidgetStatePropertyAll(
+        EdgeInsets.symmetric(vertical: 14),
+      ),
+      shape: WidgetStatePropertyAll(
+        RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+      ),
+    );
+    return filled
+        ? FilledButton(
+            onPressed: busy ? null : onTap,
+            style: style,
+            child: child,
+          )
+        : FilledButton.tonal(
+            onPressed: busy ? null : onTap,
+            style: style,
+            child: child,
+          );
+  }
+}
+
 class OnlineComicInfoChip extends StatelessWidget {
   const OnlineComicInfoChip({
     super.key,
@@ -267,10 +389,25 @@ class OnlineComicTagsSection extends StatelessWidget {
     final entries =
         tags.entries.where((e) => e.value.isNotEmpty).toList(growable: false);
     if (entries.isEmpty) return const SizedBox.shrink();
+    // 分类标题柔和配色（按分类索引轮换，对齐上游多彩观感）。
+    final palette = <Color>[
+      cs.primaryContainer,
+      cs.tertiaryContainer,
+      cs.secondaryContainer,
+      cs.errorContainer,
+      cs.primaryContainer,
+    ];
+    final onPalette = <Color>[
+      cs.onPrimaryContainer,
+      cs.onTertiaryContainer,
+      cs.onSecondaryContainer,
+      cs.onErrorContainer,
+      cs.onPrimaryContainer,
+    ];
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        for (final e in entries)
+        for (final (i, e) in entries.indexed)
           Padding(
             padding: const EdgeInsets.only(bottom: 4),
             child: Wrap(
@@ -279,8 +416,8 @@ class OnlineComicTagsSection extends StatelessWidget {
               children: [
                 OnlineComicInfoChip(
                   label: e.key,
-                  color: cs.surfaceContainerHighest,
-                  textColor: cs.onSurface,
+                  color: palette[i % palette.length],
+                  textColor: onPalette[i % onPalette.length],
                 ),
                 for (final v in e.value)
                   GestureDetector(
@@ -289,8 +426,8 @@ class OnlineComicTagsSection extends StatelessWidget {
                         _onLongPressAt(context, v, e.key, d.globalPosition),
                     child: OnlineComicInfoChip(
                       label: v,
-                      color: cs.secondaryContainer,
-                      textColor: cs.onSecondaryContainer,
+                      color: cs.primary.withValues(alpha: 0.10),
+                      textColor: cs.primary,
                     ),
                   ),
               ],
@@ -339,6 +476,7 @@ class OnlineComicEpisodesList extends StatefulWidget {
 
 class _OnlineComicEpisodesListState extends State<OnlineComicEpisodesList> {
   bool _expanded = false;
+  bool _reversed = false;
 
   @override
   Widget build(BuildContext context) {
@@ -350,32 +488,85 @@ class _OnlineComicEpisodesListState extends State<OnlineComicEpisodesList> {
         total > widget.defaultCollapseCount;
     final shown = collapsed ? widget.defaultCollapseCount : total;
 
+    // 生成展示用的 1-based 序号序列（支持倒序）。
+    final order = List<int>.generate(total, (i) => i + 1);
+    if (_reversed) {
+      final r = order.reversed.toList();
+      r.length = shown;
+      order
+        ..clear()
+        ..addAll(r);
+    } else {
+      order.length = shown;
+    }
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text('章节 ($total)', style: textTheme.titleSmall),
+        Row(
+          children: [
+            Expanded(
+              child: Text('章节 ($total)', style: textTheme.titleSmall),
+            ),
+            if (total > 1)
+              IconButton(
+                visualDensity: VisualDensity.compact,
+                tooltip: _reversed ? '正序' : '倒序',
+                icon: Icon(
+                  _reversed
+                      ? Icons.arrow_downward
+                      : Icons.arrow_upward,
+                  size: 20,
+                ),
+                onPressed: () => setState(() => _reversed = !_reversed),
+              ),
+          ],
+        ),
         if (widget.subtitle != null)
           Text(
             widget.subtitle!,
             style: textTheme.bodySmall
                 ?.copyWith(color: colorScheme.onSurfaceVariant),
           ),
-        const SizedBox(height: 4),
-        for (var i = 0; i < shown; i++)
-          ListTile(
-            dense: true,
-            leading: Text(
-              '${i + 1}',
-              style: textTheme.bodySmall
-                  ?.copyWith(color: colorScheme.onSurfaceVariant),
-            ),
-            title: Text(widget.episodes[i]),
-            trailing: const Icon(Icons.play_circle_outline, size: 20),
-            onTap: () => widget.onEpisodeTap(i + 1),
-            onLongPress: widget.onEpisodeLongPress == null
-                ? null
-                : () => widget.onEpisodeLongPress!(i + 1),
+        const SizedBox(height: 8),
+        GridView.builder(
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          padding: EdgeInsets.zero,
+          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+            crossAxisCount: 2,
+            crossAxisSpacing: 8,
+            mainAxisSpacing: 8,
+            childAspectRatio: 3.2,
           ),
+          itemCount: order.length,
+          itemBuilder: (context, i) {
+            final ep = order[i];
+            final name =
+                ep - 1 < widget.episodes.length ? widget.episodes[ep - 1] : '第$ep章';
+            return InkWell(
+              borderRadius: BorderRadius.circular(8),
+              onTap: () => widget.onEpisodeTap(ep),
+              onLongPress: widget.onEpisodeLongPress == null
+                  ? null
+                  : () => widget.onEpisodeLongPress!(ep),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                alignment: Alignment.centerLeft,
+                decoration: BoxDecoration(
+                  color: colorScheme.surfaceContainerHighest,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text(
+                  name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: textTheme.bodyMedium,
+                ),
+              ),
+            );
+          },
+        ),
         if (collapsed)
           Center(
             child: TextButton(
@@ -417,7 +608,7 @@ class OnlineComicRecommendationGrid extends StatelessWidget {
         crossAxisCount: 3,
         crossAxisSpacing: 8,
         mainAxisSpacing: 8,
-        childAspectRatio: 0.62,
+        childAspectRatio: 0.48,
       ),
       itemCount: comics.length,
       itemBuilder: (context, index) {
@@ -428,7 +619,8 @@ class OnlineComicRecommendationGrid extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Expanded(
+              AspectRatio(
+                aspectRatio: 0.72,
                 child: OnlineComicCover(
                   url: c.cover,
                   headers: headers,
@@ -437,11 +629,11 @@ class OnlineComicRecommendationGrid extends StatelessWidget {
                 ),
               ),
               const SizedBox(height: 4),
-              Text(
-                c.title,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: textTheme.bodySmall,
+              Expanded(
+                child: Text(
+                  c.title,
+                  style: textTheme.labelSmall,
+                ),
               ),
             ],
           ),

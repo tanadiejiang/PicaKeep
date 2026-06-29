@@ -45,6 +45,7 @@ class JmComicInfo {
     required this.isFavourite,
     required this.isLiked,
     required this.coverUrl,
+    required this.relatedComics,
   });
 
   final String id;
@@ -67,6 +68,9 @@ class JmComicInfo {
   final bool isFavourite;
   final bool isLiked;
   final String coverUrl;
+
+  /// 相关推荐漫画列表
+  final List<JmComicBrief> relatedComics;
 
   String get author => authors.join(' / ');
 

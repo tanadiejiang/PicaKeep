@@ -10,6 +10,7 @@ import 'base.dart';
 import 'comic_source/comic_source.dart';
 import 'components/window_frame.dart';
 import 'foundation/app.dart';
+import 'foundation/appearance_settings.dart';
 import 'foundation/archive/archive_registry.dart';
 import 'foundation/history.dart';
 import 'foundation/local_favorites.dart';
@@ -168,8 +169,9 @@ Future<void> _initializeOnlineFoundation() async {
   SingleInstanceCookieJar('${App.dataPath}${Platform.pathSeparator}cookies.db');
   await ComicSource.init();
   unawaited(OnlineDownloadManager.instance.loadQueue());
-  // jm 动态域名：启动时对现有域名做一次活域名重选（轻量，不打 bytepluses）
-  JmNetwork().maybeSelectDomainOnStartup();
+  // jm 启动预热：活域名重选 + 已登录则用存储账密重换新鲜会话 cookie。
+  // 必须在 ComicSource.init() 之后（账密已读回内存）。
+  JmNetwork().warmUpOnStartup();
 }
 
 Future<void> _showDesktopWindowWhenReady() async {
@@ -546,7 +548,17 @@ class _PicaKeepAppState extends State<PicaKeepApp> with WidgetsBindingObserver {
         final framedChild = App.isDesktop
             ? WindowFrame(child: child)
             : _MobileSystemUiFrame(child: child);
-        return framedChild;
+        // 字号设置：屏蔽系统「字体大小/显示大小」差异，按 App 自身设定固定显示。
+        // 选「跟随系统」时返回 null，保持系统 textScaler 不变。
+        final scale = resolveAppTextScale(appdata.settings[appTextScaleSettingIndex]);
+        if (scale == null) {
+          return framedChild;
+        }
+        return MediaQuery.withClampedTextScaling(
+          minScaleFactor: scale,
+          maxScaleFactor: scale,
+          child: framedChild,
+        );
       },
       theme: ThemeData(
         colorScheme: _buildLightScheme(_lightDynamicScheme),

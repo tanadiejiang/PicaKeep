@@ -2,9 +2,8 @@ import 'package:flutter/material.dart';
 
 import 'package:picakeep/comic_source/comic_source.dart';
 import 'package:picakeep/foundation/app_page_route.dart';
-import 'package:picakeep/network/jm_network/jm_models.dart';
 import 'package:picakeep/pages/accounts/accounts_page.dart';
-import 'package:picakeep/pages/online_comic/jm_comic_detail_page.dart';
+import 'package:picakeep/pages/online_comic/jm_comic_page_v2.dart';
 
 import 'online_search_logic.dart';
 import 'online_search_result_page.dart';
@@ -184,15 +183,7 @@ class _SearchConfigBody extends StatelessWidget {
                 avatar: const Icon(Icons.open_in_new, size: 16),
                 label: Text(sug.label),
                 onPressed: () => Navigator.of(context).push(AppPageRoute(
-                  builder: (_) => JmComicDetailPage(
-                    comic: JmComicBrief(
-                      id: sug.id,
-                      title: sug.label,
-                      author: '',
-                      tags: const [],
-                      coverUrl: '',
-                    ),
-                  ),
+                  builder: (_) => JmComicPageV2(sug.id),
                 )),
               ),
             );
