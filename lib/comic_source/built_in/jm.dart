@@ -3,7 +3,7 @@ import 'package:picakeep/comic_source/favorite_data.dart';
 import 'package:picakeep/network/base_comic.dart';
 import 'package:picakeep/network/jm_network/jm_network.dart';
 import 'package:picakeep/network/res.dart';
-import 'package:picakeep/pages/online_comic/jm_comic_detail_page.dart';
+import 'package:picakeep/pages/online_comic/jm_comic_page_v2.dart';
 
 final _jmNet = JmNetwork();
 
@@ -74,5 +74,5 @@ final ComicSource jm = ComicSource.named(
       return Res<List<BaseComic>>(res.data, subData: res.subData);
     },
   ),
-  comicPageBuilder: (comic) => JmComicDetailPage(comic: comic),
+  comicPageBuilder: (comic) => JmComicPageV2(comic.id),
 );

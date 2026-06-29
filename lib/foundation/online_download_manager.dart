@@ -1055,6 +1055,7 @@ class OnlineDownloadManager {
       isFavourite: false,
       isLiked: false,
       coverUrl: json['coverUrl']?.toString() ?? '',
+      relatedComics: const [],
     );
   }
 

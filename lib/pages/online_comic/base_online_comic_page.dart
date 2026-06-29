@@ -71,6 +71,10 @@ abstract class BaseOnlineComicPage<T> extends StatelessWidget {
   /// 加载收藏态（数据加载成功后调用）。
   Future<bool> loadFavoriteState(T data);
 
+  /// 加载点赞态（数据加载成功后调用，默认 false）。
+  /// 有点赞功能的源重写此方法，使点赞图标在进入页面时即反映已赞状态。
+  Future<bool> loadLikeState(T data) async => false;
+
   // ==========================================================
   // 可选重写：附加信息
   // ==========================================================
@@ -109,6 +113,9 @@ abstract class BaseOnlineComicPage<T> extends StatelessWidget {
   /// 评论回调（非 null 才显示评论按钮）。
   void Function(BuildContext context, T data)? get onComment => null;
 
+  /// 分享回调（非 null 才显示分享图标）。
+  void Function(BuildContext context, T data)? get onShare => null;
+
   /// 章节长按回调（如 JM 强制在线阅读）。
   void Function(BuildContext context, T data, int ep)? get onEpisodeLongPress =>
       null;
@@ -137,6 +144,18 @@ abstract class BaseOnlineComicPage<T> extends StatelessWidget {
   @protected
   void refreshFavorite(bool value) => _logic.setFavorite(value);
 
+  /// 供子类在点赞操作完成后同步点赞按钮图标。
+  @protected
+  void refreshLiked(bool value) => _logic.setLiked(value);
+
+  /// 当前收藏态（子类 onFavorite 里据此正确 toggle，而非用不可变的 data 原始值）。
+  @protected
+  bool get currentFavorite => _logic.favorite;
+
+  /// 当前点赞态。
+  @protected
+  bool get currentLiked => _logic.liked;
+
   /// 数字格式化（万位显示，如 12345 → 1.2万）。
   String _formatNumber(int n) {
     if (n < 10000) return n.toString();
@@ -155,29 +174,36 @@ abstract class BaseOnlineComicPage<T> extends StatelessWidget {
         init: OnlineComicPageLogic<T>(
           loadData: loadData,
           loadFavoriteState: loadFavoriteState,
+          loadLikeState: onLike == null ? null : loadLikeState,
         ),
         builder: (logic) {
           logic.startLoadingIfNeeded();
-          return CustomScrollView(
-            controller: logic.scrollController,
-            slivers: [
-              _buildAppBar(context, logic),
-              if (logic.loading)
-                const SliverFillRemaining(
-                  hasScrollBody: false,
-                  child: OnlineComicLoadingView(),
-                )
-              else if (logic.error != null)
-                SliverFillRemaining(
-                  hasScrollBody: false,
-                  child: OnlineComicErrorView(
-                    error: logic.error!,
-                    onRetry: logic.retry,
-                  ),
-                )
-              else if (logic.data != null)
-                ..._buildContent(context, logic, logic.data as T),
-            ],
+          // 点击空白/非文字处清除信息区选中态：点击时让 SelectionArea 失焦，
+          // SelectableRegion 焦点丢失即原生清空选区。translucent 不挡子级点击/滚动/长按选中。
+          return GestureDetector(
+            behavior: HitTestBehavior.translucent,
+            onTap: () => FocusScope.of(context).unfocus(),
+            child: CustomScrollView(
+              controller: logic.scrollController,
+              slivers: [
+                _buildAppBar(context, logic),
+                if (logic.loading)
+                  const SliverFillRemaining(
+                    hasScrollBody: false,
+                    child: OnlineComicLoadingView(),
+                  )
+                else if (logic.error != null)
+                  SliverFillRemaining(
+                    hasScrollBody: false,
+                    child: OnlineComicErrorView(
+                      error: logic.error!,
+                      onRetry: logic.retry,
+                    ),
+                  )
+                else if (logic.data != null)
+                  ..._buildContent(context, logic, logic.data as T),
+              ],
+            ),
           );
         },
       ),
@@ -286,10 +312,8 @@ abstract class BaseOnlineComicPage<T> extends StatelessWidget {
     final textTheme = Theme.of(context).textTheme;
     final colorScheme = Theme.of(context).colorScheme;
     final title = extractTitle(data) ?? '';
-    final subTitle = extractSubTitle(data);
     final pages = extractPages(data);
     final views = extractViews(data);
-    final likes = extractLikes(data);
     final comments = extractComments(data);
 
     final stats = <Widget>[];
@@ -303,7 +327,6 @@ abstract class BaseOnlineComicPage<T> extends StatelessWidget {
     }
 
     if (views != null) addStat(Icons.visibility_outlined, _formatNumber(views));
-    if (likes != null) addStat(Icons.thumb_up_outlined, _formatNumber(likes));
     if (comments != null) {
       addStat(Icons.comment_outlined, _formatNumber(comments));
     }
@@ -317,51 +340,42 @@ abstract class BaseOnlineComicPage<T> extends StatelessWidget {
         ),
         const SizedBox(width: 16),
         Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(title, style: textTheme.titleLarge),
-              const SizedBox(height: 8),
-              Row(children: [
-                const Icon(Icons.tag, size: 16),
-                const SizedBox(width: 4),
-                Expanded(
-                  child: SelectableText(
-                    'ID: $id · $source',
-                    maxLines: 1,
-                    style: textTheme.bodySmall
-                        ?.copyWith(color: colorScheme.onSurfaceVariant),
-                  ),
-                ),
-              ]),
-              if (subTitle != null && subTitle.isNotEmpty) ...[
-                const SizedBox(height: 6),
+          // 信息区文字可长按选中（点空白处清除选区），对齐旧详情页的可选行为。
+          child: SelectionArea(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(title, style: textTheme.titleMedium),
+                const SizedBox(height: 8),
                 Row(children: [
-                  const Icon(Icons.person_outline, size: 16),
+                  const Icon(Icons.public, size: 16),
                   const SizedBox(width: 4),
                   Expanded(
-                    child: Text(subTitle,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: textTheme.bodyMedium),
+                    child: Text(
+                      source,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: textTheme.bodySmall
+                          ?.copyWith(color: colorScheme.onSurfaceVariant),
+                    ),
                   ),
                 ]),
+                if (pages != null) ...[
+                  const SizedBox(height: 6),
+                  Row(children: [
+                    const Icon(Icons.menu_book_outlined, size: 16),
+                    const SizedBox(width: 4),
+                    Text('$pages 页',
+                        style: textTheme.bodySmall
+                            ?.copyWith(color: colorScheme.onSurfaceVariant)),
+                  ]),
+                ],
+                if (stats.isNotEmpty) ...[
+                  const SizedBox(height: 6),
+                  Row(children: stats),
+                ],
               ],
-              if (pages != null) ...[
-                const SizedBox(height: 6),
-                Row(children: [
-                  const Icon(Icons.menu_book_outlined, size: 16),
-                  const SizedBox(width: 4),
-                  Text('$pages 页',
-                      style: textTheme.bodySmall
-                          ?.copyWith(color: colorScheme.onSurfaceVariant)),
-                ]),
-              ],
-              if (stats.isNotEmpty) ...[
-                const SizedBox(height: 6),
-                Row(children: stats),
-              ],
-            ],
+            ),
           ),
         ),
       ],
@@ -370,40 +384,68 @@ abstract class BaseOnlineComicPage<T> extends StatelessWidget {
 
   Widget _buildActions(
       BuildContext context, OnlineComicPageLogic<T> logic, T data) {
-    final comments = extractComments(data);
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+    final likes = extractLikes(data);
+
+    // 上排图标行：从头开始 / 分享 / 收藏 / 赞 / 评论
+    final iconActions = <Widget>[
+      OnlineComicIconAction(
+        icon: Icons.play_circle_outline,
+        label: '从头开始',
+        onTap: () => onRead(context, data, ep: 1),
+      ),
+      if (onShare != null)
+        OnlineComicIconAction(
+          icon: Icons.share_outlined,
+          label: '分享',
+          onTap: () => onShare!(context, data),
+        ),
+      OnlineComicIconAction(
+        icon: logic.favorite ? Icons.bookmark : Icons.bookmark_border,
+        label: '收藏',
+        active: logic.favorite,
+        onTap: () => onFavorite(context, data),
+      ),
+      if (onLike != null)
+        OnlineComicIconAction(
+          icon: logic.liked ? Icons.thumb_up : Icons.thumb_up_outlined,
+          label: likes != null ? _formatNumber(likes) : '喜欢',
+          active: logic.liked,
+          onTap: () => onLike!(context, data),
+        ),
+      if (onComment != null)
+        OnlineComicIconAction(
+          icon: Icons.chat_bubble_outline,
+          label: '评论',
+          onTap: () => onComment!(context, data),
+        ),
+    ];
+
+    return Column(
       children: [
-        OnlineComicActionButton(
-          icon: Icons.menu_book_outlined,
-          label: '阅读',
-          onTap: () => onRead(context, data, ep: 1),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+          children: [for (final a in iconActions) Expanded(child: a)],
         ),
-        OnlineComicActionButton(
-          icon: Icons.download_outlined,
-          label: '下载',
-          onTap: () => onDownload(context, data),
+        const SizedBox(height: 16),
+        // 下排两个大胶囊：下载 / 阅读
+        Row(
+          children: [
+            Expanded(
+              child: OnlineComicPillButton(
+                label: '下载',
+                onTap: () => onDownload(context, data),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: OnlineComicPillButton(
+                label: '阅读',
+                filled: true,
+                onTap: () => onRead(context, data, ep: 1),
+              ),
+            ),
+          ],
         ),
-        OnlineComicActionButton(
-          icon: logic.favorite ? Icons.favorite : Icons.favorite_outline,
-          label: '收藏',
-          onTap: () => onFavorite(context, data),
-        ),
-        if (onLike != null)
-          OnlineComicActionButton(
-            icon: Icons.thumb_up_outlined,
-            label: '喜欢',
-            onTap: () => onLike!(context, data),
-          ),
-        if (onComment != null)
-          OnlineComicActionButton(
-            icon: Icons.comment_outlined,
-            label: '评论',
-            badge: (comments != null && comments > 0)
-                ? _formatNumber(comments)
-                : null,
-            onTap: () => onComment!(context, data),
-          ),
       ],
     );
   }

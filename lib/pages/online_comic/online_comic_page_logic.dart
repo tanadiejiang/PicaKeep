@@ -11,7 +11,11 @@ import 'package:picakeep/network/res.dart';
 ///
 /// 泛型 [T] 为各源站的详情数据模型（如 `PicacgComicItem` / `JmComicInfo`）。
 class OnlineComicPageLogic<T> extends StateController {
-  OnlineComicPageLogic({required this.loadData, this.loadFavoriteState});
+  OnlineComicPageLogic({
+    required this.loadData,
+    this.loadFavoriteState,
+    this.loadLikeState,
+  });
 
   /// 详情数据加载入口，由子类页面提供（通常是某个 `XxxNetwork().getComicInfo(id)`）。
   final Future<Res<T>> Function() loadData;
@@ -19,6 +23,9 @@ class OnlineComicPageLogic<T> extends StateController {
   /// 收藏态加载入口（可选）。数据加载成功后调用，结果写入 [favorite]。
   /// 与原项目 `get()` 保持同一时机，避免收藏图标在数据出现后才闪现。
   final Future<bool> Function(T data)? loadFavoriteState;
+
+  /// 点赞态加载入口（可选）。数据加载成功后调用，结果写入 [liked]。
+  final Future<bool> Function(T data)? loadLikeState;
 
   /// 已加载到的详情数据；为 null 表示尚未加载成功。
   T? data;
@@ -31,6 +38,9 @@ class OnlineComicPageLogic<T> extends StateController {
 
   /// 本地/平台收藏态。子类可在 `onFavorite` 完成后通过 [setFavorite] 同步。
   bool favorite = false;
+
+  /// 点赞态。子类可在 `onLike` 完成后通过 [setLiked] 同步。
+  bool liked = false;
 
   /// 详情页滚动控制器，用于驱动 AppBar 标题随滚动渐显。
   final ScrollController scrollController = ScrollController();
@@ -72,6 +82,14 @@ class OnlineComicPageLogic<T> extends StateController {
           // 收藏态加载失败不影响详情展示。
         }
       }
+      final likeLoader = loadLikeState;
+      if (likeLoader != null) {
+        try {
+          liked = await likeLoader(res.data);
+        } catch (_) {
+          // 点赞态加载失败不影响详情展示。
+        }
+      }
     }
     loading = false;
     update();
@@ -90,6 +108,13 @@ class OnlineComicPageLogic<T> extends StateController {
   void setFavorite(bool value) {
     if (favorite == value) return;
     favorite = value;
+    update();
+  }
+
+  /// 由子类在点赞操作完成后调用，刷新点赞按钮图标。
+  void setLiked(bool value) {
+    if (liked == value) return;
+    liked = value;
     update();
   }
 

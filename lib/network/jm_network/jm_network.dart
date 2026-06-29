@@ -152,6 +152,59 @@ class JmNetwork {
     unawaited(selectDomain());
   }
 
+  /// app 启动预热（对齐上游"启动即重登"）：
+  /// 1) 先对现有域名做一次活域名重选（轻量，不打 bytepluses）；
+  /// 2) 若本地已登录，再用存储账密重换一份新鲜会话 cookie。
+  ///
+  /// jm 会话 cookie 寿命极短，且我们落 SQLite 持久化、无 expires 永不过期清理，
+  /// 冷启动若不重登会带着失效的"僵尸 cookie"打 /album，服务端按游客返回、
+  /// 收藏/点赞态恒显未收藏。重登的 `login` 自身依赖活域名 `_baseUrl`，
+  /// 故必须在 selectDomain 完成后串行执行。整体异步、吞异常，不阻塞、不拖垮启动。
+  void warmUpOnStartup() {
+    if (_domainSelectedThisSession) return;
+    _domainSelectedThisSession = true;
+    unawaited(_warmUp());
+  }
+
+  Future<void> _warmUp() async {
+    try {
+      await selectDomain();
+    } catch (e, s) {
+      LogManager.addLog(
+          LogLevel.warning, 'JmNetwork', 'warmUp selectDomain: $e\n$s');
+    }
+    // 仅已登录才重登：游客无账密，避免无谓请求。
+    if (!_hasStoredLogin) return;
+    try {
+      final res = await reLoginFromStored();
+      LogManager.addLog(
+        res.success ? LogLevel.info : LogLevel.warning,
+        'JmNetwork',
+        res.success
+            ? 'startup relogin ok'
+            : 'startup relogin failed: ${res.errorMessage}',
+      );
+    } catch (e, s) {
+      LogManager.addLog(LogLevel.error, 'JmNetwork', 'startup relogin: $e\n$s');
+    }
+  }
+
+  /// 本地是否已登录（jm.data 里 token 非空）。与 [reLoginFromStored] 读同一份数据，
+  /// 不依赖 ComicSource，保持网络层纯净。
+  bool get _hasStoredLogin {
+    final token = _readJmData()?['token']?.toString() ?? '';
+    return token.isNotEmpty;
+  }
+
+  /// 判断错误文案是否表示"需要登录"。放宽到简体/英文，防服务端改文案漏判自愈。
+  static bool _looksLikeLoginError(String msg) {
+    final lower = msg.toLowerCase();
+    return msg.contains('登入') ||
+        msg.contains('登录') ||
+        lower.contains('login') ||
+        lower.contains('member');
+  }
+
   // ── GET（带解密）──────────────────────────────────────────────────────────
 
   Future<Res<dynamic>> _get(String url, {bool isRetry = false}) async {
@@ -177,8 +230,7 @@ class JmNetwork {
               decoded?['msg']?.toString() ??
               decoded?['error']?.toString();
         } catch (_) {}
-        final needsLogin =
-            errMsg == '請先登入會員' || errMsg?.contains('登入') == true;
+        final needsLogin = errMsg != null && _looksLikeLoginError(errMsg);
         if (needsLogin && !isRetry) {
           final reRes = await reLoginFromStored();
           if (reRes.success) return _get(url, isRetry: true);
@@ -234,7 +286,8 @@ class JmNetwork {
 
   // ── POST ──────────────────────────────────────────────────────────────────
 
-  Future<Res<dynamic>> _post(String url, String body) async {
+  Future<Res<dynamic>> _post(String url, String body,
+      {bool isRetry = false}) async {
     final time = DateTime.now().millisecondsSinceEpoch ~/ 1000;
     final opts = getJmApiOptions(time, post: true)
       ..validateStatus = (i) => i == 200 || i == 401;
@@ -246,6 +299,14 @@ class JmNetwork {
       if (res.statusCode == 401) {
         final msg =
             ((jsonDecode(bodyStr) as Map?)?['errorMsg'])?.toString() ?? '401';
+        // 登录态失效自愈：用存储的账号密码重登一次再重试（与 _get 一致）。
+        // jm 的 POST（收藏/点赞/评论）不像 GET 那样会被浏览自愈带过，
+        // cookie 过期时这里若不自愈就会把"請先登入會員"直接抛给用户。
+        final needsLogin = _looksLikeLoginError(msg);
+        if (needsLogin && !isRetry) {
+          final reRes = await reLoginFromStored();
+          if (reRes.success) return _post(url, body, isRetry: true);
+        }
         return Res.error(msg);
       }
       final json = jsonDecode(bodyStr) as Map;
@@ -272,6 +333,7 @@ class JmNetwork {
       final res = await _post(
         '$_baseUrl/login',
         'username=${Uri.encodeComponent(account)}&password=${Uri.encodeComponent(password)}',
+        isRetry: true, // 登录接口自身不触发自愈，避免递归
       );
       if (res.error) return Res.fromErrorRes(res);
       // 把服务器返回的 username/uid 写回调用方可读的数据
@@ -338,11 +400,22 @@ class JmNetwork {
 
   // ── 漫画详情 ──────────────────────────────────────────────────────────────
 
-  Future<Res<JmComicInfo>> getComicInfo(String id) async {
+  Future<Res<JmComicInfo>> getComicInfo(String id, {bool isRetry = false}) async {
     final res = await _get('$_baseUrl/album?id=$id');
     if (res.error) return Res.fromErrorRes(res);
     try {
       final d = res.data as Map;
+      // 游客 200 静默降级兜底：服务端对失效会话/游客的 /album 可能返回 200 但
+      // 整体不含 is_favorite/liked 字段（非 false，是 key 缺失），此时 _get 的
+      // 401 自愈够不着。若本地已登录且字段整体缺失，视为会话可疑，重登重取一次。
+      // containsKey 区分"字段缺失(会话失效)"与"返回 false(真未收藏)"，避免误循环。
+      if (!isRetry &&
+          _hasStoredLogin &&
+          !d.containsKey('is_favorite') &&
+          !d.containsKey('liked')) {
+        final reRes = await reLoginFromStored();
+        if (reRes.success) return getComicInfo(id, isRetry: true);
+      }
       final series = <int, String>{};
       final epNames = <String>[];
       var sort = 1;
@@ -357,6 +430,22 @@ class JmNetwork {
         series[1] = id;
         epNames.add('第1章');
       }
+
+      // 解析相关推荐
+      final relatedList = (d['related_list'] as List? ?? []);
+      final relatedComics = <JmComicBrief>[];
+      for (final item in relatedList) {
+        final comicId = item['id']?.toString() ?? '';
+        if (comicId.isEmpty) continue;
+        relatedComics.add(JmComicBrief(
+          id: comicId,
+          title: item['name']?.toString() ?? '',
+          author: _parseStringList(item['author']).join(', '),
+          tags: _parseStringList(item['tags']),
+          coverUrl: getJmCoverUrl(comicId),
+        ));
+      }
+
       return Res(JmComicInfo(
         id: id,
         title: d['name']?.toString() ?? 'Unknown',
@@ -373,6 +462,7 @@ class JmNetwork {
         isFavourite: d['is_favorite'] == true || d['is_favorite'] == 1,
         isLiked: d['liked'] == true || d['liked'] == 1,
         coverUrl: getJmCoverUrl(id),
+        relatedComics: relatedComics,
       ));
     } catch (e, s) {
       LogManager.addLog(LogLevel.error, 'JmNetwork', 'getComicInfo: $e\n$s');
@@ -490,6 +580,7 @@ class JmNetwork {
               username: r['username']?.toString() ?? '',
               content: _stripHtml(r['content']?.toString() ?? ''),
               timeAgo: r['addtime']?.toString() ?? '',
+              avatar: getJmAvatarUrl(r['photo']?.toString() ?? ''),
             ));
           }
           comments.add(JmComment(
@@ -497,6 +588,7 @@ class JmNetwork {
             username: c['username']?.toString() ?? '',
             content: _stripHtml(c['content']?.toString() ?? ''),
             timeAgo: c['addtime']?.toString() ?? '',
+            avatar: getJmAvatarUrl(c['photo']?.toString() ?? ''),
             replies: replies,
           ));
         } catch (_) {
@@ -545,6 +637,29 @@ class JmNetwork {
   static String _joinList(dynamic v) {
     if (v is List) return v.join(' / ');
     return v?.toString() ?? '';
+  }
+
+  /// 点赞漫画
+  Future<Res<bool>> likeComic(String id) async {
+    final res = await _post('$_baseUrl/like', 'id=$id');
+    if (res.error) return Res.fromErrorRes(res);
+    return const Res(true);
+  }
+
+  /// 发送评论
+  Future<Res<String>> comment(String aid, String content) async {
+    final body = 'comment=${Uri.encodeComponent(content)}&status=undefined&aid=$aid';
+    final res = await _post('$_baseUrl/comment', body);
+    if (res.error) return Res.fromErrorRes(res);
+
+    // 检查响应中的 status 字段
+    if (res.data is Map && res.data['status'] == 'fail') {
+      final message = res.data['msg']?.toString() ?? '发送失败';
+      return Res.error(message);
+    }
+
+    final message = res.data is Map ? (res.data['msg']?.toString() ?? '评论成功') : '评论成功';
+    return Res(message);
   }
 
   static int _parseInt(dynamic v) {
