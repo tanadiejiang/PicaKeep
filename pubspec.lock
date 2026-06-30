@@ -105,6 +105,23 @@ packages:
       url: "https://pub.flutter-io.cn"
     source: hosted
     version: "3.0.7"
+  csslib:
+    dependency: transitive
+    description:
+      name: csslib
+      sha256: "09bad715f418841f976c77db72d5398dc1253c21fb9c0c7f0b0b985860b2d58e"
+      url: "https://pub.flutter-io.cn"
+    source: hosted
+    version: "1.0.2"
+  desktop_webview_window:
+    dependency: "direct main"
+    description:
+      path: "packages/desktop_webview_window"
+      ref: "7801fc5"
+      resolved-ref: "7801fc582ecf5a7351632887891ecf309a7b2583"
+      url: "https://github.com/wgh136/flutter_desktop_webview"
+    source: git
+    version: "0.2.4"
   dio:
     dependency: "direct main"
     description:
@@ -157,10 +174,10 @@ packages:
     dependency: "direct main"
     description:
       name: file_picker
-      sha256: "825aec673606875c33cd8d3c4083f1a3c3999015a84178b317b7ef396b7384f3"
+      sha256: ab13ae8ef5580a411c458d6207b6774a6c237d77ac37011b13994879f68a8810
       url: "https://pub.flutter-io.cn"
     source: hosted
-    version: "8.0.7"
+    version: "8.3.7"
   file_selector:
     dependency: "direct main"
     description:
@@ -254,6 +271,77 @@ packages:
       url: "https://pub.flutter-io.cn"
     source: hosted
     version: "1.1.3"
+  flutter_inappwebview:
+    dependency: "direct main"
+    description:
+      path: flutter_inappwebview
+      ref: "3ef899b"
+      resolved-ref: "3ef899b3db57c911b080979f1392253b835f98ab"
+      url: "https://github.com/venera-app/flutter_inappwebview"
+    source: git
+    version: "6.2.0-beta.3"
+  flutter_inappwebview_android:
+    dependency: transitive
+    description:
+      path: flutter_inappwebview_android
+      ref: "3ef899b3db57c911b080979f1392253b835f98ab"
+      resolved-ref: "3ef899b3db57c911b080979f1392253b835f98ab"
+      url: "https://github.com/venera-app/flutter_inappwebview"
+    source: git
+    version: "1.2.0-beta.3"
+  flutter_inappwebview_internal_annotations:
+    dependency: transitive
+    description:
+      name: flutter_inappwebview_internal_annotations
+      sha256: e30fba942e3debea7b7e6cdd4f0f59ce89dd403a9865193e3221293b6d1544c6
+      url: "https://pub.flutter-io.cn"
+    source: hosted
+    version: "1.3.0"
+  flutter_inappwebview_ios:
+    dependency: transitive
+    description:
+      path: flutter_inappwebview_ios
+      ref: "3ef899b3db57c911b080979f1392253b835f98ab"
+      resolved-ref: "3ef899b3db57c911b080979f1392253b835f98ab"
+      url: "https://github.com/venera-app/flutter_inappwebview"
+    source: git
+    version: "1.2.0-beta.3"
+  flutter_inappwebview_macos:
+    dependency: transitive
+    description:
+      path: flutter_inappwebview_macos
+      ref: "3ef899b3db57c911b080979f1392253b835f98ab"
+      resolved-ref: "3ef899b3db57c911b080979f1392253b835f98ab"
+      url: "https://github.com/venera-app/flutter_inappwebview"
+    source: git
+    version: "1.2.0-beta.3"
+  flutter_inappwebview_platform_interface:
+    dependency: transitive
+    description:
+      path: flutter_inappwebview_platform_interface
+      ref: "3ef899b3db57c911b080979f1392253b835f98ab"
+      resolved-ref: "3ef899b3db57c911b080979f1392253b835f98ab"
+      url: "https://github.com/venera-app/flutter_inappwebview"
+    source: git
+    version: "1.4.0-beta.3"
+  flutter_inappwebview_web:
+    dependency: transitive
+    description:
+      path: flutter_inappwebview_web
+      ref: "3ef899b3db57c911b080979f1392253b835f98ab"
+      resolved-ref: "3ef899b3db57c911b080979f1392253b835f98ab"
+      url: "https://github.com/venera-app/flutter_inappwebview"
+    source: git
+    version: "1.2.0-beta.3"
+  flutter_inappwebview_windows:
+    dependency: transitive
+    description:
+      path: flutter_inappwebview_windows
+      ref: "3ef899b3db57c911b080979f1392253b835f98ab"
+      resolved-ref: "3ef899b3db57c911b080979f1392253b835f98ab"
+      url: "https://github.com/venera-app/flutter_inappwebview"
+    source: git
+    version: "0.7.0-beta.3"
   flutter_lints:
     dependency: "direct dev"
     description:
@@ -309,6 +397,14 @@ packages:
       url: "https://pub.flutter-io.cn"
     source: hosted
     version: "1.0.3"
+  html:
+    dependency: "direct main"
+    description:
+      name: html
+      sha256: "6d1264f2dffa1b1101c25a91dff0dc2daee4c18e87cd8538729773c073dbf602"
+      url: "https://pub.flutter-io.cn"
+    source: hosted
+    version: "0.15.6"
   http:
     dependency: transitive
     description:
@@ -761,10 +857,10 @@ packages:
     dependency: "direct main"
     description:
       name: shelf_web_socket
-      sha256: cc36c297b52866d203dbf9332263c94becc2fe0ceaa9681d07b6ef9807023b67
+      sha256: "3632775c8e90d6c9712f883e633716432a27758216dfb61bd86a8321c0580925"
       url: "https://pub.flutter-io.cn"
     source: hosted
-    version: "2.0.1"
+    version: "3.0.0"
   shimmer_animation:
     dependency: "direct main"
     description:
@@ -974,18 +1070,26 @@ packages:
     dependency: transitive
     description:
       name: web
-      sha256: "97da13628db363c635202ad97068d47c5b8aa555808e7a9411963c533b449b27"
+      sha256: "868d88a33d8a87b18ffc05f9f030ba328ffefba92d6c127917a2ba740f9cfe4a"
       url: "https://pub.flutter-io.cn"
     source: hosted
-    version: "0.5.1"
+    version: "1.1.1"
+  web_socket:
+    dependency: transitive
+    description:
+      name: web_socket
+      sha256: "34d64019aa8e36bf9842ac014bb5d2f5586ca73df5e4d9bf5c936975cae6982c"
+      url: "https://pub.flutter-io.cn"
+    source: hosted
+    version: "1.0.1"
   web_socket_channel:
     dependency: "direct main"
     description:
       name: web_socket_channel
-      sha256: "58c6666b342a38816b2e7e50ed0f1e261959630becd4c879c4f26bfa14aa5a42"
+      sha256: d645757fb0f4773d602444000a8131ff5d48c9e47adfe9772652dd1a4f2d45c8
       url: "https://pub.flutter-io.cn"
     source: hosted
-    version: "2.4.5"
+    version: "3.0.3"
   win32:
     dependency: transitive
     description:

@@ -3,8 +3,10 @@
 #
 
 list(APPEND FLUTTER_PLUGIN_LIST
+  desktop_webview_window
   dynamic_color
   file_selector_windows
+  flutter_inappwebview_windows
   screen_retriever_windows
   share_plus
   sqlite3_flutter_libs

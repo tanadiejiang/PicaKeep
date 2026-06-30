@@ -30,6 +30,10 @@ import 'package:picakeep/foundation/local_library_settings.dart';
 import 'package:picakeep/network/online_image/online_image_manager.dart';
 import 'package:picakeep/network/picacg_network/picacg_network.dart';
 import 'package:picakeep/network/jm_network/jm_network.dart';
+import 'package:picakeep/network/eh_network/eh_main_network.dart';
+import 'package:picakeep/network/eh_network/eh_models.dart';
+import 'package:picakeep/network/eh_network/get_gallery_id.dart';
+import 'package:picakeep/network/nhentai_network/nhentai_main_network.dart';
 import 'package:picakeep/foundation/image_loader/jm_image_recombine.dart';
 import 'package:picakeep/tools/save_image.dart';
 import 'package:picakeep/tools/time.dart';
@@ -59,6 +63,8 @@ part 'reading_data.dart';
 
 part '../online_comic/picacg_reading_data.dart';
 part '../online_comic/jm_reading_data.dart';
+part '../online_comic/eh_reading_data.dart';
+part '../online_comic/nhentai_reading_data.dart';
 
 SystemUiOverlayStyle _readerOverlayStyle(bool useDarkBackground) {
   final isDark = useDarkBackground;

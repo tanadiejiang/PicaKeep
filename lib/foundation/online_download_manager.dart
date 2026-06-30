@@ -16,35 +16,98 @@ import 'package:picakeep/foundation/image_loader/jm_image_recombine.dart';
 import 'package:picakeep/foundation/local_favorites.dart';
 import 'package:picakeep/foundation/log.dart';
 import 'package:picakeep/network/app_dio.dart';
+import 'package:picakeep/network/eh_network/eh_main_network.dart';
+import 'package:picakeep/network/eh_network/eh_models.dart';
+import 'package:picakeep/network/eh_network/get_gallery_id.dart';
 import 'package:picakeep/network/jm_network/jm_network.dart';
+import 'package:picakeep/network/nhentai_network/nhentai_main_network.dart';
 import 'package:picakeep/network/picacg_network/picacg_network.dart';
 import 'package:picakeep/network/res.dart';
 import 'package:picakeep/pages/reader/comic_reading_page.dart';
 
 class OnlineDownloadTask {
-  OnlineDownloadTask.picacg({required PicacgComicItem comic})
-      : _comic = comic,
-        _jmInfo = null,
-        sourceKey = 'picacg';
-
   OnlineDownloadTask.jm({required JmComicInfo jmInfo})
       : _comic = null,
         _jmInfo = jmInfo,
+        _gallery = null,
+        _nhentaiComic = null,
         sourceKey = 'jm';
+
+  OnlineDownloadTask.picacg({required PicacgComicItem comic})
+      : _comic = comic,
+        _jmInfo = null,
+        _gallery = null,
+        _nhentaiComic = null,
+        sourceKey = 'picacg';
+
+  OnlineDownloadTask.ehentai({required Gallery gallery})
+      : _comic = null,
+        _jmInfo = null,
+        _gallery = gallery,
+        _nhentaiComic = null,
+        sourceKey = 'ehentai';
+
+  OnlineDownloadTask.nhentai({required NhentaiComic nhentaiComic})
+      : _comic = null,
+        _jmInfo = null,
+        _gallery = null,
+        _nhentaiComic = nhentaiComic,
+        sourceKey = 'nhentai';
 
   final PicacgComicItem? _comic;
   final JmComicInfo? _jmInfo;
+  final Gallery? _gallery;
+  final NhentaiComic? _nhentaiComic;
   final String sourceKey;
 
   // 向前兼容的 comic getter（仅 picacg 任务有效）
   PicacgComicItem get comic => _comic!;
 
+  /// ehentai 画廊载体（仅 ehentai 任务有效）。
+  Gallery get gallery => _gallery!;
+
+  /// nhentai 画廊载体（仅 nhentai 任务有效）。
+  NhentaiComic get nhentaiComic => _nhentaiComic!;
+
   /// 通用 display getters
-  String get taskId => sourceKey == 'jm' ? 'jm${_jmInfo!.id}' : _comic!.id;
-  String get taskTitle =>
-      sourceKey == 'jm' ? _jmInfo!.title : _comic!.title;
-  String get taskCover =>
-      sourceKey == 'jm' ? _jmInfo!.coverUrl : _comic!.cover;
+  String get taskId {
+    switch (sourceKey) {
+      case 'jm':
+        return 'jm${_jmInfo!.id}';
+      case 'ehentai':
+        return getGalleryId(_gallery!.link); // 无前缀，与 DownloadedGallery.id 一致
+      case 'nhentai':
+        return 'nhentai${_nhentaiComic!.id}';
+      default:
+        return _comic!.id;
+    }
+  }
+
+  String get taskTitle {
+    switch (sourceKey) {
+      case 'jm':
+        return _jmInfo!.title;
+      case 'ehentai':
+        return _gallery!.title;
+      case 'nhentai':
+        return _nhentaiComic!.title;
+      default:
+        return _comic!.title;
+    }
+  }
+
+  String get taskCover {
+    switch (sourceKey) {
+      case 'jm':
+        return _jmInfo!.coverUrl;
+      case 'ehentai':
+        return _gallery!.coverPath;
+      case 'nhentai':
+        return _nhentaiComic!.cover;
+      default:
+        return _comic!.cover;
+    }
+  }
 
   // 并发下载时每张图各自的 token
   final _cancelTokens = <CancelToken>{};
@@ -153,6 +216,22 @@ class OnlineDownloadManager {
             if (parsed is DownloadedJmComic) {
               items.add(
                 OnlineDownloadedJmComic.fromDownloadedJmComic(
+                  parsed,
+                  rootPath: root,
+                  directoryName: directory,
+                ),
+              );
+            } else if (parsed is DownloadedGallery) {
+              items.add(
+                OnlineDownloadedGallery.fromDownloadedGallery(
+                  parsed,
+                  rootPath: root,
+                  directoryName: directory,
+                ),
+              );
+            } else if (parsed is NhentaiDownloadedComic) {
+              items.add(
+                OnlineDownloadedNhentai.fromNhentaiDownloadedComic(
                   parsed,
                   rootPath: root,
                   directoryName: directory,
@@ -306,6 +385,39 @@ class OnlineDownloadManager {
     return const Res(true);
   }
 
+  /// 入队一个 ehentai 画廊（单画廊多图、无章节）。供 06 详情页下载按钮调用。
+  ///
+  /// 去重：同 [getGalleryId] 标识不重复入队。totalEps 恒为 1（无章节）。
+  Future<Res<bool>> enqueueEhentai(Gallery gallery) async {
+    final key = getGalleryId(gallery.link);
+    if (_tasks.containsKey(key)) return const Res(true);
+    final task = OnlineDownloadTask.ehentai(gallery: gallery)
+      ..totalEps = 1
+      ..totalPages = int.tryParse(gallery.maxPage) ?? 0;
+    _tasks[task.id] = task;
+    _notify();
+    unawaited(_saveQueue());
+    _scheduleNext();
+    return const Res(true);
+  }
+
+  /// 入队一个 nhentai 画廊（单画廊多图、无章节）。供详情页下载按钮调用。
+  ///
+  /// 去重：同 `nhentai{id}` 标识不重复入队。totalEps 恒为 1（无章节）；
+  /// totalPages 先用详情页缩略图数预估，下载时以 getImages 实际数为准。
+  Future<Res<bool>> enqueueNhentai(NhentaiComic comic) async {
+    final key = 'nhentai${comic.id}';
+    if (_tasks.containsKey(key)) return const Res(true);
+    final task = OnlineDownloadTask.nhentai(nhentaiComic: comic)
+      ..totalEps = 1
+      ..totalPages = comic.thumbnails.length;
+    _tasks[task.id] = task;
+    _notify();
+    unawaited(_saveQueue());
+    _scheduleNext();
+    return const Res(true);
+  }
+
   /// 找队列里第一个待下载的任务启动（若已有任务在跑则跳过）
   void _scheduleNext() {
     if (_running) return;
@@ -321,6 +433,10 @@ class OnlineDownloadManager {
   Future<void> _runTask(OnlineDownloadTask task) async {
     if (task.sourceKey == 'jm') {
       await _runJmTask(task);
+    } else if (task.sourceKey == 'ehentai') {
+      await _runEhentaiTask(task);
+    } else if (task.sourceKey == 'nhentai') {
+      await _runNhentaiTask(task);
     } else {
       await _runPicacgTask(task);
     }
@@ -571,6 +687,234 @@ class OnlineDownloadManager {
     }
   }
 
+  /// ehentai 专用下载执行体（单画廊多图、无章节、根目录平铺）。
+  ///
+  /// 逐页 [EhNetwork.getEhImageUrl] 解密拿已验证直链（内部含 showKey/mpvKey 状态机、
+  /// nl 换节点重试、ehgt 3 并发闸），再带图片鉴权三件套 header 写盘到根目录
+  /// `1.{ext}…pageCount.{ext}`。完成后写 [DownloadedGallery]（真实页数）落库。
+  Future<void> _runEhentaiTask(OnlineDownloadTask task) async {
+    if (_running) return;
+    _running = true;
+    task.startSpeedTimer(_notify);
+    final gallery = task._gallery!;
+    try {
+      final downloadRoot = await _resolveOnlineDownloadRoot();
+      final safeDirectory = _safeName(gallery.title);
+      final root =
+          Directory('$downloadRoot${Platform.pathSeparator}$safeDirectory');
+      await root.create(recursive: true);
+
+      final headers = {
+        'Cookie': EhNetwork().cookiesStr,
+        'User-Agent': EhNetwork.ehUA,
+        'Referer': EhNetwork().ehBaseUrl,
+      };
+
+      // 封面：s.exhentai.org → ehgt.org（公共契约），带鉴权三件套。
+      if (gallery.coverPath.isNotEmpty) {
+        final coverUrl =
+            gallery.coverPath.replaceFirst('s.exhentai.org', 'ehgt.org');
+        try {
+          await _downloadFile(
+            task,
+            coverUrl,
+            File('${root.path}${Platform.pathSeparator}cover.jpg'),
+            headers: headers,
+          );
+        } catch (e) {
+          // 封面失败不阻断正文下载。
+          LogManager.addLog(
+              LogLevel.warning, 'OnlineDownload', 'eh cover failed: $e');
+        }
+      }
+
+      final totalPages = int.tryParse(gallery.maxPage) ?? 0;
+      if (totalPages <= 0) {
+        throw Exception('Invalid gallery page count: ${gallery.maxPage}');
+      }
+      task.currentEp = 1;
+      task.currentEpName = gallery.title;
+      task.currentPage = 0;
+      task.totalPages = totalPages;
+      _notify();
+
+      var completedPages = 0;
+      final errors = <String>[];
+      // 串行逐页：getEhImageUrl 内部 showKey 为画廊级加锁串行，且 ehgt 限 3 并发
+      // 由其内部闸控制；这里按页顺序解密+下载，避免并发绕过状态机锁。
+      for (var pageIndex = 0; pageIndex < totalPages; pageIndex++) {
+        _throwIfCancelled(task);
+        final page = pageIndex + 1; // getEhImageUrl 为 1-based
+        try {
+          final (imageUrl, _) = await EhNetwork().getEhImageUrl(gallery, page);
+          final file = File(
+            '${root.path}${Platform.pathSeparator}$page${_imageExtension(imageUrl)}',
+          );
+          await _downloadFile(task, imageUrl, file, headers: headers);
+          completedPages++;
+          task.currentPage = completedPages;
+          _notify();
+        } on _OnlineDownloadCancelled {
+          rethrow;
+        } catch (e) {
+          errors.add('page $page: $e');
+          LogManager.addLog(
+              LogLevel.warning, 'OnlineDownload', 'eh page $page failed: $e');
+        }
+        if (pageIndex % 5 == 0) {
+          unawaited(_saveQueue());
+        }
+      }
+      _throwIfCancelled(task);
+      if (completedPages == 0) {
+        throw Exception(errors.isNotEmpty
+            ? errors.first
+            : 'No page downloaded');
+      }
+
+      final item = DownloadedGallery(
+        galleryTitle: gallery.title,
+        subtitle: gallery.subTitle ?? '',
+        uploader: gallery.uploader,
+        link: gallery.link,
+        coverPath: gallery.coverPath,
+        size: _directoryMb(root),
+        tagList: gallery.toBrief().tags,
+        pageCount: completedPages,
+      )
+        ..directory = safeDirectory
+        ..time = DateTime.now();
+      await _upsertDownloadRecord(
+        rootPath: downloadRoot,
+        item: item,
+        directory: safeDirectory,
+      );
+      task.completed = true;
+      App.notifyLocalDataChanged();
+    } on _OnlineDownloadCancelled catch (_) {
+      if (!task.paused) task.cancelled = true;
+    } catch (error, stackTrace) {
+      task.error = error.toString();
+      LogManager.addLog(LogLevel.error, 'OnlineDownload', '$error\n$stackTrace');
+    } finally {
+      _running = false;
+      task.stopSpeedTimer();
+      unawaited(_saveQueue());
+      _notify();
+      _scheduleNext();
+    }
+  }
+
+  /// nhentai 专用下载执行体（单画廊多图、无章节、根目录平铺）。
+  ///
+  /// 与 ehentai 的差异：nhentai 图片是 CDN 直链，[NhentaiNetwork.getImages] 一次
+  /// 性返回全部页 URL（无需逐页解密），故可并发下载。带 Referer 头规避 CDN 防盗链。
+  /// 完成后写 [NhentaiDownloadedComic]（id=`nhentai{id}`）落库。
+  Future<void> _runNhentaiTask(OnlineDownloadTask task) async {
+    if (_running) return;
+    _running = true;
+    task.startSpeedTimer(_notify);
+    final comic = task._nhentaiComic!;
+    try {
+      final downloadRoot = await _resolveOnlineDownloadRoot();
+      final safeDirectory = _safeName(comic.title);
+      final root =
+          Directory('$downloadRoot${Platform.pathSeparator}$safeDirectory');
+      await root.create(recursive: true);
+
+      const headers = {'Referer': 'https://nhentai.net/'};
+
+      // 封面（失败不阻断正文）。
+      if (comic.cover.isNotEmpty) {
+        try {
+          await _downloadFile(
+            task,
+            comic.cover,
+            File('${root.path}${Platform.pathSeparator}cover.jpg'),
+            headers: headers,
+          );
+        } catch (e) {
+          LogManager.addLog(
+              LogLevel.warning, 'OnlineDownload', 'nhentai cover failed: $e');
+        }
+      }
+
+      // 一次性取全部页 CDN 直链。
+      final imagesRes = await NhentaiNetwork().getImages(comic.id);
+      if (imagesRes.error) {
+        throw Exception(imagesRes.errorMessageWithoutNull);
+      }
+      final urls = imagesRes.data;
+      if (urls.isEmpty) {
+        throw Exception('No page found');
+      }
+
+      task.currentEp = 1;
+      task.currentEpName = comic.title;
+      task.currentPage = 0;
+      task.totalPages = urls.length;
+      _notify();
+
+      var completedPages = 0;
+      final concurrency = int.tryParse(appdata.settings[79]) ?? 6;
+      final semaphore = _Semaphore(concurrency);
+      final errors = <String>[];
+      final futures = <Future<void>>[];
+      for (var pageIndex = 0; pageIndex < urls.length; pageIndex++) {
+        _throwIfCancelled(task);
+        final url = urls[pageIndex];
+        final file = File(
+          '${root.path}${Platform.pathSeparator}${pageIndex + 1}${_imageExtension(url)}',
+        );
+        futures.add(semaphore.run(() async {
+          _throwIfCancelled(task);
+          try {
+            await _downloadFile(task, url, file, headers: headers);
+          } catch (e) {
+            errors.add('page ${pageIndex + 1}: $e');
+            return;
+          }
+          completedPages++;
+          task.currentPage = completedPages;
+          _notify();
+        }));
+      }
+      await Future.wait(futures);
+      _throwIfCancelled(task);
+      if (completedPages == 0) {
+        throw Exception(errors.isNotEmpty ? errors.first : 'No page downloaded');
+      }
+
+      final item = NhentaiDownloadedComic(
+        comicID: comic.id,
+        title: comic.title,
+        size: _directoryMb(root),
+        cover: comic.cover,
+        tagList: comic.tags['Tags'] ?? const [],
+      )
+        ..directory = safeDirectory
+        ..time = DateTime.now();
+      await _upsertDownloadRecord(
+        rootPath: downloadRoot,
+        item: item,
+        directory: safeDirectory,
+      );
+      task.completed = true;
+      App.notifyLocalDataChanged();
+    } on _OnlineDownloadCancelled catch (_) {
+      if (!task.paused) task.cancelled = true;
+    } catch (error, stackTrace) {
+      task.error = error.toString();
+      LogManager.addLog(LogLevel.error, 'OnlineDownload', '$error\n$stackTrace');
+    } finally {
+      _running = false;
+      task.stopSpeedTimer();
+      unawaited(_saveQueue());
+      _notify();
+      _scheduleNext();
+    }
+  }
+
   /// jm 专用下载：下载字节 → 图块重组 → 写盘
   /// [basePath] 不含扩展名；最终扩展名由重组结果决定（重组→.png，不重组→原始）
   /// [allowRecombine] false 时直接存原始字节，不重组（封面用）
@@ -676,8 +1020,9 @@ class OnlineDownloadManager {
   Future<void> _downloadFile(
     OnlineDownloadTask task,
     String url,
-    File file,
-  ) async {
+    File file, {
+    Map<String, String>? headers,
+  }) async {
     _throwIfCancelled(task);
     if (await file.exists() && await file.length() > 0) {
       return;
@@ -688,7 +1033,7 @@ class OnlineDownloadManager {
     while (true) {
       attempt++;
       try {
-        await _downloadFileOnce(task, url, file);
+        await _downloadFileOnce(task, url, file, headers: headers);
         return;
       } catch (error) {
         _throwIfCancelled(task);
@@ -715,8 +1060,9 @@ class OnlineDownloadManager {
   Future<void> _downloadFileOnce(
     OnlineDownloadTask task,
     String url,
-    File file,
-  ) async {
+    File file, {
+    Map<String, String>? headers,
+  }) async {
     final dio = logDio();
     final cancelToken = CancelToken();
     task.addToken(cancelToken);
@@ -725,6 +1071,7 @@ class OnlineDownloadManager {
         url,
         cancelToken: cancelToken,
         options: Options(
+          headers: headers,
           responseType: ResponseType.stream,
           sendTimeout: const Duration(seconds: 15),
           receiveTimeout: const Duration(seconds: 30),
@@ -818,6 +1165,20 @@ class OnlineDownloadManager {
                 'currentEp': t.currentEp,
                 'paused': t.paused,
               };
+            } else if (t.sourceKey == 'ehentai') {
+              return {
+                'sourceKey': 'ehentai',
+                'galleryJson': t._gallery!.toJson(),
+                'currentPage': t.currentPage,
+                'paused': t.paused,
+              };
+            } else if (t.sourceKey == 'nhentai') {
+              return {
+                'sourceKey': 'nhentai',
+                'nhentaiJson': t._nhentaiComic!.toMap(),
+                'currentPage': t.currentPage,
+                'paused': t.paused,
+              };
             } else {
               return {
                 'sourceKey': 'picacg',
@@ -863,6 +1224,30 @@ class OnlineDownloadManager {
             final task = OnlineDownloadTask.jm(jmInfo: info)
               ..totalEps = info.series.length
               ..currentEp = (item['currentEp'] as int?) ?? 0
+              ..paused = true;
+            _tasks[task.id] = task;
+          } else if (sourceKey == 'ehentai') {
+            final galleryJson = (item['galleryJson'] as Map)
+                .map((k, v) => MapEntry(k.toString(), v));
+            // Gallery.fromJson 第138行 tag 桶 bug 已在 02 修复。
+            final gallery = Gallery.fromJson(galleryJson);
+            final key = getGalleryId(gallery.link);
+            if (_tasks.containsKey(key)) continue;
+            final task = OnlineDownloadTask.ehentai(gallery: gallery)
+              ..totalEps = 1
+              ..totalPages = int.tryParse(gallery.maxPage) ?? 0
+              ..currentPage = (item['currentPage'] as int?) ?? 0
+              ..paused = true;
+            _tasks[task.id] = task;
+          } else if (sourceKey == 'nhentai') {
+            final nhentaiJson = (item['nhentaiJson'] as Map)
+                .map((k, v) => MapEntry(k.toString(), v));
+            final comic = NhentaiComic.fromMap(nhentaiJson);
+            final key = 'nhentai${comic.id}';
+            if (_tasks.containsKey(key)) continue;
+            final task = OnlineDownloadTask.nhentai(nhentaiComic: comic)
+              ..totalEps = 1
+              ..currentPage = (item['currentPage'] as int?) ?? 0
               ..paused = true;
             _tasks[task.id] = task;
           } else {
@@ -1340,6 +1725,156 @@ class OnlineDownloadedJmComic extends DownloadedJmComic {
   }
 }
 
+/// ehentai 在线下载画廊的本地包装：提供磁盘路径、封面、阅读页。
+/// 与 OnlineDownloadedComic / OnlineDownloadedJmComic 平行；ehentai 为单画廊
+/// 多图、无章节，页图平铺在下载目录根（1.{ext}…pageCount.{ext}）。
+class OnlineDownloadedGallery extends DownloadedGallery {
+  OnlineDownloadedGallery({
+    required this.rootPath,
+    required this.directoryName,
+    required super.galleryTitle,
+    super.subtitle,
+    super.uploader,
+    required super.link,
+    super.coverPath,
+    super.size,
+    super.tagList,
+    super.pageCount,
+  });
+
+  factory OnlineDownloadedGallery.fromDownloadedGallery(
+    DownloadedGallery gallery, {
+    required String rootPath,
+    required String directoryName,
+  }) {
+    return OnlineDownloadedGallery(
+      rootPath: rootPath,
+      directoryName: directoryName,
+      galleryTitle: gallery.galleryTitle,
+      subtitle: gallery.subtitle,
+      uploader: gallery.uploader,
+      link: gallery.link,
+      coverPath: gallery.coverPath,
+      size: gallery.size,
+      tagList: gallery.tagList,
+      pageCount: gallery.pageCount,
+    )
+      ..time = gallery.time
+      ..directory = directoryName;
+  }
+
+  final String rootPath;
+  final String directoryName;
+
+  String get rootDirectoryPath =>
+      '$rootPath${Platform.pathSeparator}$directoryName';
+
+  @override
+  String? get fileSystemPath => rootDirectoryPath;
+
+  @override
+  String? get localCoverPath {
+    for (final name in const ['cover.jpg', 'cover.webp', 'cover.png']) {
+      final path = '$rootDirectoryPath${Platform.pathSeparator}$name';
+      if (File(path).existsSync()) {
+        return path;
+      }
+    }
+    return null;
+  }
+
+  @override
+  bool get canDelete => false;
+
+  @override
+  Widget createReadingPage({int? ep, int? page}) {
+    // 无章节：chapters 传空 map → hasEp=false → 读根目录平铺图。
+    return ComicReadingPage(
+      OnlineLocalReadingData(
+        title: name,
+        id: id,
+        rootDirectoryPath: rootDirectoryPath,
+        chapters: const <String, String>{},
+        isEhentai: true,
+      ),
+      page ?? 1,
+      ep ?? 1,
+    );
+  }
+}
+
+/// nhentai 在线下载画廊的本地包装：提供磁盘路径、封面、阅读页。
+/// 与 OnlineDownloadedGallery 平行；nhentai 为单画廊多图、无章节，
+/// 页图平铺在下载目录根（1.{ext}…pageCount.{ext}）。
+class OnlineDownloadedNhentai extends NhentaiDownloadedComic {
+  OnlineDownloadedNhentai({
+    required this.rootPath,
+    required this.directoryName,
+    required super.comicID,
+    required super.title,
+    super.size,
+    super.cover,
+    super.tagList,
+  });
+
+  factory OnlineDownloadedNhentai.fromNhentaiDownloadedComic(
+    NhentaiDownloadedComic comic, {
+    required String rootPath,
+    required String directoryName,
+  }) {
+    return OnlineDownloadedNhentai(
+      rootPath: rootPath,
+      directoryName: directoryName,
+      comicID: comic.comicID,
+      title: comic.title,
+      size: comic.size,
+      cover: comic.cover,
+      tagList: comic.tagList,
+    )
+      ..time = comic.time
+      ..directory = directoryName;
+  }
+
+  final String rootPath;
+  final String directoryName;
+
+  String get rootDirectoryPath =>
+      '$rootPath${Platform.pathSeparator}$directoryName';
+
+  @override
+  String? get fileSystemPath => rootDirectoryPath;
+
+  @override
+  String? get localCoverPath {
+    for (final name in const ['cover.jpg', 'cover.webp', 'cover.png']) {
+      final path = '$rootDirectoryPath${Platform.pathSeparator}$name';
+      if (File(path).existsSync()) {
+        return path;
+      }
+    }
+    return null;
+  }
+
+  @override
+  bool get canDelete => false;
+
+  @override
+  Widget createReadingPage({int? ep, int? page}) {
+    // 无章节：chapters 传空 map → hasEp=false → 读根目录平铺图。
+    return ComicReadingPage(
+      OnlineLocalReadingData(
+        title: name,
+        id: id,
+        rootDirectoryPath: rootDirectoryPath,
+        chapters: const <String, String>{},
+        isNhentai: true,
+      ),
+      page ?? 1,
+      ep ?? 1,
+    );
+  }
+}
+
 class OnlineLocalReadingData extends ReadingData {
   OnlineLocalReadingData({
     required this.title,
@@ -1348,6 +1883,8 @@ class OnlineLocalReadingData extends ReadingData {
     required this.chapters,
     this.isJm = false,
     this.jmComicId,
+    this.isEhentai = false,
+    this.isNhentai = false,
   });
 
   @override
@@ -1366,6 +1903,14 @@ class OnlineLocalReadingData extends ReadingData {
   /// 禁漫数字 id（不含 jm 前缀），用于回退时拉取在线章节图片列表。
   final String? jmComicId;
 
+  /// 是否为 ehentai 源（单画廊多图、无章节）。为 true 时 sourceKey/comicType/
+  /// favoriteType 走 ehentai，hasEp=false 读根目录平铺图。
+  final bool isEhentai;
+
+  /// 是否为 nhentai 源（单画廊多图、无章节）。与 ehentai 同构：hasEp=false 读
+  /// 根目录平铺图，sourceKey/comicType/favoriteType 走 nhentai。
+  final bool isNhentai;
+
   /// 缓存每个 ep 的在线章节信息，避免重复网络请求。
   /// key = ep 序号(1-based)，value = (chapterId, urls)。
   final Map<int, ({String chapterId, List<String> urls})> _jmEpCache = {};
@@ -1374,10 +1919,22 @@ class OnlineLocalReadingData extends ReadingData {
   String get downloadId => id;
 
   @override
-  String get sourceKey => 'picacg';
+  String get sourceKey => isJm
+      ? 'jm'
+      : isEhentai
+          ? 'ehentai'
+          : isNhentai
+              ? 'nhentai'
+              : 'picacg';
 
   @override
-  ComicType get comicType => ComicType.picacg;
+  ComicType get comicType => isJm
+      ? ComicType.jm
+      : isEhentai
+          ? ComicType.ehentai
+          : isNhentai
+              ? ComicType.nhentai
+              : ComicType.picacg;
 
   @override
   bool get hasEp => chapters.isNotEmpty;
@@ -1389,7 +1946,13 @@ class OnlineLocalReadingData extends ReadingData {
   bool get downloaded => false;
 
   @override
-  FavoriteType get favoriteType => FavoriteType.picacg;
+  FavoriteType get favoriteType => isJm
+      ? FavoriteType.jm
+      : isEhentai
+          ? FavoriteType.ehentai
+          : isNhentai
+              ? FavoriteType.nhentai
+              : FavoriteType.picacg;
 
   @override
   Future<List<String>> loadEpNetwork(int ep) async {

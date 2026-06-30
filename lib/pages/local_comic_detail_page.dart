@@ -19,6 +19,7 @@ import 'package:picakeep/foundation/trash.dart';
 import 'package:picakeep/tools/read_history_helper.dart';
 import 'package:picakeep/pages/online_comic/jm_comic_page_v2.dart';
 import 'package:picakeep/pages/online_comic/picacg_comic_page_v2.dart';
+import 'package:picakeep/pages/online_comic/nhentai_comic_page_v2.dart';
 import 'package:picakeep/tools/tags_translation.dart';
 import 'package:picakeep/tools/translations.dart';
 
@@ -1196,6 +1197,10 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
       App.pushInner(() => JmComicPageV2(numericId));
     } else if (comic.type == DownloadType.picacg) {
       App.pushInner(() => PicacgComicPageV2(comic.id));
+    } else if (comic.type == DownloadType.nhentai) {
+      final numericId =
+          comic.id.startsWith('nhentai') ? comic.id.substring(7) : comic.id;
+      App.pushInner(() => NhentaiComicPageV2(numericId));
     }
   }
 
@@ -1424,7 +1429,8 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
           ),
           _buildActionItem('分享', Icons.share, () => _copyText(comic.name)),
           if (_comic.type == DownloadType.jm ||
-              _comic.type == DownloadType.picacg)
+              _comic.type == DownloadType.picacg ||
+              _comic.type == DownloadType.nhentai)
             _buildActionItem('在线详情', Icons.public, _onVisitOnline),
           if (comic is LocalLibraryComicItem &&
               comic.isArchiveItem &&

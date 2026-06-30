@@ -188,8 +188,7 @@ abstract class BaseOnlineComicPage<T> extends StatelessWidget {
               slivers: [
                 _buildAppBar(context, logic),
                 if (logic.loading)
-                  const SliverFillRemaining(
-                    hasScrollBody: false,
+                  const SliverToBoxAdapter(
                     child: OnlineComicLoadingView(),
                   )
                 else if (logic.error != null)

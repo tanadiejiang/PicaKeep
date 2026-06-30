@@ -41,6 +41,11 @@ public final class GeneratedPluginRegistrant {
       Log.e(TAG, "Error registering plugin flutter_image_gallery_saver, dev.knottx.flutter_image_gallery_saver.FlutterImageGallerySaverPlugin", e);
     }
     try {
+      flutterEngine.getPlugins().add(new com.pichillilorenzo.flutter_inappwebview_android.InAppWebViewFlutterPlugin());
+    } catch (Exception e) {
+      Log.e(TAG, "Error registering plugin flutter_inappwebview_android, com.pichillilorenzo.flutter_inappwebview_android.InAppWebViewFlutterPlugin", e);
+    }
+    try {
       flutterEngine.getPlugins().add(new io.flutter.plugins.flutter_plugin_android_lifecycle.FlutterAndroidLifecyclePlugin());
     } catch (Exception e) {
       Log.e(TAG, "Error registering plugin flutter_plugin_android_lifecycle, io.flutter.plugins.flutter_plugin_android_lifecycle.FlutterAndroidLifecyclePlugin", e);
