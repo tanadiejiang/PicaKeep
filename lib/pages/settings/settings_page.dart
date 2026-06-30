@@ -43,6 +43,7 @@ part 'explore_settings.dart';
 part 'reading_settings.dart';
 part 'local_favorite_settings.dart';
 part 'download_settings.dart';
+part 'network_settings.dart';
 
 void refreshLocalDataCaches() {
   // Managers are reinitialized in place so mounted widgets never observe
@@ -102,7 +103,7 @@ class _SettingsPageState extends State<SettingsPage> {
       !UiMode.m1(context) &&
       MediaQuery.of(context).size.width >= _settingsWideLayoutBreakpoint;
 
-  final categories = <String>["浏览", "阅读", "外观", "本地收藏", "APP", "下载", "APP能力", "关于"];
+  final categories = <String>["浏览", "阅读", "外观", "本地收藏", "APP", "网络", "下载", "APP能力", "关于"];
 
   final icons = <IconData>[
     Icons.explore,
@@ -110,6 +111,7 @@ class _SettingsPageState extends State<SettingsPage> {
     Icons.color_lens,
     Icons.collections_bookmark_rounded,
     Icons.apps,
+    Icons.wifi,
     Icons.download_outlined,
     Icons.cloud_sync_outlined,
     Icons.info
@@ -423,9 +425,10 @@ class _SettingsPageState extends State<SettingsPage> {
         2 => buildAppearanceSettings(width),
         3 => LocalFavoritesSettings(width: width),
         4 => buildAppSettings(width, context),
-        5 => _buildDownloadSettings(width),
-        6 => buildAppCapabilitiesSettings(width, context),
-        7 => buildAbout(width),
+        5 => buildNetworkSettings(width, context),
+        6 => _buildDownloadSettings(width),
+        7 => buildAppCapabilitiesSettings(width, context),
+        8 => buildAbout(width),
         _ => throw UnimplementedError()
       };
     }

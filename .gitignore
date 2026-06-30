@@ -54,3 +54,10 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# nuget for flutter_inappwebview_windows DEPS build
+/nuget.exe
+/windows/nuget.exe
+
+# WebView APK test files (CF testing artifacts)
+webview*.apk

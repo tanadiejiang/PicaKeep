@@ -143,8 +143,18 @@ DownloadedItem? parseDownloadedItemRecordData(
     return RegExp(r'^\d+$').hasMatch(value.trim());
   }
 
+  // ehentai 画廊 id 形如 '123-abc'（getGalleryId(link)，含连字符），必须在
+  // 下面 contains('-') → CustomDownloadedItem 分支之前精准拦截，否则
+  // ehentai 已下载条目会被误判为自定义源条目，导致本地无法解析回 DownloadedGallery。
+  bool isEhentaiGalleryId(String value) {
+    return RegExp(r'^\d+-[a-z0-9]+$').hasMatch(value.trim());
+  }
+
   try {
-    if (normalizedId.contains('-')) {
+    if (isEhentaiGalleryId(normalizedId) &&
+        (data.containsKey('galleryTitle') || data.containsKey('gallery'))) {
+      comic = DownloadedGallery.fromJson(data);
+    } else if (normalizedId.contains('-')) {
       comic = CustomDownloadedItem.fromJson(data);
     } else if (normalizedId.startsWith('jm')) {
       comic = DownloadedJmComic.fromMap(data);
@@ -399,6 +409,10 @@ class DownloadedGallery extends DownloadedItem {
   double? size;
   List<String> tagList;
 
+  /// 真实页数（ehentai 单画廊多图、无章节）。页图平铺在下载目录根，
+  /// 文件名为 1.{ext}…pageCount.{ext}。旧数据缺该键时回退 1（向后兼容）。
+  int pageCount;
+
   DownloadedGallery({
     required this.galleryTitle,
     this.subtitle = '',
@@ -407,6 +421,7 @@ class DownloadedGallery extends DownloadedItem {
     this.coverPath = '',
     this.size,
     this.tagList = const [],
+    this.pageCount = 1,
   });
 
   @override
@@ -418,6 +433,7 @@ class DownloadedGallery extends DownloadedItem {
         "coverPath": coverPath,
         "size": size,
         "tagList": tagList,
+        "pageCount": pageCount,
       };
 
   factory DownloadedGallery.fromJson(Map<String, dynamic> json) {
@@ -431,6 +447,7 @@ class DownloadedGallery extends DownloadedItem {
         coverPath: g["cover"] ?? g["coverPath"] ?? '',
         size: json["size"]?.toDouble(),
         tagList: _parseTags(g["tags"]),
+        pageCount: _parsePageCount(json["pageCount"] ?? g["maxPage"]),
       );
     }
     return DownloadedGallery(
@@ -441,7 +458,15 @@ class DownloadedGallery extends DownloadedItem {
       coverPath: json["coverPath"] ?? '',
       size: json["size"]?.toDouble(),
       tagList: _parseTags(json["tags"]),
+      pageCount: _parsePageCount(json["pageCount"]),
     );
+  }
+
+  /// 安全解析页数：支持 int / String / null（旧数据），下限 1。
+  static int _parsePageCount(dynamic value) {
+    if (value is int) return value > 0 ? value : 1;
+    final parsed = int.tryParse(value?.toString() ?? '');
+    return (parsed != null && parsed > 0) ? parsed : 1;
   }
 
   static List<String> _parseTags(dynamic tags) {
@@ -459,9 +484,11 @@ class DownloadedGallery extends DownloadedItem {
   @override
   DownloadType get type => DownloadType.ehentai;
 
+  /// 无章节：始终单一逻辑章（index 0）已下载。
   @override
   List<int> get downloadedEps => [0];
 
+  /// 无章节：单逻辑章。真实页数由 [pageCount] 表达，不靠 eps 数量。
   @override
   List<String> get eps => ["EP 1"];
 
@@ -496,9 +523,8 @@ class DownloadedGallery extends DownloadedItem {
       id: id,
       downloadId: id,
       sourceKey: 'ehentai',
-      hasEp: true,
+      hasEp: false,
       comicType: comicTypeForDownloadType(DownloadType.ehentai),
-      eps: {"1": "EP 1"},
       favoriteType: FavoriteType.ehentai,
     );
     data.downloadedEps = [0];

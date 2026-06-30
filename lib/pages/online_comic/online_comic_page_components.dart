@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:shimmer_animation/shimmer_animation.dart';
 
 /// 通用在线漫画详情页的可复用 UI 组件集合。
 ///
@@ -113,13 +114,140 @@ class OnlineComicErrorView extends StatelessWidget {
   }
 }
 
-/// 统一加载态。
+/// 统一加载态：与数据态布局同构的骨架屏。
+///
+/// 结构严格对齐 [BaseOnlineComicPage] 的 `_buildContent` 真实区块顺序，
+/// 占位尺寸（封面 120×168、按钮行、标签行、章节 2 列网格）与真实组件一致，
+/// 数据到达后替换无明显跳变。整片用 [Shimmer] 包裹做流光，子级为半透明灰块。
+///
+/// 一处改全源生效：JM / Picacg 及未来所有接入基类的源共用此加载态。
 class OnlineComicLoadingView extends StatelessWidget {
   const OnlineComicLoadingView({super.key});
 
   @override
   Widget build(BuildContext context) {
-    return const Center(child: CircularProgressIndicator());
+    final cs = Theme.of(context).colorScheme;
+    // 占位块统一色：半透明 surfaceContainerHighest，与原项目 buildLoading 一致。
+    final blockColor = cs.surfaceContainerHighest.withValues(alpha: 0.4);
+
+    Widget bar({double? width, double height = 16, double radius = 8}) =>
+        Container(
+          width: width,
+          height: height,
+          decoration: BoxDecoration(
+            color: blockColor,
+            borderRadius: BorderRadius.circular(radius),
+          ),
+        );
+
+    // 顶部圆形图标动作占位（对齐 OnlineComicIconAction：44 圆 + 下方小标签）。
+    Widget iconAction() => Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 44,
+              height: 44,
+              decoration: BoxDecoration(
+                color: blockColor,
+                shape: BoxShape.circle,
+              ),
+            ),
+            const SizedBox(height: 8),
+            bar(width: 28, height: 8, radius: 4),
+          ],
+        );
+
+    return Shimmer(
+      color: cs.surfaceContainerHighest,
+      colorOpacity: 0.5,
+      child: Padding(
+        // 与数据态 _buildContent 外层同构。
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // ── 封面 + 信息区（对齐 _buildInfoSection）──
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // 封面：与 OnlineComicCover 默认 120×168 / radius 8 一致。
+                Container(
+                  width: 120,
+                  height: 168,
+                  decoration: BoxDecoration(
+                    color: blockColor,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                ),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      bar(height: 20), // 标题行
+                      const SizedBox(height: 8),
+                      bar(width: 100, height: 12), // 源
+                      const SizedBox(height: 10),
+                      bar(width: 140, height: 12), // 统计行
+                      const SizedBox(height: 10),
+                      bar(width: 80, height: 12),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 20),
+            // ── 动作按钮区（对齐 _buildActions：图标行 + 两大胶囊）──
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+              children: [for (var i = 0; i < 5; i++) iconAction()],
+            ),
+            const SizedBox(height: 16),
+            Row(
+              children: [
+                Expanded(child: bar(height: 48, radius: 24)),
+                const SizedBox(width: 12),
+                Expanded(child: bar(height: 48, radius: 24)),
+              ],
+            ),
+            const SizedBox(height: 20),
+            const Divider(),
+            // ── 信息标签区（对齐 OnlineComicTagsSection 若干行）──
+            const SizedBox(height: 12),
+            bar(width: 40, height: 16), // 「信息」标题
+            const SizedBox(height: 12),
+            for (var i = 0; i < 3; i++) ...[
+              Row(
+                children: [
+                  bar(width: 56, height: 28, radius: 10),
+                  const SizedBox(width: 6),
+                  bar(width: 72, height: 28, radius: 10),
+                  const SizedBox(width: 6),
+                  bar(width: 60, height: 28, radius: 10),
+                ],
+              ),
+              const SizedBox(height: 6),
+            ],
+            const SizedBox(height: 10),
+            const Divider(),
+            // ── 章节区占位（对齐 OnlineComicEpisodesList 2 列网格）──
+            const SizedBox(height: 12),
+            bar(width: 80, height: 16), // 「章节 (N)」标题
+            const SizedBox(height: 12),
+            for (var row = 0; row < 3; row++) ...[
+              Row(
+                children: [
+                  Expanded(child: bar(height: 44, radius: 8)),
+                  const SizedBox(width: 8),
+                  Expanded(child: bar(height: 44, radius: 8)),
+                ],
+              ),
+              const SizedBox(height: 8),
+            ],
+          ],
+        ),
+      ),
+    );
   }
 }
 

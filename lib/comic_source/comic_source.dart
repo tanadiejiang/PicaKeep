@@ -11,6 +11,8 @@ import 'package:picakeep/network/res.dart';
 
 import 'built_in/picacg.dart';
 import 'built_in/jm.dart';
+import 'built_in/ehentai.dart';
+import 'built_in/nhentai.dart';
 
 typedef LoginHandler = Future<Res<bool>> Function(
   String username,
@@ -31,6 +33,11 @@ typedef OnlineSearchLoader = Future<Res<List<BaseComic>>> Function(
 
 typedef OnlineComicPageBuilder = Widget Function(BaseComic comic);
 
+/// 源级别的封面/图片请求头钩子。返回 `null` 表示该源不需要自定义请求头,
+/// 消费端应回退到裸 `NetworkImage`。picacg / jm 不实现它(保持 `null`),
+/// ehentai 等需要 Cookie/Referer/User-Agent 鉴权的源在源注册时填上。
+typedef ImageHeadersBuilder = Map<String, String>? Function(BaseComic comic);
+
 class ComicSource {
   ComicSource.named({
     required this.key,
@@ -39,12 +46,13 @@ class ComicSource {
     this.favoriteData,
     this.searchPageData,
     this.comicPageBuilder,
+    this.imageHeadersBuilder,
     Map<String, dynamic>? data,
   }) : data = data ?? <String, dynamic>{};
 
   static final List<ComicSource> sources = <ComicSource>[];
 
-  static List<ComicSource> get builtIn => <ComicSource>[picacg, jm];
+  static List<ComicSource> get builtIn => <ComicSource>[picacg, jm, ehentai, nhentai];
 
   static Future<void> init() async {
     sources
@@ -86,6 +94,9 @@ class ComicSource {
   final FavoriteData? favoriteData;
   final SearchPageData? searchPageData;
   final OnlineComicPageBuilder? comicPageBuilder;
+
+  /// 可选:源级别封面/图片请求头钩子。默认 `null`,消费端回退裸 `NetworkImage`。
+  final ImageHeadersBuilder? imageHeadersBuilder;
   final Map<String, dynamic> data;
 
   bool _isSaving = false;
@@ -154,12 +165,19 @@ class AccountConfig {
     this.logout,
     this.reLogin,
     this.infoItems,
+    this.onLogin,
   });
 
   final LoginHandler login;
   final LogoutHandler? logout;
   final ReloginHandler? reLogin;
   final AccountInfoLoader? infoItems;
+
+  /// 可选:自定义登录入口(纯增量)。源若提供该回调,账号页应调用它跳转到源自有的
+  /// 登录页面,而非走默认的账密 [login] 表单。picacg / jm 不设置(保持 null,
+  /// 走默认账密登录);ehentai 等 cookie 登录源在此挂自己的登录页。
+  /// 返回 Future,账号页 await 它(登录页关闭)后再刷新账号信息区。
+  final Future<void> Function(BuildContext context)? onLogin;
 }
 
 class AccountInfoItem {

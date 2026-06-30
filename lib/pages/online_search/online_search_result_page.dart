@@ -4,7 +4,9 @@ import 'package:flutter/material.dart';
 import 'package:picakeep/comic_source/comic_source.dart';
 import 'package:picakeep/components/comic_tile.dart';
 import 'package:picakeep/foundation/app_page_route.dart';
+import 'package:picakeep/foundation/image_loader/stream_image_provider.dart';
 import 'package:picakeep/network/base_comic.dart';
+import 'package:picakeep/network/online_image/online_image_manager.dart';
 
 import 'online_search_logic.dart';
 
@@ -114,6 +116,25 @@ class _OnlineSearchResultPageState extends State<OnlineSearchResultPage> {
     );
   }
 
+  /// 构造封面 imageProvider。
+  /// - 源未提供 [imageHeadersBuilder](picacg / jm)→ 走裸 `NetworkImage`,与改造前完全一致。
+  /// - 钩子返回 `null` 或空 header → 同样回退 `NetworkImage`。
+  /// - 钩子返回非空 header → 走带 header 的 `StreamImageProvider`,header 透传到图片请求。
+  ImageProvider _coverProvider(BaseComic comic) {
+    final builder = widget.source.imageHeadersBuilder;
+    if (builder == null) {
+      return NetworkImage(comic.cover);
+    }
+    final headers = builder(comic);
+    if (headers == null || headers.isEmpty) {
+      return NetworkImage(comic.cover);
+    }
+    return StreamImageProvider.withProgress(
+      () => OnlineImageManager.instance.getImage(comic.cover, headers: headers),
+      comic.cover,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
@@ -186,7 +207,7 @@ class _OnlineSearchResultPageState extends State<OnlineSearchResultPage> {
                           name: comic.title,
                           author: comic.subTitle,
                           imagePath: File(''),
-                          imageProvider: NetworkImage(comic.cover),
+                          imageProvider: _coverProvider(comic),
                           type: null,
                           tag: comic.tags,
                           size: comic.description,

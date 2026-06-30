@@ -393,6 +393,18 @@ class MainActivity : FlutterActivity() {
         }
         MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
+            SYSTEM_PROXY_CHANNEL,
+        ).setMethodCallHandler { call, result ->
+            when (call.method) {
+                // 读系统 HTTP 代理，拼成 host:port 返回；无则 null。
+                // 供 WebView（flutter_inappwebview ProxyController）跟随系统代理用——
+                // Android 系统 WebView 不会自动读 dart:io 所用的系统代理。
+                "get" -> result.success(readSystemHttpProxy())
+                else -> result.notImplemented()
+            }
+        }
+        MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
             STORAGE_ACCESS_CHANNEL,
         ).setMethodCallHandler { call, result ->
             when (call.method) {
@@ -657,6 +669,18 @@ class MainActivity : FlutterActivity() {
                 else -> result.notImplemented()
             }
         }
+    }
+
+    private fun readSystemHttpProxy(): String? {
+        return runCatching {
+            val host = java.lang.System.getProperty("http.proxyHost")?.trim()
+            val port = java.lang.System.getProperty("http.proxyPort")?.trim()
+            if (host.isNullOrEmpty() || port.isNullOrEmpty()) {
+                null
+            } else {
+                "$host:$port"
+            }
+        }.getOrNull()
     }
 
     private fun readClipboardText(maxChars: Int): String? {
@@ -1734,6 +1758,8 @@ class MainActivity : FlutterActivity() {
             "lingxue.picakeep/storage_access"
         private const val CLIPBOARD_CHANNEL =
             "lingxue.picakeep/clipboard"
+        private const val SYSTEM_PROXY_CHANNEL =
+            "lingxue.picakeep/system_proxy"
         private const val REQUEST_CODE_POST_NOTIFICATIONS = 1001
         private const val REQUEST_CODE_SHIZUKU = 1002
         private const val PRIVILEGED_PROCESS_TIMEOUT_MS = 5_000L

@@ -127,6 +127,14 @@ class _AccountSourceTileState extends State<_AccountSourceTile> {
   }
 
   Future<void> _openLogin() async {
+    // 若源提供了自定义登录入口（如 ehentai 的 Cookie 登录），优先走它。
+    // onLogin 返回 Future，await 它（登录页关闭）后再刷新账号信息区。
+    final customLogin = widget.source.account?.onLogin;
+    if (customLogin != null) {
+      await customLogin(context);
+      if (mounted) setState(_reloadInfo);
+      return;
+    }
     final changed = await Navigator.of(context).push<bool>(
       AppPageRoute(builder: (_) => LoginPage(source: widget.source)),
     );

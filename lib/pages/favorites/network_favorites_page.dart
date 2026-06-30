@@ -127,7 +127,7 @@ class _NetworkFavoritesPageState extends State<NetworkFavoritesPage> {
                         name: comic.title,
                         coverPath: comic.cover,
                         author: comic.subTitle,
-                        type: FavoriteType.picacg,
+                        type: _favoriteTypeForSource(_source?.key),
                         tags: comic.tags,
                       );
                       LocalFavoritesManager().addComic(folder!, item);
@@ -142,6 +142,22 @@ class _NetworkFavoritesPageState extends State<NetworkFavoritesPage> {
         ),
       ),
     );
+  }
+
+  /// 转存本地时按当前在线源映射到对应的本地收藏分类。
+  /// 修正原写死 [FavoriteType.picacg] 导致 jm/ehentai/nhentai 转存全落错类型的 bug。
+  FavoriteType _favoriteTypeForSource(String? key) {
+    switch (key) {
+      case 'jm':
+        return FavoriteType.jm;
+      case 'ehentai':
+        return FavoriteType.ehentai;
+      case 'nhentai':
+        return FavoriteType.nhentai;
+      case 'picacg':
+      default:
+        return FavoriteType.picacg;
+    }
   }
 
   @override

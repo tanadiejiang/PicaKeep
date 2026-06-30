@@ -167,7 +167,7 @@ extension ServerAppRouting on PicaKeepAdminServer {
     return _jsonResponse({'error': 'not found'}, statusCode: 404);
   }
 
-  void _handleEventSocket(WebSocketChannel channel) {
+  void _handleEventSocket(WebSocketChannel channel, [String? protocol]) {
     _eventChannels.add(channel);
     final eventSubscription = _eventBus.stream.listen((event) {
       _sendSocketJson(channel, event.toJson());
