@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
-import 'package:picakeep/network/jm_network/jm_network.dart';
-import 'package:picakeep/network/res.dart';
+import 'package:picakeep/network/picacg_network/picacg_network.dart';
+import 'package:picakeep/pages/online_comic/picacg_reply_page.dart';
 
-class JmCommentsPageV2 extends StatefulWidget {
-  const JmCommentsPageV2({
+class PicacgCommentsPageV2 extends StatefulWidget {
+  const PicacgCommentsPageV2({
     super.key,
     required this.comicId,
     required this.totalComments,
@@ -13,14 +13,13 @@ class JmCommentsPageV2 extends StatefulWidget {
   final int totalComments;
 
   @override
-  State<JmCommentsPageV2> createState() => _JmCommentsPageV2State();
+  State<PicacgCommentsPageV2> createState() => _PicacgCommentsPageV2State();
 }
 
-class _JmCommentsPageV2State extends State<JmCommentsPageV2> {
-  final List<JmComment> _comments = [];
+class _PicacgCommentsPageV2State extends State<PicacgCommentsPageV2> {
+  final List<PicacgComment> _comments = [];
   final TextEditingController _controller = TextEditingController();
   final ScrollController _scrollController = ScrollController();
-  final FocusNode _inputFocusNode = FocusNode();
 
   int _page = 1;
   int _totalPages = 1;
@@ -28,9 +27,6 @@ class _JmCommentsPageV2State extends State<JmCommentsPageV2> {
   bool _loadingMore = false;
   bool _sendingComment = false;
   String? _error;
-
-  /// 回复目标：非 null 时输入框进入"回复 @xxx"模式。
-  JmComment? _replyTarget;
 
   @override
   void initState() {
@@ -43,7 +39,6 @@ class _JmCommentsPageV2State extends State<JmCommentsPageV2> {
   void dispose() {
     _controller.dispose();
     _scrollController.dispose();
-    _inputFocusNode.dispose();
     super.dispose();
   }
 
@@ -56,21 +51,8 @@ class _JmCommentsPageV2State extends State<JmCommentsPageV2> {
     }
   }
 
-  /// 进入回复模式：设定目标评论，清空输入框，自动聚焦。
-  void _setReplyTarget(JmComment comment) {
-    setState(() => _replyTarget = comment);
-    _controller.clear();
-    _inputFocusNode.requestFocus();
-  }
-
-  /// 退出回复模式，清空输入框。
-  void _clearReplyTarget() {
-    setState(() => _replyTarget = null);
-    _controller.clear();
-  }
-
   Future<void> _loadComments() async {
-    final res = await JmNetwork().getComments(widget.comicId, _page);
+    final res = await PicacgNetwork().getComments(widget.comicId, _page);
     if (!mounted) return;
     setState(() {
       _loading = false;
@@ -78,6 +60,7 @@ class _JmCommentsPageV2State extends State<JmCommentsPageV2> {
         _error = res.errorMessageWithoutNull;
       } else {
         _comments.addAll(res.data);
+        // subData 是总页数
         if (res.subData != null && res.subData is int) {
           _totalPages = res.subData as int;
         }
@@ -89,7 +72,7 @@ class _JmCommentsPageV2State extends State<JmCommentsPageV2> {
     if (_loadingMore || _page >= _totalPages) return;
     setState(() => _loadingMore = true);
     _page++;
-    final res = await JmNetwork().getComments(widget.comicId, _page);
+    final res = await PicacgNetwork().getComments(widget.comicId, _page);
     if (!mounted) return;
     setState(() {
       _loadingMore = false;
@@ -109,14 +92,7 @@ class _JmCommentsPageV2State extends State<JmCommentsPageV2> {
     }
 
     setState(() => _sendingComment = true);
-
-    final target = _replyTarget;
-    final Res<String> res;
-    if (target != null) {
-      res = await JmNetwork().replyComment(widget.comicId, content, target.id);
-    } else {
-      res = await JmNetwork().comment(widget.comicId, content);
-    }
+    final res = await PicacgNetwork().sendComment(widget.comicId, content);
     if (!mounted) return;
     setState(() => _sendingComment = false);
 
@@ -126,12 +102,11 @@ class _JmCommentsPageV2State extends State<JmCommentsPageV2> {
       );
     } else {
       _controller.clear();
-      if (target != null) setState(() => _replyTarget = null);
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(target != null ? '回复成功' : '评论成功')),
+        const SnackBar(content: Text('评论成功')),
       );
-      // 延迟 5 秒后刷新评论列表（等待服务器处理）
-      await Future.delayed(const Duration(seconds: 5));
+      // 延迟 1 秒后刷新评论列表（等待服务器处理）
+      await Future.delayed(const Duration(seconds: 1));
       if (!mounted) return;
       setState(() {
         _comments.clear();
@@ -202,19 +177,10 @@ class _JmCommentsPageV2State extends State<JmCommentsPageV2> {
                                   ),
                                 );
                               }
-                              return _CommentCard(
-                                comment: _comments[index],
-                                onReply: _setReplyTarget,
-                              );
+                              return _CommentCard(comment: _comments[index]);
                             },
                           ),
           ),
-          // 回复模式提示条（仅回复模式时显示）
-          if (_replyTarget != null)
-            _ReplyBar(
-              username: _replyTarget!.username,
-              onCancel: _clearReplyTarget,
-            ),
           // 发送框
           Container(
             decoration: BoxDecoration(
@@ -238,13 +204,9 @@ class _JmCommentsPageV2State extends State<JmCommentsPageV2> {
                 Expanded(
                   child: TextField(
                     controller: _controller,
-                    focusNode: _inputFocusNode,
                     enabled: !_sendingComment,
                     decoration: InputDecoration(
-                      // 回复模式时 hint 提示"回复 @xxx"
-                      hintText: _replyTarget != null
-                          ? '回复 @${_replyTarget!.username}...'
-                          : '发表评论...',
+                      hintText: '发表评论...',
                       border: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(24),
                       ),
@@ -278,148 +240,178 @@ class _JmCommentsPageV2State extends State<JmCommentsPageV2> {
   }
 }
 
-/// 回复模式提示条：显示"回复 @用户名"+ 取消按钮。
-class _ReplyBar extends StatelessWidget {
-  const _ReplyBar({required this.username, required this.onCancel});
+class _CommentCard extends StatefulWidget {
+  const _CommentCard({required this.comment});
 
-  final String username;
-  final VoidCallback onCancel;
+  final PicacgComment comment;
 
   @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    return Container(
-      color: cs.surfaceContainerHighest,
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-      child: Row(
-        children: [
-          Icon(Icons.reply, size: 16, color: cs.onSurfaceVariant),
-          const SizedBox(width: 6),
-          Expanded(
-            child: Text(
-              '回复 @$username',
-              style: Theme.of(context)
-                  .textTheme
-                  .bodySmall
-                  ?.copyWith(color: cs.onSurfaceVariant),
-              overflow: TextOverflow.ellipsis,
-            ),
-          ),
-          GestureDetector(
-            onTap: onCancel,
-            child: Icon(Icons.close, size: 18, color: cs.onSurfaceVariant),
-          ),
-        ],
-      ),
-    );
-  }
+  State<_CommentCard> createState() => _CommentCardState();
 }
 
-class _CommentCard extends StatelessWidget {
-  const _CommentCard({
-    required this.comment,
-    this.isReply = false,
-    this.onReply,
-  });
+class _CommentCardState extends State<_CommentCard> {
+  bool _liking = false;
 
-  final JmComment comment;
-  final bool isReply;
-
-  /// 回复回调，仅顶层评论传入（`isReply == false`）；回复的回复不支持嵌套回复。
-  final void Function(JmComment)? onReply;
+  Future<void> _toggleLike() async {
+    if (_liking) return;
+    final comment = widget.comment;
+    // 乐观更新
+    setState(() {
+      _liking = true;
+      comment.isLiked = !comment.isLiked;
+      comment.likes += comment.isLiked ? 1 : -1;
+    });
+    final res = await PicacgNetwork().likeOrUnlikeComment(comment.commentId);
+    if (!mounted) return;
+    setState(() {
+      _liking = false;
+      if (res.error) {
+        // 回滚
+        comment.isLiked = !comment.isLiked;
+        comment.likes += comment.isLiked ? 1 : -1;
+      }
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
+    final comment = widget.comment;
     final textTheme = Theme.of(context).textTheme;
     final colorScheme = Theme.of(context).colorScheme;
     final initial =
-        comment.username.isNotEmpty ? comment.username[0].toUpperCase() : '?';
+        comment.name.isNotEmpty ? comment.name[0].toUpperCase() : '?';
+    final date = comment.createdAt.length >= 10
+        ? comment.createdAt.substring(0, 10)
+        : comment.createdAt;
 
-    return GestureDetector(
-      // 长按顶层评论也可触发回复
-      onLongPress: onReply != null ? () => onReply!(comment) : null,
-      child: Padding(
-        padding: EdgeInsets.only(left: isReply ? 32 : 0),
-        child: Column(
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // 头像：优先显示真实头像，fallback 为字母占位
-                comment.avatar.isNotEmpty
-                    ? CircleAvatar(
-                        radius: isReply ? 13 : 16,
-                        backgroundImage: NetworkImage(
-                          comment.avatar,
-                          headers: getJmImgHeaders(),
-                        ),
-                        onBackgroundImageError: (_, __) {},
-                        child: Container(),
-                      )
-                    : CircleAvatar(
-                        radius: isReply ? 13 : 16,
-                        backgroundColor: colorScheme.primaryContainer,
-                        child: Text(
-                          initial,
-                          style: textTheme.labelMedium?.copyWith(
-                              color: colorScheme.onPrimaryContainer),
-                        ),
-                      ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+            // 头像：优先显示真实头像，fallback 为字母占位
+            CircleAvatar(
+              radius: 16,
+              backgroundColor: colorScheme.primaryContainer,
+              backgroundImage: comment.avatarUrl.isNotEmpty
+                  ? NetworkImage(comment.avatarUrl)
+                  : null,
+              child: comment.avatarUrl.isNotEmpty
+                  ? null
+                  : Text(
+                      initial,
+                      style: textTheme.labelMedium
+                          ?.copyWith(color: colorScheme.onPrimaryContainer),
+                    ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
                     children: [
-                      Row(
-                        children: [
-                          Expanded(
-                            child: Text(
-                              comment.username,
-                              style: textTheme.bodyMedium
-                                  ?.copyWith(fontWeight: FontWeight.w600),
-                            ),
-                          ),
-                          // 顶层评论右侧显示回复图标（点击触发回复）
-                          if (onReply != null)
-                            GestureDetector(
-                              onTap: () => onReply!(comment),
-                              child: Padding(
-                                padding: const EdgeInsets.only(left: 8),
-                                child: Icon(
-                                  Icons.reply,
-                                  size: 18,
-                                  color: colorScheme.onSurfaceVariant,
-                                ),
-                              ),
-                            ),
-                        ],
-                      ),
-                      if (comment.timeAgo.isNotEmpty)
-                        Text(
-                          comment.timeAgo,
-                          style: textTheme.bodySmall?.copyWith(
-                              color: colorScheme.onSurfaceVariant),
+                      Flexible(
+                        child: Text(
+                          comment.name,
+                          style: textTheme.bodyMedium
+                              ?.copyWith(fontWeight: FontWeight.w600),
+                          overflow: TextOverflow.ellipsis,
                         ),
+                      ),
+                      const SizedBox(width: 6),
+                      Text(
+                        'Lv.${comment.level}',
+                        style: textTheme.bodySmall
+                            ?.copyWith(color: colorScheme.onSurfaceVariant),
+                      ),
                     ],
                   ),
-                ),
-              ],
+                  if (date.isNotEmpty)
+                    Text(
+                      date,
+                      style: textTheme.bodySmall
+                          ?.copyWith(color: colorScheme.onSurfaceVariant),
+                    ),
+                ],
+              ),
             ),
-            const SizedBox(height: 6),
-            Text(comment.content, style: textTheme.bodyMedium),
-            // 已有回复列表（回复的回复不传 onReply，不支持无限嵌套）
-            if (comment.replies.isNotEmpty) ...[
-              const SizedBox(height: 12),
-              for (final reply in comment.replies)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 12),
-                  child: _CommentCard(comment: reply, isReply: true),
-                ),
-            ],
           ],
         ),
-      ),
+        const SizedBox(height: 6),
+        Text(comment.content, style: textTheme.bodyMedium),
+        const SizedBox(height: 6),
+        Row(
+          children: [
+            const Spacer(),
+            InkWell(
+              onTap: () {
+                Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => PicacgReplyPage(replyTo: comment),
+                  ),
+                );
+              },
+              borderRadius: BorderRadius.circular(12),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 4,
+                  vertical: 2,
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      Icons.chat_bubble_outline,
+                      size: 16,
+                      color: colorScheme.onSurfaceVariant,
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      '${comment.replyCount}',
+                      style: textTheme.bodySmall
+                          ?.copyWith(color: colorScheme.onSurfaceVariant),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(width: 16),
+            InkWell(
+              onTap: _liking ? null : _toggleLike,
+              borderRadius: BorderRadius.circular(12),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 4,
+                  vertical: 2,
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      comment.isLiked ? Icons.favorite : Icons.favorite_border,
+                      size: 16,
+                      color: comment.isLiked
+                          ? colorScheme.error
+                          : colorScheme.onSurfaceVariant,
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      '${comment.likes}',
+                      style: textTheme.bodySmall?.copyWith(
+                        color: comment.isLiked
+                            ? colorScheme.error
+                            : colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ],
     );
   }
 }

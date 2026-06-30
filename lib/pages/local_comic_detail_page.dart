@@ -17,9 +17,8 @@ import 'package:picakeep/foundation/local_library_settings.dart';
 import 'package:picakeep/foundation/remote_library_data_source.dart';
 import 'package:picakeep/foundation/trash.dart';
 import 'package:picakeep/tools/read_history_helper.dart';
-import 'package:picakeep/network/picacg_network/models.dart';
 import 'package:picakeep/pages/online_comic/jm_comic_page_v2.dart';
-import 'package:picakeep/pages/online_comic/online_comic_detail_page.dart';
+import 'package:picakeep/pages/online_comic/picacg_comic_page_v2.dart';
 import 'package:picakeep/tools/tags_translation.dart';
 import 'package:picakeep/tools/translations.dart';
 
@@ -1196,17 +1195,7 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
           comic.id.startsWith('jm') ? comic.id.substring(2) : comic.id;
       App.pushInner(() => JmComicPageV2(numericId));
     } else if (comic.type == DownloadType.picacg) {
-      final thumb = comic is DownloadedComic ? comic.thumbUrl : '';
-      App.pushInner(() => OnlineComicDetailPage(
-            comic: PicacgComicItemBrief(
-              id: comic.id,
-              title: comic.name,
-              author: comic.subTitle,
-              likes: 0,
-              path: thumb,
-              tags: comic.tags,
-            ),
-          ));
+      App.pushInner(() => PicacgComicPageV2(comic.id));
     }
   }
 

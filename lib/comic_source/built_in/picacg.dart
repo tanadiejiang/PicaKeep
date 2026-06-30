@@ -3,7 +3,7 @@ import 'package:picakeep/comic_source/favorite_data.dart';
 import 'package:picakeep/network/base_comic.dart';
 import 'package:picakeep/network/picacg_network/picacg_network.dart';
 import 'package:picakeep/network/res.dart';
-import 'package:picakeep/pages/online_comic/online_comic_detail_page.dart';
+import 'package:picakeep/pages/online_comic/picacg_comic_page_v2.dart';
 
 final PicacgNetwork picacgNetwork = PicacgNetwork();
 
@@ -86,7 +86,7 @@ final ComicSource picacg = ComicSource.named(
       return Res<List<BaseComic>>(res.data, subData: res.subData);
     },
   ),
-  comicPageBuilder: (comic) => OnlineComicDetailPage(comic: comic),
+  comicPageBuilder: (comic) => PicacgComicPageV2(comic.id),
   data: <String, dynamic>{
     'appChannel': '3',
     'imageQuality': 'original',
