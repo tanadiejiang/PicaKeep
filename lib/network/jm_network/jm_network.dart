@@ -310,6 +310,15 @@ class JmNetwork {
         return Res.error(msg);
       }
       final json = jsonDecode(bodyStr) as Map;
+      // POST 的 200 静默降级兜底：服务端可能返回 200 但 body 含 status:fail + 登录错误文案。
+      // 若命中且未重试过，触发一次自愈（对齐 GET 的游客 200 兜底逻辑）。
+      if (!isRetry &&
+          json['status'] == 'fail' &&
+          _hasStoredLogin &&
+          _looksLikeLoginError(json['msg']?.toString() ?? '')) {
+        final reRes = await reLoginFromStored();
+        if (reRes.success) return _post(url, body, isRetry: true);
+      }
       final raw = json['data'];
       if (raw == null) return const Res<dynamic>(null);
       final decrypted = convertJmData(
@@ -659,6 +668,26 @@ class JmNetwork {
     }
 
     final message = res.data is Map ? (res.data['msg']?.toString() ?? '评论成功') : '评论成功';
+    return Res(message);
+  }
+
+  /// 回复某条评论。[commentId] 为被回复评论的 ID（即 JmComment.id）。
+  /// 尝试用 CID（大写）作为参数名，对齐 API 响应中的字段名。
+  Future<Res<String>> replyComment(String aid, String content, String commentId) async {
+    final body =
+        'comment=${Uri.encodeComponent(content)}&aid=$aid&CID=$commentId&is_reply=1&forum_subject=1';
+    LogManager.addLog(LogLevel.info, 'JmNetwork',
+        'replyComment body: $body (commentId=$commentId)');
+    final res = await _post('$_baseUrl/comment', body);
+    LogManager.addLog(LogLevel.info, 'JmNetwork',
+        'replyComment response: error=${res.error}, data=${res.data}');
+    if (res.error) return Res.fromErrorRes(res);
+    if (res.data is Map && res.data['status'] == 'fail') {
+      final message = res.data['msg']?.toString() ?? '发送失败';
+      return Res.error(message);
+    }
+    final message =
+        res.data is Map ? (res.data['msg']?.toString() ?? '回复成功') : '回复成功';
     return Res(message);
   }
 

@@ -329,6 +329,68 @@ class PicacgNetwork {
     }
   }
 
+  /// 点赞或取消点赞漫画（toggle）。
+  Future<Res<bool>> likeOrUnlikeComic(String id) async {
+    final res = await post('$apiUrl/comics/$id/like', {});
+    if (res.error) return Res.fromErrorRes(res);
+    return const Res(true);
+  }
+
+  /// 获取漫画评论列表（分页）。subData 为总页数（int）。
+  Future<Res<List<PicacgComment>>> getComments(String id, int page) async {
+    final res = await get('$apiUrl/comics/$id/comments?page=$page');
+    if (res.error) return Res.fromErrorRes(res);
+    try {
+      final data = res.data['data']['comments'] as Map;
+      final totalPages = (data['pages'] as num).toInt();
+      final docs = data['docs'] as List;
+      final comments = docs.whereType<Map>().map(PicacgComment.fromApi).toList();
+      return Res(comments, subData: totalPages);
+    } catch (e, s) {
+      LogManager.addLog(LogLevel.error, 'PicacgNetwork',
+          'Failed to parse comments: $e\n$s');
+      return Res.error(e.toString());
+    }
+  }
+
+  /// 发送顶级评论（非回复）。
+  Future<Res<bool>> sendComment(String id, String content) async {
+    final res = await post('$apiUrl/comics/$id/comments', {'content': content});
+    if (res.error) return Res.fromErrorRes(res);
+    return const Res(true);
+  }
+
+  /// 发送回复（回复某条评论）。路径用评论 ID，与顶级评论不同。
+  Future<Res<bool>> sendReply(String commentId, String content) async {
+    final res = await post('$apiUrl/comments/$commentId', {'content': content});
+    if (res.error) return Res.fromErrorRes(res);
+    return const Res(true);
+  }
+
+  /// 点赞或取消点赞评论（toggle）。
+  Future<Res<bool>> likeOrUnlikeComment(String commentId) async {
+    final res = await post('$apiUrl/comments/$commentId/like', {});
+    if (res.error) return Res.fromErrorRes(res);
+    return const Res(true);
+  }
+
+  /// 获取评论回复列表（分页）。subData 为总页数。
+  Future<Res<List<PicacgComment>>> getReply(String commentId, int page) async {
+    final res = await get('$apiUrl/comments/$commentId/childrens?page=$page');
+    if (res.error) return Res.fromErrorRes(res);
+    try {
+      final data = res.data['data']['comments'] as Map;
+      final totalPages = (data['pages'] as num).toInt();
+      final docs = data['docs'] as List;
+      final comments = docs.whereType<Map>().map(PicacgComment.fromApi).toList();
+      return Res(comments, subData: totalPages);
+    } catch (e, s) {
+      LogManager.addLog(LogLevel.error, 'PicacgNetwork',
+          'Failed to parse reply: $e\n$s');
+      return Res.error(e.toString());
+    }
+  }
+
   Res<List<PicacgComicItemBrief>> _parseComicList(Object? comicsJson) {
     try {
       final docs = (comicsJson as Map)['docs'] as List;

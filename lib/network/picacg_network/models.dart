@@ -283,3 +283,56 @@ class PicacgComicItem extends PicacgComicItemBrief {
     );
   }
 }
+
+/// Picacg 评论模型。字段照搬原项目 loadMoreCommends 实现。
+class PicacgComment {
+  PicacgComment({
+    required this.commentId,
+    required this.name,
+    required this.avatarUrl,
+    required this.level,
+    required this.content,
+    required this.replyCount,
+    required this.createdAt,
+    required this.isLiked,
+    required this.likes,
+    this.slogan,
+  });
+
+  factory PicacgComment.fromApi(Map json) {
+    final user = json['_user'] as Map?;
+    String avatarUrl = '';
+    if (user != null) {
+      try {
+        final avatar = user['avatar'] as Map?;
+        if (avatar != null) {
+          avatarUrl = '${avatar['fileServer']}/static/${avatar['path']}';
+        }
+      } catch (_) {}
+    }
+    return PicacgComment(
+      commentId: json['_id']?.toString() ?? '',
+      name: user?['name']?.toString() ?? 'Unknown',
+      avatarUrl: avatarUrl,
+      level: (user?['level'] as num?)?.toInt() ?? 1,
+      content: json['content']?.toString() ?? '',
+      replyCount: (json['commentsCount'] as num?)?.toInt() ?? 0,
+      createdAt: json['created_at']?.toString() ?? '',
+      isLiked: json['isLiked'] == true,
+      likes: (json['likesCount'] as num?)?.toInt() ?? 0,
+      slogan: user?['slogan']?.toString(),
+    );
+  }
+
+  final String commentId;
+  final String name;
+  final String avatarUrl;
+  final int level;
+  final String content;
+  final int replyCount;
+  final String createdAt;
+  // Non-final: local like-toggle mutates these in UI layer.
+  bool isLiked;
+  int likes;
+  final String? slogan;
+}
