@@ -47,6 +47,7 @@ class ComicSource {
     this.searchPageData,
     this.comicPageBuilder,
     this.imageHeadersBuilder,
+    this.idMatcher,
     Map<String, dynamic>? data,
   }) : data = data ?? <String, dynamic>{};
 
@@ -97,6 +98,11 @@ class ComicSource {
 
   /// 可选:源级别封面/图片请求头钩子。默认 `null`,消费端回退裸 `NetworkImage`。
   final ImageHeadersBuilder? imageHeadersBuilder;
+
+  /// 可选:ID 直跳正则。搜索页检测到输入文本匹配时，建议列表出现「打开漫画」条目。
+  /// 匹配后搜索页将文本传给 [comicPageBuilder]（前缀剥离由源自行处理）。
+  final RegExp? idMatcher;
+
   final Map<String, dynamic> data;
 
   bool _isSaving = false;
@@ -195,11 +201,16 @@ class SearchPageData {
     required this.loadPage,
     this.searchOptions = const <SearchOption>[],
     this.defaultOption = '',
+    this.enableTagsSuggestions = false,
   });
 
   final OnlineSearchLoader loadPage;
   final List<SearchOption> searchOptions;
   final String defaultOption;
+
+  /// 是否在搜索框输入时显示标签建议列表。
+  /// eh/nh 源设为 true；picacg/jm 保持默认 false。
+  final bool enableTagsSuggestions;
 }
 
 class SearchOption {

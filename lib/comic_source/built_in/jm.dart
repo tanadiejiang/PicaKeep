@@ -75,4 +75,7 @@ final ComicSource jm = ComicSource.named(
     },
   ),
   comicPageBuilder: (comic) => JmComicPageV2(comic.id),
+
+  // ── ID 直跳（纯数字 / jm前缀）──────────────────────────────────────────────
+  idMatcher: RegExp(r'^(?:jm)?\d+$', caseSensitive: false),
 );

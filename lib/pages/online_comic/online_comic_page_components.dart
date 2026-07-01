@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shimmer_animation/shimmer_animation.dart';
+import 'package:picakeep/tools/tags_translation.dart'
+    show tagTranslateCategory, tagTranslateWithNs;
 
 /// 通用在线漫画详情页的可复用 UI 组件集合。
 ///
@@ -474,6 +476,7 @@ class OnlineComicTagsSection extends StatelessWidget {
     super.key,
     required this.tags,
     required this.onTagTap,
+    this.enableTagTranslation = false,
   });
 
   /// 分组标签：key = 分类名，value = 该类标签列表。
@@ -481,6 +484,9 @@ class OnlineComicTagsSection extends StatelessWidget {
 
   /// 标签点击/搜索回调 (tag, category)。
   final void Function(String tag, String category) onTagTap;
+
+  /// 是否启用标签中文翻译（eh/nh 开启，jm/picacg 保持 false）。
+  final bool enableTagTranslation;
 
   Future<void> _onLongPressAt(
       BuildContext context, String value, String category, Offset pos) async {
@@ -543,7 +549,9 @@ class OnlineComicTagsSection extends StatelessWidget {
               runSpacing: 4,
               children: [
                 OnlineComicInfoChip(
-                  label: e.key,
+                  label: enableTagTranslation
+                      ? tagTranslateCategory(e.key)
+                      : e.key,
                   color: palette[i % palette.length],
                   textColor: onPalette[i % onPalette.length],
                 ),
@@ -553,7 +561,9 @@ class OnlineComicTagsSection extends StatelessWidget {
                     onLongPressStart: (d) =>
                         _onLongPressAt(context, v, e.key, d.globalPosition),
                     child: OnlineComicInfoChip(
-                      label: v,
+                      label: enableTagTranslation
+                          ? tagTranslateWithNs(v, e.key)
+                          : v,
                       color: cs.primary.withValues(alpha: 0.10),
                       textColor: cs.primary,
                     ),

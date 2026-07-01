@@ -59,6 +59,9 @@ abstract class BaseOnlineComicPage<T> extends StatelessWidget {
   /// 标签点击/搜索。
   void onTagTap(BuildContext context, String tag, String category);
 
+  /// 是否启用标签中文翻译。eh/nh 源重写返回 true，jm/picacg 保持默认 false。
+  bool get enableTagTranslation => false;
+
   /// 阅读。[ep] 为 1-based 章节序号。
   void onRead(BuildContext context, T data, {int ep});
 
@@ -255,6 +258,7 @@ abstract class BaseOnlineComicPage<T> extends StatelessWidget {
                   OnlineComicTagsSection(
                     tags: tags,
                     onTagTap: (t, c) => onTagTap(context, t, c),
+                    enableTagTranslation: enableTagTranslation,
                   ),
                   const SizedBox(height: 16),
                   const Divider(),

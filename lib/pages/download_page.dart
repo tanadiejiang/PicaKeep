@@ -126,7 +126,7 @@ String _translateDownloadedTag(String tag) {
     for (final map in tagTranslations.values) {
       for (final entry in map.entries) {
         if (entry.key.toLowerCase() == tag.toLowerCase()) {
-          return entry.value.isNotEmpty ? entry.value.first : tag;
+          return entry.value.isNotEmpty ? entry.value : tag;
         }
       }
     }
