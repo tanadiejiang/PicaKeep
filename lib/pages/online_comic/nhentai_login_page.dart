@@ -1,6 +1,8 @@
 import 'dart:io' as io;
 
 import 'package:flutter/material.dart';
+import 'package:flutter_inappwebview/flutter_inappwebview.dart'
+    show CookieManager, WebUri;
 import 'package:picakeep/base.dart';
 import 'package:picakeep/comic_source/comic_source.dart';
 import 'package:picakeep/foundation/app.dart';
@@ -10,16 +12,18 @@ import 'package:picakeep/pages/online_comic/webview.dart';
 
 /// Nhentai 登录页（仅网页 Webview 抓 cookie 一条路径）。
 ///
-/// 移植自上游 `nhentai_network/login.dart` 的 `nhLogin`，但做了两点关键修正：
-/// 1. **不用网页标题判定登录**：nhentai 登录页 `/login/` 自身标题就含 "nhentai"，
-///    用标题判定会在登录页加载瞬间误命中。改为以 `sessionid` cookie 为唯一信号。
-/// 2. **webview 关闭后统一校验**：webview 期间持续把抓到的 cookie 写进 cookieJar，
-///    关闭（移动端 await 页面返回 / 桌面端 onClose）后读 cookieJar 看有没有
-///    `sessionid` —— 无论自动还是手动关，都会校验并复位 UI，不会卡在转圈。
+/// 登录流程：
+/// 1. 进入前清掉 webview CookieManager 里的残留 nhentai token（C1），
+///    防止旧 token 冒充本次登录触发秒退。
+/// 2. 打开 nhentai `/login/` webview；移动端 await 返回，桌面端 onClose 回调。
+/// 3. 移动端快捷路径（C2）：见过登录页标题 **且** 已离开登录页 **且** webview
+///    cookies 含 token → 仅调 `App.globalBack()` 关窗，**不提前置 `_done`**。
+/// 4. `_verifyAfterClose`（C3）是唯一收尾点：读 app 的 `cookieJar`，
+///    有 `access_token`/`refresh_token` → 建登录态 + pop；无则复位 UI + 提示。
 ///
-/// 已知限制：`sessionid` 是 Django httpOnly cookie，依赖 webview 平台的
-/// CookieManager 能否读出 httpOnly。若日志 `NhentaiLogin` 的 cookie keys 里始终
-/// 没有 `sessionid`，说明当前平台 webview 读不到 httpOnly cookie，需换方案。
+/// 已知限制：`access_token`/`refresh_token` 为 httpOnly cookie，
+/// webview CookieManager 能否读/删取决于平台实现。C2 快捷路径依赖读到 token，
+/// 若读不到则用户手动返回后由 C3 从 app cookieJar 校验兜底（日志追 `NhentaiLogin`）。
 class NhentaiLoginPage extends StatefulWidget {
   const NhentaiLoginPage({super.key});
 
@@ -76,16 +80,45 @@ class _NhentaiLoginPageState extends State<NhentaiLoginPage> {
     return names.contains('access_token') || names.contains('refresh_token');
   }
 
+  /// 登录前清掉 webview 全局 CookieManager 里 nhentai 的残留 token。
+  ///
+  /// 快捷关闭判定读的是 webview CookieManager（非 app 的 cookieJar）。若此前
+  /// 登录/测试过，CookieManager 会残留 access_token/refresh_token，导致一进登录页
+  /// 就被误判为「已登录」而秒退。进 webview 前先清掉，确保 token 是本次登录下发的。
+  /// 只清 webview CookieManager，不动 app 的 NhentaiNetwork().cookieJar（登录态权威源）。
+  Future<void> _clearWebviewTokens() async {
+    final base = NhentaiNetwork().baseUrl;
+    try {
+      final cm = CookieManager.instance();
+      final url = WebUri(base);
+      for (final name in const ['access_token', 'refresh_token']) {
+        await cm.deleteCookie(
+            url: url, name: name, domain: '.nhentai.net');
+        await cm.deleteCookie(url: url, name: name);
+      }
+      LogManager.addLog(
+          LogLevel.info, 'NhentaiLogin', 'cleared webview tokens before login');
+    } catch (e) {
+      // 清理失败不阻断登录流程，C2 的「离开登录页」判据可兜底。
+      LogManager.addLog(
+          LogLevel.warning, 'NhentaiLogin', 'clear webview tokens failed: $e');
+    }
+  }
+
   Future<void> _loginWithWebview() async {
     if (_logging) return;
     // cookieJar 需先就绪（saveFromResponse / loadForRequest 依赖它）。
     if (NhentaiNetwork().cookieJar == null) {
       await NhentaiNetwork().init();
     }
+    // C1：清掉 webview CookieManager 中 nhentai 的残留 token，消除「旧 token
+    // 冒充本次登录」导致的秒退。只清 webview 侧，不动 app 的 cookieJar。
+    await _clearWebviewTokens();
     setState(() {
       _logging = true;
       _error = null;
       _done = false;
+      _seenLoginPage = false;
     });
     final loginUrl = '${NhentaiNetwork().baseUrl}/login/?next=/';
 
@@ -99,9 +132,13 @@ class _NhentaiLoginPageState extends State<NhentaiLoginPage> {
               LogManager.addLog(
                   LogLevel.info, 'NhentaiLogin', 'mobile title=$title');
 
-              // 状态机：必须先出现过登录页标题，之后离开登录页才算登录完成。
-              // 防止 jar 里有旧 token 时第一次 onTitleChange 就误关。
-              if (title.contains('Login') || title.contains('Register')) {
+              // 状态机：必须先出现过登录页标题，之后**离开登录页**才算登录完成。
+              // 关键：置 _seenLoginPage 与「离开登录页」判定不能在同一次回调里成立，
+              // 否则无法区分「仍在登录页」和「已离开」。故本次回调若仍在登录页，
+              // 只记 _seenLoginPage 并 return，不做任何关闭判定。
+              final onLoginPage =
+                  title.contains('Login') || title.contains('Register');
+              if (onLoginPage) {
                 _seenLoginPage = true;
               }
 
@@ -115,12 +152,16 @@ class _NhentaiLoginPageState extends State<NhentaiLoginPage> {
                 appdata.writeImplicitData();
               }
 
-              // 快捷路径：已见过登录页 + 当前 webview cookies 里有 token → 登录成功。
-              // 用 cookies 而非 jar 判断，确保是本次 webview 下发的 token。
+              // 仍在登录页：不判定关闭，等用户完成登录、页面跳离后再说。
+              if (onLoginPage) return;
+
+              // 快捷路径：已见过登录页 + 现已离开登录页 + 本次 webview cookies
+              // 含 token → 登录成功。只关窗，收尾（置 _done / 建登录态 / pop）
+              // 统一交给 await 返回后的 _verifyAfterClose，避免抢先置 _done
+              // 把 _verifyAfterClose 的 `if (_done) return` 触发、导致按钮卡转圈。
               final hasToken = cookies.containsKey('access_token') ||
                   cookies.containsKey('refresh_token');
               if (_seenLoginPage && hasToken) {
-                _done = true;
                 App.globalBack();
               }
             },
@@ -156,8 +197,8 @@ class _NhentaiLoginPageState extends State<NhentaiLoginPage> {
     }
   }
 
-  /// webview 关闭后统一校验：读 cookieJar 看 sessionid，成功写 token + pop，
-  /// 失败复位 UI + 提示（不再卡转圈）。
+  /// webview 关闭后统一收尾（唯一收尾点）：读 app cookieJar，
+  /// 有 access_token/refresh_token → 建登录态 + pop；无则复位 UI + 提示。
   void _verifyAfterClose() {
     if (!mounted || _done) return;
     final ok = _hasSessionInJar();
