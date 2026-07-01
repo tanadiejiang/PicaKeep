@@ -142,6 +142,9 @@ class EhentaiComicPageV2 extends BaseOnlineComicPage<Gallery> {
   // category 参数由 OnlineComicTagsSection 传来，已是 namespace 键
 
   @override
+  bool get enableTagTranslation => true;
+
+  @override
   void onTagTap(BuildContext context, String tag, String category) {
     final source = ComicSource.find('ehentai');
     if (source == null) return;

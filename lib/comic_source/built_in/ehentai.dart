@@ -135,6 +135,7 @@ final ComicSource ehentai = ComicSource.named(
   // ── 搜索 ─────────────────────────────────────────────────────────────────
   searchPageData: SearchPageData(
     defaultOption: '',
+    enableTagsSuggestions: true,
     searchOptions: const [
       SearchOption(label: '全部', value: ''),
       SearchOption(label: '同人', value: 'doujinshi'),

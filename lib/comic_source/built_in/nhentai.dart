@@ -55,6 +55,7 @@ final ComicSource nhentai = ComicSource.named(
   // ── 搜索（页码翻页，subData=末页页码，框架据此判停）────────────────────────
   searchPageData: SearchPageData(
     defaultOption: '',
+    enableTagsSuggestions: true,
     searchOptions: const [
       SearchOption(label: '最新', value: ''),
       SearchOption(label: '今日热门', value: '&sort=popular-today'),
@@ -82,6 +83,10 @@ final ComicSource nhentai = ComicSource.named(
 
   // ── 详情页构造器 ───────────────────────────────────────────────────────────
   comicPageBuilder: (comic) => NhentaiComicPageV2(comic.id),
+
+  // ── ID 直跳（纯数字 / nh前缀 / nhentai前缀）────────────────────────────────
+  // 前缀剥离由详情页构造前处理（搜索页跳转时统一剥离，见 online_search_page.dart）。
+  idMatcher: RegExp(r'^(\d+|nh\d+|nhentai\d+)$', caseSensitive: false),
 
   // ── 封面鉴权（Referer 规避防盗链，解决搜索列表裂图）──────────────────────────
   imageHeadersBuilder: (comic) => const {'Referer': 'https://nhentai.net/'},

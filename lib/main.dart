@@ -25,6 +25,7 @@ import 'server/local_server_runtime.dart';
 import 'server/local_server_runtime_sync.dart';
 import 'tools/block_screenshot.dart';
 import 'tools/dynamic_theme_channel.dart';
+import 'tools/tags_translation.dart';
 import 'tools/translations.dart';
 
 Future<void> main(List<String> args) async {
@@ -169,6 +170,8 @@ Future<void> _initializeOnlineFoundation() async {
   SingleInstanceCookieJar('${App.dataPath}${Platform.pathSeparator}cookies.db');
   await ComicSource.init();
   unawaited(OnlineDownloadManager.instance.loadQueue());
+  // tags 翻译数据：非阻塞预热，搜索/详情页翻译按需使用。
+  unawaited(loadTagTranslations());
   // jm 启动预热：活域名重选 + 已登录则用存储账密重换新鲜会话 cookie。
   // 必须在 ComicSource.init() 之后（账密已读回内存）。
   JmNetwork().warmUpOnStartup();

@@ -99,6 +99,9 @@ class NhentaiComicPageV2 extends BaseOnlineComicPage<NhentaiComic> {
   // ── 标签点击：跳搜索 ─────────────────────────────────────────────────────
 
   @override
+  bool get enableTagTranslation => true;
+
+  @override
   void onTagTap(BuildContext context, String tag, String category) {
     final src = ComicSource.find('nhentai');
     if (src == null) return;
