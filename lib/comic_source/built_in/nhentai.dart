@@ -75,7 +75,7 @@ final ComicSource nhentai = ComicSource.named(
     key: 'nhentai',
     title: 'Nhentai',
     multiFolder: false,
-    loadComic: (page) async {
+    loadComic: (page, [folder]) async {
       final res = await NhentaiNetwork().getFavorites(page);
       return _toBaseRes(res);
     },

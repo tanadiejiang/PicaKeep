@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_reorderable_grid_view/widgets/reorderable_builder.dart';
 import 'package:picakeep/base.dart';
+import 'package:picakeep/comic_source/comic_source.dart';
 import 'package:picakeep/components/comic_tile.dart';
 import 'package:picakeep/components/layout.dart';
 import 'package:picakeep/foundation/app.dart';
@@ -69,6 +70,7 @@ class _MainFavoritesPageState extends State<MainFavoritesPage> {
   bool _loading = true;
   bool _foldersExpanded = true;
   String? _currentFolder;
+  ComicSource? _selectedNetworkSource;
   List<String> _folders = [];
   final Map<String, int> _folderCounts = {};
   final Map<String, List<RemoteFavoriteItem>> _remoteFolderItems = {};
@@ -314,10 +316,12 @@ class _MainFavoritesPageState extends State<MainFavoritesPage> {
     _contentVersion++;
   }
 
+  bool get _hasAnyItems =>
+      _folders.isNotEmpty ||
+      ComicSource.sources.any((s) => s.favoriteData != null);
+
   void _toggleFolders() {
-    if (_folders.isEmpty) {
-      return;
-    }
+    if (!_hasAnyItems) return;
     setState(() {
       _foldersExpanded = !_foldersExpanded;
       _FavoritesPageSession.foldersExpanded = _foldersExpanded;
@@ -330,6 +334,7 @@ class _MainFavoritesPageState extends State<MainFavoritesPage> {
     }
     setState(() {
       _currentFolder = folder;
+      _selectedNetworkSource = null;
       _foldersExpanded = false;
       _FavoritesPageSession.currentFolder = folder;
       _FavoritesPageSession.foldersExpanded = false;
@@ -543,31 +548,39 @@ class _MainFavoritesPageState extends State<MainFavoritesPage> {
 
   Widget _buildTopBar(BuildContext context) {
     final iconColor = Theme.of(context).colorScheme.primary;
+    final networkSource = _selectedNetworkSource;
+    final displayName = networkSource != null
+        ? networkSource.favoriteData!.title
+        : (_currentFolder ?? '未选择'.tl);
 
     return Material(
       elevation: 1,
       child: InkWell(
         hoverColor: Colors.transparent,
-        onTap: _folders.isEmpty ? null : _toggleFolders,
+        onTap: _hasAnyItems ? _toggleFolders : null,
         child: SizedBox(
           height: _kSecondaryTopBarHeight,
           child: Row(
             children: [
               Icon(
-                _currentFolder == null ? Icons.folder_outlined : Icons.folder,
+                networkSource != null
+                    ? Icons.cloud
+                    : (_currentFolder == null
+                        ? Icons.folder_outlined
+                        : Icons.folder),
                 color: iconColor,
               ),
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
-                  _currentFolder ?? '未选择'.tl,
+                  displayName,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(fontSize: 16),
                 ),
               ),
               const SizedBox(width: 8),
-              if (_folders.isNotEmpty)
+              if (_hasAnyItems)
                 Icon(
                   _foldersExpanded
                       ? Icons.keyboard_arrow_up
@@ -581,6 +594,10 @@ class _MainFavoritesPageState extends State<MainFavoritesPage> {
   }
 
   Widget _buildFoldersDrawer(BuildContext context, double height) {
+    final networkSources = ComicSource.sources
+        .where((s) => s.favoriteData != null)
+        .toList(growable: false);
+
     return Material(
       elevation: 1,
       child: SizedBox(
@@ -594,6 +611,53 @@ class _MainFavoritesPageState extends State<MainFavoritesPage> {
               controller: _foldersScrollController,
               slivers: [
                 const SliverToBoxAdapter(child: SizedBox(height: 8)),
+
+                // ── 网络收藏区 ──────────────────────────────────────────────
+                if (networkSources.isNotEmpty) ...[
+                  SliverToBoxAdapter(
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(20, 4, 20, 4),
+                      child: Text('网络'.tl,
+                          style: Theme.of(context).textTheme.labelMedium),
+                    ),
+                  ),
+                  SliverPadding(
+                    padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+                    sliver: SliverGrid(
+                      gridDelegate:
+                          const SliverGridDelegateWithMaxCrossAxisExtent(
+                        maxCrossAxisExtent: 320,
+                        mainAxisExtent: 48,
+                        mainAxisSpacing: 6,
+                        crossAxisSpacing: 12,
+                      ),
+                      delegate: SliverChildBuilderDelegate(
+                        (context, index) {
+                          final src = networkSources[index];
+                          final selected =
+                              _selectedNetworkSource?.key == src.key;
+                          return _NetworkSourceTile(
+                            source: src,
+                            selected: selected,
+                            onTap: () {
+                              setState(() {
+                                _selectedNetworkSource = src;
+                                _currentFolder = null;
+                                _foldersExpanded = false;
+                                _FavoritesPageSession.foldersExpanded = false;
+                              });
+                            },
+                          );
+                        },
+                        childCount: networkSources.length,
+                      ),
+                    ),
+                  ),
+                  const SliverToBoxAdapter(child: Divider(height: 1)),
+                  const SliverToBoxAdapter(child: SizedBox(height: 8)),
+                ],
+
+                // ── 本地/远程工具栏行 ───────────────────────────────────────
                 SliverToBoxAdapter(
                   child: Padding(
                     padding: const EdgeInsets.fromLTRB(20, 4, 20, 8),
@@ -610,9 +674,7 @@ class _MainFavoritesPageState extends State<MainFavoritesPage> {
                           ],
                           selected: {_view},
                           onSelectionChanged: (selection) {
-                            if (selection.isEmpty) {
-                              return;
-                            }
+                            if (selection.isEmpty) return;
                             unawaited(_setView(selection.first));
                           },
                         ),
@@ -651,17 +713,6 @@ class _MainFavoritesPageState extends State<MainFavoritesPage> {
                             onTap: _openDownloadedSearch,
                           ),
                           _ActionItem(
-                            icon: Icons.cloud_queue,
-                            label: '网络'.tl,
-                            onTap: () {
-                              Navigator.of(context).push(
-                                MaterialPageRoute(
-                                  builder: (_) => const NetworkFavoritesPage(),
-                                ),
-                              );
-                            },
-                          ),
-                          _ActionItem(
                             icon: Icons.reorder,
                             label: '排序'.tl,
                             onTap: _openReorderPage,
@@ -683,6 +734,8 @@ class _MainFavoritesPageState extends State<MainFavoritesPage> {
                   ),
                 ),
                 const SliverToBoxAdapter(child: SizedBox(height: 8)),
+
+                // ── 本地/远程文件夹格子 ─────────────────────────────────────
                 if (_loadIssue != null)
                   SliverFillRemaining(
                     hasScrollBody: false,
@@ -707,9 +760,7 @@ class _MainFavoritesPageState extends State<MainFavoritesPage> {
                 else if (_folders.isEmpty)
                   SliverFillRemaining(
                     hasScrollBody: false,
-                    child: Center(
-                      child: Text('这里什么都没有'.tl),
-                    ),
+                    child: Center(child: Text('这里什么都没有'.tl)),
                   )
                 else
                   SliverPadding(
@@ -747,6 +798,15 @@ class _MainFavoritesPageState extends State<MainFavoritesPage> {
   }
 
   Widget _buildContent() {
+    // 网络收藏视图
+    final networkSource = _selectedNetworkSource;
+    if (networkSource != null) {
+      return NetworkFavoriteWidget(
+        key: ValueKey('network:${networkSource.key}'),
+        source: networkSource,
+      );
+    }
+
     if (_currentFolder == null) {
       return Center(
         child: Text(
@@ -973,6 +1033,50 @@ class _RemoteFavoriteTile extends StatelessWidget {
 }
 
 enum _FolderMenuAction { rename, delete }
+
+class _NetworkSourceTile extends StatelessWidget {
+  const _NetworkSourceTile({
+    required this.source,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final ComicSource source;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return InkWell(
+      borderRadius: BorderRadius.circular(10),
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 160),
+        padding: const EdgeInsets.symmetric(horizontal: 12),
+        decoration: BoxDecoration(
+          color: selected ? cs.surfaceContainerHigh : Colors.transparent,
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: Row(
+          children: [
+            Icon(Icons.cloud_outlined, size: 24, color: cs.primary),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                source.favoriteData!.title,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontSize: 15),
+              ),
+            ),
+            Icon(Icons.chevron_right, size: 20, color: cs.outline),
+          ],
+        ),
+      ),
+    );
+  }
+}
 
 class _ActionItem extends StatelessWidget {
   const _ActionItem({

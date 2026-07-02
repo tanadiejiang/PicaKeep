@@ -135,6 +135,14 @@ abstract class BaseOnlineComicPage<T> extends StatelessWidget {
   /// 在标签区之后、章节区之前插入的自定义区块（可选）。
   Widget? buildCustomSection(BuildContext context, T data) => null;
 
+  /// 替换默认 [OnlineComicTagsSection] 的自定义标签区（可选）。
+  ///
+  /// 返回非 null 时，完全替代默认渲染；返回 null 则走默认逻辑。
+  /// nhentai 用此钩子实现「ID 行置顶 + 页数/时间合并行」，其它源不重写。
+  Widget? buildTagsSectionOverride(
+          BuildContext context, T data, Map<String, List<String>> tags) =>
+      null;
+
   // ==========================================================
   // 内部辅助
   // ==========================================================
@@ -255,11 +263,12 @@ abstract class BaseOnlineComicPage<T> extends StatelessWidget {
                   const SizedBox(height: 12),
                   Text('信息', style: Theme.of(context).textTheme.titleSmall),
                   const SizedBox(height: 8),
-                  OnlineComicTagsSection(
-                    tags: tags,
-                    onTagTap: (t, c) => onTagTap(context, t, c),
-                    enableTagTranslation: enableTagTranslation,
-                  ),
+                  buildTagsSectionOverride(context, data, tags) ??
+                      OnlineComicTagsSection(
+                        tags: tags,
+                        onTagTap: (t, c) => onTagTap(context, t, c),
+                        enableTagTranslation: enableTagTranslation,
+                      ),
                   const SizedBox(height: 16),
                   const Divider(),
                 ],
