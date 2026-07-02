@@ -8,8 +8,10 @@ import 'package:picakeep/foundation/app.dart';
 import 'package:picakeep/foundation/app_page_route.dart';
 import 'package:picakeep/foundation/history.dart';
 import 'package:picakeep/foundation/local_favorites.dart';
+import 'package:picakeep/foundation/online_download_manager.dart';
 import 'package:picakeep/network/eh_network/eh_main_network.dart';
 import 'package:picakeep/network/eh_network/eh_models.dart';
+import 'package:picakeep/network/eh_network/get_gallery_id.dart';
 import 'package:picakeep/network/res.dart';
 import 'package:picakeep/pages/online_comic/base_online_comic_page.dart';
 import 'package:picakeep/pages/online_comic/eh_comments_page.dart';
@@ -273,13 +275,132 @@ class EhentaiComicPageV2 extends BaseOnlineComicPage<Gallery> {
   @override
   void Function(BuildContext context, Gallery data)? get onLike => null; // 星级评分在自定义区块，不占点赞槽
 
-  // ── 下载入口（07 未完成，占位）──────────────────────────────────────────
+  // ── 下载入口 ────────────────────────────────────────────────────────────
 
   @override
   Future<void> onDownload(BuildContext context, Gallery data) async {
-    // TODO(07): 接 ehentai 在线下载器（普通下载 / 归档 Original / 归档 Resample）
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('下载功能正在接入（07 计划），敬请期待')),
+    final hasArchive =
+        data.auth != null && (data.auth!['archiveDownload'] ?? '').isNotEmpty;
+
+    var current = 0;
+    var loading = hasArchive;
+    ArchiveDownloadInfo? info;
+
+    Future<void> startDownload(int type) async {
+      final taskId = getGalleryId(data.link);
+      if (OnlineDownloadManager.instance.isDownloading(taskId)) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('已在下载中')));
+        return;
+      }
+      await OnlineDownloadManager.instance.enqueueEhentai(data, type);
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('已加入下载队列')));
+    }
+
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setS) {
+          // 归档信息懒加载
+          if (hasArchive && loading && info == null) {
+            EhNetwork()
+                .getArchiveDownloadInfo(data.auth!['archiveDownload']!)
+                .then((res) {
+              if (!ctx.mounted) return;
+              setS(() {
+                loading = false;
+                if (!res.error) info = res.data;
+              });
+            });
+          }
+
+          Future<void> cancelUnlockAndReload() async {
+            if (info?.cancelUnlockUrl == null) return;
+            setS(() => loading = true);
+            final res = await EhNetwork().cancelAndReloadArchiveInfo(info!);
+            if (!ctx.mounted) return;
+            setS(() {
+              loading = false;
+              if (!res.error) info = res.data;
+            });
+          }
+
+          return AlertDialog(
+            title: const Text('下载选项'),
+            contentPadding: const EdgeInsets.symmetric(vertical: 8),
+            content: SizedBox(
+              width: double.maxFinite,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  RadioListTile<int>(
+                    value: 0,
+                    groupValue: current,
+                    title: const Text('普通下载'),
+                    subtitle: const Text('逐页下载，支持断点续传'),
+                    onChanged: (v) => setS(() => current = v!),
+                  ),
+                  if (hasArchive)
+                    ExpansionTile(
+                      title: const Text('归档下载'),
+                      children: [
+                        if (loading)
+                          const Padding(
+                            padding: EdgeInsets.all(16),
+                            child: CircularProgressIndicator(),
+                          )
+                        else if (info == null)
+                          const ListTile(
+                            title: Text('归档信息加载失败'),
+                            subtitle: Text('请重试'),
+                          )
+                        else ...[
+                          RadioListTile<int>(
+                            value: 1,
+                            groupValue: current,
+                            title: const Text('Original'),
+                            subtitle: Text(
+                                '${info!.originCost}  ${info!.originSize}'),
+                            onChanged: (v) => setS(() => current = v!),
+                          ),
+                          RadioListTile<int>(
+                            value: 2,
+                            groupValue: current,
+                            title: const Text('Resample'),
+                            subtitle: Text(
+                                '${info!.resampleCost}  ${info!.resampleSize}'),
+                            onChanged: (v) => setS(() => current = v!),
+                          ),
+                          if (info!.cancelUnlockUrl != null)
+                            ListTile(
+                              title: const Text('取消解锁'),
+                              subtitle: const Text('长按执行此操作'),
+                              onLongPress: cancelUnlockAndReload,
+                            ),
+                        ],
+                      ],
+                    ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('取消'),
+              ),
+              FilledButton(
+                onPressed: () {
+                  Navigator.pop(ctx);
+                  startDownload(current);
+                },
+                child: const Text('确认'),
+              ),
+            ],
+          );
+        },
+      ),
     );
   }
 

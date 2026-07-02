@@ -4,6 +4,8 @@ import 'dart:io';
 import 'dart:math' as math;
 import 'dart:typed_data';
 
+import 'package:archive/archive_io.dart';
+
 import 'package:dio/dio.dart';
 import 'package:flutter/widgets.dart';
 import 'package:path_provider/path_provider.dart';
@@ -121,6 +123,9 @@ class OnlineDownloadTask {
   bool cancelled = false;
   bool paused = false;
   String? error;
+
+  // ehentai 专用：0=逐页，1=归档Original，2=归档Resample
+  int downloadType = 0;
 
   void addToken(CancelToken token) => _cancelTokens.add(token);
   void removeToken(CancelToken token) => _cancelTokens.remove(token);
@@ -388,12 +393,13 @@ class OnlineDownloadManager {
   /// 入队一个 ehentai 画廊（单画廊多图、无章节）。供 06 详情页下载按钮调用。
   ///
   /// 去重：同 [getGalleryId] 标识不重复入队。totalEps 恒为 1（无章节）。
-  Future<Res<bool>> enqueueEhentai(Gallery gallery) async {
+  Future<Res<bool>> enqueueEhentai(Gallery gallery, [int type = 0]) async {
     final key = getGalleryId(gallery.link);
     if (_tasks.containsKey(key)) return const Res(true);
     final task = OnlineDownloadTask.ehentai(gallery: gallery)
       ..totalEps = 1
-      ..totalPages = int.tryParse(gallery.maxPage) ?? 0;
+      ..totalPages = int.tryParse(gallery.maxPage) ?? 0
+      ..downloadType = type;
     _tasks[task.id] = task;
     _notify();
     unawaited(_saveQueue());
@@ -704,93 +710,209 @@ class OnlineDownloadManager {
           Directory('$downloadRoot${Platform.pathSeparator}$safeDirectory');
       await root.create(recursive: true);
 
-      final headers = {
-        'Cookie': EhNetwork().cookiesStr,
-        'User-Agent': EhNetwork.ehUA,
-        'Referer': EhNetwork().ehBaseUrl,
-      };
+      if (task.downloadType == 0) {
+        // ── 逐页模式 ────────────────────────────────────────────────────────
+        final headers = {
+          'Cookie': EhNetwork().cookiesStr,
+          'User-Agent': EhNetwork.ehUA,
+          'Referer': EhNetwork().ehBaseUrl,
+        };
 
-      // 封面：s.exhentai.org → ehgt.org（公共契约），带鉴权三件套。
-      if (gallery.coverPath.isNotEmpty) {
-        final coverUrl =
-            gallery.coverPath.replaceFirst('s.exhentai.org', 'ehgt.org');
-        try {
-          await _downloadFile(
-            task,
-            coverUrl,
-            File('${root.path}${Platform.pathSeparator}cover.jpg'),
-            headers: headers,
-          );
-        } catch (e) {
-          // 封面失败不阻断正文下载。
-          LogManager.addLog(
-              LogLevel.warning, 'OnlineDownload', 'eh cover failed: $e');
+        if (gallery.coverPath.isNotEmpty) {
+          final coverUrl =
+              gallery.coverPath.replaceFirst('s.exhentai.org', 'ehgt.org');
+          try {
+            await _downloadFile(
+              task,
+              coverUrl,
+              File('${root.path}${Platform.pathSeparator}cover.jpg'),
+              headers: headers,
+            );
+          } catch (e) {
+            LogManager.addLog(
+                LogLevel.warning, 'OnlineDownload', 'eh cover failed: $e');
+          }
         }
-      }
 
-      final totalPages = int.tryParse(gallery.maxPage) ?? 0;
-      if (totalPages <= 0) {
-        throw Exception('Invalid gallery page count: ${gallery.maxPage}');
-      }
-      task.currentEp = 1;
-      task.currentEpName = gallery.title;
-      task.currentPage = 0;
-      task.totalPages = totalPages;
-      _notify();
+        final totalPages = int.tryParse(gallery.maxPage) ?? 0;
+        if (totalPages <= 0) {
+          throw Exception('Invalid gallery page count: ${gallery.maxPage}');
+        }
+        task.currentEp = 1;
+        task.currentEpName = gallery.title;
+        task.currentPage = 0;
+        task.totalPages = totalPages;
+        _notify();
 
-      var completedPages = 0;
-      final errors = <String>[];
-      // 串行逐页：getEhImageUrl 内部 showKey 为画廊级加锁串行，且 ehgt 限 3 并发
-      // 由其内部闸控制；这里按页顺序解密+下载，避免并发绕过状态机锁。
-      for (var pageIndex = 0; pageIndex < totalPages; pageIndex++) {
+        var completedPages = 0;
+        final errors = <String>[];
+        for (var pageIndex = 0; pageIndex < totalPages; pageIndex++) {
+          _throwIfCancelled(task);
+          final page = pageIndex + 1;
+          try {
+            final (imageUrl, _) =
+                await EhNetwork().getEhImageUrl(gallery, page);
+            final file = File(
+              '${root.path}${Platform.pathSeparator}$page${_imageExtension(imageUrl)}',
+            );
+            await _downloadFile(task, imageUrl, file, headers: headers);
+            completedPages++;
+            task.currentPage = completedPages;
+            _notify();
+          } on _OnlineDownloadCancelled {
+            rethrow;
+          } catch (e) {
+            errors.add('page $page: $e');
+            LogManager.addLog(
+                LogLevel.warning, 'OnlineDownload', 'eh page $page failed: $e');
+          }
+          if (pageIndex % 5 == 0) {
+            unawaited(_saveQueue());
+          }
+        }
         _throwIfCancelled(task);
-        final page = pageIndex + 1; // getEhImageUrl 为 1-based
-        try {
-          final (imageUrl, _) = await EhNetwork().getEhImageUrl(gallery, page);
-          final file = File(
-            '${root.path}${Platform.pathSeparator}$page${_imageExtension(imageUrl)}',
-          );
-          await _downloadFile(task, imageUrl, file, headers: headers);
-          completedPages++;
-          task.currentPage = completedPages;
-          _notify();
-        } on _OnlineDownloadCancelled {
-          rethrow;
-        } catch (e) {
-          errors.add('page $page: $e');
-          LogManager.addLog(
-              LogLevel.warning, 'OnlineDownload', 'eh page $page failed: $e');
+        if (completedPages == 0) {
+          throw Exception(errors.isNotEmpty ? errors.first : 'No page downloaded');
         }
-        if (pageIndex % 5 == 0) {
-          unawaited(_saveQueue());
-        }
-      }
-      _throwIfCancelled(task);
-      if (completedPages == 0) {
-        throw Exception(errors.isNotEmpty
-            ? errors.first
-            : 'No page downloaded');
-      }
 
-      final item = DownloadedGallery(
-        galleryTitle: gallery.title,
-        subtitle: gallery.subTitle ?? '',
-        uploader: gallery.uploader,
-        link: gallery.link,
-        coverPath: gallery.coverPath,
-        size: _directoryMb(root),
-        tagList: gallery.toBrief().tags,
-        pageCount: completedPages,
-      )
-        ..directory = safeDirectory
-        ..time = DateTime.now();
-      await _upsertDownloadRecord(
-        rootPath: downloadRoot,
-        item: item,
-        directory: safeDirectory,
-      );
-      task.completed = true;
-      App.notifyLocalDataChanged();
+        final item = DownloadedGallery(
+          galleryTitle: gallery.title,
+          subtitle: gallery.subTitle ?? '',
+          uploader: gallery.uploader,
+          link: gallery.link,
+          coverPath: gallery.coverPath,
+          size: _directoryMb(root),
+          tagList: gallery.toBrief().tags,
+          pageCount: completedPages,
+        )
+          ..directory = safeDirectory
+          ..time = DateTime.now();
+        await _upsertDownloadRecord(
+          rootPath: downloadRoot,
+          item: item,
+          directory: safeDirectory,
+        );
+        task.completed = true;
+        App.notifyLocalDataChanged();
+      } else {
+        // ── 归档模式（type 1=Original / 2=Resample）───────────────────────
+        final archiveUrl = gallery.auth?['archiveDownload'];
+        if (archiveUrl == null || archiveUrl.isEmpty) {
+          throw Exception('归档下载 URL 缺失（画廊 auth["archiveDownload"] 为 null）');
+        }
+
+        task.currentEp = 1;
+        task.currentEpName = gallery.title;
+        task.currentPage = 0;
+        task.totalPages = 100; // 用百分比模拟；实际字节进度下方更新
+        _notify();
+
+        // 1. 取 zip 真实链接（会实际扣积分，务必在用户确认后才走到此处）
+        final linkRes =
+            await EhNetwork().getArchiveDownloadLink(archiveUrl, task.downloadType);
+        if (linkRes.error) {
+          throw Exception('获取归档链接失败：${linkRes.errorMessageWithoutNull}');
+        }
+        final zipUrl = linkRes.data;
+
+        // 2. 流式下载 zip 到 temp.zip，用字节进度模拟页进度
+        final tempZip = File('${root.path}${Platform.pathSeparator}temp.zip');
+        final dio = logDio();
+        final cancelToken = CancelToken();
+        task.addToken(cancelToken);
+        try {
+          int received = 0;
+          int? total;
+          await dio.download(
+            zipUrl,
+            tempZip.path,
+            cancelToken: cancelToken,
+            options: Options(headers: {
+              'Cookie': EhNetwork().cookiesStr,
+              'User-Agent': EhNetwork.ehUA,
+              'Referer': EhNetwork().ehBaseUrl,
+            }),
+            onReceiveProgress: (rcv, ttl) {
+              received = rcv;
+              total = ttl > 0 ? ttl : null;
+              task.onData(rcv - received);
+              if (total != null) {
+                task.currentPage = ((received / total!) * 90).round();
+                _notify();
+              }
+            },
+          );
+        } finally {
+          task.removeToken(cancelToken);
+        }
+        _throwIfCancelled(task);
+
+        // 3. 解压 zip
+        task.currentPage = 91;
+        _notify();
+        final bytes = await tempZip.readAsBytes();
+        final archive = ZipDecoder().decodeBytes(bytes);
+        final imageFiles = archive.files
+            .where((f) => f.isFile && f.name != 'cover.jpg' &&
+                RegExp(r'\.(jpe?g|png|webp|gif)$', caseSensitive: false)
+                    .hasMatch(f.name))
+            .toList()
+          ..sort((a, b) => a.name.compareTo(b.name));
+
+        // 封面（若归档包含 cover.jpg 则保留，否则单独不处理）
+        final coverEntry = archive.files.firstWhere(
+          (f) => f.isFile && f.name == 'cover.jpg',
+          orElse: () => ArchiveFile.noCompress('__none__', 0, Uint8List(0)),
+        );
+        if (coverEntry.name != '__none__') {
+          await File('${root.path}${Platform.pathSeparator}cover.jpg')
+              .writeAsBytes(coverEntry.content as List<int>);
+        }
+
+        // 4. 按序重命名写盘：0.ext / 1.ext ...
+        for (var i = 0; i < imageFiles.length; i++) {
+          _throwIfCancelled(task);
+          final entry = imageFiles[i];
+          final ext = entry.name.contains('.')
+              ? '.${entry.name.split('.').last.toLowerCase()}'
+              : '.jpg';
+          final dest = File(
+              '${root.path}${Platform.pathSeparator}${i + 1}$ext');
+          await dest.writeAsBytes(entry.content as List<int>);
+          task.currentPage = 91 + ((i / imageFiles.length) * 8).round();
+          _notify();
+        }
+        task.currentPage = 99;
+        _notify();
+
+        // 5. 删 temp.zip
+        if (await tempZip.exists()) await tempZip.delete();
+
+        if (imageFiles.isEmpty) {
+          throw Exception('归档解压后无图片文件');
+        }
+
+        final item = DownloadedGallery(
+          galleryTitle: gallery.title,
+          subtitle: gallery.subTitle ?? '',
+          uploader: gallery.uploader,
+          link: gallery.link,
+          coverPath: gallery.coverPath,
+          size: _directoryMb(root),
+          tagList: gallery.toBrief().tags,
+          pageCount: imageFiles.length,
+        )
+          ..directory = safeDirectory
+          ..time = DateTime.now();
+        await _upsertDownloadRecord(
+          rootPath: downloadRoot,
+          item: item,
+          directory: safeDirectory,
+        );
+        task.currentPage = 100;
+        task.completed = true;
+        App.notifyLocalDataChanged();
+      }
     } on _OnlineDownloadCancelled catch (_) {
       if (!task.paused) task.cancelled = true;
     } catch (error, stackTrace) {
@@ -1171,6 +1293,7 @@ class OnlineDownloadManager {
                 'galleryJson': t._gallery!.toJson(),
                 'currentPage': t.currentPage,
                 'paused': t.paused,
+                'downloadType': t.downloadType,
               };
             } else if (t.sourceKey == 'nhentai') {
               return {
@@ -1237,6 +1360,7 @@ class OnlineDownloadManager {
               ..totalEps = 1
               ..totalPages = int.tryParse(gallery.maxPage) ?? 0
               ..currentPage = (item['currentPage'] as int?) ?? 0
+              ..downloadType = (item['downloadType'] as int?) ?? 0
               ..paused = true;
             _tasks[task.id] = task;
           } else if (sourceKey == 'nhentai') {

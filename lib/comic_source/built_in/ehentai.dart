@@ -181,18 +181,50 @@ final ComicSource ehentai = ComicSource.named(
   favoriteData: FavoriteData(
     key: 'ehentai',
     title: 'E-Hentai',
-    multiFolder: false, // 简化：单文件夹模式，加载全部收藏页
-    loadComic: (page) async {
-      // page==1 时重建 loader（确保新进入收藏页时从头加载）
+    multiFolder: true,
+    loadComic: (page, [folderId]) async {
       if (page == 1 || _favLoader == null) {
         _favLoader = _EhGalleryLoader(
-          firstPageLoader: () => EhNetwork().getGalleries(
-            '${EhNetwork().ehBaseUrl}/favorites.php',
-            favoritePage: true,
-          ),
+          firstPageLoader: () {
+            final catParam = (folderId == null || folderId == '-1')
+                ? ''
+                : '?favcat=$folderId';
+            return EhNetwork().getGalleries(
+              '${EhNetwork().ehBaseUrl}/favorites.php$catParam',
+              favoritePage: true,
+            );
+          },
         );
       }
       return _favLoader!(page);
+    },
+    loadFolders: () async {
+      final res = await EhNetwork().getGalleries(
+        '${EhNetwork().ehBaseUrl}/favorites.php',
+        favoritePage: true,
+      );
+      if (res.error) return Res.fromErrorRes(res);
+      final names = EhNetwork().folderNames;
+      final map = <String, String>{'-1': '全部'};
+      for (int i = 0; i < names.length; i++) {
+        map[i.toString()] = names[i];
+      }
+      return Res(map);
+    },
+    addOrDelFavorite: (comic, isAdding) async {
+      if (isAdding) {
+        final link = comic.id;
+        final m = RegExp(r'/g/(\d+)/([0-9a-f]+)').firstMatch(link);
+        if (m == null) return const Res.error('无法解析 gid/token');
+        final ok = await EhNetwork().favorite(m.group(1)!, m.group(2)!);
+        return ok ? const Res(true) : const Res.error('收藏失败');
+      } else {
+        final link = comic.id;
+        final m = RegExp(r'/g/(\d+)/').firstMatch(link);
+        if (m == null) return const Res.error('无法解析 gid');
+        final ok = await EhNetwork().unfavorite2(m.group(1)!);
+        return ok ? const Res(true) : const Res.error('取消收藏失败');
+      }
     },
   ),
 

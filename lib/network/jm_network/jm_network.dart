@@ -544,6 +544,38 @@ class JmNetwork {
     }
   }
 
+  Future<Res<List<JmComicBrief>>> getFolderComicsPage(
+      String folderId, int page) async {
+    final res = await _get(
+        '$_baseUrl/favorite?page=$page&folder_id=$folderId&o=mr');
+    if (res.error) return Res.fromErrorRes(res);
+    try {
+      final comics = <JmComicBrief>[];
+      for (final c in (res.data['list'] as List? ?? [])) {
+        try {
+          final id = c['id'].toString();
+          comics.add(JmComicBrief(
+            id: id,
+            title: c['name']?.toString() ?? '',
+            author: _joinList(c['author']),
+            tags: _parseStringList(c['tags']),
+            coverUrl: getJmCoverUrl(id),
+          ));
+        } catch (_) {
+          continue;
+        }
+      }
+      final total = _parseInt(res.data['total']);
+      final perPage = comics.isEmpty ? 1 : comics.length;
+      return Res(comics,
+          subData: total == 0 ? 1 : (total / perPage).ceil());
+    } catch (e, s) {
+      LogManager.addLog(
+          LogLevel.error, 'JmNetwork', 'getFolderComicsPage: $e\n$s');
+      return Res.error(e.toString());
+    }
+  }
+
   /// 获取收藏夹列表（随收藏列表一起返回的 folder_list）
   Future<Res<List<JmFolder>>> getFolders() async {
     final res = await _get('$_baseUrl/favorite?page=1&folder_id=0&o=mr');

@@ -10,6 +10,7 @@ import 'package:picakeep/pages/online_comic/base_online_comic_page.dart';
 import 'package:picakeep/pages/online_comic/nhentai_comments_page.dart';
 import 'package:picakeep/pages/online_comic/online_comic_page_components.dart';
 import 'package:picakeep/pages/online_search/online_search_result_page.dart';
+import 'package:picakeep/tools/tags_translation.dart';
 import 'package:picakeep/pages/reader/comic_reading_page.dart';
 
 /// Nhentai 画廊详情页 V2。
@@ -120,6 +121,94 @@ class NhentaiComicPageV2 extends BaseOnlineComicPage<NhentaiComic> {
     );
   }
 
+  // ── 自定义标签区（ID 置顶 + 页数/时间合并行）─────────────────────────────
+
+  @override
+  Widget? buildTagsSectionOverride(
+      BuildContext context, NhentaiComic data, Map<String, List<String>> tags) {
+    final cs = Theme.of(context).colorScheme;
+    final palette = <Color>[
+      cs.primaryContainer, cs.tertiaryContainer, cs.secondaryContainer,
+      cs.errorContainer, cs.primaryContainer,
+    ];
+    final onPalette = <Color>[
+      cs.onPrimaryContainer, cs.onTertiaryContainer, cs.onSecondaryContainer,
+      cs.onErrorContainer, cs.onPrimaryContainer,
+    ];
+
+    Widget catChip(String label, int i) => OnlineComicInfoChip(
+          label: label,
+          color: palette[i % palette.length],
+          textColor: onPalette[i % onPalette.length],
+        );
+    Widget valChip(String v) => OnlineComicInfoChip(
+          label: v,
+          color: cs.primary.withValues(alpha: 0.10),
+          textColor: cs.primary,
+        );
+    Widget tagRow(Widget wrap) =>
+        Padding(padding: const EdgeInsets.only(bottom: 4), child: wrap);
+
+    // 找时间 key（getComicInfo 里写的是 "时间".tl，中文环境 = "时间"）
+    String? timeKey;
+    for (final k in tags.keys) {
+      if (k == '时间' || k == 'Time') {
+        timeKey = k;
+        break;
+      }
+    }
+
+    final rows = <Widget>[];
+    int idx = 0;
+
+    // ID 行（置顶）
+    rows.add(tagRow(Wrap(spacing: 6, runSpacing: 4, children: [
+      catChip('ID', idx),
+      GestureDetector(
+        onTap: () => onTagTap(context, data.id, 'ID'),
+        child: valChip(data.id),
+      ),
+    ])));
+    idx++;
+
+    // 普通标签（排除 Pages、时间，其余按顺序正常渲染）
+    for (final e in tags.entries) {
+      if (e.key == 'Pages' || e.key == timeKey) continue;
+      if (e.value.isEmpty) continue;
+      rows.add(tagRow(Wrap(spacing: 6, runSpacing: 4, children: [
+        catChip(tagTranslateCategory(e.key), idx),
+        for (final v in e.value)
+          GestureDetector(
+            onTap: () => onTagTap(context, v, e.key),
+            child: valChip(tagTranslateWithNs(v, e.key)),
+          ),
+      ])));
+      idx++;
+    }
+
+    // 页数 + 时间 合并行（两对 category+value 同一 Wrap）
+    final pagesVal = tags['Pages']?.firstOrNull ?? '';
+    final timeVal = timeKey != null ? (tags[timeKey]?.firstOrNull ?? '') : '';
+    if (pagesVal.isNotEmpty || timeVal.isNotEmpty) {
+      rows.add(tagRow(Wrap(spacing: 6, runSpacing: 4, children: [
+        if (pagesVal.isNotEmpty) ...[
+          catChip('页数', idx),
+          valChip(pagesVal),
+        ],
+        if (timeVal.isNotEmpty) ...[
+          catChip(timeKey ?? '时间', idx + 1),
+          valChip(timeVal),
+        ],
+      ])));
+    }
+
+    if (rows.isEmpty) return null;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: rows,
+    );
+  }
+
   // ── 推荐项点击：跳该画廊详情 ─────────────────────────────────────────────
 
   @override
@@ -168,12 +257,6 @@ class NhentaiComicPageV2 extends BaseOnlineComicPage<NhentaiComic> {
         loggedIn: ComicSource.find('nhentai')?.isLoggedIn ?? false,
         onPlatformToggle: () async {
           Navigator.of(ctx).pop();
-          if (data.token.isEmpty) {
-            if (!context.mounted) return;
-            ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('缺少 CSRF token，请下拉刷新后重试')));
-            return;
-          }
           final wantFav = !data.favorite;
           final res = wantFav
               ? await NhentaiNetwork().favoriteComic(data.id, data.token)

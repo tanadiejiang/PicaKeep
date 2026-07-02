@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io' show Cookie;
 import 'package:dio/dio.dart';
 import 'package:html/dom.dart';
 import 'package:picakeep/foundation/log.dart';
@@ -52,6 +53,9 @@ class NhentaiNetwork {
 
   String baseUrl = "https://nhentai.net";
 
+  /// 从 /api/v2/cdn 动态获取的缩略图 CDN 服务器前缀，避免硬编码子域名。
+  String? _cdnServer;
+
   late Dio dio;
 
   Future<void> init() async {
@@ -70,7 +74,7 @@ class NhentaiNetwork {
         "Accept-Language": "zh-CN,zh-TW;q=0.9,zh;q=0.8,en-US;q=0.7,en;q=0.6",
         "Referer": "$baseUrl/",
       },
-      validateStatus: (i) => i == 200 || i == 302,
+      validateStatus: (i) => i == 200 || i == 301 || i == 302 || i == 308,
     ));
     dio.interceptors.add(CookieManagerSql(cookieJar!));
     dio.interceptors.add(CloudflareInterceptor());
@@ -84,18 +88,121 @@ class NhentaiNetwork {
     cookieJar!.delete(uri, "refresh_token");
   }
 
-  Future<Res<String>> get(String url) async {
+  /// 从 cookieJar 读取 CSRF token。
+  ///
+  /// Django 以 `csrftoken` cookie（非 httpOnly）下发 CSRF token，在
+  /// `getComicInfo` 的 script 解析失败时作为 fallback，确保收藏操作有 token。
+  String getCsrfToken() {
+    if (cookieJar == null) return '';
+    final cookies = cookieJar!.loadForRequest(Uri.parse(baseUrl));
+    try {
+      return cookies.firstWhere((c) => c.name == 'csrftoken').value;
+    } catch (_) {
+      return '';
+    }
+  }
+
+  /// 用 refresh_token 刷新 access_token（JWT 过期时调用）。
+  /// 返回新 access_token，失败返回空字符串。
+  Future<String> _refreshAccessToken() async {
+    if (cookieJar == null) return '';
+    final cookies = cookieJar!.loadForRequest(Uri.parse(baseUrl));
+    String refreshToken = '';
+    try {
+      refreshToken = cookies.firstWhere((c) => c.name == 'refresh_token').value;
+    } catch (_) {
+      return '';
+    }
+    if (refreshToken.isEmpty) return '';
+
+    try {
+      final res = await post('$baseUrl/api/v2/auth/refresh', {
+        'refresh_token': refreshToken,
+      });
+      if (res.error) return '';
+      final json = const JsonDecoder().convert(res.data);
+      final newAccessToken = json['access_token'] as String?;
+      if (newAccessToken == null || newAccessToken.isEmpty) return '';
+
+      // 更新 cookieJar 里的 access_token cookie
+      final uri = Uri.parse(baseUrl);
+      final newCookie = Cookie('access_token', newAccessToken)
+        ..domain = uri.host
+        ..path = '/'
+        ..httpOnly = true;
+      cookieJar!.saveFromResponse(uri, [newCookie]);
+
+      // 若响应包含新 refresh_token，也更新
+      final newRefreshToken = json['refresh_token'] as String?;
+      if (newRefreshToken != null && newRefreshToken.isNotEmpty) {
+        final refreshCookie = Cookie('refresh_token', newRefreshToken)
+          ..domain = uri.host
+          ..path = '/'
+          ..httpOnly = true;
+        cookieJar!.saveFromResponse(uri, [refreshCookie]);
+      }
+
+      return newAccessToken;
+    } catch (e) {
+      LogManager.addLog(LogLevel.error, 'TokenRefresh', 'Failed: $e');
+      return '';
+    }
+  }
+
+  /// 从 /api/v2/cdn 动态取 CDN 服务器前缀，结果缓存在 [_cdnServer]。
+  /// API 文档明确禁止硬编码子域名，CDN 服务器列表可能变动。
+  Future<void> _fetchCdnServer() async {
+    if (_cdnServer != null) return;
+    try {
+      // CDN 端点是公开的，不需要认证
+      final res = await get('$baseUrl/api/v2/cdn');
+      if (!res.error) {
+        final data = const JsonDecoder().convert(res.data);
+        // 实际响应字段名是 thumb_servers（用于缩略图），不是 servers
+        final servers = (data['thumb_servers'] as List?) ?? (data['servers'] as List?);
+        if (servers != null && servers.isNotEmpty) {
+          _cdnServer = (servers.first as String).replaceAll(RegExp(r'/$'), '');
+        }
+      }
+    } catch (_) {}
+    // 若请求失败，回退到已知的 CDN 地址（历史观测值，作为兜底）
+    _cdnServer ??= 'https://t.nhentai.net';
+  }
+
+  /// 从 cookieJar 读取 access_token 值。
+  String _getAccessToken() {
+    final jar = cookieJar;
+    if (jar == null) return '';
+    final cookies = jar.loadForRequest(Uri.parse(baseUrl));
+    try {
+      return cookies.firstWhere((c) => c.name == 'access_token').value;
+    } catch (_) {
+      return '';
+    }
+  }
+
+  Future<Res<String>> get(String url, [Map<String, String>? extraHeaders]) async {
     if (cookieJar == null) {
       await init();
     }
     try {
-      var res =
-          await dio.get<String>(url, options: Options(followRedirects: false));
-      if (res.statusCode == 302) {
-        var path = res.headers["Location"]?.first ??
+      var res = await dio.get<String>(
+        url,
+        options: Options(
+          followRedirects: false,
+          headers: extraHeaders,
+        ),
+      );
+      if (res.statusCode == 301 || res.statusCode == 302 || res.statusCode == 308) {
+        final location = res.headers["Location"]?.first ??
             res.headers["location"]?.first ??
             "";
-        return get(Uri.parse(url).replace(path: path).toString());
+        // Location 可能是绝对 URL 或相对路径。
+        // 不能用 Uri.replace(path:) —— 它会把 ? 当 path 字符 encode 成 %3F。
+        final origin = Uri.parse(url).origin;
+        final target =
+            location.startsWith('http') ? location : '$origin$location';
+        return get(target, extraHeaders);
       }
       return Res(res.data);
     } catch (e) {
@@ -201,29 +308,29 @@ class NhentaiNetwork {
 
   Future<Res<List<NhentaiComicBrief>>> search(String keyword, int page,
       [NhentaiSort sort = NhentaiSort.recent]) async {
-    var res = await get(
-        "$baseUrl/search?q=${Uri.encodeComponent(keyword)}&page=$page${sort.value}");
-    if (res.error) {
-      return Res.fromErrorRes(res);
-    }
+    // 改用 v2 API，规避 HTML 抓取 data-tags 属性已消失导致标签/语言全空的问题
+    await _fetchCdnServer();
+    // 认证依赖 cookie interceptor，不发 Authorization header（access_token 值≠ v2 User Token）
+    final sortParam = switch (sort) {
+      NhentaiSort.recent        => 'date',
+      NhentaiSort.popularToday  => 'popular-today',
+      NhentaiSort.popularWeek   => 'popular-week',
+      NhentaiSort.popularMonth  => 'popular-month',
+      NhentaiSort.popularAll    => 'popular',
+    };
+    final res = await get(
+      '$baseUrl/api/v2/search'
+      '?query=${Uri.encodeComponent(keyword)}&page=$page&sort=$sortParam',
+    );
+    if (res.error) return Res.fromErrorRes(res);
     try {
-      var document = parse(res.data);
-
-      var comicDoms = document.querySelectorAll("div.gallery");
-
-      var lastPagination = document
-          .querySelector("section.pagination > a.last")
-          ?.attributes["href"]
-          ?.nums;
-
-      if (comicDoms.isEmpty) {
-        return const Res([], subData: 0);
-      }
-
-      return Res(
-          removeNullValue(List.generate(
-              comicDoms.length, (index) => parseComic(comicDoms[index]))),
-          subData: lastPagination == null ? 1 : int.parse(lastPagination));
+      final json = const JsonDecoder().convert(res.data);
+      final items = (json['result'] as List)
+          .map((e) => _parseV2GalleryItem(e as Map<String, dynamic>))
+          .whereType<NhentaiComicBrief>()
+          .toList();
+      final numPages = (json['num_pages'] as num?)?.toInt() ?? 1;
+      return Res(items, subData: numPages);
     } catch (e, s) {
       LogManager.addLog(LogLevel.error, "Data Analyse", "$e\n$s");
       return Res(null, errorMessage: "Failed to Parse Data: $e");
@@ -305,6 +412,9 @@ class NhentaiNetwork {
       } catch (e) {
         // ignore
       }
+      // Fallback：script 解析失败时从 cookie jar 读 csrftoken cookie。
+      // Django 同时以非 httpOnly cookie 下发 CSRF token，jar 里一定有。
+      if (token.isEmpty) token = getCsrfToken();
 
       return Res(NhentaiComic(id, title, subTitle, cover, tags, favorite,
           thumbnails, recommendations, token));
@@ -315,19 +425,28 @@ class NhentaiNetwork {
   }
 
   Future<Res<List<NhentaiComment>>> getComments(String id) async {
-    var res = await get("$baseUrl/api/gallery/$id/comments");
+    // nhentai 已废弃旧的 /api/gallery/{id}/comments（返回 403 + "Use new API"）。
+    // 新 API：GET /api/v2/galleries/{id}/comments，返回 {result:[...], num_pages, ...}。
+    var res = await get("$baseUrl/api/v2/galleries/$id/comments");
     if (res.error) {
       return Res.fromErrorRes(res);
     }
     try {
       var json = const JsonDecoder().convert(res.data);
+      // v2 把评论数组包在 result 字段里（旧版是裸数组），做兼容取值。
+      var list = json is Map ? (json["result"] as List? ?? const []) : json;
       var comments = <NhentaiComment>[];
-      for (var c in json) {
+      for (var c in list) {
+        var avatar = c["poster"]?["avatar_url"]?.toString() ?? "";
+        // avatar_url 可能已是完整 URL，也可能是相对路径，后者才拼 CDN 前缀。
+        if (avatar.isNotEmpty && !avatar.startsWith("http")) {
+          avatar = "https://i3.nhentai.net/$avatar";
+        }
         comments.add(NhentaiComment(
-            c["poster"]["username"],
-            "https://i3.nhentai.net/${c["poster"]["avatar_url"]}",
-            c["body"],
-            c["post_date"]));
+            c["poster"]?["username"]?.toString() ?? "",
+            avatar,
+            c["body"]?.toString() ?? "",
+            (c["post_date"] as num?)?.toInt() ?? 0));
       }
       return Res(comments);
     } catch (e, s) {
@@ -369,56 +488,132 @@ class NhentaiNetwork {
     }
   }
 
-  // 一页 25 个
+  // ── v2 收藏列表（带 token 刷新）──────────────────────────────────────
   Future<Res<List<NhentaiComicBrief>>> getFavorites(int page) async {
-    if (!logged) {
-      return const Res(null, errorMessage: "login required");
+    if (cookieJar == null) await init();
+    if (!logged) return const Res(null, errorMessage: 'login required');
+    await _fetchCdnServer();
+
+    // 首次尝试
+    final token = _getAccessToken();
+    if (token.isEmpty) return const Res(null, errorMessage: 'login required');
+
+    final res = await get(
+      '$baseUrl/api/v2/favorites?page=$page',
+      {'Authorization': 'User $token'},
+    );
+
+    // 若401，尝试刷新 token 后重试一次
+    if (res.error && res.errorMessage != null && res.errorMessage!.contains('401')) {
+      final newToken = await _refreshAccessToken();
+      if (newToken.isEmpty) {
+        return const Res(null, errorMessage: 'Token expired, please re-login');
+      }
+      final retryRes = await get(
+        '$baseUrl/api/v2/favorites?page=$page',
+        {'Authorization': 'User $newToken'},
+      );
+      if (retryRes.error) return Res.fromErrorRes(retryRes);
+      return _parseFavoritesV2(retryRes.data);
     }
-    var res = await get("$baseUrl/favorites/?page=$page");
-    if (res.error) {
-      return Res.fromErrorRes(res);
-    }
+
+    if (res.error) return Res.fromErrorRes(res);
+    return _parseFavoritesV2(res.data);
+  }
+
+  /// 解析 v2 favorites 响应
+  Res<List<NhentaiComicBrief>> _parseFavoritesV2(String data) {
     try {
-      var document = parse(res.data);
-      var comics = document.querySelectorAll("div.gallery");
-      var lastPagination = document
-          .querySelector("section.pagination > a.last")
-          ?.attributes["href"]
-          ?.nums;
-      return Res(
-          removeNullValue(List.generate(
-              comics.length, (index) => parseComic(comics[index]))),
-          subData: lastPagination == null ? 1 : int.parse(lastPagination));
+      final json = const JsonDecoder().convert(data);
+      final items = (json['result'] as List)
+          .map((e) => _parseV2GalleryItem(e as Map<String, dynamic>))
+          .whereType<NhentaiComicBrief>()
+          .toList();
+      final numPages = (json['num_pages'] as num?)?.toInt() ?? 1;
+      return Res(items, subData: numPages);
     } catch (e, s) {
-      LogManager.addLog(LogLevel.error, "Data Analyse", "$e\n$s");
-      return Res(null, errorMessage: "Failed to Parse Data: $e");
+      LogManager.addLog(LogLevel.error, 'Data Analyse', '$e\n$s');
+      return Res(null, errorMessage: 'Failed to Parse Data: $e');
     }
   }
 
-  Future<Res<bool>> favoriteComic(String id, String token) async {
-    var res = await post("$baseUrl/api/gallery/$id/favorite", null, {
-      "Referer": "$baseUrl/g/$id",
-      "X-Csrftoken": token,
-      "X-Requested-With": "XMLHttpRequest"
-    });
-    if (res.error) {
-      return Res.fromErrorRes(res);
-    } else {
-      return const Res(true);
+  /// v2 GalleryListItem → NhentaiComicBrief
+  NhentaiComicBrief? _parseV2GalleryItem(Map<String, dynamic> e) {
+    try {
+      final id = e['id'].toString();
+      final title = (e['english_title'] as String?)?.trim().isNotEmpty == true
+          ? e['english_title'] as String
+          : (e['japanese_title'] as String?) ?? id;
+      // thumbnail 是相对路径，拼动态 CDN 前缀（由 _fetchCdnServer 预取）
+      final rawCover = (e['thumbnail'] as String?) ?? '';
+      final cdn = (_cdnServer ?? 'https://t.nhentai.net').replaceAll(RegExp(r'/$'), '');
+      final cover = rawCover.startsWith('http')
+          ? rawCover
+          : '$cdn/${rawCover.replaceAll(RegExp(r'^/+'), '')}';
+      final tagIdList = (e['tag_ids'] as List?) ?? [];
+      // 只保留 nhentaiTags 里有英文名的 tag，过滤掉未知数字 ID
+      final tagIds = tagIdList
+          .map((t) => nhentaiTags[t.toString()])
+          .whereType<String>()
+          .toList();
+      // 语言直接从 tag_ids 判断（比对 nhentai 语言 tag ID）
+      const langTagIds = {'12227': 'English', '6346': '日本語', '29963': '中文'};
+      String lang = 'Unknown';
+      for (final t in tagIdList) {
+        final mapped = langTagIds[t.toString()];
+        if (mapped != null) { lang = mapped; break; }
+      }
+      return NhentaiComicBrief(title, cover, id, lang, tagIds);
+    } catch (_) {
+      return null;
     }
+  }
+
+  // ── v2 收藏/取消收藏（替代旧版 /api/gallery/{id}/favorite）────────────────
+  Future<Res<bool>> favoriteComic(String id, String token) async {
+    final accessToken = _getAccessToken();
+    if (accessToken.isNotEmpty) {
+      try {
+        final res = await dio.post<String>(
+          '$baseUrl/api/v2/galleries/$id/favorite',
+          options: Options(
+            validateStatus: (s) => s != null && s < 500,
+            headers: {'Authorization': 'User $accessToken'},
+          ),
+        );
+        if (res.statusCode == 200) return const Res(true);
+      } catch (_) {}
+    }
+    // 旧版 CSRF fallback
+    final res = await post('$baseUrl/api/gallery/$id/favorite', null, {
+      'Referer': '$baseUrl/g/$id',
+      'X-Csrftoken': token,
+      'X-Requested-With': 'XMLHttpRequest',
+    });
+    return res.error ? Res.fromErrorRes(res) : const Res(true);
   }
 
   Future<Res<bool>> unfavoriteComic(String id, String token) async {
-    var res = await post("$baseUrl/api/gallery/$id/unfavorite", null, {
-      "Referer": "$baseUrl/g/$id",
-      "X-Csrftoken": token,
-      "X-Requested-With": "XMLHttpRequest"
-    });
-    if (res.error) {
-      return Res.fromErrorRes(res);
-    } else {
-      return const Res(true);
+    final accessToken = _getAccessToken();
+    if (accessToken.isNotEmpty) {
+      try {
+        final res = await dio.delete<String>(
+          '$baseUrl/api/v2/galleries/$id/favorite',
+          options: Options(
+            validateStatus: (s) => s != null && s < 500,
+            headers: {'Authorization': 'User $accessToken'},
+          ),
+        );
+        if (res.statusCode == 200) return const Res(true);
+      } catch (_) {}
     }
+    // 旧版 CSRF fallback
+    final res = await post('$baseUrl/api/gallery/$id/unfavorite', null, {
+      'Referer': '$baseUrl/g/$id',
+      'X-Csrftoken': token,
+      'X-Requested-With': 'XMLHttpRequest',
+    });
+    return res.error ? Res.fromErrorRes(res) : const Res(true);
   }
 
   Future<Res<List<NhentaiComicBrief>>> getCategoryComics(

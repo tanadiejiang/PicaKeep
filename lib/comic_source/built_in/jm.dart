@@ -48,15 +48,24 @@ final ComicSource jm = ComicSource.named(
   favoriteData: FavoriteData(
     key: 'jm',
     title: '禁漫',
-    multiFolder: false,
-    loadComic: (page) async {
-      final res = await _jmNet.getFavorites(page);
+    multiFolder: true,
+    allFavoritesId: '0',
+    loadComic: (page, [folder]) async {
+      final res = await _jmNet.getFolderComicsPage(folder ?? '0', page);
       if (res.error) return Res.fromErrorRes(res);
       return Res<List<BaseComic>>(res.data, subData: res.subData);
     },
-    addOrDelFavorite: (comic) async {
-      // 获取当前收藏状态需要知道是否已收藏，这里简单切换
-      return _jmNet.setFavorite(comic.id, add: true);
+    loadFolders: () async {
+      final res = await _jmNet.getFolders();
+      if (res.error) return Res.fromErrorRes(res);
+      final map = <String, String>{'0': '全部'};
+      for (final f in res.data) {
+        map[f.id] = f.name;
+      }
+      return Res(map);
+    },
+    addOrDelFavorite: (comic, isAdding) async {
+      return _jmNet.setFavorite(comic.id, add: isAdding);
     },
   ),
   searchPageData: SearchPageData(

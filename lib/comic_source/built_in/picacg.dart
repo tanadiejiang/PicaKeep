@@ -14,8 +14,8 @@ final ComicSource picacg = ComicSource.named(
     key: 'picacg',
     title: 'Picacg',
     multiFolder: false,
-    loadComic: (page) async => picacgNetwork.getFavorites(page),
-    addOrDelFavorite: (comic) async {
+    loadComic: (page, [folder]) async => picacgNetwork.getFavorites(page),
+    addOrDelFavorite: (comic, isAdding) async {
       return picacgNetwork.favouriteOrUnfavouriteComic(comic.id);
     },
   ),

@@ -2,10 +2,10 @@ import 'package:picakeep/network/base_comic.dart';
 import 'package:picakeep/network/res.dart';
 
 typedef NetworkFavoriteLoader = Future<Res<List<BaseComic>>> Function(
-  int page,
-);
+  int page, [String? folder]);
 
-typedef NetworkFavoriteAction = Future<Res<bool>> Function(BaseComic comic);
+typedef NetworkFavoriteAction = Future<Res<bool>> Function(
+    BaseComic comic, bool isAdding);
 
 class FavoriteData {
   const FavoriteData({
@@ -24,10 +24,10 @@ class FavoriteData {
   final String title;
   final bool multiFolder;
   final NetworkFavoriteLoader loadComic;
-  final Future<Res<List<String>>> Function()? loadFolders;
+  final Future<Res<Map<String, String>>> Function()? loadFolders;
   final Future<Res<bool>> Function(String folder)? deleteFolder;
   final Future<Res<bool>> Function(String folder)? addFolder;
-  final Future<Res<List<String>>> Function()? allFavoritesId;
+  final String? allFavoritesId;
   final NetworkFavoriteAction? addOrDelFavorite;
 }
 
