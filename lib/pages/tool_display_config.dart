@@ -39,6 +39,13 @@ const appCapabilitiesToolId = 'app_capabilities';
 const trashToolId = 'trash';
 const clearCacheToolId = 'clear_cache';
 const archiveSettingsToolId = 'archive_settings';
+const onlineToolsToolId = 'online_tools';
+// 在线工具子项
+const ehSubscriptionToolId = 'eh_subscription';
+const imageSearchBotToolId = 'image_search_bot';
+const imageSearchSauceToolId = 'image_search_sauce';
+const openLinkToolId = 'open_link';
+const jmComicIdToolId = 'jm_comic_id';
 
 const List<ToolDisplayDefinition> allToolDisplayDefinitions = [
   ToolDisplayDefinition(
@@ -63,18 +70,18 @@ const List<ToolDisplayDefinition> allToolDisplayDefinitions = [
     quickLabel: '存储空间',
   ),
   ToolDisplayDefinition(
-    id: albumsToolId,
-    icon: Icons.photo_library,
-    title: '图集',
-    subtitle: '浏览并切换本地 / 聚合 / 远程图集',
-    quickLabel: '图集',
-  ),
-  ToolDisplayDefinition(
     id: appCapabilitiesToolId,
     icon: Icons.cloud_sync_outlined,
     title: 'APP能力',
     subtitle: '管理客户端 / 服务端运行能力与未来规划',
     quickLabel: 'APP能力',
+  ),
+  ToolDisplayDefinition(
+    id: onlineToolsToolId,
+    icon: Icons.language,
+    title: '在线工具',
+    subtitle: '使用工具发现更多漫画',
+    quickLabel: '在线工具',
   ),
   ToolDisplayDefinition(
     id: trashToolId,
