@@ -10,7 +10,12 @@ import 'package:picakeep/foundation/archive/archive_reading_service.dart';
 import 'package:picakeep/foundation/local_library_settings.dart';
 import 'package:picakeep/foundation/remote_library_data_source.dart';
 import 'package:picakeep/pages/app_capabilities_page.dart';
+import 'package:picakeep/pages/eh_subscription_page.dart';
 import 'package:picakeep/pages/local_library_page.dart';
+import 'package:picakeep/pages/online_comic/eh_comic_page_v2.dart';
+import 'package:picakeep/pages/online_comic/jm_comic_page_v2.dart';
+import 'package:picakeep/pages/online_comic/nhentai_comic_page_v2.dart';
+import 'package:picakeep/pages/online_comic/webview.dart';
 import 'package:picakeep/pages/service_info_page.dart';
 import 'package:picakeep/pages/settings/archive_settings_page.dart';
 import 'package:picakeep/pages/tool_display_config.dart';
@@ -32,6 +37,7 @@ class _ToolsPageState extends State<ToolsPage> {
 
   bool _customizingExternalTools = false;
   bool _cacheManagementExpanded = false;
+  bool _onlineToolsExpanded = false;
   bool _loadingCacheSize = false;
   int? _cacheSizeBytes;
   late List<String> _orderedExternalIds;
@@ -103,6 +109,12 @@ class _ToolsPageState extends State<ToolsPage> {
     if (_cacheManagementExpanded) {
       unawaited(_refreshCacheSize());
     }
+  }
+
+  void _toggleOnlineTools() {
+    setState(() {
+      _onlineToolsExpanded = !_onlineToolsExpanded;
+    });
   }
 
   Future<void> _refreshCacheSize() async {
@@ -230,15 +242,6 @@ class _ToolsPageState extends State<ToolsPage> {
             builder: (_) => const LocalLibraryStoragePage(),
           ),
         );
-      case albumsToolId:
-        return Navigator.of(context).push(
-          MaterialPageRoute(
-            builder: (_) => const LocalLibraryPage(
-              albumOnly: true,
-              title: '图集',
-            ),
-          ),
-        );
       case appCapabilitiesToolId:
         return Navigator.of(context).push(
           MaterialPageRoute(builder: (_) => const AppCapabilitiesPage()),
@@ -253,6 +256,18 @@ class _ToolsPageState extends State<ToolsPage> {
         return Navigator.of(context).push(
           MaterialPageRoute(builder: (_) => const ArchiveSettingsPage()),
         );
+      case ehSubscriptionToolId:
+        return Navigator.of(context).push(
+          MaterialPageRoute(builder: (_) => const EhSubscriptionPage()),
+        );
+      case imageSearchBotToolId:
+        return _openWebview(context, 'https://soutubot.moe/', '搜图bot酱');
+      case imageSearchSauceToolId:
+        return _openWebview(context, 'https://saucenao.com/', 'SauceNAO');
+      case openLinkToolId:
+        return _showOpenLinkDialog(context);
+      case jmComicIdToolId:
+        return _showJmIdDialog(context);
       default:
         return Future.value();
     }
@@ -334,6 +349,174 @@ class _ToolsPageState extends State<ToolsPage> {
     );
   }
 
+  Future<void> _openWebview(BuildContext context, String url, String title) async {
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => AppWebview(
+          initialUrl: url,
+          singlePage: false,
+          onTitleChange: (pageTitle, controller) {
+            // 可以在这里更新标题
+          },
+        ),
+      ),
+    );
+  }
+
+  Future<void> _showOpenLinkDialog(BuildContext context) async {
+    final controller = TextEditingController();
+    final result = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text('打开链接'.tl),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          decoration: InputDecoration(
+            hintText: '输入 EH/NH/Hitomi/JM 链接'.tl,
+          ),
+          onSubmitted: (value) {
+            if (value.trim().isNotEmpty) {
+              Navigator.of(dialogContext).pop(value.trim());
+            }
+          },
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: Text('取消'.tl),
+          ),
+          FilledButton(
+            onPressed: () {
+              final value = controller.text.trim();
+              if (value.isNotEmpty) {
+                Navigator.of(dialogContext).pop(value);
+              }
+            },
+            child: Text('打开'.tl),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+
+    if (result == null || !context.mounted) {
+      return;
+    }
+
+    // 解析链接并跳转
+    final uri = Uri.tryParse(result);
+    if (uri == null) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('无效的链接'.tl),
+            duration: const Duration(seconds: 2),
+          ),
+        );
+      }
+      return;
+    }
+
+    // 根据域名判断来源
+    final host = uri.host.toLowerCase();
+    if (host.contains('e-hentai.org') || host.contains('exhentai.org')) {
+      // EH链接：https://e-hentai.org/g/123456/abcdef/
+      final pathSegments = uri.pathSegments;
+      if (pathSegments.length >= 3 && pathSegments[0] == 'g') {
+        App.pushInner(() => EhentaiComicPageV2(result));
+        return;
+      }
+    } else if (host.contains('nhentai')) {
+      // NH链接：https://nhentai.net/g/123456/ 或 https://nhentai.xxx/g/123456/
+      final match = RegExp(r'/g/(\d+)').firstMatch(uri.path);
+      if (match != null) {
+        final id = match.group(1)!;
+        App.pushInner(() => NhentaiComicPageV2(id));
+        return;
+      }
+    } else if (host.contains('18comic.vip') || host.contains('18comic.org') ||
+               host.contains('jmcomic') || result.toLowerCase().contains('jm')) {
+      // JM链接：https://18comic.vip/album/123456/ 或包含 jm 关键字
+      final match = RegExp(r'/album/(\d+)|/(\d+)').firstMatch(uri.path);
+      if (match != null) {
+        final id = match.group(1) ?? match.group(2);
+        if (id != null) {
+          App.pushInner(() => JmComicPageV2(id));
+          return;
+        }
+      }
+    }
+
+    // 无法识别
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('无法识别的链接'.tl),
+          duration: const Duration(seconds: 2),
+        ),
+      );
+    }
+  }
+
+  Future<void> _showJmIdDialog(BuildContext context) async {
+    final controller = TextEditingController();
+    final result = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text('禁漫漫画ID'.tl),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          keyboardType: TextInputType.number,
+          decoration: InputDecoration(
+            hintText: '输入漫画 ID（纯数字）'.tl,
+          ),
+          onSubmitted: (value) {
+            if (value.trim().isNotEmpty) {
+              Navigator.of(dialogContext).pop(value.trim());
+            }
+          },
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: Text('取消'.tl),
+          ),
+          FilledButton(
+            onPressed: () {
+              final value = controller.text.trim();
+              if (value.isNotEmpty) {
+                Navigator.of(dialogContext).pop(value);
+              }
+            },
+            child: Text('打开'.tl),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+
+    if (result == null || !context.mounted) {
+      return;
+    }
+
+    final id = int.tryParse(result);
+    if (id == null) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('请输入有效的数字 ID'.tl),
+            duration: const Duration(seconds: 2),
+          ),
+        );
+      }
+      return;
+    }
+
+    App.pushInner(() => JmComicPageV2(result));
+  }
+
   Widget _buildCacheManagementCard(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
     return Card.outlined(
@@ -398,6 +581,77 @@ class _ToolsPageState extends State<ToolsPage> {
     );
   }
 
+  Widget _buildOnlineToolsCard(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return Card.outlined(
+      margin: EdgeInsets.zero,
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        children: [
+          ListTile(
+            leading: const Icon(Icons.language),
+            title: Text('在线工具'.tl),
+            subtitle: Text('使用工具发现更多漫画'.tl),
+            trailing: AnimatedRotation(
+              turns: _onlineToolsExpanded ? 0.25 : 0,
+              duration: const Duration(milliseconds: 180),
+              child: const Icon(Icons.chevron_right),
+            ),
+            onTap: _toggleOnlineTools,
+            onLongPress: _enterCustomizeMode,
+          ),
+          AnimatedCrossFade(
+            firstChild: const SizedBox.shrink(),
+            secondChild: Column(
+              children: [
+                Divider(height: 1, color: colorScheme.outlineVariant),
+                ListTile(
+                  leading: const Icon(Icons.subscriptions_outlined),
+                  title: Text('EH订阅'.tl),
+                  subtitle: Text('订阅 EHentai 标签、上传者并在首页展示'.tl),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () => _openTool(context, ehSubscriptionToolId),
+                ),
+                ListTile(
+                  leading: const Icon(Icons.image_search),
+                  title: Text('搜图bot酱'.tl),
+                  subtitle: Text('使用搜图bot酱以图搜图'.tl),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () => _openTool(context, imageSearchBotToolId),
+                ),
+                ListTile(
+                  leading: const Icon(Icons.search),
+                  title: Text('SauceNAO搜图'.tl),
+                  subtitle: Text('使用 SauceNAO 以图搜图'.tl),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () => _openTool(context, imageSearchSauceToolId),
+                ),
+                ListTile(
+                  leading: const Icon(Icons.link),
+                  title: Text('打开链接'.tl),
+                  subtitle: Text('输入 EH/NH/Hitomi/JM 链接跳转到详情页'.tl),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () => _openTool(context, openLinkToolId),
+                ),
+                ListTile(
+                  leading: const Icon(Icons.tag),
+                  title: Text('禁漫漫画ID'.tl),
+                  subtitle: Text('输入禁漫天堂漫画 ID 跳转到详情页'.tl),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () => _openTool(context, jmComicIdToolId),
+                ),
+              ],
+            ),
+            crossFadeState: _onlineToolsExpanded
+                ? CrossFadeState.showSecond
+                : CrossFadeState.showFirst,
+            duration: const Duration(milliseconds: 180),
+          ),
+        ],
+      ),
+    );
+  }
+
   List<Widget> _buildRegularToolCards(BuildContext context) {
     return _orderedExternalIds
         .map((id) => toolDisplayDefinitionMap[id])
@@ -407,15 +661,17 @@ class _ToolsPageState extends State<ToolsPage> {
             padding: const EdgeInsets.only(bottom: 12),
             child: definition.id == clearCacheToolId
                 ? _buildCacheManagementCard(context)
-                : _ToolCard(
-                    key: ValueKey('tool_${definition.id}'),
-                    icon: definition.icon,
-                    title: definition.title.tl,
-                    subtitle: definition.subtitle.tl,
-                    trailing: const Icon(Icons.chevron_right),
-                    onTap: () => _openTool(context, definition.id),
-                    onLongPress: _enterCustomizeMode,
-                  ),
+                : definition.id == onlineToolsToolId
+                    ? _buildOnlineToolsCard(context)
+                    : _ToolCard(
+                        key: ValueKey('tool_${definition.id}'),
+                        icon: definition.icon,
+                        title: definition.title.tl,
+                        subtitle: definition.subtitle.tl,
+                        trailing: const Icon(Icons.chevron_right),
+                        onTap: () => _openTool(context, definition.id),
+                        onLongPress: _enterCustomizeMode,
+                      ),
           ),
         )
         .toList(growable: false);

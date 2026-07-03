@@ -28,6 +28,11 @@ import 'tools.dart';
 import 'download_page.dart';
 import 'downloading/downloading_page.dart';
 import 'local_library_page.dart';
+import 'online_comic/eh_comic_page_v2.dart';
+import 'online_comic/nhentai_comic_page_v2.dart';
+import 'online_comic/jm_comic_page_v2.dart';
+import 'online_comic/webview.dart';
+import 'eh_subscription_page.dart';
 
 class MePage extends StatefulWidget {
   const MePage({super.key});
@@ -464,6 +469,158 @@ class _MePageState extends State<MePage> {
         builder: (_) => ToolsPage(startInCustomizeMode: startInCustomizeMode),
       ),
     );
+  }
+
+  void _showOnlineToolsSheet(BuildContext context) {
+    showModalBottomSheet(
+      context: context,
+      builder: (sheetCtx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              title: Text('工具'.tl),
+            ),
+            ListTile(
+              leading: const Icon(Icons.subscriptions),
+              title: Text('EH订阅'.tl),
+              onTap: () {
+                Navigator.pop(sheetCtx);
+                App.pushInner(() => const EhSubscriptionPage());
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.image_search_outlined),
+              title: Text('图片搜索 [搜图bot酱]'.tl),
+              trailing: const Icon(Icons.open_in_new),
+              onTap: () {
+                Navigator.pop(sheetCtx);
+                App.pushInner(() => const AppWebview(
+                      initialUrl: 'https://soutubot.moe/',
+                      singlePage: false,
+                    ));
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.image_search),
+              title: Text('图片搜索 [SauceNAO]'.tl),
+              trailing: const Icon(Icons.open_in_new),
+              onTap: () {
+                Navigator.pop(sheetCtx);
+                App.pushInner(() => const AppWebview(
+                      initialUrl: 'https://saucenao.com/',
+                      singlePage: false,
+                    ));
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.link),
+              title: Text('打开链接'.tl),
+              onTap: () {
+                Navigator.pop(sheetCtx);
+                _showOpenLinkSheet(context);
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.numbers),
+              title: Text('禁漫漫画ID'.tl),
+              onTap: () {
+                Navigator.pop(sheetCtx);
+                _showJmIdSheet(context);
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _showOpenLinkSheet(BuildContext context) async {
+    final controller = TextEditingController();
+    final result = await showDialog<String>(
+      context: context,
+      builder: (dialogCtx) => AlertDialog(
+        title: Text('打开链接'.tl),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          decoration: InputDecoration(hintText: '输入 EH/NH/Hitomi/JM 链接'.tl),
+          onSubmitted: (v) {
+            if (v.trim().isNotEmpty) Navigator.of(dialogCtx).pop(v.trim());
+          },
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogCtx).pop(),
+            child: Text('取消'.tl),
+          ),
+          FilledButton(
+            onPressed: () {
+              final v = controller.text.trim();
+              if (v.isNotEmpty) Navigator.of(dialogCtx).pop(v);
+            },
+            child: Text('打开'.tl),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+    if (result == null || !context.mounted) return;
+    final uri = Uri.tryParse(result);
+    if (uri == null) return;
+    final host = uri.host.toLowerCase();
+    if (host.contains('e-hentai.org') || host.contains('exhentai.org')) {
+      final segs = uri.pathSegments;
+      if (segs.length >= 3 && segs[0] == 'g') {
+        App.pushInner(() => EhentaiComicPageV2(result));
+      }
+    } else if (host.contains('nhentai')) {
+      final m = RegExp(r'/g/(\d+)').firstMatch(uri.path);
+      if (m != null) App.pushInner(() => NhentaiComicPageV2(m.group(1)!));
+    } else if (host.contains('18comic') || host.contains('jmcomic') ||
+        result.toLowerCase().contains('jm')) {
+      final m = RegExp(r'/album/(\d+)|/(\d+)').firstMatch(uri.path);
+      if (m != null) {
+        final id = m.group(1) ?? m.group(2);
+        if (id != null) App.pushInner(() => JmComicPageV2(id));
+      }
+    }
+  }
+
+  Future<void> _showJmIdSheet(BuildContext context) async {
+    final controller = TextEditingController();
+    final result = await showDialog<String>(
+      context: context,
+      builder: (dialogCtx) => AlertDialog(
+        title: Text('禁漫漫画ID'.tl),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          keyboardType: TextInputType.number,
+          decoration: InputDecoration(hintText: '输入漫画 ID（纯数字）'.tl),
+          onSubmitted: (v) {
+            if (v.trim().isNotEmpty) Navigator.of(dialogCtx).pop(v.trim());
+          },
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogCtx).pop(),
+            child: Text('取消'.tl),
+          ),
+          FilledButton(
+            onPressed: () {
+              final v = controller.text.trim();
+              if (v.isNotEmpty) Navigator.of(dialogCtx).pop(v);
+            },
+            child: Text('打开'.tl),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+    if (result == null || !context.mounted) return;
+    if (int.tryParse(result) == null) return;
+    App.pushInner(() => JmComicPageV2(result));
   }
 
   Future<void> _openServiceInfoPage(BuildContext context) {
@@ -1071,10 +1228,10 @@ class _MePageState extends State<MePage> {
                   builder: (_) => const LocalLibraryStoragePage(),
                 ),
               );
-        case albumsToolId:
-          return () => _openLocalLibraryPage(context);
         case appCapabilitiesToolId:
           return () => _openAppCapabilitiesPage(context);
+        case onlineToolsToolId:
+          return () => _showOnlineToolsSheet(context);
         case trashToolId:
           return () => Navigator.of(context).push(
                 MaterialPageRoute(builder: (_) => const TrashPage()),
