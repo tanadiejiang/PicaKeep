@@ -13,6 +13,7 @@ enum AiChatMessageType {
   assistant,
   toolCall,
   toolResult,
+  resultList,
   error,
   system,
 }
@@ -66,6 +67,14 @@ class AiChatMessage {
         text = ok ? (message ?? '工具执行成功') : (message ?? '工具执行失败'),
         toolArgs = null,
         toolData = data,
+        createdAt = DateTime.now();
+
+  AiChatMessage.resultList({required List<Map<String, dynamic>> items})
+      : type = AiChatMessageType.resultList,
+        text = '共 ${items.length} 条结果',
+        toolName = null,
+        toolArgs = null,
+        toolData = {'items': items},
         createdAt = DateTime.now();
 
   AiChatMessage.error(this.text)
@@ -130,6 +139,9 @@ class AiConversationController extends ChangeNotifier {
   // 当前工具调用轮次
   int _currentRound = 0;
 
+  // 待展示的结果列表缓冲区（跨多个工具调用累积，文本回复后一并展示）
+  final List<Map<String, dynamic>> _pendingResultItems = [];
+
   static const int _maxRounds = 3;
 
   AiConversationController._internal();
@@ -184,6 +196,7 @@ class AiConversationController extends ChangeNotifier {
     conversationId = _generateUuid();
     _conversationTitle = '新会话';
     _createdAt = DateTime.now();
+    _pendingResultItems.clear();
     _initSystemPrompt();
   }
 
@@ -239,7 +252,8 @@ class AiConversationController extends ChangeNotifier {
 2. 所有下载操作必须告知用户并等待确认，不自行触发
 3. 数据来源必须透明（说明是本地库/收藏/历史/在线）
 4. 字段缺失时如实说明，不猜测
-5. 用中文回复''';
+5. 用中文回复
+6. 工具返回漫画列表（items数组）时，文字回复只需简要总结数量、已下载/未下载等占比，不要逐条罗列或输出markdown表格，提示用户点击下方清单查看详情''';
 
     if (_history.isEmpty || _history.first.role != 'system') {
       _history.insert(0, LlmMessage.system(systemPrompt));
@@ -300,6 +314,10 @@ class AiConversationController extends ChangeNotifier {
       final text = response.content ?? '';
       displayMessages.add(AiChatMessage.assistant(text));
       _history.add(LlmMessage.assistant(content: text));
+      if (_pendingResultItems.isNotEmpty) {
+        displayMessages.add(AiChatMessage.resultList(items: List.of(_pendingResultItems)));
+        _pendingResultItems.clear();
+      }
       isLoading = false;
       notifyListeners();
       return;
@@ -359,6 +377,13 @@ class AiConversationController extends ChangeNotifier {
           message: result.message,
         ),
       );
+      if (result.data is Map) {
+        final dataMap = result.data as Map;
+        final rawItems = dataMap['items'];
+        if (rawItems is List) {
+          _pendingResultItems.addAll(rawItems.whereType<Map<String, dynamic>>());
+        }
+      }
       notifyListeners();
     }
 

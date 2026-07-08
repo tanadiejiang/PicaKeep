@@ -401,7 +401,7 @@ class _ComicDescription extends StatelessWidget {
                 ],
               ),
             ),
-            if (badge != null)
+            if (badge != null && badge!.isNotEmpty)
               Container(
                 padding: const EdgeInsets.fromLTRB(6, 4, 6, 4),
                 decoration: BoxDecoration(
