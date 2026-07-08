@@ -15,6 +15,7 @@ import 'package:picakeep/foundation/image_loader/base_image_provider.dart';
 import 'package:picakeep/foundation/image_loader/stream_image_provider.dart';
 import 'package:picakeep/foundation/local_favorites.dart';
 import 'package:picakeep/foundation/local_library_settings.dart';
+import 'package:picakeep/foundation/log.dart';
 import 'package:picakeep/pages/reader/comic_reading_page.dart';
 
 class RemoteLibraryDataSourceException implements Exception {
@@ -1382,6 +1383,14 @@ class RemoteLibraryDataSource {
     );
   }
 
+  Future<List<RemoteLibraryComicItem>> fetchManagedDownloadItems({
+    bool forceRefresh = false,
+  }) async {
+    return RemoteLibraryClient.fromCurrentSettings().fetchManagedDownloadItems(
+      forceRefresh: forceRefresh,
+    );
+  }
+
   Future<List<RemoteLibraryRootItem>> fetchRootItems({
     bool managedDownloadOnly = false,
     bool customLibraryOnly = false,
@@ -1605,10 +1614,21 @@ class RemoteLibraryClient {
     if (normalized.isEmpty) {
       return const <RemoteLibraryComicItem>[];
     }
-    final items = await fetchItems(forceRefresh: forceRefresh);
-    return items
-        .where((item) => item.rootId == normalized)
-        .toList(growable: false);
+    return (await _fetchFilteredSnapshot(
+      forceRefresh: forceRefresh,
+      rootId: normalized,
+    ))
+        .items;
+  }
+
+  Future<List<RemoteLibraryComicItem>> fetchManagedDownloadItems({
+    bool forceRefresh = false,
+  }) async {
+    return (await _fetchFilteredSnapshot(
+      forceRefresh: forceRefresh,
+      managedOnly: true,
+    ))
+        .items;
   }
 
   Future<List<RemoteLibraryRootItem>> fetchRootItems({
@@ -1975,9 +1995,65 @@ class RemoteLibraryClient {
     }
   }
 
-  Future<_RemoteLibrarySnapshot> _fetchSnapshotFromNetwork() async {
-    final payload = await _getJsonMap('/api/library/items');
+  Future<_RemoteLibrarySnapshot> _fetchFilteredSnapshot({
+    bool forceRefresh = false,
+    String? rootId,
+    bool managedOnly = false,
+  }) async {
+    _invalidateCachesForAppStateIfNeeded();
+    final normalizedRootId = rootId?.trim() ?? '';
+    if (normalizedRootId.isEmpty && !managedOnly) {
+      return _fetchSnapshot(forceRefresh: forceRefresh);
+    }
+    // 使用全量 snapshot（命中缓存时零开销），再内存过滤——
+    // 不绕过 _snapshotCache 直接请求网络，避免每次进入「远程·已下载」都发起全量
+    // JSON 请求并在 UI isolate 上同步解析，导致界面卡死。
+    // 服务端同样保留了 managedOnly/rootId 过滤参数，当 NAS 二进制更新后可减少传输量；
+    // 但客户端不依赖服务端过滤——旧二进制忽略参数返回全量时，这里的内存过滤保证正确性。
+    final full = await _fetchSnapshot(forceRefresh: forceRefresh);
+    return _filterSnapshotInMemory(
+      full,
+      rootId: normalizedRootId,
+      managedOnly: managedOnly,
+    );
+  }
+
+  _RemoteLibrarySnapshot _filterSnapshotInMemory(
+    _RemoteLibrarySnapshot snapshot, {
+    required String rootId,
+    required bool managedOnly,
+  }) {
+    if (rootId.isNotEmpty) {
+      return _RemoteLibrarySnapshot(
+        roots: snapshot.roots
+            .where((r) => r.id == rootId)
+            .toList(growable: false),
+        items: snapshot.items
+            .where((item) => item.rootId == rootId)
+            .toList(growable: false),
+        signature: snapshot.signature,
+      );
+    }
+    if (managedOnly) {
+      return _RemoteLibrarySnapshot(
+        roots: snapshot.roots
+            .where((r) => r.isManagedDownloadRoot)
+            .toList(growable: false),
+        items: snapshot.items
+            .where((item) => item.isManagedDownloadRoot)
+            .toList(growable: false),
+        signature: snapshot.signature,
+      );
+    }
+    return snapshot;
+  }
+
+  Future<_RemoteLibrarySnapshot> _fetchSnapshotFromNetwork([String path = '/api/library/items']) async {
+    final sw = Stopwatch()..start();
+    final payload = await _getJsonMap(path);
+    final fetchMs = sw.elapsedMilliseconds;
     final itemsValue = payload['items'];
+    final itemsRawCount = itemsValue is List ? itemsValue.length : 0;
     final items = itemsValue is! List
         ? const <RemoteLibraryComicItem>[]
         : itemsValue
@@ -1989,8 +2065,17 @@ class RemoteLibraryClient {
               ),
             )
             .toList(growable: false);
+    final mapMs = sw.elapsedMilliseconds - fetchMs;
     final roots = _readRoots(payload['roots'], items);
     final signature = _readText(payload['librarySignature']);
+    Log.info(
+      'RemoteLib',
+      'snapshot $path fetch+decode=${fetchMs}ms map=${mapMs}ms items=$itemsRawCount roots=${roots.length}',
+    );
+    // ignore: avoid_print
+    print(
+      '[PicaKeep][RemoteLib] snapshot $path fetch+decode=${fetchMs}ms map=${mapMs}ms items=$itemsRawCount roots=${roots.length}',
+    );
     return _RemoteLibrarySnapshot(
       roots: roots,
       items: items,
@@ -2493,6 +2578,14 @@ class RemoteLibraryClient {
       final bodyText = await utf8.decoder.bind(response).join().timeout(
             const Duration(seconds: 8),
           );
+      Log.info(
+        'RemoteLib',
+        'req $method $path -> ${response.statusCode} bodyBytes=${bodyText.length}',
+      );
+      // ignore: avoid_print
+      print(
+        '[PicaKeep][RemoteLib] req $method $path -> ${response.statusCode} bodyBytes=${bodyText.length}',
+      );
       if (response.statusCode < 200 || response.statusCode >= 300) {
         throw RemoteLibraryRequestException(
           '远程资源请求失败：${response.statusCode}',
@@ -2502,14 +2595,9 @@ class RemoteLibraryClient {
       if (bodyText.trim().isEmpty) {
         return const <String, dynamic>{};
       }
-      final decoded = jsonDecode(bodyText);
-      if (decoded is Map<String, dynamic>) {
-        return decoded;
-      }
-      if (decoded is Map) {
-        return decoded.map((key, value) => MapEntry(key.toString(), value));
-      }
-      throw const RemoteLibraryDataSourceException('服务端返回了无效数据');
+      // 大响应（如 9.8MB 全量资源库）的 jsonDecode 在 UI 线程同步执行会导致 ANR。
+      // compute() 将解析挪到独立 isolate，UI 线程不阻塞。
+      return await compute(_decodeJsonBody, bodyText);
     } on RemoteLibraryRequestException {
       rethrow;
     } on TimeoutException {
@@ -2605,4 +2693,16 @@ List<String> _readFirstStringList(Iterable<Object?> values) {
     }
   }
   return const <String>[];
+}
+
+/// 在独立 isolate 中解析 JSON 字符串，避免大响应（如 9.8MB 全量资源库）
+/// 在 UI 线程同步 jsonDecode 时导致 ANR。
+/// [compute] 要求顶层/static 函数且参数可跨 isolate 传递（String/Map 均符合）。
+Map<String, dynamic> _decodeJsonBody(String body) {
+  final decoded = jsonDecode(body);
+  if (decoded is Map<String, dynamic>) return decoded;
+  if (decoded is Map) {
+    return decoded.map((key, value) => MapEntry(key.toString(), value));
+  }
+  return const <String, dynamic>{};
 }

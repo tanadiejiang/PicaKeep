@@ -5,10 +5,12 @@ import 'package:flutter/services.dart';
 import 'package:picakeep/foundation/app.dart';
 import 'package:picakeep/foundation/app_page_route.dart';
 import 'package:picakeep/foundation/app_runtime_mode.dart';
+import 'package:picakeep/foundation/ai/ai_settings.dart';
 import 'package:picakeep/foundation/main_page_hub.dart';
 import 'package:picakeep/tools/local_app_links.dart';
 import '../base.dart';
 import '../components/components.dart';
+import 'ai/ai_page.dart';
 import 'favorites/main_favorites_page.dart';
 import 'local_search_page.dart';
 import 'me_page.dart';
@@ -39,8 +41,11 @@ class _MainPageState extends State<MainPage> {
       normalizeAppRuntimeMode(appdata.settings[appRuntimeModeSettingIndex]) ==
       appRuntimeModeServer;
 
+  bool get _showAiTab => appdata.settings[showAiTabSettingIndex] == '1';
+
   List<Widget> get _pages => [
         const MePage(),
+        if (_showAiTab) const AiPage(),
         const MainFavoritesPage(),
         if (_showServiceInfoTab) const ServiceInfoPage(),
       ];
@@ -51,6 +56,12 @@ class _MainPageState extends State<MainPage> {
           icon: Icons.person_outline,
           activeIcon: Icons.person,
         ),
+        if (_showAiTab)
+          PaneItemEntry(
+            label: 'AI',
+            icon: Icons.smart_toy_outlined,
+            activeIcon: Icons.smart_toy,
+          ),
         PaneItemEntry(
           label: '收藏',
           icon: Icons.local_activity_outlined,
@@ -182,7 +193,7 @@ class _MainPageState extends State<MainPage> {
     final pages = _pages;
     final paneItems = _paneItems;
     return NaviPane(
-      key: ValueKey(_showServiceInfoTab),
+      key: ValueKey((_showServiceInfoTab, _showAiTab)),
       initialPage: _initialTabIndex(pages.length),
       observer: observer,
       paneItems: paneItems,

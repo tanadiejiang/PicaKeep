@@ -68,15 +68,42 @@ extension ServerAppLibrary on PicaKeepAdminServer {
       if (request.method != 'GET') {
         return _jsonResponse({'error': 'method not allowed'}, statusCode: 405);
       }
+      final managedOnlyParam =
+          request.url.queryParameters['managedOnly']?.trim().toLowerCase() ?? '';
+      final managedOnly =
+          managedOnlyParam == '1' || managedOnlyParam == 'true';
+      final rootId = request.url.queryParameters['rootId']?.trim() ?? '';
+      final visibleItems = rootId.isNotEmpty
+          ? snapshot.items
+              .where((item) => item.rootId == rootId)
+              .toList(growable: false)
+          : managedOnly
+              ? snapshot.items
+                  .where((item) => _isManagedRootId(item.rootId))
+                  .toList(growable: false)
+              : snapshot.items;
+      final visibleRoots = rootId.isNotEmpty
+          ? snapshot.roots
+              .where((root) => root.id == rootId)
+              .toList(growable: false)
+          : managedOnly
+              ? snapshot.roots
+                  .where((root) => _isManagedRootId(root.id))
+                  .toList(growable: false)
+              : snapshot.roots;
+      final visibleTotalBytes =
+          visibleItems.fold<int>(0, (sum, item) => sum + item.totalBytes);
       return _jsonResponse({
         'generatedAt': snapshot.generatedAt.toIso8601String(),
         'librarySignature': _librarySignature ?? '',
-        'totalComicCount': snapshot.totalComicCount,
-        'totalBytes': snapshot.totalBytes,
-        'roots': snapshot.roots
-            .map((root) => _buildLibraryRootPayload(root, snapshot.items))
+        'totalComicCount': visibleItems.length,
+        'totalBytes': visibleTotalBytes,
+        'allTotalComicCount': snapshot.totalComicCount,
+        'allTotalBytes': snapshot.totalBytes,
+        'roots': visibleRoots
+            .map((root) => _buildLibraryRootPayload(root, visibleItems))
             .toList(),
-        'items': snapshot.items.map(_buildLibraryItemPayload).toList(),
+        'items': visibleItems.map(_buildLibraryItemPayload).toList(),
       });
     }
 
