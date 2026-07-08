@@ -10,6 +10,7 @@ const aiCapabilitySearchLocalSettingIndex = 123;
 const aiCapabilityQueryLocalLibrarySettingIndex = 124;
 const aiCapabilityResolveLocalItemsSettingIndex = 125;
 const aiCapabilityGetDownloadStatusSettingIndex = 126;
+const aiCapabilityQueryRemoteLibrarySettingIndex = 133;
 
 // Provider 配置
 const aiProviderTemplateSettingIndex = 127;
@@ -30,6 +31,7 @@ int? aiCapabilitySettingIndex(String toolName) {
     'query_local_library': aiCapabilityQueryLocalLibrarySettingIndex,
     'resolve_local_items': aiCapabilityResolveLocalItemsSettingIndex,
     'get_download_status': aiCapabilityGetDownloadStatusSettingIndex,
+    'query_remote_library': aiCapabilityQueryRemoteLibrarySettingIndex,
   }[toolName];
 }
 

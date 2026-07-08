@@ -37,6 +37,7 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
       aiCapabilityQueryLocalLibrarySettingIndex,
       aiCapabilityResolveLocalItemsSettingIndex,
       aiCapabilityGetDownloadStatusSettingIndex,
+      aiCapabilityQueryRemoteLibrarySettingIndex,
     ].any((idx) => appdata.settings[idx] == '1');
   }
 
@@ -45,6 +46,9 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
       appdata.settings[index] = value;
     });
     appdata.updateSettings();
+    if (index == showAiTabSettingIndex) {
+      App.serviceConfigVersion.value++;
+    }
   }
 
   void _toggleCapability(int index) {
@@ -214,7 +218,6 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
       _buildSectionTitle('底栏'.tl),
       _buildSwitch(
         title: '显示 AI 标签页'.tl,
-        subtitle: '开启后底栏出现 AI Tab（需重建页面生效）'.tl,
         settingIndex: showAiTabSettingIndex,
         leading: const Icon(Icons.smart_toy_outlined),
       ),
@@ -245,6 +248,12 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
         title: '查询下载状态'.tl,
         settingIndex: aiCapabilityGetDownloadStatusSettingIndex,
         leading: const Icon(Icons.info_outline),
+      ),
+      _buildSwitch(
+        title: '远程库查询'.tl,
+        subtitle: '查询远程服务器已下载漫画（需已连接远程服务）'.tl,
+        settingIndex: aiCapabilityQueryRemoteLibrarySettingIndex,
+        leading: const Icon(Icons.cloud_done_outlined),
       ),
       const Divider(),
       _buildProviderSection(),

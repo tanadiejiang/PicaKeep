@@ -3,16 +3,26 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:picakeep/foundation/ai/ai_capabilities.dart';
 import 'package:picakeep/foundation/ai/ai_settings.dart';
+import 'package:picakeep/pages/ai/ai_chat_page.dart';
 import 'package:picakeep/tools/translations.dart';
 
-class AiPage extends StatefulWidget {
+class AiPage extends StatelessWidget {
   const AiPage({super.key});
 
   @override
-  State<AiPage> createState() => _AiPageState();
+  Widget build(BuildContext context) {
+    return const AiChatPage();
+  }
 }
 
-class _AiPageState extends State<AiPage> {
+class AiToolDebugPage extends StatefulWidget {
+  const AiToolDebugPage({super.key});
+
+  @override
+  State<AiToolDebugPage> createState() => _AiToolDebugPageState();
+}
+
+class _AiToolDebugPageState extends State<AiToolDebugPage> {
   late final List<Map<String, Object?>> _schemas;
 
   @override
@@ -24,21 +34,21 @@ class _AiPageState extends State<AiPage> {
 
   @override
   Widget build(BuildContext context) {
-    return CustomScrollView(
-      slivers: [
-        SliverAppBar(
-          title: Text('AI 工具'.tl),
-          floating: true,
-          automaticallyImplyLeading: false,
-        ),
-        SliverList(
-          delegate: SliverChildBuilderDelegate(
-            (context, index) => _ToolCard(schema: _schemas[index]),
-            childCount: _schemas.length,
+    return Scaffold(
+      appBar: AppBar(
+        title: Text('AI 工具调试'.tl),
+      ),
+      body: CustomScrollView(
+        slivers: [
+          SliverList(
+            delegate: SliverChildBuilderDelegate(
+              (context, index) => _ToolCard(schema: _schemas[index]),
+              childCount: _schemas.length,
+            ),
           ),
-        ),
-        const SliverToBoxAdapter(child: SizedBox(height: 24)),
-      ],
+          const SliverToBoxAdapter(child: SizedBox(height: 24)),
+        ],
+      ),
     );
   }
 }

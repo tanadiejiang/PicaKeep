@@ -332,15 +332,16 @@ class EhentaiComicPageV2 extends BaseOnlineComicPage<Gallery> {
             contentPadding: const EdgeInsets.symmetric(vertical: 8),
             content: SizedBox(
               width: double.maxFinite,
-              child: Column(
+              child: RadioGroup<int>(
+                groupValue: current,
+                onChanged: (v) => setS(() => current = v!),
+                child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  RadioListTile<int>(
+                  const RadioListTile<int>(
                     value: 0,
-                    groupValue: current,
-                    title: const Text('普通下载'),
-                    subtitle: const Text('逐页下载，支持断点续传'),
-                    onChanged: (v) => setS(() => current = v!),
+                    title: Text('普通下载'),
+                    subtitle: Text('逐页下载，支持断点续传'),
                   ),
                   if (hasArchive)
                     ExpansionTile(
@@ -359,19 +360,15 @@ class EhentaiComicPageV2 extends BaseOnlineComicPage<Gallery> {
                         else ...[
                           RadioListTile<int>(
                             value: 1,
-                            groupValue: current,
                             title: const Text('Original'),
                             subtitle: Text(
                                 '${info!.originCost}  ${info!.originSize}'),
-                            onChanged: (v) => setS(() => current = v!),
                           ),
                           RadioListTile<int>(
                             value: 2,
-                            groupValue: current,
                             title: const Text('Resample'),
                             subtitle: Text(
                                 '${info!.resampleCost}  ${info!.resampleSize}'),
-                            onChanged: (v) => setS(() => current = v!),
                           ),
                           if (info!.cancelUnlockUrl != null)
                             ListTile(
@@ -385,6 +382,7 @@ class EhentaiComicPageV2 extends BaseOnlineComicPage<Gallery> {
                 ],
               ),
             ),
+          ),
             actions: [
               TextButton(
                 onPressed: () => Navigator.pop(ctx),

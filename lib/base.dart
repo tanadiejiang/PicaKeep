@@ -162,6 +162,7 @@ class Appdata {
     '',  //130 aiModelId
     '{}', //131 aiModelParams
     '[]', //132 aiPromptTemplates
+    '0', //133 aiCapabilityQueryRemoteLibrary
   ];
 
   List<String> implicitData = [
