@@ -149,6 +149,19 @@ class Appdata {
     '1', //117 mDNS 失败时自动网段扫描
     '{}', //118 图集合集外壳目录识别
     '2', //119 App 字号（0跟随系统/1小/2标准/3大/4特大）
+    '0', //120 showAiTab
+    '0', //121 aiCapabilitySearchOnline
+    '0', //122 aiCapabilityDownloadComic
+    '0', //123 aiCapabilitySearchLocal
+    '0', //124 aiCapabilityQueryLocalLibrary
+    '0', //125 aiCapabilityResolveLocalItems
+    '0', //126 aiCapabilityGetDownloadStatus
+    '',  //127 aiProviderTemplate
+    '',  //128 aiBaseUrl
+    '',  //129 aiApiKey
+    '',  //130 aiModelId
+    '{}', //131 aiModelParams
+    '[]', //132 aiPromptTemplates
   ];
 
   List<String> implicitData = [

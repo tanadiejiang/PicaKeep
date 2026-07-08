@@ -1,6 +1,8 @@
 import 'ai_tool_registry.dart';
 import 'tools/download_comic_tool.dart';
 import 'tools/download_status_tool.dart';
+import 'tools/query_local_library_tool.dart';
+import 'tools/resolve_local_items_tool.dart';
 import 'tools/search_local_tool.dart';
 import 'tools/search_online_tool.dart';
 
@@ -20,6 +22,8 @@ class AiCapabilities {
       SearchOnlineTool(),
       DownloadComicTool(),
       SearchLocalTool(),
+      QueryLocalLibraryTool(),
+      ResolveLocalItemsTool(),
       DownloadStatusTool(),
     ]);
     _registered = true;

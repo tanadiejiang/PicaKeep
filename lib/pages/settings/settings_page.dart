@@ -33,6 +33,7 @@ import 'package:picakeep/tools/app_icon_channel.dart';
 import 'package:picakeep/tools/block_screenshot.dart';
 import 'package:picakeep/tools/night_mode_channel.dart';
 import 'package:share_plus/share_plus.dart';
+import 'package:picakeep/foundation/ai/ai_settings.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 part 'app_settings.dart';
@@ -44,6 +45,7 @@ part 'reading_settings.dart';
 part 'local_favorite_settings.dart';
 part 'download_settings.dart';
 part 'network_settings.dart';
+part 'ai_settings_page.dart';
 
 void refreshLocalDataCaches() {
   // Managers are reinitialized in place so mounted widgets never observe
@@ -103,7 +105,7 @@ class _SettingsPageState extends State<SettingsPage> {
       !UiMode.m1(context) &&
       MediaQuery.of(context).size.width >= _settingsWideLayoutBreakpoint;
 
-  final categories = <String>["浏览", "阅读", "外观", "本地收藏", "APP", "网络", "下载", "APP能力", "关于"];
+  final categories = <String>["浏览", "阅读", "外观", "本地收藏", "APP", "网络", "AI", "下载", "APP能力", "关于"];
 
   final icons = <IconData>[
     Icons.explore,
@@ -112,6 +114,7 @@ class _SettingsPageState extends State<SettingsPage> {
     Icons.collections_bookmark_rounded,
     Icons.apps,
     Icons.wifi,
+    Icons.smart_toy_outlined,
     Icons.download_outlined,
     Icons.cloud_sync_outlined,
     Icons.info
@@ -426,9 +429,10 @@ class _SettingsPageState extends State<SettingsPage> {
         3 => LocalFavoritesSettings(width: width),
         4 => buildAppSettings(width, context),
         5 => buildNetworkSettings(width, context),
-        6 => _buildDownloadSettings(width),
-        7 => buildAppCapabilitiesSettings(width, context),
-        8 => buildAbout(width),
+        6 => AiSettingsPage(width: width),
+        7 => _buildDownloadSettings(width),
+        8 => buildAppCapabilitiesSettings(width, context),
+        9 => buildAbout(width),
         _ => throw UnimplementedError()
       };
     }

@@ -31,6 +31,10 @@ extension DownloadPageLogicLoading on DownloadPageLogic {
   }
 
   Future<void> reload() async {
+    // ignore: avoid_print
+    print(
+      '[PicaKeep][DownloadPage] reload.start view=$_view remoteRootId=$remoteRootId',
+    );
     final forceRemoteRefresh = _forceRemoteRefreshOnNextReload;
     _forceRemoteRefreshOnNextReload = false;
     // 用户主动刷新时清除持久化的"无封面"标记，使有新增封面文件的项得以重新探测。
@@ -52,6 +56,7 @@ extension DownloadPageLogicLoading on DownloadPageLogic {
       direction = 'asc';
     }
     _loadIssue = null;
+    final reloadSw = Stopwatch()..start();
     // 远程可用性探测（fetchSnapshot）远程离线时会走到 ~3s 超时。local 视图的
     // _loadComics 完全不读 remoteAvailable，showSourceSelector 也用
     // _hasConfiguredRemoteServer 兜底，因此 local 视图无需等待该探测——
@@ -62,16 +67,27 @@ extension DownloadPageLogicLoading on DownloadPageLogic {
     } else {
       remoteAvailable = await _checkRemoteAvailability();
     }
+    final availMs = reloadSw.elapsedMilliseconds;
     final loadResult = await _loadComics(
       order,
       direction,
       forceRemoteRefresh: forceRemoteRefresh,
     );
+    final loadMs = reloadSw.elapsedMilliseconds - availMs;
     final loadedComics = List<DownloadedItem>.from(loadResult.items);
     _loadIssue = loadedComics.isEmpty ? loadResult.issue : null;
     final visibleIds = loadedComics.map((item) => item.id).toSet();
     _coverImageProviders.removeWhere((key, _) => !visibleIds.contains(key));
     await _prepareTileViewModels(loadedComics);
+    final tileMs = reloadSw.elapsedMilliseconds - availMs - loadMs;
+    Log.info(
+      'DownloadPage',
+      'reload view=$_view avail=${availMs}ms load=${loadMs}ms tileModels=${tileMs}ms items=${loadedComics.length}',
+    );
+    // ignore: avoid_print
+    print(
+      '[PicaKeep][DownloadPage] reload view=$_view avail=${availMs}ms load=${loadMs}ms tileModels=${tileMs}ms items=${loadedComics.length}',
+    );
     baseComics = loadedComics;
     _prefetchCoverThumbnails(loadedComics);
     keyword_ = '__stale__';
@@ -284,11 +300,9 @@ extension DownloadPageLogicLoading on DownloadPageLogic {
             rootId,
             forceRefresh: forceRemoteRefresh,
           )
-        : (await _remoteDataSource.fetchItems(
+        : await _remoteDataSource.fetchManagedDownloadItems(
             forceRefresh: forceRemoteRefresh,
-          ))
-            .where((item) => item.isManagedDownloadRoot)
-            .toList(growable: false);
+          );
     final items = downloads.cast<DownloadedItem>().toList();
     _sortItems(items, order, direction);
     return items;

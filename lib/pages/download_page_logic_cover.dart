@@ -6,6 +6,29 @@ extension DownloadPageLogicCover on DownloadPageLogic {
   bool get _showReadingPosition => appdata.settings[73] == '1';
 
   Future<void> _prepareTileViewModels(List<DownloadedItem> items) async {
+    // 远程档/remoteRootId 页：直接用字段访问构建 ViewModel，跳过：
+    //   1. 本地历史/收藏 DB 查询（item id 是服务端派生值，对不上本地 target，且极慢）
+    //   2. 通用 _downloadedItemAuthor/_downloadedItemTags 等 fallback 路径——它们
+    //      在字段为空时会调 toJson()，而 RemoteLibraryComicItem.toJson() 会序列化
+    //      全部章节页 URL，4075 个 item 同步跑造成主线程数秒阻塞。
+    // 直接访问 .subTitle/.sourceDisplayName/.tags/.comicSize 均为 O(1) getter，
+    // 不触发 DB 或序列化，预构建后滚动与本地档一样流畅。
+    if (_view == _DownloadedLibraryView.remote || _isRemoteRootPage) {
+      _tileViewModels
+        ..clear()
+        ..addEntries(items.map((item) => MapEntry(
+              item.id,
+              _DownloadedTileViewModel(
+                author: item.subTitle.trim(),
+                type: item.sourceDisplayName.trim(),
+                tags: item.tags,
+                size: item.comicSize != null
+                    ? '${item.comicSize!.toStringAsFixed(2)}MB'
+                    : '未知大小'.tl,
+              ),
+            )));
+      return;
+    }
     final showFavoriteBadge = _showFavoriteBadge;
     final showReadingPosition = _showReadingPosition;
     final readingHistoryById = showReadingPosition
@@ -36,8 +59,11 @@ extension DownloadPageLogicCover on DownloadPageLogic {
 
   Future<Map<String, History>> _buildReadingHistoryById(
       List<DownloadedItem> items) async {
+    // 远程项（根目录或单项）的 id 是服务端派生值，与本地历史/收藏 target 无关，
+    // 排除后避免聚合档里混入的远程项也触发无意义查询。
     final ids = items
-        .where((item) => item is! RemoteLibraryRootItem)
+        .where((item) =>
+            item is! RemoteLibraryRootItem && item is! RemoteLibraryComicItem)
         .map((item) => item.id.trim())
         .where((id) => id.isNotEmpty)
         .toSet();
@@ -52,7 +78,8 @@ extension DownloadPageLogicCover on DownloadPageLogic {
   Future<Map<String, bool>> _buildFavoriteById(
       List<DownloadedItem> items) async {
     final ids = items
-        .where((item) => item is! RemoteLibraryRootItem)
+        .where((item) =>
+            item is! RemoteLibraryRootItem && item is! RemoteLibraryComicItem)
         .map((item) => item.id.trim())
         .where((id) => id.isNotEmpty)
         .toSet();
