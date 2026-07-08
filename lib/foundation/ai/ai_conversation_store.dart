@@ -1,0 +1,286 @@
+import 'dart:io';
+import 'dart:convert';
+import 'package:picakeep/foundation/app.dart';
+import 'ai_conversation.dart';
+import 'llm_client.dart';
+
+/// 对话元数据
+class AiConversationMeta {
+  final String id;
+  final String title;
+  final DateTime createdAt;
+  final DateTime updatedAt;
+
+  AiConversationMeta({
+    required this.id,
+    required this.title,
+    required this.createdAt,
+    required this.updatedAt,
+  });
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'title': title,
+        'createdAt': createdAt.toIso8601String(),
+        'updatedAt': updatedAt.toIso8601String(),
+      };
+
+  factory AiConversationMeta.fromJson(Map<String, dynamic> json) {
+    return AiConversationMeta(
+      id: json['id'] as String,
+      title: json['title'] as String,
+      createdAt: DateTime.parse(json['createdAt'] as String),
+      updatedAt: DateTime.parse(json['updatedAt'] as String),
+    );
+  }
+}
+
+/// 对话持久化存储（纯静态方法）
+class AiConversationStore {
+  AiConversationStore._();
+
+  static const int _maxConversations = 50;
+
+  static Future<String> get _dir async {
+    final path = '${App.dataPath}${Platform.pathSeparator}ai_conversations';
+    await Directory(path).create(recursive: true);
+    return path;
+  }
+
+  static String get _indexPath =>
+      '${App.dataPath}${Platform.pathSeparator}ai_conversations_index.json';
+
+  static String get _lastActiveIdPath =>
+      '${App.dataPath}${Platform.pathSeparator}ai_last_active_conversation.txt';
+
+  /// 加载对话索引
+  static Future<List<AiConversationMeta>> loadIndex() async {
+    try {
+      final file = File(_indexPath);
+      if (!await file.exists()) return [];
+
+      final content = await file.readAsString();
+      final jsonList = jsonDecode(content) as List<dynamic>;
+      return jsonList
+          .whereType<Map<String, dynamic>>()
+          .map((json) => AiConversationMeta.fromJson(json))
+          .toList();
+    } catch (e) {
+      print('Failed to load conversation index: $e');
+      return [];
+    }
+  }
+
+  /// 加载对话内容
+  static Future<Map<String, dynamic>?> loadConversation(String id) async {
+    try {
+      final dir = await _dir;
+      final file = File('$dir${Platform.pathSeparator}$id.json');
+      if (!await file.exists()) return null;
+
+      final content = await file.readAsString();
+      return jsonDecode(content) as Map<String, dynamic>;
+    } catch (e) {
+      print('Failed to load conversation $id: $e');
+      return null;
+    }
+  }
+
+  /// 保存对话
+  static Future<void> save({
+    required String id,
+    required String title,
+    required DateTime createdAt,
+    required List<AiChatMessage> displayMessages,
+    required List<LlmMessage> history,
+  }) async {
+    try {
+      final updatedAt = DateTime.now();
+      final dir = await _dir;
+
+      // 构建完整 JSON
+      final conversationJson = {
+        'version': 1,
+        'id': id,
+        'title': title,
+        'createdAt': createdAt.toIso8601String(),
+        'updatedAt': updatedAt.toIso8601String(),
+        'displayMessages': displayMessages.map((msg) => _serializeAiChatMessage(msg)).toList(),
+        'history': history.map((msg) => msg.toJson()).toList(),
+      };
+
+      // 写入对话文件
+      final file = File('$dir${Platform.pathSeparator}$id.json');
+      await file.writeAsString(jsonEncode(conversationJson));
+
+      // 更新索引
+      final index = await loadIndex();
+      final existingIndex = index.indexWhere((meta) => meta.id == id);
+
+      final newMeta = AiConversationMeta(
+        id: id,
+        title: title,
+        createdAt: createdAt,
+        updatedAt: updatedAt,
+      );
+
+      if (existingIndex >= 0) {
+        index[existingIndex] = newMeta;
+      } else {
+        index.add(newMeta);
+      }
+
+      // 按 updatedAt 降序排序
+      index.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+
+      // 清理超量对话
+      await _pruneIfNeeded(index);
+
+      // 写回索引
+      final indexFile = File(_indexPath);
+      await indexFile.writeAsString(jsonEncode(index.map((m) => m.toJson()).toList()));
+    } catch (e) {
+      print('Failed to save conversation $id: $e');
+    }
+  }
+
+  /// 删除对话
+  static Future<void> delete(String id) async {
+    try {
+      // 删除对话文件
+      final dir = await _dir;
+      final file = File('$dir${Platform.pathSeparator}$id.json');
+      if (await file.exists()) {
+        await file.delete();
+      }
+
+      // 从索引移除
+      final index = await loadIndex();
+      index.removeWhere((meta) => meta.id == id);
+
+      final indexFile = File(_indexPath);
+      await indexFile.writeAsString(jsonEncode(index.map((m) => m.toJson()).toList()));
+    } catch (e) {
+      print('Failed to delete conversation $id: $e');
+    }
+  }
+
+  /// 加载最后活跃的对话 ID
+  static Future<String?> loadLastActiveId() async {
+    try {
+      final file = File(_lastActiveIdPath);
+      if (!await file.exists()) return null;
+      return (await file.readAsString()).trim();
+    } catch (e) {
+      print('Failed to load last active conversation id: $e');
+      return null;
+    }
+  }
+
+  /// 保存最后活跃的对话 ID
+  static Future<void> saveLastActiveId(String id) async {
+    try {
+      final file = File(_lastActiveIdPath);
+      await file.writeAsString(id);
+    } catch (e) {
+      print('Failed to save last active conversation id: $e');
+    }
+  }
+
+  /// 清理超量对话
+  static Future<void> _pruneIfNeeded(List<AiConversationMeta> index) async {
+    if (index.length <= _maxConversations) return;
+
+    try {
+      // 按 createdAt 排序，删除最老的
+      final sorted = List<AiConversationMeta>.from(index);
+      sorted.sort((a, b) => a.createdAt.compareTo(b.createdAt));
+
+      final toDelete = sorted.take(sorted.length - _maxConversations).toList();
+      final dir = await _dir;
+
+      for (final meta in toDelete) {
+        final file = File('$dir${Platform.pathSeparator}${meta.id}.json');
+        if (await file.exists()) {
+          await file.delete();
+        }
+        index.removeWhere((m) => m.id == meta.id);
+      }
+    } catch (e) {
+      print('Failed to prune conversations: $e');
+    }
+  }
+
+  /// 序列化 AiChatMessage
+  static Map<String, dynamic> _serializeAiChatMessage(AiChatMessage msg) {
+    final json = <String, dynamic>{
+      'type': msg.type.name,
+      'text': msg.text,
+      'createdAt': msg.createdAt.toIso8601String(),
+    };
+
+    if (msg.toolName != null) json['toolName'] = msg.toolName;
+    if (msg.toolArgs != null) json['toolArgs'] = msg.toolArgs;
+
+    // toolData 序列化：仅支持基本类型
+    if (msg.toolData != null) {
+      final data = msg.toolData;
+      if (data is String || data is num || data is bool) {
+        json['toolData'] = data;
+      } else if (data is List || data is Map) {
+        try {
+          json['toolData'] = jsonDecode(jsonEncode(data));
+        } catch (_) {
+          // 无法序列化则跳过
+        }
+      }
+    }
+
+    return json;
+  }
+
+  /// 反序列化 AiChatMessage
+  static AiChatMessage deserializeAiChatMessage(Map<String, dynamic> json) {
+    final typeStr = json['type'] as String;
+    final type = AiChatMessageType.values.firstWhere(
+      (e) => e.name == typeStr,
+      orElse: () => AiChatMessageType.assistant,
+    );
+
+    return AiChatMessage(
+      type: type,
+      text: json['text'] as String,
+      toolName: json['toolName'] as String?,
+      toolArgs: json['toolArgs'] as Map<String, dynamic>?,
+      toolData: json['toolData'],
+      createdAt: json['createdAt'] != null
+          ? DateTime.parse(json['createdAt'] as String)
+          : DateTime.now(),
+    );
+  }
+
+  /// 反序列化 LlmMessage
+  static LlmMessage deserializeLlmMessage(Map<String, dynamic> json) {
+    final role = json['role'] as String;
+    final content = json['content'] as String?;
+    final toolCallsJson = json['tool_calls'] as List<dynamic>?;
+    final toolCallId = json['tool_call_id'] as String?;
+    final name = json['name'] as String?;
+
+    List<LlmToolCall>? toolCalls;
+    if (toolCallsJson != null) {
+      toolCalls = toolCallsJson
+          .whereType<Map<String, dynamic>>()
+          .map((tc) => LlmToolCall.fromJson(tc))
+          .toList();
+    }
+
+    return LlmMessage(
+      role: role,
+      content: content,
+      toolCalls: toolCalls,
+      toolCallId: toolCallId,
+      name: name,
+    );
+  }
+}
