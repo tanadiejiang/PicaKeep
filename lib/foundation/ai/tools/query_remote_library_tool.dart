@@ -67,6 +67,7 @@ class QueryRemoteLibraryTool extends AiTool {
                   'author': item.subtitle,
                   'tags': item.metadataTags,
                   'coverUrl': item.coverUrl,
+                  'source': item.sourceDisplayName,
                   'availability': {'remoteDownloaded': true},
                 })
             .toList(),

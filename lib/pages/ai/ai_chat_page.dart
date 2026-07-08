@@ -3,6 +3,8 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:picakeep/foundation/ai/ai_conversation.dart';
 import 'package:picakeep/foundation/ai/ai_conversation_store.dart';
+import 'package:picakeep/foundation/ai/ai_result_item.dart';
+import 'package:picakeep/pages/ai/ai_item_list_page.dart';
 import 'package:picakeep/pages/ai/ai_page.dart';
 import 'package:picakeep/tools/translations.dart';
 
@@ -398,6 +400,9 @@ class _MessageBubble extends StatelessWidget {
           ),
         );
 
+      case AiChatMessageType.resultList:
+        return _ResultListEntryCard(message: message);
+
       default:
         return const SizedBox.shrink();
     }
@@ -496,6 +501,33 @@ class _ToolCardState extends State<_ToolCard> {
     } catch (_) {
       return obj?.toString() ?? '';
     }
+  }
+}
+
+/// 结果清单入口卡片
+class _ResultListEntryCard extends StatelessWidget {
+  const _ResultListEntryCard({required this.message});
+
+  final AiChatMessage message;
+
+  @override
+  Widget build(BuildContext context) {
+    final items = AiResultItem.fromToolData(message.toolData);
+    final colorScheme = Theme.of(context).colorScheme;
+    return Card(
+      margin: const EdgeInsets.symmetric(vertical: 4),
+      color: colorScheme.secondaryContainer,
+      child: ListTile(
+        leading: Icon(Icons.list_alt, color: colorScheme.onSecondaryContainer),
+        title: Text('共 ${items.length} 条结果，点击查看清单'),
+        trailing: const Icon(Icons.chevron_right),
+        onTap: items.isEmpty
+            ? null
+            : () => Navigator.of(context).push(MaterialPageRoute(
+                  builder: (_) => AiItemListPage(title: '工具结果', items: items),
+                )),
+      ),
+    );
   }
 }
 

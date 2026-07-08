@@ -174,6 +174,14 @@ Iterable<String> _searchTermsForDownloadedItem(DownloadedItem item) sync* {
         .map((value) => value.toLowerCase());
   }
 
+  // 远程条目：toJson() 序列化全量 episodes 极慢，直接返回轻量字段
+  if (item is RemoteLibraryComicItem) {
+    if (item.displayId.isNotEmpty) yield item.displayId.toLowerCase();
+    if (item.remoteId.isNotEmpty) yield item.remoteId.toLowerCase();
+    if (item.remotePath.isNotEmpty) yield item.remotePath.toLowerCase();
+    return;
+  }
+
   try {
     final json = item.toJson();
     for (final key in const [
@@ -458,6 +466,7 @@ class DownloadPageLogic extends StateController {
   bool _isScrollInteracting = false;
   bool _pendingCoverRefresh = false;
   Timer? _scrollIdleTimer;
+  Timer? _searchDebounceTimer;
 
   bool loading = true;
   bool selecting = false;
@@ -504,6 +513,13 @@ class DownloadPageLogic extends StateController {
     loading = true;
     update();
     unawaited(_reloadVisibleComics());
+  }
+
+  @override
+  void dispose() {
+    _scrollIdleTimer?.cancel();
+    _searchDebounceTimer?.cancel();
+    super.dispose();
   }
 }
 
@@ -1130,9 +1146,15 @@ class _DownloadPageState extends State<DownloadPage>
           hintText: "搜索".tl,
         ),
         onChanged: (s) {
-          logic.keyword = s;
-          logic.find();
-          logic.update();
+          logic._searchDebounceTimer?.cancel();
+          logic._searchDebounceTimer = Timer(
+            const Duration(milliseconds: 280),
+            () {
+              logic.keyword = s;
+              logic.find();
+              logic.update();
+            },
+          );
         },
       );
     } else {
@@ -1643,7 +1665,7 @@ class DownloadedComicInfoView extends StatefulWidget {
     this.sheetMinSize = 0.3,
   });
   final DownloadedItem item;
-  final DownloadPageLogic logic;
+  final DownloadPageLogic? logic;
   final ScrollController? scrollController;
   final DraggableScrollableController? sheetController;
   final double? sheetMaxSize;
@@ -1831,7 +1853,7 @@ class _DownloadedComicInfoViewState extends State<DownloadedComicInfoView> {
   }
 
   void deleteEpisode(int i) {
-    if (!widget.logic.canDeleteItem(_comic)) {
+    if (widget.logic == null || !widget.logic!.canDeleteItem(_comic)) {
       return;
     }
     showDialog(
@@ -2160,10 +2182,11 @@ class _DownloadedComicInfoViewState extends State<DownloadedComicInfoView> {
     } else if (comic is LocalLibraryComicItem) {
       coverProvider = LocalLibraryManager().coverImageProviderForItem(comic);
     } else {
-      coverProvider = widget.logic.coverImageProviderFor(comic);
+      coverProvider = widget.logic?.coverImageProviderFor(comic)
+          ?? (comic is RemoteLibraryComicItem ? comic.coverImageProvider : null);
     }
 
-    final file = widget.logic.coverFor(comic);
+    final file = widget.logic?.coverFor(comic) ?? File('');
     final hasFile = file.path.trim().isNotEmpty;
     return ClipRRect(
       borderRadius: const BorderRadius.all(Radius.circular(16)),
