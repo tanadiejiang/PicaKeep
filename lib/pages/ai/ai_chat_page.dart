@@ -16,6 +16,11 @@ class AiChatPage extends StatefulWidget {
 }
 
 class _AiChatPageState extends State<AiChatPage> {
+  // 按会话 id 缓存的输入草稿。AiConversationController.create() 每次都是
+  // 全新实例（从磁盘反序列化的静态工厂，无全局单例/注册表复用），
+  // 草稿不能挂在 controller 上，只能挂在 State 的类级 static 字段上。
+  static final Map<String, String> _draftsByConversationId = {};
+
   AiConversationController? _controller;
   final _scaffoldKey = GlobalKey<ScaffoldState>();
   late final TextEditingController _inputController;
@@ -35,6 +40,8 @@ class _AiChatPageState extends State<AiChatPage> {
     if (mounted) {
       setState(() => _controller = ctrl);
       _controller!.addListener(_onControllerUpdate);
+      _restoreDraft(ctrl);
+      _scrollToBottomAfterFrame();
     }
   }
 
@@ -45,6 +52,8 @@ class _AiChatPageState extends State<AiChatPage> {
       _controller?.dispose();
       setState(() => _controller = newCtrl);
       _controller!.addListener(_onControllerUpdate);
+      _restoreDraft(newCtrl);
+      _scrollToBottomAfterFrame();
       await AiConversationStore.saveLastActiveId(meta.id);
     }
   }
@@ -56,10 +65,32 @@ class _AiChatPageState extends State<AiChatPage> {
       _controller?.dispose();
       setState(() => _controller = newCtrl);
       _controller!.addListener(_onControllerUpdate);
+      _restoreDraft(newCtrl);
+      _scrollToBottomAfterFrame();
       if (newCtrl.conversationId != null) {
         await AiConversationStore.saveLastActiveId(newCtrl.conversationId!);
       }
     }
+  }
+
+  /// 切到底部一次（用于 controller 重建后恢复滚动位置）。
+  /// maxScrollExtent 为 0（如新会话空列表）时 guard 会自动跳过。
+  void _scrollToBottomAfterFrame() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_scrollController.hasClients &&
+          _scrollController.position.maxScrollExtent > 0) {
+        _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
+      }
+    });
+  }
+
+  /// 按会话 id 恢复输入框草稿；没有草稿则清空，避免残留上一个会话的文字。
+  void _restoreDraft(AiConversationController ctrl) {
+    final draft = _draftsByConversationId[ctrl.conversationId ?? ''] ?? '';
+    _inputController.text = draft;
+    _inputController.selection = TextSelection.collapsed(
+      offset: _inputController.text.length,
+    );
   }
 
   @override
@@ -153,6 +184,7 @@ class _AiChatPageState extends State<AiChatPage> {
     final text = _inputController.text.trim();
     if (text.isEmpty) return;
     _inputController.clear();
+    _draftsByConversationId.remove(_controller?.conversationId ?? '');
     _controller!.send(text);
   }
 
@@ -292,6 +324,8 @@ class _AiChatPageState extends State<AiChatPage> {
                     minLines: 1,
                     enabled: !_controller!.isLoading &&
                         _controller!.pendingDownload == null,
+                    onChanged: (v) =>
+                        _draftsByConversationId[_controller?.conversationId ?? ''] = v,
                     onSubmitted: (_) => _send(),
                   ),
                 ),
