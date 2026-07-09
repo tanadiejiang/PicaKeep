@@ -81,6 +81,8 @@ class AiItemListPage extends StatelessWidget {
       showModalBottomSheet(
         context: context,
         isScrollControlled: true,
+        showDragHandle: false,
+        useSafeArea: false,
         backgroundColor: Colors.transparent,
         builder: (context) {
           return DraggableScrollableSheet(
@@ -88,88 +90,109 @@ class AiItemListPage extends StatelessWidget {
             initialChildSize: 0.6,
             minChildSize: 0.3,
             maxChildSize: 0.9,
+            expand: false,
             builder: (context, scrollController) {
-              return DownloadedComicInfoView(
-                realItem!,
-                null,
-                scrollController: scrollController,
-                sheetController: sheetController,
-                sheetMaxSize: 0.9,
+              return Material(
+                color: Theme.of(context).colorScheme.surface,
+                surfaceTintColor: Theme.of(context).colorScheme.surfaceTint,
+                shape: const RoundedRectangleBorder(
+                  borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+                ),
+                clipBehavior: Clip.antiAlias,
+                child: DownloadedComicInfoView(
+                  realItem!,
+                  null,
+                  scrollController: scrollController,
+                  sheetController: sheetController,
+                  sheetMaxSize: 0.9,
+                ),
               );
             },
           );
         },
-      );
+      ).whenComplete(sheetController.dispose);
     } else {
       // fallback：轻量底栏
       showModalBottomSheet(
         context: context,
+        isScrollControlled: true,
+        showDragHandle: false,
+        useSafeArea: false,
+        backgroundColor: Colors.transparent,
         builder: (context) {
-          return SingleChildScrollView(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                // 封面图
-                if (item.coverUrl.isNotEmpty)
-                  Center(
-                    child: Image(
-                      image: NetworkImage(item.coverUrl),
-                      height: 120,
-                      errorBuilder: (context, error, stackTrace) {
-                        return Container(
-                          height: 120,
-                          width: 80,
-                          color: Colors.grey[300],
-                          child: const Icon(Icons.image_not_supported),
-                        );
-                      },
+          return Material(
+            color: Theme.of(context).colorScheme.surface,
+            surfaceTintColor: Theme.of(context).colorScheme.surfaceTint,
+            shape: const RoundedRectangleBorder(
+              borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+            ),
+            clipBehavior: Clip.antiAlias,
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // 封面图
+                  if (item.coverUrl.isNotEmpty)
+                    Center(
+                      child: Image(
+                        image: NetworkImage(item.coverUrl),
+                        height: 120,
+                        errorBuilder: (context, error, stackTrace) {
+                          return Container(
+                            height: 120,
+                            width: 80,
+                            color: Colors.grey[300],
+                            child: const Icon(Icons.image_not_supported),
+                          );
+                        },
+                      ),
+                    )
+                  else
+                    Center(
+                      child: Container(
+                        height: 120,
+                        width: 80,
+                        color: Colors.grey[300],
+                        child: const Icon(Icons.image),
+                      ),
                     ),
-                  )
-                else
-                  Center(
-                    child: Container(
-                      height: 120,
-                      width: 80,
-                      color: Colors.grey[300],
-                      child: const Icon(Icons.image),
+                  const SizedBox(height: 16),
+
+                  // 标题
+                  Text(
+                    item.title,
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
+                  const SizedBox(height: 8),
+
+                  // 作者
+                  Text(
+                    item.author,
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                  const SizedBox(height: 12),
+
+                  // 标签
+                  if (item.tags.isNotEmpty)
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: item.tags
+                          .take(8)
+                          .map((tag) => Chip(
+                                label: Text(tag),
+                                visualDensity: VisualDensity.compact,
+                              ))
+                          .toList(),
                     ),
-                  ),
-                const SizedBox(height: 16),
+                  const SizedBox(height: 12),
 
-                // 标题
-                Text(
-                  item.title,
-                  style: Theme.of(context).textTheme.titleMedium,
-                ),
-                const SizedBox(height: 8),
-
-                // 作者
-                Text(
-                  item.author,
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
-                const SizedBox(height: 12),
-
-                // 标签
-                if (item.tags.isNotEmpty)
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: item.tags
-                        .take(8)
-                        .map((tag) => Chip(
-                              label: Text(tag),
-                              visualDensity: VisualDensity.compact,
-                            ))
-                        .toList(),
-                  ),
-                const SizedBox(height: 12),
-
-                // availability 状态
-                _buildAvailabilityStatus(context, item.availability),
-              ],
+                  // availability 状态
+                  _buildAvailabilityStatus(context, item.availability),
+                ],
+              ),
             ),
           );
         },

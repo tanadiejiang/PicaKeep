@@ -124,11 +124,11 @@ extension ReadComic on DownloadedItem {
 
 String _translateDownloadedTag(String tag) {
   try {
+    final lowerTag = tag.toLowerCase();
     for (final map in tagTranslations.values) {
-      for (final entry in map.entries) {
-        if (entry.key.toLowerCase() == tag.toLowerCase()) {
-          return entry.value.isNotEmpty ? entry.value : tag;
-        }
+      final hit = map[lowerTag];
+      if (hit != null && hit.isNotEmpty) {
+        return hit;
       }
     }
   } catch (_) {}
