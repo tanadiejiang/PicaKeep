@@ -94,7 +94,7 @@ class SearchOnlineTool extends AiTool {
         'id': comic.id,
         'title': comic.title,
         'author': comic.subTitle,
-        'cover': comic.cover,
+        'coverUrl': comic.cover,
         'tags': comic.tags,
         if (comic is PicacgComicItemBrief && comic.pages != null)
           'pageCount': comic.pages,
@@ -104,7 +104,7 @@ class SearchOnlineTool extends AiTool {
         'id': comic.id,
         'title': comic.title,
         'author': comic.subTitle,
-        'cover': comic.cover,
+        'coverUrl': comic.cover,
         'tags': comic.tags,
         if (comic.pages != null) 'pageCount': comic.pages,
       };

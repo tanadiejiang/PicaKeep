@@ -33,7 +33,9 @@ import 'package:picakeep/tools/app_icon_channel.dart';
 import 'package:picakeep/tools/block_screenshot.dart';
 import 'package:picakeep/tools/night_mode_channel.dart';
 import 'package:share_plus/share_plus.dart';
+import 'package:picakeep/foundation/ai/ai_prompt_tags.dart';
 import 'package:picakeep/foundation/ai/ai_settings.dart';
+import 'package:picakeep/pages/ai/ai_page.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 part 'app_settings.dart';
@@ -105,7 +107,18 @@ class _SettingsPageState extends State<SettingsPage> {
       !UiMode.m1(context) &&
       MediaQuery.of(context).size.width >= _settingsWideLayoutBreakpoint;
 
-  final categories = <String>["浏览", "阅读", "外观", "本地收藏", "APP", "网络", "AI", "下载", "APP能力", "关于"];
+  final categories = <String>[
+    "浏览",
+    "阅读",
+    "外观",
+    "本地收藏",
+    "APP",
+    "网络",
+    "AI",
+    "下载",
+    "APP能力",
+    "关于"
+  ];
 
   final icons = <IconData>[
     Icons.explore,

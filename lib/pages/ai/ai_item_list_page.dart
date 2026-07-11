@@ -1,13 +1,21 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import '../../foundation/ai/ai_result_item.dart';
+import '../../foundation/ai/ai_sources.dart';
+import '../../foundation/ai/ai_download_queue.dart';
+import '../../foundation/app_page_route.dart';
 import '../../foundation/remote_library_data_source.dart';
 import '../../foundation/download_model.dart';
 import '../../components/comic_tile.dart';
 import '../../components/layout.dart';
 import '../download_page.dart';
+import '../online_comic/picacg_comic_page_v2.dart';
+import '../online_comic/jm_comic_page_v2.dart';
+import '../online_comic/nhentai_comic_page_v2.dart';
+import '../online_comic/eh_comic_page_v2.dart';
+import 'ai_download_list_page.dart';
 
-class AiItemListPage extends StatelessWidget {
+class AiItemListPage extends StatefulWidget {
   final String title;
   final List<AiResultItem> items;
 
@@ -18,54 +26,69 @@ class AiItemListPage extends StatelessWidget {
   });
 
   @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: Text('$title (${items.length}条)'),
-      ),
-      body: items.isEmpty
-          ? const Center(
-              child: Text('暂无结果'),
-            )
-          : CustomScrollView(
-              slivers: [
-                SliverPadding(
-                  padding: const EdgeInsets.all(4),
-                  sliver: SliverGrid(
-                    gridDelegate: SliverGridDelegateWithComics(),
-                    delegate: SliverChildBuilderDelegate(
-                      (context, index) {
-                        final item = items[index];
-                        return Padding(
-                          padding: const EdgeInsets.all(2),
-                          child: DownloadedComicTile(
-                            name: item.title,
-                            author: item.author,
-                            imagePath: File(''),
-                            imageProvider: item.coverUrl.isNotEmpty
-                                ? NetworkImage(item.coverUrl)
-                                : null,
-                            type: item.source,
-                            tag: item.tags,
-                            size: item.availability['remoteDownloaded'] == true
-                                ? '远程已下载'
-                                : '',
-                            onTap: () => _showItemDetail(context, item),
-                            onLongTap: () {},
-                            onSecondaryTap: (_) {},
-                          ),
-                        );
-                      },
-                      childCount: items.length,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-    );
+  State<AiItemListPage> createState() => _AiItemListPageState();
+}
+
+class _AiItemListPageState extends State<AiItemListPage> {
+  bool _selecting = false;
+  late List<bool> _selected;
+  int _selectedNum = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _selected = List.filled(widget.items.length, false);
   }
 
-  Future<void> _showItemDetail(BuildContext context, AiResultItem item) async {
+  void _onTap(int index) {
+    if (_selecting) {
+      setState(() {
+        _selected[index] = !_selected[index];
+        _selectedNum += _selected[index] ? 1 : -1;
+        if (_selectedNum == 0) {
+          _selecting = false;
+        }
+      });
+    } else {
+      _openDetail(widget.items[index]);
+    }
+  }
+
+  void _onLongTap(int index) {
+    setState(() {
+      _selecting = true;
+      _selected[index] = true;
+      _selectedNum = 1;
+    });
+  }
+
+  void _exitSelection() {
+    setState(() {
+      _selected = List.filled(widget.items.length, false);
+      _selectedNum = 0;
+      _selecting = false;
+    });
+  }
+
+  void _openDetail(AiResultItem item) {
+    Widget page;
+    switch (item.source) {
+      case aiSourcePicacg:
+        page = PicacgComicPageV2(item.id);
+      case aiSourceJm:
+        page = JmComicPageV2(item.id);
+      case aiSourceNhentai:
+        page = NhentaiComicPageV2(item.id);
+      case aiSourceEhentai:
+        page = EhentaiComicPageV2(item.id);
+      default:
+        _showFallbackSheet(item);
+        return;
+    }
+    Navigator.of(context).push(AppPageRoute(builder: (_) => page));
+  }
+
+  Future<void> _showFallbackSheet(AiResultItem item) async {
     DownloadedItem? realItem;
     try {
       realItem = await const RemoteLibraryDataSource()
@@ -74,7 +97,7 @@ class AiItemListPage extends StatelessWidget {
       // 查找失败，降级到轻量底栏
     }
 
-    if (!context.mounted) return;
+    if (!mounted) return;
 
     if (realItem != null) {
       final sheetController = DraggableScrollableController();
@@ -112,7 +135,6 @@ class AiItemListPage extends StatelessWidget {
         },
       ).whenComplete(sheetController.dispose);
     } else {
-      // fallback：轻量底栏
       showModalBottomSheet(
         context: context,
         isScrollControlled: true,
@@ -200,6 +222,25 @@ class AiItemListPage extends StatelessWidget {
     }
   }
 
+  Future<void> _addToQueue() async {
+    final toQueue = <AiResultItem>[];
+    for (var i = 0; i < widget.items.length; i++) {
+      if (_selected[i]) {
+        toQueue.add(widget.items[i]);
+      }
+    }
+    if (toQueue.isEmpty) return;
+
+    await AiDownloadQueue.instance.addItems(toQueue);
+
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('已加入队列 ${toQueue.length} 项')),
+    );
+
+    _exitSelection();
+  }
+
   Widget _buildAvailabilityStatus(
       BuildContext context, Map<String, dynamic> availability) {
     final statusList = <String>[];
@@ -223,6 +264,113 @@ class AiItemListPage extends StatelessWidget {
       style: Theme.of(context).textTheme.bodySmall?.copyWith(
             color: Theme.of(context).colorScheme.primary,
           ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: _selecting
+          ? AppBar(
+              backgroundColor:
+                  Theme.of(context).colorScheme.primaryContainer,
+              leading: IconButton(
+                icon: const Icon(Icons.close),
+                onPressed: _exitSelection,
+              ),
+              title: Text('已选 $_selectedNum 项'),
+              actions: [
+                IconButton(
+                  icon: const Icon(Icons.download),
+                  tooltip: '加入下载队列',
+                  onPressed: _selectedNum > 0 ? _addToQueue : null,
+                ),
+              ],
+            )
+          : AppBar(
+              title: Text('${widget.title} (${widget.items.length}条)'),
+              actions: [
+                IconButton(
+                  icon: const Icon(Icons.queue),
+                  tooltip: '下载队列',
+                  onPressed: () {
+                    Navigator.of(context).push(
+                      AppPageRoute(
+                          builder: (_) => const AiDownloadListPage()),
+                    );
+                  },
+                ),
+              ],
+            ),
+      body: widget.items.isEmpty
+          ? const Center(
+              child: Text('暂无结果'),
+            )
+          : CustomScrollView(
+              slivers: [
+                SliverPadding(
+                  padding: const EdgeInsets.all(4),
+                  sliver: SliverGrid(
+                    gridDelegate: SliverGridDelegateWithComics(),
+                    delegate: SliverChildBuilderDelegate(
+                      (context, index) {
+                        final item = widget.items[index];
+                        return Padding(
+                          padding: const EdgeInsets.all(2),
+                          child: Stack(
+                            children: [
+                              DownloadedComicTile(
+                                name: item.title,
+                                author: item.author,
+                                imagePath: File(''),
+                                imageProvider: item.coverUrl.isNotEmpty
+                                    ? NetworkImage(item.coverUrl)
+                                    : null,
+                                type: item.source,
+                                tag: item.tags,
+                                size: item.availability['remoteDownloaded'] ==
+                                        true
+                                    ? '远程已下载'
+                                    : '',
+                                onTap: () => _onTap(index),
+                                onLongTap: () => _onLongTap(index),
+                                onSecondaryTap: (_) {},
+                              ),
+                              if (_selecting)
+                                IgnorePointer(
+                                  child: AnimatedContainer(
+                                    duration:
+                                        const Duration(milliseconds: 150),
+                                    color: _selected[index]
+                                        ? Theme.of(context)
+                                            .colorScheme
+                                            .primary
+                                            .withValues(alpha: 0.3)
+                                        : Colors.transparent,
+                                    child: _selected[index]
+                                        ? const Align(
+                                            alignment: Alignment.topRight,
+                                            child: Padding(
+                                              padding: EdgeInsets.all(6),
+                                              child: Icon(
+                                                Icons.check_circle,
+                                                color: Colors.white,
+                                              ),
+                                            ),
+                                          )
+                                        : null,
+                                  ),
+                                ),
+                            ],
+                          ),
+                        );
+                      },
+                      childCount: widget.items.length,
+                    ),
+                  ),
+                ),
+              ],
+            ),
     );
   }
 }

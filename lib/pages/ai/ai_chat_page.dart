@@ -1,12 +1,18 @@
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:picakeep/foundation/ai/ai_conversation.dart';
 import 'package:picakeep/foundation/ai/ai_conversation_store.dart';
+import 'package:picakeep/foundation/ai/ai_download_queue.dart';
+import 'package:picakeep/foundation/ai/ai_prompt_tags.dart';
 import 'package:picakeep/foundation/ai/ai_result_item.dart';
+import 'package:picakeep/foundation/app_page_route.dart';
+import 'package:picakeep/pages/ai/ai_download_list_page.dart';
 import 'package:picakeep/pages/ai/ai_item_list_page.dart';
-import 'package:picakeep/pages/ai/ai_page.dart';
 import 'package:picakeep/tools/translations.dart';
+
+const _promptTagBoundaryPattern = r'''[\s#，。；、,.!?;！：:（）()\[\]{}<>《》“”"'`~～]''';
 
 class AiChatPage extends StatefulWidget {
   const AiChatPage({super.key});
@@ -15,22 +21,46 @@ class AiChatPage extends StatefulWidget {
   State<AiChatPage> createState() => _AiChatPageState();
 }
 
-class _AiChatPageState extends State<AiChatPage> {
+class _AiChatPageState extends State<AiChatPage>
+    with AutomaticKeepAliveClientMixin {
   // 按会话 id 缓存的输入草稿。AiConversationController.create() 每次都是
   // 全新实例（从磁盘反序列化的静态工厂，无全局单例/注册表复用），
   // 草稿不能挂在 controller 上，只能挂在 State 的类级 static 字段上。
   static final Map<String, String> _draftsByConversationId = {};
 
+  // 按会话 id 记忆滚动 offset，用于切换标签页/会话时恢复位置。
+  static final Map<String, double> _scrollOffsetByConvId = {};
+
+  @override
+  bool get wantKeepAlive => true;
+
   AiConversationController? _controller;
   final _scaffoldKey = GlobalKey<ScaffoldState>();
   late final TextEditingController _inputController;
   late final ScrollController _scrollController;
+  final LayerLink _promptPanelLink = LayerLink();
+  final GlobalKey _promptTagButtonKey = GlobalKey();
+  OverlayEntry? _promptPanelEntry;
+  bool _resetSourceRestriction = false;
+
+  // 结构化选中态：面板 chip 点选后写入这些集合，不再写入 _inputController 文本。
+  // 发送时与 _inputController 文本的正则识别结果合并，手动在输入框里打 #标签名 仍有效。
+  final Set<String> _selectedTagChips = {}; // 普通标签名，不含 #
+  final Set<String> _selectedSourceChips =
+      {}; // source 值（picacg/jm/ehentai/nhentai）
+  bool _selectedLocalOnly = false;
+  final AiPromptTagSettingsController _promptTagSettings =
+      AiPromptTagSettingsController.instance;
+
+  static const Map<String, String> _sourceByTagName = aiPromptSourceTagToSource;
 
   @override
   void initState() {
     super.initState();
     _inputController = TextEditingController();
     _scrollController = ScrollController();
+    _promptTagSettings.addListener(_onPromptTagSettingsUpdate);
+    _promptTagSettings.initialize();
     _loadController();
   }
 
@@ -41,11 +71,15 @@ class _AiChatPageState extends State<AiChatPage> {
       setState(() => _controller = ctrl);
       _controller!.addListener(_onControllerUpdate);
       _restoreDraft(ctrl);
-      _scrollToBottomAfterFrame();
+      // 若该会话有记忆的滚动位置（如切标签页离开前保存的），恢复它；
+      // 否则（首次打开/无记录）跳到底部。
+      _restoreOrScrollToBottom(ctrl);
     }
   }
 
   Future<void> _switchConversation(AiConversationMeta meta) async {
+    _clearPromptPanelState();
+    _saveScrollOffset();
     final newCtrl = await AiConversationController.create(loadId: meta.id);
     if (mounted) {
       _controller?.removeListener(_onControllerUpdate);
@@ -53,12 +87,13 @@ class _AiChatPageState extends State<AiChatPage> {
       setState(() => _controller = newCtrl);
       _controller!.addListener(_onControllerUpdate);
       _restoreDraft(newCtrl);
-      _scrollToBottomAfterFrame();
+      _restoreOrScrollToBottom(newCtrl);
       await AiConversationStore.saveLastActiveId(meta.id);
     }
   }
 
   Future<void> _newConversation() async {
+    _clearPromptPanelState();
     final newCtrl = await AiConversationController.create();
     if (mounted) {
       _controller?.removeListener(_onControllerUpdate);
@@ -74,13 +109,48 @@ class _AiChatPageState extends State<AiChatPage> {
   }
 
   /// 切到底部一次（用于 controller 重建后恢复滚动位置）。
-  /// maxScrollExtent 为 0（如新会话空列表）时 guard 会自动跳过。
+  /// 首帧 ListView 可能尚未完成懒加载布局（maxScrollExtent 仍为0），
+  /// 此时追加第二帧重试，避免静默跳过导致停在顶部。
   void _scrollToBottomAfterFrame() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (_scrollController.hasClients &&
-          _scrollController.position.maxScrollExtent > 0) {
-        _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
+      if (!mounted) return;
+      if (_scrollController.hasClients) {
+        final maxExtent = _scrollController.position.maxScrollExtent;
+        if (maxExtent > 0) {
+          _scrollController.jumpTo(maxExtent);
+        } else {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted && _scrollController.hasClients) {
+              _scrollController
+                  .jumpTo(_scrollController.position.maxScrollExtent);
+            }
+          });
+        }
       }
+    });
+  }
+
+  /// 保存当前会话的滚动 offset，供下次恢复。
+  void _saveScrollOffset() {
+    final id = _controller?.conversationId;
+    if (id != null && _scrollController.hasClients) {
+      _scrollOffsetByConvId[id] = _scrollController.offset;
+    }
+  }
+
+  /// 若该会话有记忆的滚动位置则恢复，否则跳到底部。
+  void _restoreOrScrollToBottom(AiConversationController ctrl) {
+    final id = ctrl.conversationId;
+    final saved = id != null ? _scrollOffsetByConvId[id] : null;
+    if (saved == null) {
+      _scrollToBottomAfterFrame();
+      return;
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_scrollController.hasClients) return;
+      _scrollController.jumpTo(
+        saved.clamp(0, _scrollController.position.maxScrollExtent),
+      );
     });
   }
 
@@ -93,8 +163,479 @@ class _AiChatPageState extends State<AiChatPage> {
     );
   }
 
+  void _saveDraft() {
+    _draftsByConversationId[_controller?.conversationId ?? ''] =
+        _inputController.text;
+  }
+
+  bool get _isPromptTagsLongTermEnabled => _promptTagSettings.longTermEnabled;
+
+  Future<void> _setPromptTagsLongTermEnabled(bool value) =>
+      _promptTagSettings.setLongTermEnabled(value);
+
+  List<AiPromptTag> _loadPromptTagOptions() => _promptTagSettings.promptTags;
+
+  void _onPromptTagSettingsUpdate() {
+    if (!mounted) return;
+    setState(() {});
+    _promptPanelEntry?.markNeedsBuild();
+  }
+
+  List<String> _persistentPromptTagNames() =>
+      _controller?.persistentPromptTags.map((tag) => tag.name).toList() ??
+      const [];
+
+  Set<String> _persistentAllowedSources() =>
+      _controller?.persistentAllowedSearchSources ?? const {};
+
+  Set<String> _sourceTagsInInput() {
+    return _sourceByTagName.keys
+        .where((name) => _containsPromptToken(name))
+        .toSet();
+  }
+
+  Set<String> _selectedSourceTagNames() {
+    if (_resetSourceRestriction || _containsPromptToken('不限来源')) {
+      return const {};
+    }
+    // 面板 chip 选中态优先；若有结构化选中来源，直接返回对应 tag 名
+    if (_selectedSourceChips.isNotEmpty) {
+      return _sourceByTagName.entries
+          .where((entry) => _selectedSourceChips.contains(entry.value))
+          .map((entry) => entry.key)
+          .toSet();
+    }
+    // fallback：手输文本里识别的来源标签
+    final inputSources = _sourceTagsInInput();
+    if (inputSources.isNotEmpty) return inputSources;
+    // fallback：会话长期来源限制（只用于 chip 的 selected 展示，不是"真实选中"）
+    final persistentSources = _persistentAllowedSources();
+    return _sourceByTagName.entries
+        .where((entry) => persistentSources.contains(entry.value))
+        .map((entry) => entry.key)
+        .toSet();
+  }
+
+  bool _containsPromptToken(String name) {
+    final token = '#${name.replaceFirst(RegExp(r'^#'), '')}';
+    return RegExp(
+      '(^|$_promptTagBoundaryPattern)${RegExp.escape(token)}'
+      '(?=$_promptTagBoundaryPattern|\$)',
+      multiLine: true,
+    ).hasMatch(_inputController.text);
+  }
+
+  // 注：不再提供程序化插入/删除输入框 token 的方法（_insertPromptToken/
+  // _removePromptTokens 随本次结构化选中改造被移除）。面板 chip 点选只操作
+  // _selectedTagChips/_selectedSourceChips/_selectedLocalOnly 结构化集合；
+  // 手动在输入框正文里打出 #标签名 的旧路径仍受 _containsPromptToken 识别、
+  // 由 parseAiPromptTags 在发送时解析，两条路径互不干扰。
+
+  void _togglePromptTag(String name) {
+    final normalized = name.replaceFirst(RegExp(r'^#'), '');
+    if (_selectedTagChips.contains(normalized)) {
+      _selectedTagChips.remove(normalized);
+    } else {
+      _selectedTagChips.add(normalized);
+    }
+    if (mounted) setState(() {});
+    _promptPanelEntry?.markNeedsBuild();
+  }
+
+  /// 面板"#搜本地" chip 的选中/取消。与来源标签互斥范围而非并集来源，
+  /// 不强制清空 `_selectedSourceChips`，选中时来源选择仅在取消本地限定后生效。
+  void _toggleLocalOnlyTag() {
+    _selectedLocalOnly = !_selectedLocalOnly;
+    if (mounted) setState(() {});
+    _promptPanelEntry?.markNeedsBuild();
+  }
+
+  void _toggleSourceTag(String name) {
+    final source = _sourceByTagName[name];
+    if (source == null) return;
+    if (_selectedSourceChips.contains(source)) {
+      _selectedSourceChips.remove(source);
+    } else {
+      _selectedSourceChips.add(source);
+    }
+    _resetSourceRestriction = _selectedSourceChips.isEmpty;
+    if (mounted) setState(() {});
+    _promptPanelEntry?.markNeedsBuild();
+  }
+
+  void _selectAllSources() {
+    _selectedSourceChips.clear();
+    _resetSourceRestriction = true;
+    if (mounted) setState(() {});
+    _promptPanelEntry?.markNeedsBuild();
+  }
+
+  Future<void> _clearPersistentPromptTags() async {
+    await _controller?.clearPersistentPromptTags();
+    _promptPanelEntry?.markNeedsBuild();
+  }
+
+  Future<void> _clearPersistentSources() async {
+    await _controller?.clearPersistentSourceRestriction();
+    _resetSourceRestriction = false;
+    _promptPanelEntry?.markNeedsBuild();
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _clearPersistentLocalOnly() async {
+    await _controller?.clearPersistentLocalOnly();
+    _promptPanelEntry?.markNeedsBuild();
+    if (mounted) setState(() {});
+  }
+
+  void _togglePromptPanel() {
+    if (_promptPanelEntry != null) {
+      _closePromptPanel();
+    } else {
+      _showPromptPanel();
+    }
+  }
+
+  void _showPromptPanel() {
+    if (_promptPanelEntry != null || !mounted) return;
+    final buttonContext = _promptTagButtonKey.currentContext;
+    final buttonBox = buttonContext?.findRenderObject() as RenderBox?;
+    if (buttonBox == null || !buttonBox.hasSize) return;
+    final media = MediaQuery.of(context);
+    final buttonTop = buttonBox.localToGlobal(Offset.zero).dy;
+    final maxHeight = (buttonTop - media.padding.top - 16).clamp(96.0, 320.0);
+    final panelWidth = (media.size.width - 16).clamp(240.0, 380.0);
+
+    late final OverlayEntry entry;
+    entry = OverlayEntry(
+      builder: (overlayContext) => Stack(
+        children: [
+          Positioned.fill(
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: _closePromptPanel,
+              child: const ColoredBox(color: Colors.transparent),
+            ),
+          ),
+          CompositedTransformFollower(
+            link: _promptPanelLink,
+            showWhenUnlinked: false,
+            targetAnchor: Alignment.topLeft,
+            followerAnchor: Alignment.bottomLeft,
+            offset: const Offset(0, -8),
+            child: Material(
+              elevation: 10,
+              borderRadius: BorderRadius.circular(16),
+              clipBehavior: Clip.antiAlias,
+              color: Theme.of(overlayContext).colorScheme.surfaceContainer,
+              child: SizedBox(
+                width: panelWidth,
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(maxHeight: maxHeight),
+                  child: _buildPromptPanel(overlayContext),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+    _promptPanelEntry = entry;
+    Overlay.of(context).insert(entry);
+    if (mounted) setState(() {});
+  }
+
+  void _closePromptPanel() {
+    final entry = _promptPanelEntry;
+    _promptPanelEntry = null;
+    entry?.remove();
+    if (mounted) setState(() {});
+  }
+
+  void _clearPromptPanelState() {
+    final entry = _promptPanelEntry;
+    _promptPanelEntry = null;
+    entry?.remove();
+    _resetSourceRestriction = false;
+    _selectedTagChips.clear();
+    _selectedSourceChips.clear();
+    _selectedLocalOnly = false;
+  }
+
+  /// 输入框上方常驻的结构化标签行：展示本次待发送选中项 + 已生效的长期状态。
+  /// 两者皆无时不占位（返回 SizedBox.shrink），不改变无标签场景下的输入区布局。
+  /// chip 不接受文本输入、无法用退格键从中间删改，只能点击整体移除。
+  Widget _buildPendingTagRow(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final pendingSourceNames = _sourceByTagName.entries
+        .where((entry) => _selectedSourceChips.contains(entry.value))
+        .map((entry) => entry.key)
+        .toList();
+    final persistentTagNames = _persistentPromptTagNames();
+    final persistentSources = _persistentAllowedSources();
+    final persistentSourceNames = _sourceByTagName.entries
+        .where((entry) => persistentSources.contains(entry.value))
+        .map((entry) => entry.key)
+        .toList();
+    final persistentLocalOnly = _controller?.effectiveLocalOnly ?? false;
+
+    final hasPending = _selectedTagChips.isNotEmpty ||
+        pendingSourceNames.isNotEmpty ||
+        _selectedLocalOnly;
+    final hasPersistent = persistentTagNames.isNotEmpty ||
+        persistentSourceNames.isNotEmpty ||
+        persistentLocalOnly;
+    if (!hasPending && !hasPersistent) return const SizedBox.shrink();
+    const bottomGap = SizedBox(height: 4);
+
+    Widget buildChip({
+      required String label,
+      required VoidCallback onRemove,
+      required bool persistent,
+    }) {
+      return InputChip(
+        label: Text(persistent ? '$label（长期）' : label),
+        onDeleted: onRemove,
+        deleteIcon: const Icon(Icons.close, size: 16),
+        visualDensity: VisualDensity.compact,
+        backgroundColor:
+            persistent ? Colors.transparent : colorScheme.primaryContainer,
+        side: persistent
+            ? BorderSide(color: colorScheme.outline.withValues(alpha: 0.6))
+            : BorderSide.none,
+        shape: const StadiumBorder(),
+      );
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(8, 6, 8, 0),
+          child: Wrap(
+            spacing: 6,
+            runSpacing: 4,
+            children: [
+              for (final name in _selectedTagChips)
+                buildChip(
+                  label: '#$name',
+                  onRemove: () =>
+                      setState(() => _selectedTagChips.remove(name)),
+                  persistent: false,
+                ),
+              for (final name in pendingSourceNames)
+                buildChip(
+                  label: '#$name',
+                  onRemove: () => setState(
+                    () => _selectedSourceChips.remove(_sourceByTagName[name]),
+                  ),
+                  persistent: false,
+                ),
+              if (_selectedLocalOnly)
+                buildChip(
+                  label: '#$aiLocalOnlyScopeTagName',
+                  onRemove: () => setState(() => _selectedLocalOnly = false),
+                  persistent: false,
+                ),
+              for (final name in persistentTagNames)
+                buildChip(
+                  label: '#$name',
+                  onRemove: _clearPersistentPromptTags,
+                  persistent: true,
+                ),
+              if (persistentSourceNames.isNotEmpty)
+                buildChip(
+                  label:
+                      '来源：${persistentSourceNames.map((n) => '#$n').join(' ')}',
+                  onRemove: _clearPersistentSources,
+                  persistent: true,
+                ),
+              if (persistentLocalOnly)
+                buildChip(
+                  label: '#$aiLocalOnlyScopeTagName',
+                  onRemove: _clearPersistentLocalOnly,
+                  persistent: true,
+                ),
+            ],
+          ),
+        ),
+        bottomGap,
+      ],
+    );
+  }
+
+  Widget _buildPromptPanel(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final tags = _loadPromptTagOptions();
+    final selectedSources = _selectedSourceTagNames();
+    final persistentTagNames = _persistentPromptTagNames();
+    final persistentSources = _persistentAllowedSources();
+    final persistentLocalOnly = _controller?.effectiveLocalOnly ?? false;
+    final persistentSourceLabels = _sourceByTagName.entries
+        .where((entry) => persistentSources.contains(entry.value))
+        .map((entry) => '#${entry.key}')
+        .join('  ');
+
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(12),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.tag, color: colorScheme.primary),
+              const SizedBox(width: 8),
+              const Expanded(
+                child: Text(
+                  '提示词标签',
+                  style: TextStyle(fontWeight: FontWeight.bold),
+                ),
+              ),
+              const Text('长期生效', style: TextStyle(fontSize: 12)),
+              Switch(
+                value: _isPromptTagsLongTermEnabled,
+                onChanged: _setPromptTagsLongTermEnabled,
+              ),
+            ],
+          ),
+          Text(
+            _isPromptTagsLongTermEnabled
+                ? '新选择会写入当前会话；关闭开关不会删除已有长期状态。'
+                : '新选择仅对本次完整回复和工具循环有效。',
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+          if (persistentTagNames.isNotEmpty ||
+              persistentSources.isNotEmpty ||
+              persistentLocalOnly) ...[
+            const SizedBox(height: 10),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: colorScheme.secondaryContainer.withValues(alpha: 0.55),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    '当前会话长期状态',
+                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+                  ),
+                  if (persistentTagNames.isNotEmpty)
+                    Text(
+                      persistentTagNames.map((name) => '#$name').join('  '),
+                      style: const TextStyle(fontSize: 12),
+                    ),
+                  if (persistentSources.isNotEmpty)
+                    Text(
+                      '来源：$persistentSourceLabels',
+                      style: const TextStyle(fontSize: 12),
+                    ),
+                  if (persistentLocalOnly)
+                    const Text(
+                      '范围：#$aiLocalOnlyScopeTagName（仅本地/远程库，不联网）',
+                      style: TextStyle(fontSize: 12),
+                    ),
+                  Wrap(
+                    spacing: 4,
+                    children: [
+                      if (persistentTagNames.isNotEmpty)
+                        TextButton.icon(
+                          onPressed: _clearPersistentPromptTags,
+                          icon: const Icon(Icons.clear_all, size: 16),
+                          label: const Text('清除长期提示'),
+                        ),
+                      if (persistentSources.isNotEmpty)
+                        TextButton.icon(
+                          onPressed: _clearPersistentSources,
+                          icon: const Icon(Icons.public, size: 16),
+                          label: const Text('恢复全部来源'),
+                        ),
+                      if (persistentLocalOnly)
+                        TextButton.icon(
+                          onPressed: _clearPersistentLocalOnly,
+                          icon: const Icon(Icons.wifi, size: 16),
+                          label: const Text('取消仅本地'),
+                        ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ],
+          const SizedBox(height: 12),
+          Text('范围', style: Theme.of(context).textTheme.labelLarge),
+          const SizedBox(height: 6),
+          Wrap(
+            spacing: 6,
+            runSpacing: 6,
+            children: [
+              FilterChip(
+                label: const Text('#$aiLocalOnlyScopeTagName'),
+                tooltip: '仅查本地设备库与已连接的远程库快照，不联网；'
+                    '与来源选择同时选中时以本地限定为准',
+                selected: _selectedLocalOnly,
+                onSelected: (_) => _toggleLocalOnlyTag(),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Text('来源', style: Theme.of(context).textTheme.labelLarge),
+          const SizedBox(height: 6),
+          Wrap(
+            spacing: 6,
+            runSpacing: 6,
+            children: [
+              FilterChip(
+                label: const Text('默认/全部来源'),
+                selected: selectedSources.isEmpty,
+                onSelected: (_) => _selectAllSources(),
+              ),
+              for (final name in _sourceByTagName.keys)
+                FilterChip(
+                  label: Text('#$name'),
+                  selected: selectedSources.contains(name),
+                  onSelected: (_) => _toggleSourceTag(name),
+                ),
+            ],
+          ),
+          const Divider(height: 24),
+          Text('普通标签', style: Theme.of(context).textTheme.labelLarge),
+          const SizedBox(height: 6),
+          if (tags.isEmpty)
+            Text(
+              '暂无普通标签，请在 AI 设置中添加。',
+              style: Theme.of(context).textTheme.bodySmall,
+            )
+          else
+            Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              children: [
+                for (final tag in tags)
+                  FilterChip(
+                    tooltip: tag.prompt,
+                    label: Text('#${tag.name}'),
+                    selected: _selectedTagChips.contains(tag.name),
+                    onSelected: (_) => _togglePromptTag(tag.name),
+                  ),
+              ],
+            ),
+        ],
+      ),
+    );
+  }
+
   @override
   void dispose() {
+    _clearPromptPanelState();
+    _promptTagSettings.removeListener(_onPromptTagSettingsUpdate);
+    // 切标签页时整个 State 会被销毁重建（导航用 pushAndRemoveUntil 而非
+    // IndexedStack），此处兜底保存位置，配合 _loadController 的恢复逻辑。
+    _saveScrollOffset();
     _controller?.removeListener(_onControllerUpdate);
     _controller?.dispose();
     _inputController.dispose();
@@ -104,17 +645,23 @@ class _AiChatPageState extends State<AiChatPage> {
 
   void _onControllerUpdate() {
     setState(() {});
-    // 自动滚动到底部
+    _promptPanelEntry?.markNeedsBuild();
+    // 只有用户接近底部（距底 ≤ 200dp）时才自动跟随新消息，
+    // 避免用户主动翻历史时被新消息强制拉回底部。
     if (_scrollController.hasClients) {
-      Future.delayed(const Duration(milliseconds: 100), () {
-        if (_scrollController.hasClients) {
-          _scrollController.animateTo(
-            _scrollController.position.maxScrollExtent,
-            duration: const Duration(milliseconds: 200),
-            curve: Curves.easeOut,
-          );
-        }
-      });
+      final pos = _scrollController.position;
+      final nearBottom = pos.maxScrollExtent - pos.pixels <= 200;
+      if (nearBottom) {
+        Future.delayed(const Duration(milliseconds: 100), () {
+          if (mounted && _scrollController.hasClients) {
+            _scrollController.animateTo(
+              _scrollController.position.maxScrollExtent,
+              duration: const Duration(milliseconds: 200),
+              curve: Curves.easeOut,
+            );
+          }
+        });
+      }
     }
   }
 
@@ -180,170 +727,374 @@ class _AiChatPageState extends State<AiChatPage> {
     );
   }
 
-  void _send() {
+  Future<void> _send() async {
     final text = _inputController.text.trim();
-    if (text.isEmpty) return;
+    final hasPendingSelection = _selectedTagChips.isNotEmpty ||
+        _selectedSourceChips.isNotEmpty ||
+        _selectedLocalOnly;
+    if (text.isEmpty && !hasPendingSelection) return;
+    // initState 中的初始化是异步的；发送前等待同一个 pending future，避免用户
+    // 刚进入页面就发送时读到空标签列表或错误的长期生效开关。
+    await _promptTagSettings.initialize();
+    if (!mounted || _controller == null) return;
+    final resetSourceRestriction = _resetSourceRestriction;
+    // 结构化选中集合：面板点选的普通标签/来源/本地限定，与手输文本里的 #标签名
+    // 并行合并，由 AiConversationController.send() 内部统一去重（结构化选中 ∪ 文本识别）。
+    final structuredSources = Set<String>.from(_selectedSourceChips);
+    final localOnlyRequested = _selectedLocalOnly;
+    final availableTags = _promptTagSettings.promptTags;
+    final selectedPromptTags = availableTags
+        .where((tag) => _selectedTagChips.contains(tag.name))
+        .toList();
+    // send() 内部对空文本会直接 return；仅选中 chip、未打任何正文时用桥接语句
+    // 代替空字符串，避免"点了标签但什么都没发生"。
+    final effectiveText =
+        text.isEmpty && hasPendingSelection ? aiPromptTagOnlyUserBridge : text;
+    _clearPromptPanelState();
     _inputController.clear();
     _draftsByConversationId.remove(_controller?.conversationId ?? '');
-    _controller!.send(text);
+    await _controller!.send(
+      effectiveText,
+      availablePromptTags: availableTags,
+      selectedPromptTags: selectedPromptTags,
+      allowedSearchSources:
+          structuredSources.isEmpty ? null : structuredSources,
+      resetSourceRestriction: resetSourceRestriction,
+      persistSelections: _promptTagSettings.longTermEnabled,
+      localOnly: localOnlyRequested,
+    );
+  }
+
+  List<_DisplayItem> _buildDisplayItems(List<AiChatMessage> messages) {
+    final result = <_DisplayItem>[];
+    int i = 0;
+    while (i < messages.length) {
+      final msg = messages[i];
+      if (msg.type == AiChatMessageType.toolCall) {
+        final toolName = msg.toolName!;
+        final groupMsgs = <AiChatMessage>[msg];
+        int j = i + 1;
+        while (j < messages.length) {
+          final next = messages[j];
+          if (next.type == AiChatMessageType.toolResult &&
+              next.toolName == toolName) {
+            groupMsgs.add(next);
+            j++;
+            if (j < messages.length &&
+                messages[j].type == AiChatMessageType.toolCall &&
+                messages[j].toolName == toolName) {
+              groupMsgs.add(messages[j]);
+              j++;
+            } else {
+              break;
+            }
+          } else {
+            break;
+          }
+        }
+        if (groupMsgs.length >= 4) {
+          result.add(_ToolGroup(toolName: toolName, messages: groupMsgs));
+        } else {
+          for (final m in groupMsgs) {
+            result.add(_SingleItem(m));
+          }
+        }
+        i = j;
+      } else {
+        result.add(_SingleItem(msg));
+        i++;
+      }
+    }
+    return result;
   }
 
   @override
   Widget build(BuildContext context) {
+    super.build(context);
     if (_controller == null) {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
-    return Scaffold(
-      key: _scaffoldKey,
-      drawer: _ConversationDrawer(
-        currentId: _controller!.conversationId,
-        onSelect: _switchConversation,
-        onNewConversation: _newConversation,
-      ),
-      appBar: AppBar(
-        title: Text('AI 对话'.tl),
-        automaticallyImplyLeading: false,
-        leading: IconButton(
-          icon: const Icon(Icons.menu),
-          onPressed: () => _scaffoldKey.currentState?.openDrawer(),
+    final displayItems = _buildDisplayItems(_controller!.displayMessages);
+    return PopScope(
+      canPop: _promptPanelEntry == null,
+      onPopInvokedWithResult: (didPop, result) {
+        if (!didPop) _closePromptPanel();
+      },
+      child: Scaffold(
+        key: _scaffoldKey,
+        drawer: _ConversationDrawer(
+          currentId: _controller!.conversationId,
+          onSelect: _switchConversation,
+          onNewConversation: _newConversation,
         ),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.delete_outline),
-            tooltip: '清空对话'.tl,
-            onPressed: _controller!.isLoading
-                ? null
-                : () {
-                    _controller!.clear();
-                  },
+        appBar: AppBar(
+          automaticallyImplyLeading: false,
+          titleSpacing: 0,
+          leading: IconButton(
+            icon: const Icon(Icons.menu),
+            onPressed: () => _scaffoldKey.currentState?.openDrawer(),
           ),
-          IconButton(
-            icon: const Icon(Icons.build_outlined),
-            tooltip: '工具调试'.tl,
-            onPressed: () {
-              Navigator.of(context).push(
-                MaterialPageRoute<void>(
-                  builder: (ctx) => const AiToolDebugPage(),
-                ),
-              );
-            },
-          ),
-        ],
-      ),
-      body: Column(
-        children: [
-          // 消息列表
-          Expanded(
-            child: _controller!.displayMessages.isEmpty &&
-                    _controller!.pendingDownload == null
-                ? _buildEmptyGuide(context)
-                : ListView.builder(
-                    controller: _scrollController,
-                    padding: const EdgeInsets.all(8),
-                    itemCount: _controller!.displayMessages.length +
-                        (_controller!.pendingDownload != null ? 1 : 0),
-                    itemBuilder: (context, index) {
-                      // 如果是最后一项且有 pendingDownload，显示确认卡片
-                      if (index == _controller!.displayMessages.length &&
-                          _controller!.pendingDownload != null) {
-                        return _DownloadConfirmCard(
-                          pending: _controller!.pendingDownload!,
-                          onConfirm: (confirmed) =>
-                              _controller!.confirmDownload(confirmed),
-                        );
-                      }
-
-                      final message = _controller!.displayMessages[index];
-                      return _MessageBubble(message: message);
-                    },
-                  ),
-          ),
-
-          // 加载指示器
-          if (_controller!.isLoading)
-            const Padding(
-              padding: EdgeInsets.all(8),
-              child: Row(
-                children: [
-                  SizedBox(
-                    width: 16,
-                    height: 16,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  ),
-                  SizedBox(width: 8),
-                  Text('思考中...', style: TextStyle(fontSize: 12)),
-                ],
+          title: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const SizedBox(width: 4),
+              IconButton(
+                icon: const Icon(Icons.delete_outline),
+                tooltip: '清空对话'.tl,
+                onPressed: _controller!.isLoading
+                    ? null
+                    : () {
+                        _controller!.clear();
+                      },
               ),
-            ),
-
-          // 错误提示
-          if (_controller!.error != null)
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(8),
-              color: Theme.of(context).colorScheme.errorContainer,
-              child: Text(
-                _controller!.error!,
-                style: TextStyle(
-                  color: Theme.of(context).colorScheme.onErrorContainer,
-                  fontSize: 12,
-                ),
-              ),
-            ),
-
-          // 输入框
-          Container(
-            padding: const EdgeInsets.all(8),
-            decoration: BoxDecoration(
-              color: Theme.of(context).colorScheme.surface,
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.1),
-                  blurRadius: 4,
-                  offset: const Offset(0, -2),
-                ),
-              ],
-            ),
-            child: Row(
+            ],
+          ),
+        ),
+        body: Stack(
+          children: [
+            Column(
               children: [
+                // 消息列表
                 Expanded(
-                  child: TextField(
-                    controller: _inputController,
-                    decoration: InputDecoration(
-                      hintText: _controller!.pendingDownload != null
-                          ? '请先处理下载确认'.tl
-                          : '输入消息...'.tl,
-                      border: const OutlineInputBorder(),
-                      contentPadding: const EdgeInsets.symmetric(
-                        horizontal: 12,
-                        vertical: 8,
-                      ),
-                      isDense: true,
-                    ),
-                    maxLines: 3,
-                    minLines: 1,
-                    enabled: !_controller!.isLoading &&
-                        _controller!.pendingDownload == null,
-                    onChanged: (v) =>
-                        _draftsByConversationId[_controller?.conversationId ?? ''] = v,
-                    onSubmitted: (_) => _send(),
-                  ),
+                  child: _controller!.displayMessages.isEmpty &&
+                          _controller!.pendingDownload == null
+                      ? _buildEmptyGuide(context)
+                      : GestureDetector(
+                          behavior: HitTestBehavior.translucent,
+                          onTap: () => FocusScope.of(context).unfocus(),
+                          child: ListView.builder(
+                            controller: _scrollController,
+                            padding: const EdgeInsets.all(8),
+                            itemCount: displayItems.length +
+                                (_controller!.pendingDownload != null ? 1 : 0),
+                            itemBuilder: (context, index) {
+                              // 如果是最后一项且有 pendingDownload，显示确认卡片
+                              if (index == displayItems.length &&
+                                  _controller!.pendingDownload != null) {
+                                return _DownloadConfirmCard(
+                                  pending: _controller!.pendingDownload!,
+                                  onConfirm: (confirmed) =>
+                                      _controller!.confirmDownload(confirmed),
+                                );
+                              }
+                              final item = displayItems[index];
+                              if (item is _SingleItem) {
+                                return _MessageBubble(message: item.message);
+                              } else if (item is _ToolGroup) {
+                                return _ToolGroupCard(group: item);
+                              }
+                              return const SizedBox.shrink();
+                            },
+                          ),
+                        ),
                 ),
-                const SizedBox(width: 8),
-                FilledButton(
-                  onPressed: _controller!.isLoading ||
-                          _controller!.pendingDownload != null
-                      ? null
-                      : _send,
-                  child: Text('发送'.tl),
+
+                // 加载指示器
+                if (_controller!.isLoading)
+                  const Padding(
+                    padding: EdgeInsets.all(8),
+                    child: Row(
+                      children: [
+                        SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        ),
+                        SizedBox(width: 8),
+                        Text('思考中...', style: TextStyle(fontSize: 12)),
+                      ],
+                    ),
+                  ),
+
+                // 错误提示
+                if (_controller!.error != null)
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(8),
+                    color: Theme.of(context).colorScheme.errorContainer,
+                    child: Text(
+                      _controller!.error!,
+                      style: TextStyle(
+                        color: Theme.of(context).colorScheme.onErrorContainer,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ),
+
+                // 输入框
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: Theme.of(context).colorScheme.surface,
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.1),
+                        blurRadius: 4,
+                        offset: const Offset(0, -2),
+                      ),
+                    ],
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      _buildPendingTagRow(context),
+                      Row(
+                        children: [
+                          CompositedTransformTarget(
+                            link: _promptPanelLink,
+                            child: IconButton(
+                              key: _promptTagButtonKey,
+                              onPressed: _controller!.isLoading ||
+                                      _controller!.pendingDownload != null
+                                  ? null
+                                  : _togglePromptPanel,
+                              tooltip: '提示词标签',
+                              visualDensity: VisualDensity.compact,
+                              icon: Icon(
+                                Icons.tag,
+                                color: _promptPanelEntry != null
+                                    ? Theme.of(context).colorScheme.primary
+                                    : null,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 4),
+                          Expanded(
+                            child: TextField(
+                              controller: _inputController,
+                              decoration: InputDecoration(
+                                hintText: _controller!.pendingDownload != null
+                                    ? '请先处理下载确认'.tl
+                                    : '输入消息...'.tl,
+                                border: const OutlineInputBorder(),
+                                contentPadding: const EdgeInsets.symmetric(
+                                  horizontal: 12,
+                                  vertical: 8,
+                                ),
+                                isDense: true,
+                              ),
+                              maxLines: 3,
+                              minLines: 1,
+                              enabled: !_controller!.isLoading &&
+                                  _controller!.pendingDownload == null,
+                              onChanged: (_) => _saveDraft(),
+                              onSubmitted: (_) => _send(),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          FilledButton(
+                            onPressed: _controller!.isLoading ||
+                                    _controller!.pendingDownload != null
+                                ? null
+                                : _send,
+                            child: Text('发送'.tl),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
                 ),
               ],
             ),
-          ),
-        ],
+            Positioned(
+              right: 12,
+              bottom: 64,
+              child: ListenableBuilder(
+                listenable: AiDownloadQueue.instance,
+                builder: (context, _) {
+                  final count = AiDownloadQueue.instance.items.length;
+                  return FloatingActionButton.small(
+                    heroTag: 'ai_download_queue_fab',
+                    elevation: 2,
+                    onPressed: () => Navigator.of(context).push(
+                      AppPageRoute(builder: (_) => const AiDownloadListPage()),
+                    ),
+                    tooltip: 'AI 下载清单',
+                    child: Badge(
+                      label: count > 0 ? Text('$count') : null,
+                      isLabelVisible: count > 0,
+                      child: const Icon(Icons.download_outlined, size: 18),
+                    ),
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
+}
+
+/// 渲染分组：单条消息或同名工具多次调用分组
+sealed class _DisplayItem {}
+
+class _SingleItem extends _DisplayItem {
+  final AiChatMessage message;
+  _SingleItem(this.message);
+}
+
+class _ToolGroup extends _DisplayItem {
+  final String toolName;
+  final List<AiChatMessage> messages;
+  _ToolGroup({required this.toolName, required this.messages});
+
+  int get callCount =>
+      messages.where((m) => m.type == AiChatMessageType.toolCall).length;
+}
+
+bool _hasMarkdownTable(String text) =>
+    RegExp(r'^\s*\|', multiLine: true).hasMatch(text);
+
+Widget _buildSelectableUserText(
+  AiChatMessage message,
+  ColorScheme colorScheme,
+) {
+  final normalStyle = TextStyle(color: colorScheme.onPrimaryContainer);
+  final names = message.promptTagNames
+      .map((name) => name.replaceFirst(RegExp(r'^#'), ''))
+      .where((name) => name.isNotEmpty)
+      .toSet()
+      .toList()
+    ..sort((a, b) => b.length.compareTo(a.length));
+  if (names.isEmpty) {
+    return SelectableText(message.text, style: normalStyle);
+  }
+
+  final alternatives = names.map(RegExp.escape).join('|');
+  final regex = RegExp(
+    '(^|$_promptTagBoundaryPattern)(#(?:$alternatives))'
+    '(?=$_promptTagBoundaryPattern|\$)',
+    multiLine: true,
+  );
+  final spans = <InlineSpan>[];
+  var cursor = 0;
+  for (final match in regex.allMatches(message.text)) {
+    final prefixLength = match.group(1)?.length ?? 0;
+    final tokenStart = match.start + prefixLength;
+    if (tokenStart > cursor) {
+      spans.add(TextSpan(text: message.text.substring(cursor, tokenStart)));
+    }
+    spans.add(
+      TextSpan(
+        text: message.text.substring(tokenStart, match.end),
+        style: TextStyle(
+          color: colorScheme.primary,
+          fontWeight: FontWeight.bold,
+          backgroundColor: colorScheme.primary.withValues(alpha: 0.12),
+        ),
+      ),
+    );
+    cursor = match.end;
+  }
+  if (cursor == 0) {
+    return SelectableText(message.text, style: normalStyle);
+  }
+  if (cursor < message.text.length) {
+    spans.add(TextSpan(text: message.text.substring(cursor)));
+  }
+  return SelectableText.rich(TextSpan(style: normalStyle, children: spans));
 }
 
 /// 消息气泡
@@ -370,10 +1121,7 @@ class _MessageBubble extends StatelessWidget {
               color: colorScheme.primaryContainer,
               borderRadius: BorderRadius.circular(12),
             ),
-            child: Text(
-              message.text,
-              style: TextStyle(color: colorScheme.onPrimaryContainer),
-            ),
+            child: _buildSelectableUserText(message, colorScheme),
           ),
         );
 
@@ -384,15 +1132,64 @@ class _MessageBubble extends StatelessWidget {
             margin: const EdgeInsets.symmetric(vertical: 4),
             padding: const EdgeInsets.all(12),
             constraints: BoxConstraints(
-              maxWidth: MediaQuery.of(context).size.width * 0.7,
+              maxWidth: _hasMarkdownTable(message.text)
+                  ? MediaQuery.of(context).size.width * 0.95
+                  : MediaQuery.of(context).size.width * 0.7,
             ),
             decoration: BoxDecoration(
               color: colorScheme.secondaryContainer,
               borderRadius: BorderRadius.circular(12),
             ),
-            child: Text(
-              message.text,
-              style: TextStyle(color: colorScheme.onSecondaryContainer),
+            child: SelectionArea(
+              child: MarkdownBody(
+                data: message.text,
+                styleSheet:
+                    MarkdownStyleSheet.fromTheme(Theme.of(context)).copyWith(
+                  p: TextStyle(
+                    color: colorScheme.onSecondaryContainer,
+                    fontSize: 14,
+                  ),
+                  strong: TextStyle(
+                    color: colorScheme.onSecondaryContainer,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 14,
+                  ),
+                  em: TextStyle(
+                    color: colorScheme.onSecondaryContainer,
+                    fontStyle: FontStyle.italic,
+                    fontSize: 14,
+                  ),
+                  code: TextStyle(
+                    color: colorScheme.onSecondaryContainer,
+                    backgroundColor: colorScheme.surfaceContainerHighest,
+                    fontFamily: 'monospace',
+                    fontSize: 13,
+                  ),
+                  codeblockDecoration: BoxDecoration(
+                    color: colorScheme.surfaceContainerHighest,
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                  tableBody: TextStyle(
+                    color: colorScheme.onSecondaryContainer,
+                    fontSize: 13,
+                  ),
+                  tableHead: TextStyle(
+                    color: colorScheme.onSecondaryContainer,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 13,
+                  ),
+                  tableBorder: TableBorder.all(
+                    color: colorScheme.outline.withValues(alpha: 0.4),
+                    width: 0.5,
+                  ),
+                  listBullet: TextStyle(
+                    color: colorScheme.onSecondaryContainer,
+                    fontSize: 14,
+                  ),
+                ),
+                selectable: false,
+                softLineBreak: true,
+              ),
             ),
           ),
         );
@@ -443,6 +1240,75 @@ class _MessageBubble extends StatelessWidget {
   }
 }
 
+/// 同名工具多次调用折叠卡片
+class _ToolGroupCard extends StatefulWidget {
+  const _ToolGroupCard({required this.group});
+  final _ToolGroup group;
+
+  @override
+  State<_ToolGroupCard> createState() => _ToolGroupCardState();
+}
+
+class _ToolGroupCardState extends State<_ToolGroupCard> {
+  bool _expanded = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final group = widget.group;
+    final callCount = group.callCount;
+
+    return Card(
+      margin: const EdgeInsets.symmetric(vertical: 2),
+      color: colorScheme.surfaceContainerHighest,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          ListTile(
+            dense: true,
+            visualDensity: VisualDensity.compact,
+            leading: Icon(Icons.check_circle_outline,
+                size: 20, color: colorScheme.primary),
+            title: Text(
+              '${group.toolName}  ×$callCount',
+              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold),
+            ),
+            subtitle: Text(
+              '已完成 $callCount 次调用',
+              style: const TextStyle(fontSize: 11),
+            ),
+            trailing: IconButton(
+              icon: Icon(_expanded ? Icons.expand_less : Icons.expand_more,
+                  size: 20),
+              padding: EdgeInsets.zero,
+              onPressed: () => setState(() => _expanded = !_expanded),
+            ),
+          ),
+          if (_expanded) ...[
+            const Divider(height: 1),
+            ...group.messages.map((msg) => Padding(
+                  key: ValueKey(msg.hashCode),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  child: _ToolCard(
+                    toolName: msg.toolName ?? group.toolName,
+                    toolArgs: msg.toolArgs,
+                    resultText: msg.type == AiChatMessageType.toolResult
+                        ? msg.text
+                        : null,
+                    resultData: msg.type == AiChatMessageType.toolResult
+                        ? msg.toolData
+                        : null,
+                    isResult: msg.type == AiChatMessageType.toolResult,
+                  ),
+                )),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
 /// 工具调用/结果卡片
 class _ToolCard extends StatefulWidget {
   const _ToolCard({
@@ -466,18 +1332,32 @@ class _ToolCard extends StatefulWidget {
 class _ToolCardState extends State<_ToolCard> {
   bool _expanded = false;
 
+  bool _hasItems(Object? data) {
+    if (data is! Map) return false;
+    final items = data['items'];
+    return items is List && items.isNotEmpty;
+  }
+
+  int _itemCount(Object? data) {
+    if (data is! Map) return 0;
+    final items = data['items'];
+    if (items is! List) return 0;
+    return items.length;
+  }
+
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
 
     return Card(
-      margin: const EdgeInsets.symmetric(vertical: 4),
+      margin: const EdgeInsets.symmetric(vertical: 2),
       color: colorScheme.surfaceContainerHighest,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           ListTile(
             dense: true,
+            visualDensity: VisualDensity.compact,
             leading: Icon(
               widget.isResult ? Icons.check_circle_outline : Icons.build,
               size: 20,
@@ -491,7 +1371,8 @@ class _ToolCardState extends State<_ToolCard> {
               ),
             ),
             subtitle: widget.isResult
-                ? Text(widget.resultText ?? '', style: const TextStyle(fontSize: 11))
+                ? Text(widget.resultText ?? '',
+                    style: const TextStyle(fontSize: 11))
                 : null,
             trailing: IconButton(
               icon: Icon(
@@ -501,6 +1382,41 @@ class _ToolCardState extends State<_ToolCard> {
               onPressed: () => setState(() => _expanded = !_expanded),
             ),
           ),
+          if (widget.isResult && _hasItems(widget.resultData)) ...[
+            const Divider(height: 1),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(8, 0, 8, 6),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: TextButton.icon(
+                  onPressed: () {
+                    final items = AiResultItem.fromToolData(
+                      widget.resultData is Map<String, dynamic>
+                          ? widget.resultData as Map<String, dynamic>
+                          : null,
+                    );
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => AiItemListPage(
+                          title: '工具结果',
+                          items: items,
+                        ),
+                      ),
+                    );
+                  },
+                  icon: const Icon(Icons.list_alt_outlined, size: 14),
+                  label: Text('查看 ${_itemCount(widget.resultData)} 条原始结果'),
+                  style: TextButton.styleFrom(
+                    visualDensity: VisualDensity.compact,
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 8, vertical: 0),
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
+                ),
+              ),
+            ),
+          ],
           if (_expanded) ...[
             const Divider(height: 1),
             Padding(
@@ -513,9 +1429,8 @@ class _ToolCardState extends State<_ToolCard> {
                   borderRadius: BorderRadius.circular(4),
                 ),
                 child: Text(
-                  _formatJson(widget.isResult
-                      ? widget.resultData
-                      : widget.toolArgs),
+                  _formatJson(
+                      widget.isResult ? widget.resultData : widget.toolArgs),
                   style: const TextStyle(
                     fontFamily: 'monospace',
                     fontSize: 10,

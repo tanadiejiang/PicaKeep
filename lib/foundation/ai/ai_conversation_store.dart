@@ -1,7 +1,11 @@
 import 'dart:io';
 import 'dart:convert';
+
+import 'package:flutter/foundation.dart';
 import 'package:picakeep/foundation/app.dart';
 import 'ai_conversation.dart';
+import 'ai_prompt_tags.dart';
+import 'ai_sources.dart';
 import 'llm_client.dart';
 
 /// 对话元数据
@@ -86,6 +90,40 @@ class AiConversationStore {
     }
   }
 
+  @visibleForTesting
+  static Map<String, dynamic> serializeConversationForTesting({
+    required String id,
+    required String title,
+    required DateTime createdAt,
+    required DateTime updatedAt,
+    required List<AiChatMessage> displayMessages,
+    required List<LlmMessage> history,
+    Iterable<AiPromptTag> persistentPromptTags = const <AiPromptTag>[],
+    Set<String>? persistentAllowedSearchSources,
+    bool? persistentLocalOnly,
+  }) {
+    final json = <String, dynamic>{
+      'version': 2,
+      'id': id,
+      'title': title,
+      'createdAt': createdAt.toIso8601String(),
+      'updatedAt': updatedAt.toIso8601String(),
+      'displayMessages':
+          displayMessages.map((msg) => _serializeAiChatMessage(msg)).toList(),
+      'history': history.map((msg) => msg.toJson()).toList(),
+      'persistentPromptTags': _serializePersistentPromptTags(
+        persistentPromptTags,
+      ),
+      'persistentAllowedSearchSources': _serializeAllowedSources(
+        persistentAllowedSearchSources,
+      ),
+    };
+    if (persistentLocalOnly == true) {
+      json['persistentLocalOnly'] = true;
+    }
+    return json;
+  }
+
   /// 保存对话
   static Future<void> save({
     required String id,
@@ -93,21 +131,25 @@ class AiConversationStore {
     required DateTime createdAt,
     required List<AiChatMessage> displayMessages,
     required List<LlmMessage> history,
+    Iterable<AiPromptTag> persistentPromptTags = const <AiPromptTag>[],
+    Set<String>? persistentAllowedSearchSources,
+    bool? persistentLocalOnly,
   }) async {
     try {
       final updatedAt = DateTime.now();
       final dir = await _dir;
 
-      // 构建完整 JSON
-      final conversationJson = {
-        'version': 1,
-        'id': id,
-        'title': title,
-        'createdAt': createdAt.toIso8601String(),
-        'updatedAt': updatedAt.toIso8601String(),
-        'displayMessages': displayMessages.map((msg) => _serializeAiChatMessage(msg)).toList(),
-        'history': history.map((msg) => msg.toJson()).toList(),
-      };
+      final conversationJson = serializeConversationForTesting(
+        id: id,
+        title: title,
+        createdAt: createdAt,
+        updatedAt: updatedAt,
+        displayMessages: displayMessages,
+        history: history,
+        persistentPromptTags: persistentPromptTags,
+        persistentAllowedSearchSources: persistentAllowedSearchSources,
+        persistentLocalOnly: persistentLocalOnly,
+      );
 
       // 写入对话文件
       final file = File('$dir${Platform.pathSeparator}$id.json');
@@ -138,7 +180,8 @@ class AiConversationStore {
 
       // 写回索引
       final indexFile = File(_indexPath);
-      await indexFile.writeAsString(jsonEncode(index.map((m) => m.toJson()).toList()));
+      await indexFile
+          .writeAsString(jsonEncode(index.map((m) => m.toJson()).toList()));
     } catch (e) {
       print('Failed to save conversation $id: $e');
     }
@@ -159,7 +202,8 @@ class AiConversationStore {
       index.removeWhere((meta) => meta.id == id);
 
       final indexFile = File(_indexPath);
-      await indexFile.writeAsString(jsonEncode(index.map((m) => m.toJson()).toList()));
+      await indexFile
+          .writeAsString(jsonEncode(index.map((m) => m.toJson()).toList()));
     } catch (e) {
       print('Failed to delete conversation $id: $e');
     }
@@ -221,6 +265,9 @@ class AiConversationStore {
 
     if (msg.toolName != null) json['toolName'] = msg.toolName;
     if (msg.toolArgs != null) json['toolArgs'] = msg.toolArgs;
+    if (msg.promptTagNames.isNotEmpty) {
+      json['promptTagNames'] = msg.promptTagNames;
+    }
 
     // toolData 序列化：仅支持基本类型
     if (msg.toolData != null) {
@@ -239,6 +286,39 @@ class AiConversationStore {
     return json;
   }
 
+  static List<Map<String, String>> _serializePersistentPromptTags(
+    Iterable<AiPromptTag> tags,
+  ) {
+    final byName = <String, AiPromptTag>{};
+    for (final tag in tags) {
+      final name = tag.name.trim().replaceFirst(RegExp(r'^#'), '');
+      if (name.isEmpty || tag.prompt.trim().isEmpty) continue;
+      byName[name] = tag;
+    }
+    return byName.entries
+        .map(
+          (entry) => <String, String>{
+            'name': entry.key,
+            'prompt': entry.value.prompt,
+          },
+        )
+        .toList(growable: false);
+  }
+
+  static List<String>? _serializeAllowedSources(Set<String>? sources) {
+    if (sources == null) return null;
+    const order = <String>[
+      aiSourcePicacg,
+      aiSourceJm,
+      aiSourceEhentai,
+      aiSourceNhentai,
+    ];
+    final normalized =
+        sources.map(normalizeAiSource).whereType<String>().toSet();
+    if (normalized.isEmpty) return null;
+    return order.where(normalized.contains).toList(growable: false);
+  }
+
   /// 反序列化 AiChatMessage
   static AiChatMessage deserializeAiChatMessage(Map<String, dynamic> json) {
     final typeStr = json['type'] as String;
@@ -253,6 +333,9 @@ class AiConversationStore {
       toolName: json['toolName'] as String?,
       toolArgs: json['toolArgs'] as Map<String, dynamic>?,
       toolData: json['toolData'],
+      promptTagNames:
+          (json['promptTagNames'] as List?)?.map((name) => name.toString()) ??
+              const <String>[],
       createdAt: json['createdAt'] != null
           ? DateTime.parse(json['createdAt'] as String)
           : DateTime.now(),

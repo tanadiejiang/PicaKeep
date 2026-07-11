@@ -1,7 +1,7 @@
 name: picakeep
 description: "PicaKeep - 本地漫画阅读器 / 收藏管理器"
 publish_to: 'none'
-version: 1.9.46+1
+version: 1.9.47+1
 
 environment:
   sdk: '>=3.3.0'
@@ -57,6 +57,7 @@ dependencies:
       url: https://github.com/wgh136/flutter_desktop_webview
       path: packages/desktop_webview_window
       ref: 7801fc5
+  flutter_markdown: ^0.7.7
 
 dependency_overrides:
   local_auth_windows:
