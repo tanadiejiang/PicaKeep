@@ -15,6 +15,7 @@ import 'foundation/archive/archive_registry.dart';
 import 'foundation/history.dart';
 import 'foundation/local_favorites.dart';
 import 'foundation/log_file_service.dart';
+import 'foundation/ai/ai_download_queue.dart';
 import 'foundation/online_download_manager.dart';
 import 'foundation/remote_library_event_channel.dart';
 import 'network/cookie_jar.dart';
@@ -169,6 +170,7 @@ Future<void> _initializeApplication() async {
 Future<void> _initializeOnlineFoundation() async {
   SingleInstanceCookieJar('${App.dataPath}${Platform.pathSeparator}cookies.db');
   await ComicSource.init();
+  await AiDownloadQueue.instance.load();
   unawaited(OnlineDownloadManager.instance.loadQueue());
   // tags 翻译数据：非阻塞预热，搜索/详情页翻译按需使用。
   unawaited(loadTagTranslations());

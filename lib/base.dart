@@ -5,6 +5,7 @@ import 'dart:io';
 
 import 'foundation/archive/archive_memory_cache.dart';
 import 'foundation/archive/archive_password_store.dart';
+import 'foundation/ai/ai_prompt_tags.dart';
 import 'foundation/app.dart';
 import 'foundation/app_runtime_mode.dart';
 import 'foundation/local_data_source.dart';
@@ -156,13 +157,18 @@ class Appdata {
     '0', //124 aiCapabilityQueryLocalLibrary
     '0', //125 aiCapabilityResolveLocalItems
     '0', //126 aiCapabilityGetDownloadStatus
-    '',  //127 aiProviderTemplate
-    '',  //128 aiBaseUrl
-    '',  //129 aiApiKey
-    '',  //130 aiModelId
+    '', //127 aiProviderTemplate
+    '', //128 aiBaseUrl
+    '', //129 aiApiKey
+    '', //130 aiModelId
     '{}', //131 aiModelParams
     '[]', //132 aiPromptTemplates
     '0', //133 aiCapabilityQueryRemoteLibrary
+    '0', //134 aiCapabilityDisplayResultList
+    '0', //135 aiCapabilityManageFavorites
+    '0', //136 aiPromptTagsLongTerm
+    '0', //137 aiPromptTemplatesInitialized
+    '5', //138 aiMaxToolRounds
   ];
 
   List<String> implicitData = [
@@ -469,7 +475,16 @@ class Appdata {
   }
 }
 
-var appdata = Appdata();
+Appdata _createAppdata() {
+  final data = Appdata();
+  AiPromptTagSettingsController.instance.configureStorage(
+    settingsProvider: () => data.settings,
+    persistSettings: () => data.updateSettings(),
+  );
+  return data;
+}
+
+var appdata = _createAppdata();
 
 class ReaderSettings {
   int readerType = 0;
@@ -491,7 +506,7 @@ Future<void> clearAppdata() async {
     await settingsFile.delete();
   }
   appdata.history.clearHistory();
-  appdata = Appdata();
+  appdata = _createAppdata();
   await appdata.readData();
   await eraseCache();
   await LocalFavoritesManager().clearAll();
