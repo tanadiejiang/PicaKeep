@@ -323,10 +323,30 @@ class AiConversationController extends ChangeNotifier {
   final List<AiChatMessage> displayMessages = [];
   bool isLoading = false;
   String? error;
-  PendingDownload? pendingDownload;
+
+  /// 46号计划：一轮回复内可能出现多个 `download_comic` 调用，按出现顺序
+  /// 依次排队等待用户确认；队列非空即代表"当前有待确认下载"。UI 侧
+  /// （`ai_chat_page.dart`）只读队首（见 [pendingDownload]），不感知队列
+  /// 本身，兼容旧的"单个可空对象"式判断（`!= null` / `== null`）写法。
+  final List<PendingDownload> _pendingDownloads = [];
+
+  /// 当前待确认下载（队列头部）。队列为空时为 `null`。
+  PendingDownload? get pendingDownload =>
+      _pendingDownloads.isEmpty ? null : _pendingDownloads.first;
+
+  /// 测试用：当前待确认下载队列剩余长度，用于验证"一轮内多个 download_comic"
+  /// 场景下队列的入队/出队顺序与长度变化。
+  @visibleForTesting
+  int get pendingDownloadQueueLengthForTesting => _pendingDownloads.length;
 
   String? conversationId;
   String _conversationTitle = '新会话';
+
+  /// `true`=用户通过侧栏"重命名"手动设置过标题，`_save()` 时不再用
+  /// `_deriveTitle()` 覆盖当前标题。持久化在会话文件里（不是索引文件），
+  /// 因为索引文件的 title 只是展示用镜像值，真实状态要跟着会话内容走，
+  /// 下次 `create(loadId: ...)` 加载时才能正确恢复"是否跳过自动派生"。
+  bool _titleIsCustom = false;
   DateTime? _createdAt;
 
   // LLM 对话历史（internal）
@@ -419,6 +439,7 @@ class AiConversationController extends ChangeNotifier {
   }) {
     conversationId = data['id']?.toString() ?? fallbackId;
     _conversationTitle = data['title']?.toString() ?? '新会话';
+    _titleIsCustom = data['titleIsCustom'] == true;
     _createdAt = DateTime.tryParse(data['createdAt']?.toString() ?? '') ??
         DateTime.now();
 
@@ -471,6 +492,7 @@ class AiConversationController extends ChangeNotifier {
   void _createNew() {
     conversationId = _generateUuid();
     _conversationTitle = '新会话';
+    _titleIsCustom = false;
     _createdAt = DateTime.now();
     _pendingDisplayItems = null;
     _persistentPromptTags.clear();
@@ -492,6 +514,16 @@ class AiConversationController extends ChangeNotifier {
         .replaceRange(23, 23, '-');
   }
 
+  /// 测试用：当前标题是否已被用户手动设置（跳过 `_deriveTitle()` 自动覆盖）。
+  @visibleForTesting
+  bool get titleIsCustomForTesting => _titleIsCustom;
+
+  /// 测试用：直接触发一次持久化 `_save()`，不经过 `send()`/`confirmDownload()`
+  /// （两者都会调用 LLM 网络接口）。用于验证"标记为自定义标题后，标题不会被
+  /// `_deriveTitle()` 覆盖"的回归场景，不依赖网络配置。
+  @visibleForTesting
+  Future<void> saveForTesting() => _save();
+
   /// 从第一段剥离已识别标签后仍有效的用户文本派生标题。
   String _deriveTitle() {
     for (final message in displayMessages) {
@@ -507,9 +539,13 @@ class AiConversationController extends ChangeNotifier {
   }
 
   /// 持久化当前会话。活动轮次上下文永不写入文件。
+  /// 标题若已被用户手动重命名（`_titleIsCustom == true`），跳过
+  /// `_deriveTitle()` 的自动派生覆盖，沿用当前 `_conversationTitle`。
   Future<void> _save() async {
     if (conversationId == null) return;
-    _conversationTitle = _deriveTitle();
+    if (!_titleIsCustom) {
+      _conversationTitle = _deriveTitle();
+    }
     await AiConversationStore.save(
       id: conversationId!,
       title: _conversationTitle,
@@ -519,8 +555,18 @@ class AiConversationController extends ChangeNotifier {
       persistentPromptTags: _persistentPromptTags,
       persistentAllowedSearchSources: _persistentAllowedSearchSources,
       persistentLocalOnly: _persistentLocalOnly,
+      titleIsCustom: _titleIsCustom,
     );
     await AiConversationStore.saveLastActiveId(conversationId!);
+  }
+
+  /// 供侧栏在"重命名的正好是当前活跃会话"时同步内存状态：会话文件已经在
+  /// `AiConversationStore.renameConversation()` 里写过，这里只更新内存值，
+  /// 不触发额外的 `_save()`（避免覆盖刚落盘的文件，也避免不必要的 I/O）。
+  void applyExternalRename(String newTitle) {
+    _conversationTitle = newTitle;
+    _titleIsCustom = true;
+    notifyListeners();
   }
 
   void _initSystemPrompt() {
@@ -547,6 +593,7 @@ class AiConversationController extends ChangeNotifier {
    - 只有用户明确要求重新搜索时，才重新调用 search_online
 7. 已经触发在线搜索后，如果结果明显少于用户期望或只有少量候选，不要立即宣布完成。在最多 5 轮的工具预算内至少换一种策略重试：角色搜索尝试原文、罗马音、英文名、常用昵称或简称，并结合所属作品或题材消歧；题材/标签搜索尝试同义词、近义标签或放宽过窄条件；存在多个可用来源时可换源。多种策略仍无更多结果后，再说明实际尝试过的关键词、来源与结果边界，不得伪造数量。
 8. picacg 与 jm 的关键词搜索不支持多词组合/AND 逻辑，服务端把整个 keyword 当作一个短语原样匹配；这两个源搜索时应使用单个简短关键词（角色名或题材词，不要把作品名、消歧条件等一起拼进关键词字符串），拿到结果列表后自行核对每条的标题/标签/作者是否匹配，筛掉明显不相关结果，不要指望搜索词本身帮你做精确过滤。eh、nhentai 支持空格分隔的标签组合搜索，不受此限制，可以正常拼多个词。
+9. 用户消息中可能藏有"JM ID 解码"彩蛋：把句子中按自然顺序出现的一组数字依次提取并直接拼接（不加分隔符），即得到一个 JM（禁漫）漫画 ID。识别到这种模式时（消息里出现多个数字、语境像是有意设计的数字线索），先按顺序拼出候选 ID，再调用 get_comic_detail（source: jm, id: 拼出的ID）查看该 ID 对应的漫画详情做确认，不要直接调用 download_comic 跳过确认步骤；确认后再询问用户是否需要下载。
 - 执行收藏增删操作前，应先向用户确认操作目标（特别是删除收藏夹这类不可逆操作）''';
 
     if (_history.isEmpty || _history.first.role != 'system') {
@@ -611,10 +658,22 @@ class AiConversationController extends ChangeNotifier {
       mergedPromptTagsByName[tag.name] = tag;
     }
     final mergedPromptTags = mergedPromptTagsByName.values.toList();
+    // 本轮实际用到的来源/本地限定类范围标签（面板 chip 选中、未必手打进正文），
+    // 不区分是否长期模式，都应折入气泡回显名单。
+    final scopeTagNames = <String>[
+      for (final source in selectedSources)
+        if (aiPromptTagNameForSource(source) != null)
+          aiPromptTagNameForSource(source)!,
+      if (localOnlyRequested) aiLocalOnlyScopeTagName,
+    ];
     final mergedRecognizedNames = <String>[
       ...parsed.recognizedNames,
       for (final tag in mergedPromptTagsByName.keys)
         if (!parsed.recognizedNames.contains(tag)) tag,
+      for (final name in scopeTagNames)
+        if (!parsed.recognizedNames.contains(name) &&
+            !mergedPromptTagsByName.containsKey(name))
+          name,
     ];
 
     displayMessages.add(
@@ -725,9 +784,13 @@ class AiConversationController extends ChangeNotifier {
           .where(activeSources.contains)
           .map((s) => '#${aiPromptTagNameForSource(s) ?? s}')
           .join('、');
+      final multiSourceHint = activeSources.length > 1
+          ? '这些来源应分别调用一次 search_online（可在同一轮回复内一起发出），'
+              '不需要询问用户具体选哪一个，取得各来源结果后自行合并处理/展示。'
+          : '';
       return '本轮范围限定：用户已明确指定在线搜索来源（$readable），'
           '不需要先查本地库或询问用户是否联网，请直接对上述来源执行在线搜索，'
-          '也不得使用其他来源。';
+          '也不得使用其他来源。$multiSourceHint';
     }
     return null;
   }
@@ -780,7 +843,24 @@ $lines''';
     _currentRound++;
     _history.add(LlmMessage.assistant(toolCalls: response.toolCalls));
 
-    for (final toolCall in response.toolCalls!) {
+    return _processToolCalls(response.toolCalls!);
+  }
+
+  /// 处理一轮 LLM 回复里的全部 tool_call（不含往 `_history` 追加那条 assistant
+  /// tool_calls 消息本身——调用方负责，见 [_runLoop] 与
+  /// [processToolCallsForTesting]）。
+  ///
+  /// 46号计划：一轮回复内可能出现多个 `download_comic` 调用，不能命中第一个就
+  /// 提前 `return`——那样后续 tool_call（无论是否也是 `download_comic`）永远
+  /// 不会被追加对应的 `tool` 消息，之后每次请求都会因缺失配对而必现 400。
+  /// 这里遇到 `download_comic` 时入队后继续遍历，等本轮全部 tool_call 都
+  /// 处理完（非下载的已 dispatch 并追加结果，下载的已入队）才统一判断是否
+  /// 要暂停：只要队列非空就必须暂停等待确认，不能带着未回填的 tool_calls
+  /// 继续请求下一轮。
+  Future<_RunLoopOutcome> _processToolCalls(
+    List<LlmToolCall> toolCalls,
+  ) async {
+    for (final toolCall in toolCalls) {
       final toolName = toolCall.name;
       final toolArgs = toolCall.arguments;
 
@@ -790,16 +870,18 @@ $lines''';
       notifyListeners();
 
       if (toolName == 'download_comic') {
-        pendingDownload = PendingDownload(
-          toolCallId: toolCall.id,
-          source: toolArgs['source']?.toString() ?? '',
-          comicId: toolArgs['comicId']?.toString() ??
-              toolArgs['id']?.toString() ??
-              '',
-          title: toolArgs['title']?.toString(),
+        _pendingDownloads.add(
+          PendingDownload(
+            toolCallId: toolCall.id,
+            source: toolArgs['source']?.toString() ?? '',
+            comicId: toolArgs['comicId']?.toString() ??
+                toolArgs['id']?.toString() ??
+                '',
+            title: toolArgs['title']?.toString(),
+          ),
         );
         notifyListeners();
-        return _RunLoopOutcome.waitingForDownloadConfirmation;
+        continue;
       }
 
       final blockedResult = disallowedScopeResult(
@@ -817,8 +899,36 @@ $lines''';
       _appendToolResult(toolCall.id, toolName, result);
     }
 
+    // 本轮出现过 download_comic：所有非下载 tool_call 已经正常回填结果，
+    // 但下载类还在排队等待用户逐一确认，必须先暂停，不能继续下一轮 LLM 请求
+    // （否则请求体里会带着还没有配对 tool 消息的 assistant tool_calls）。
+    if (_pendingDownloads.isNotEmpty) {
+      return _RunLoopOutcome.waitingForDownloadConfirmation;
+    }
+
     return _runLoop();
   }
+
+  /// 测试用：绕过真实网络请求，直接模拟"LLM 一轮回复带有这些 tool_calls"，
+  /// 驱动 `_runLoop()` 本应执行的处理逻辑（往 `_history` 追加 assistant
+  /// tool_calls 消息 + 逐个处理）。用于验证 46号计划"一轮内多个
+  /// download_comic"场景下不会产生孤儿 tool_call。
+  @visibleForTesting
+  Future<void> simulateToolCallRoundForTesting(
+    List<LlmToolCall> toolCalls,
+  ) async {
+    _currentRound++;
+    _history.add(LlmMessage.assistant(toolCalls: toolCalls));
+    final outcome = await _processToolCalls(toolCalls);
+    if (outcome == _RunLoopOutcome.waitingForDownloadConfirmation) {
+      notifyListeners();
+    }
+  }
+
+  /// 测试用：直接读取内部 LLM 历史（只读快照），用于断言每个 tool_call_id
+  /// 是否都有且仅有一条对应的 `tool` 消息（46号计划核心不变式）。
+  @visibleForTesting
+  List<LlmMessage> historyForTesting() => List<LlmMessage>.unmodifiable(_history);
 
   void _appendToolResult(
     String toolCallId,
@@ -866,11 +976,17 @@ $lines''';
   }
 
   /// 确认或取消下载。暂停期间保留本轮短期提示和来源约束，续跑真正结束后清理。
+  ///
+  /// 46号计划：一轮回复内可能有多个排队的 `download_comic` 调用——本方法只
+  /// 出队并处理队首那一个，处理完追加对应 `tool` 消息后：若队列里还有剩余
+  /// （即本轮还有更多待确认下载），直接停留在"等待确认"状态，不进入
+  /// `_runLoop()`（此时也不该真正续跑一轮新的 LLM 请求，因为还有尚未回复
+  /// 的 tool_call 挂在 assistant 消息上）；只有队列真正清空后才续跑
+  /// `_runLoop()` 让 LLM 看到全部下载结果继续对话。
   Future<void> confirmDownload(bool confirmed) async {
-    if (pendingDownload == null) return;
+    if (_pendingDownloads.isEmpty) return;
 
-    final pending = pendingDownload!;
-    pendingDownload = null;
+    final pending = _pendingDownloads.removeAt(0);
     notifyListeners();
 
     AiToolResult result;
@@ -893,6 +1009,11 @@ $lines''';
 
     _appendToolResult(pending.toolCallId, 'download_comic', result);
     await _save();
+
+    if (_pendingDownloads.isNotEmpty) {
+      // 本轮还有更多待确认下载：停留等待，不续跑 LLM 请求。
+      return;
+    }
 
     try {
       await _runLoop();
@@ -934,7 +1055,7 @@ $lines''';
     _history.clear();
     isLoading = false;
     error = null;
-    pendingDownload = null;
+    _pendingDownloads.clear();
     _currentRound = 0;
     _createNew();
     notifyListeners();
@@ -961,6 +1082,177 @@ $lines''';
       effectiveAllowedSearchSources,
     );
   }
+}
+
+/// 全局会话控制器注册表：按 conversationId 缓存复用 [AiConversationController]。
+///
+/// 33号计划：把 controller 的生命周期从"绑定单个 AiChatPage State"改为
+/// "绑定到跨页面存活的全局注册表"，使 `_runLoop()` 在页面切换/会话切换时
+/// 不会被 State 的 `dispose()` 强制中断。controller 的真正销毁只应发生在
+/// 用户显式永久删除该会话时（见 [remove]，由 `AiConversationStore.delete`
+/// 调用点联动触发)。
+///
+/// 41号计划：注册表自身现在也是 [ChangeNotifier]——每当任一被缓存
+/// controller 的 `isLoading` 发生翻转，都会同步更新 [loadingIds] 并
+/// `notifyListeners()`，供侧栏 Drawer 等 UI 订阅以决定是否显示"转圈中"。
+class AiConversationRegistry extends ChangeNotifier {
+  AiConversationRegistry._();
+
+  static final AiConversationRegistry instance = AiConversationRegistry._();
+
+  /// 缓存上限：超出后淘汰最久未访问的非-loading会话，避免无限增长导致内存问题。
+  /// 正在 `isLoading` 的会话永远不参与淘汰。
+  static const int _maxCacheSize = 20;
+
+  // 用 Map 的插入顺序近似 LRU：每次访问（getOrCreate 命中）时 remove+重新插入，
+  // 使其移到"最近访问"端；淘汰时从最前面（最久未访问）开始找第一个非-loading的。
+  final Map<String, AiConversationController> _cache = {};
+
+  /// 40号计划：并发去重表。key 为非空 conversationId，value 为该 id 正在进行中
+  /// 的创建 Future。同一 id 的第二次及后续 getOrCreate 调用若命中此表，直接
+  /// await 同一个 Future 而不是各自发起新的 `AiConversationController.create()`
+  /// 调用，避免两次磁盘读取各自反序列化出互相独立、之后永久分裂的 controller
+  /// 实例。仅覆盖 conversationId 非空的路径——`getOrCreate(null)`（新建会话）
+  /// 语义上每次调用都应该是独立的新会话，不需要（也不能）去重。
+  final Map<String, Future<AiConversationController>> _pending = {};
+
+  /// 41号计划：当前处于 `isLoading == true` 的 conversationId 集合，供外部
+  /// （侧栏 Drawer）监听以决定是否显示转圈指示器。只读暴露给外部，内部通过
+  /// [_setLoading] 变更并触发 [notifyListeners]。
+  final Set<String> _loadingIds = <String>{};
+
+  /// 供外部只读访问当前 loading 集合的快照（每次取值返回新的不可变副本，
+  /// 避免外部持有引用后绕过 [notifyListeners] 直接修改内部状态）。
+  Set<String> get loadingIds => Set.unmodifiable(_loadingIds);
+
+  /// 41号计划：记录已经为哪些 controller 挂过内部监听器，避免同一个
+  /// controller（LRU 缓存命中、多次 getOrCreate 命中同一实例）被重复挂听，
+  /// 否则每次 isLoading 翻转都会触发多次冗余的 registry notifyListeners。
+  /// value 是挂在该 controller 上的监听器函数本身，remove() 时需要用它
+  /// 精确地 removeListener，避免残留悬挂引用。
+  final Map<String, VoidCallback> _loadingListeners = {};
+
+  /// 41号计划：为 controller 挂一个内部监听器，比较其 `isLoading` 的
+  /// 前后值，变化时更新 [_loadingIds] 并广播。同一个 conversationId 只挂
+  /// 一次；`conversationId` 为 null（新建会话尚未落盘出 id 前）的场景不适用
+  /// 本方法，由调用方保证只在 id 非空时调用。
+  void _attachLoadingListener(String conversationId, AiConversationController ctrl) {
+    if (_loadingListeners.containsKey(conversationId)) return;
+    var lastLoading = ctrl.isLoading;
+    if (lastLoading) {
+      _loadingIds.add(conversationId);
+    }
+    void listener() {
+      final current = ctrl.isLoading;
+      if (current == lastLoading) return;
+      lastLoading = current;
+      if (current) {
+        _loadingIds.add(conversationId);
+      } else {
+        _loadingIds.remove(conversationId);
+      }
+      notifyListeners();
+    }
+    ctrl.addListener(listener);
+    _loadingListeners[conversationId] = listener;
+  }
+
+  /// 按 conversationId 获取已缓存的 controller；不存在或 id 为 null（新建会话）
+  /// 时创建新的并存入缓存。同一个非空 conversationId 多次调用返回同一实例，
+  /// 即使这些调用是并发发起、缓存尚未命中时也是如此（见 [_pending]）。
+  Future<AiConversationController> getOrCreate(String? conversationId) async {
+    if (conversationId != null && _cache.containsKey(conversationId)) {
+      // 命中缓存：移到 Map 末尾，标记为"最近访问"，供 LRU 淘汰参考。
+      final ctrl = _cache.remove(conversationId)!;
+      _cache[conversationId] = ctrl;
+      _attachLoadingListener(conversationId, ctrl);
+      return ctrl;
+    }
+    if (conversationId != null) {
+      // 缓存未命中，但可能已有同 id 的创建流程在途（并发调用）：直接复用同一个
+      // Future，保证两次调用最终拿到的是同一个 controller 实例，而不是各自
+      // 反序列化磁盘文件、创建出两个此后永久分裂的独立实例。
+      final existing = _pending[conversationId];
+      if (existing != null) {
+        return existing;
+      }
+      final future = _createAndCache(conversationId);
+      _pending[conversationId] = future;
+      try {
+        return await future;
+      } finally {
+        // 无论成功还是失败都必须清理该条目——若 create() 抛出异常后不清理，
+        // 后续所有对该 id 的 getOrCreate 调用会一直 await 一个已经失败、
+        // 永远不会 resolve 的旧 Future，造成永久卡死。
+        _pending.remove(conversationId);
+      }
+    }
+    // conversationId 为 null：新建会话，不涉及去重，直接创建。
+    final ctrl = await AiConversationController.create(loadId: null);
+    final id = ctrl.conversationId;
+    if (id != null) {
+      _cache[id] = ctrl;
+      _attachLoadingListener(id, ctrl);
+      _evictIfNeeded();
+    }
+    return ctrl;
+  }
+
+  Future<AiConversationController> _createAndCache(String conversationId) async {
+    final ctrl = await AiConversationController.create(loadId: conversationId);
+    final id = ctrl.conversationId;
+    if (id != null) {
+      _cache[id] = ctrl;
+      _attachLoadingListener(id, ctrl);
+      _evictIfNeeded();
+    }
+    return ctrl;
+  }
+
+  /// 会话被用户显式永久删除时调用：从缓存移除并真正 dispose 该 controller。
+  /// 该 conversationId 不在缓存中时是安全的空操作。同步清理 41号计划新增的
+  /// loading 监听器绑定与 loading 集合记录，避免残留过期状态或悬挂监听器。
+  void remove(String conversationId) {
+    final ctrl = _cache.remove(conversationId);
+    final listener = _loadingListeners.remove(conversationId);
+    if (ctrl != null && listener != null) {
+      ctrl.removeListener(listener);
+    }
+    final wasLoading = _loadingIds.remove(conversationId);
+    ctrl?.dispose();
+    if (wasLoading) {
+      notifyListeners();
+    }
+  }
+
+  /// 缓存条目数超过上限时，淘汰最久未访问、且当前不在 `isLoading` 的会话。
+  /// 若最久未访问的若干个都在 loading，则依次往后找，直至找到可淘汰的一个
+  /// 或已扫描全部缓存条目（此时暂不淘汰，等待下次访问后条件改变再试）。
+  void _evictIfNeeded() {
+    if (_cache.length <= _maxCacheSize) return;
+    for (final id in _cache.keys.toList(growable: false)) {
+      final ctrl = _cache[id];
+      if (ctrl != null && !ctrl.isLoading) {
+        _cache.remove(id);
+        ctrl.dispose();
+        return;
+      }
+    }
+  }
+
+  /// 测试/调试用：当前缓存条目数。
+  @visibleForTesting
+  int get cacheSizeForTesting => _cache.length;
+
+  /// 测试/调试用：某 conversationId 是否在缓存中。
+  @visibleForTesting
+  bool containsForTesting(String conversationId) =>
+      _cache.containsKey(conversationId);
+
+  /// 41号计划测试/调试用：当前是否已为该 conversationId 挂过 loading 监听器。
+  @visibleForTesting
+  bool hasLoadingListenerForTesting(String conversationId) =>
+      _loadingListeners.containsKey(conversationId);
 }
 
 String _stripRecognizedPromptTags(String text, Iterable<String> names) {

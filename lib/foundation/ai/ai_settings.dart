@@ -27,6 +27,7 @@ const aiPromptTagsLongTermSettingIndex = 136;
 const aiPromptTemplatesInitializedSettingIndex = 137;
 // 工具调用最大轮次；'0' 表示不限制
 const aiMaxToolRoundsSettingIndex = 138;
+const aiCapabilityGetComicDetailSettingIndex = 139;
 
 /// 返回给定能力名称对应的 settings index；找不到返回 null。
 int? aiCapabilitySettingIndex(String toolName) {
@@ -40,6 +41,7 @@ int? aiCapabilitySettingIndex(String toolName) {
     'query_remote_library': aiCapabilityQueryRemoteLibrarySettingIndex,
     'display_result_list': aiCapabilityDisplayResultListSettingIndex,
     'manage_favorites': aiCapabilityManageFavoritesSettingIndex,
+    'get_comic_detail': aiCapabilityGetComicDetailSettingIndex,
   }[toolName];
 }
 

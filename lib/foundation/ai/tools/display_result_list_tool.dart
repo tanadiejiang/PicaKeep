@@ -1,3 +1,4 @@
+import '../ai_sources.dart';
 import '../ai_tool.dart';
 
 class DisplayResultListTool extends AiTool {
@@ -23,7 +24,21 @@ class DisplayResultListTool extends AiTool {
                 'id（漫画ID）、title（标题）、author（作者）、'
                 'coverUrl（封面URL）、source（来源：picacg/jm/ehentai/nhentai）、'
                 'tags（标签数组）、availability（可用性信息，可选）。',
-            'items': {'type': 'object'},
+            'items': {
+              'type': 'object',
+              'properties': {
+                'source': {
+                  'type': 'string',
+                  'enum': [
+                    aiSourcePicacg,
+                    aiSourceJm,
+                    aiSourceEhentai,
+                    aiSourceNhentai,
+                  ],
+                  'description': '来源：picacg / jm / ehentai / nhentai',
+                },
+              },
+            },
           },
           'label': {
             'type': 'string',

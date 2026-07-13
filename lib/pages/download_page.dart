@@ -124,13 +124,26 @@ extension ReadComic on DownloadedItem {
 
 String _translateDownloadedTag(String tag) {
   try {
-    final lowerTag = tag.toLowerCase();
+    var value = tag.trim();
+    if (value.contains(':')) {
+      value = value.split(':').last.trim();
+    }
+    var suffix = '';
+    if (value.endsWith(' ♀')) {
+      suffix = '♀';
+      value = value.substring(0, value.length - 2).trim();
+    } else if (value.endsWith(' ♂')) {
+      suffix = '♂';
+      value = value.substring(0, value.length - 2).trim();
+    }
+    final lowerValue = value.toLowerCase();
     for (final map in tagTranslations.values) {
-      final hit = map[lowerTag];
+      final hit = map[lowerValue];
       if (hit != null && hit.isNotEmpty) {
-        return hit;
+        return '$hit$suffix';
       }
     }
+    return '$value$suffix';
   } catch (_) {}
   return tag;
 }
@@ -1970,6 +1983,7 @@ class _DownloadedComicInfoViewState extends State<DownloadedComicInfoView> {
                     children: [
                       for (final tag in tags)
                         Container(
+                          constraints: const BoxConstraints(maxWidth: 140),
                           padding: const EdgeInsets.symmetric(
                             horizontal: 8,
                             vertical: 4,
@@ -1981,6 +1995,8 @@ class _DownloadedComicInfoViewState extends State<DownloadedComicInfoView> {
                           child: Text(
                             _translateDownloadedTag(tag),
                             style: const TextStyle(fontSize: 12),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
                           ),
                         ),
                     ],

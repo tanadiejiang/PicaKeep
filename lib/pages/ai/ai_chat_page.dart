@@ -7,9 +7,14 @@ import 'package:picakeep/foundation/ai/ai_conversation_store.dart';
 import 'package:picakeep/foundation/ai/ai_download_queue.dart';
 import 'package:picakeep/foundation/ai/ai_prompt_tags.dart';
 import 'package:picakeep/foundation/ai/ai_result_item.dart';
+import 'package:picakeep/foundation/ai/ai_sources.dart';
 import 'package:picakeep/foundation/app_page_route.dart';
 import 'package:picakeep/pages/ai/ai_download_list_page.dart';
 import 'package:picakeep/pages/ai/ai_item_list_page.dart';
+import 'package:picakeep/pages/online_comic/eh_comic_page_v2.dart';
+import 'package:picakeep/pages/online_comic/jm_comic_page_v2.dart';
+import 'package:picakeep/pages/online_comic/nhentai_comic_page_v2.dart';
+import 'package:picakeep/pages/online_comic/picacg_comic_page_v2.dart';
 import 'package:picakeep/tools/translations.dart';
 
 const _promptTagBoundaryPattern = r'''[\s#，。；、,.!?;！：:（）()\[\]{}<>《》“”"'`~～]''';
@@ -28,9 +33,6 @@ class _AiChatPageState extends State<AiChatPage>
   // 草稿不能挂在 controller 上，只能挂在 State 的类级 static 字段上。
   static final Map<String, String> _draftsByConversationId = {};
 
-  // 按会话 id 记忆滚动 offset，用于切换标签页/会话时恢复位置。
-  static final Map<String, double> _scrollOffsetByConvId = {};
-
   @override
   bool get wantKeepAlive => true;
 
@@ -40,6 +42,7 @@ class _AiChatPageState extends State<AiChatPage>
   late final ScrollController _scrollController;
   final LayerLink _promptPanelLink = LayerLink();
   final GlobalKey _promptTagButtonKey = GlobalKey();
+  final GlobalKey _pendingTagRowKey = GlobalKey();
   OverlayEntry? _promptPanelEntry;
   bool _resetSourceRestriction = false;
 
@@ -66,38 +69,40 @@ class _AiChatPageState extends State<AiChatPage>
 
   Future<void> _loadController() async {
     final lastId = await AiConversationStore.loadLastActiveId();
-    final ctrl = await AiConversationController.create(loadId: lastId);
+    final ctrl = await AiConversationRegistry.instance.getOrCreate(lastId);
     if (mounted) {
       setState(() => _controller = ctrl);
       _controller!.addListener(_onControllerUpdate);
       _restoreDraft(ctrl);
-      // 若该会话有记忆的滚动位置（如切标签页离开前保存的），恢复它；
-      // 否则（首次打开/无记录）跳到底部。
-      _restoreOrScrollToBottom(ctrl);
+      // 40号计划：不再区分"是否有记忆的滚动位置"，页面（重新）加载 controller
+      // 时统一跳到底部——这覆盖了"切走AI聊天tab再切回"这个场景（该场景下
+      // State 会被完整销毁重建，见 dispose() 注释），使其总是回到最新消息处，
+      // 而不是恢复到离开前滚动到的中间位置。
+      _scrollToBottomAfterFrame();
     }
   }
 
   Future<void> _switchConversation(AiConversationMeta meta) async {
     _clearPromptPanelState();
-    _saveScrollOffset();
-    final newCtrl = await AiConversationController.create(loadId: meta.id);
+    final newCtrl = await AiConversationRegistry.instance.getOrCreate(meta.id);
     if (mounted) {
+      // controller 生命周期交给 AiConversationRegistry 管理，切换会话时只
+      // 摘除本页面挂的监听，不再 dispose()——旧会话若仍在跑 _runLoop()，
+      // dispose 会导致后续 notifyListeners 命中 ChangeNotifier 的 disposed-assert。
       _controller?.removeListener(_onControllerUpdate);
-      _controller?.dispose();
       setState(() => _controller = newCtrl);
       _controller!.addListener(_onControllerUpdate);
       _restoreDraft(newCtrl);
-      _restoreOrScrollToBottom(newCtrl);
+      _scrollToBottomAfterFrame();
       await AiConversationStore.saveLastActiveId(meta.id);
     }
   }
 
   Future<void> _newConversation() async {
     _clearPromptPanelState();
-    final newCtrl = await AiConversationController.create();
+    final newCtrl = await AiConversationRegistry.instance.getOrCreate(null);
     if (mounted) {
       _controller?.removeListener(_onControllerUpdate);
-      _controller?.dispose();
       setState(() => _controller = newCtrl);
       _controller!.addListener(_onControllerUpdate);
       _restoreDraft(newCtrl);
@@ -105,6 +110,15 @@ class _AiChatPageState extends State<AiChatPage>
       if (newCtrl.conversationId != null) {
         await AiConversationStore.saveLastActiveId(newCtrl.conversationId!);
       }
+    }
+  }
+
+  /// 侧栏重命名成功后的回调：若重命名的正好是当前活跃会话，同步 controller
+  /// 内存里的标题/自定义标志，避免用户重命名后立刻发消息触发 `_save()`，
+  /// 内存里的旧标题反而把刚落盘的新标题覆盖回去。
+  void _onConversationRenamed(String id, String newTitle) {
+    if (_controller?.conversationId == id) {
+      _controller!.applyExternalRename(newTitle);
     }
   }
 
@@ -127,30 +141,6 @@ class _AiChatPageState extends State<AiChatPage>
           });
         }
       }
-    });
-  }
-
-  /// 保存当前会话的滚动 offset，供下次恢复。
-  void _saveScrollOffset() {
-    final id = _controller?.conversationId;
-    if (id != null && _scrollController.hasClients) {
-      _scrollOffsetByConvId[id] = _scrollController.offset;
-    }
-  }
-
-  /// 若该会话有记忆的滚动位置则恢复，否则跳到底部。
-  void _restoreOrScrollToBottom(AiConversationController ctrl) {
-    final id = ctrl.conversationId;
-    final saved = id != null ? _scrollOffsetByConvId[id] : null;
-    if (saved == null) {
-      _scrollToBottomAfterFrame();
-      return;
-    }
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted || !_scrollController.hasClients) return;
-      _scrollController.jumpTo(
-        saved.clamp(0, _scrollController.position.maxScrollExtent),
-      );
     });
   }
 
@@ -303,8 +293,12 @@ class _AiChatPageState extends State<AiChatPage>
     if (buttonBox == null || !buttonBox.hasSize) return;
     final media = MediaQuery.of(context);
     final buttonTop = buttonBox.localToGlobal(Offset.zero).dy;
-    final maxHeight = (buttonTop - media.padding.top - 16).clamp(96.0, 320.0);
+    final maxHeight = (buttonTop - media.padding.top - 16).clamp(96.0, 480.0);
     final panelWidth = (media.size.width - 16).clamp(240.0, 380.0);
+    final tagRowBox =
+        _pendingTagRowKey.currentContext?.findRenderObject() as RenderBox?;
+    final tagRowHeight =
+        (tagRowBox?.hasSize ?? false) ? tagRowBox!.size.height : 0.0;
 
     late final OverlayEntry entry;
     entry = OverlayEntry(
@@ -322,7 +316,7 @@ class _AiChatPageState extends State<AiChatPage>
             showWhenUnlinked: false,
             targetAnchor: Alignment.topLeft,
             followerAnchor: Alignment.bottomLeft,
-            offset: const Offset(0, -8),
+            offset: Offset(0, -8 - tagRowHeight),
             child: Material(
               elevation: 10,
               borderRadius: BorderRadius.circular(16),
@@ -394,7 +388,7 @@ class _AiChatPageState extends State<AiChatPage>
       required bool persistent,
     }) {
       return InputChip(
-        label: Text(persistent ? '$label（长期）' : label),
+        label: Text(label),
         onDeleted: onRemove,
         deleteIcon: const Icon(Icons.close, size: 16),
         visualDensity: VisualDensity.compact,
@@ -567,22 +561,6 @@ class _AiChatPageState extends State<AiChatPage>
             ),
           ],
           const SizedBox(height: 12),
-          Text('范围', style: Theme.of(context).textTheme.labelLarge),
-          const SizedBox(height: 6),
-          Wrap(
-            spacing: 6,
-            runSpacing: 6,
-            children: [
-              FilterChip(
-                label: const Text('#$aiLocalOnlyScopeTagName'),
-                tooltip: '仅查本地设备库与已连接的远程库快照，不联网；'
-                    '与来源选择同时选中时以本地限定为准',
-                selected: _selectedLocalOnly,
-                onSelected: (_) => _toggleLocalOnlyTag(),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
           Text('来源', style: Theme.of(context).textTheme.labelLarge),
           const SizedBox(height: 6),
           Wrap(
@@ -593,6 +571,13 @@ class _AiChatPageState extends State<AiChatPage>
                 label: const Text('默认/全部来源'),
                 selected: selectedSources.isEmpty,
                 onSelected: (_) => _selectAllSources(),
+              ),
+              FilterChip(
+                label: const Text('#$aiLocalOnlyScopeTagName'),
+                tooltip: '仅查本地设备库与已连接的远程库快照，不联网；'
+                    '与来源选择同时选中时以本地限定为准',
+                selected: _selectedLocalOnly,
+                onSelected: (_) => _toggleLocalOnlyTag(),
               ),
               for (final name in _sourceByTagName.keys)
                 FilterChip(
@@ -633,11 +618,13 @@ class _AiChatPageState extends State<AiChatPage>
   void dispose() {
     _clearPromptPanelState();
     _promptTagSettings.removeListener(_onPromptTagSettingsUpdate);
-    // 切标签页时整个 State 会被销毁重建（导航用 pushAndRemoveUntil 而非
-    // IndexedStack），此处兜底保存位置，配合 _loadController 的恢复逻辑。
-    _saveScrollOffset();
+    // 40号计划：切标签页时整个 State 会被销毁重建（导航用 pushAndRemoveUntil
+    // 而非 IndexedStack）。此前这里会兜底保存滚动 offset 供下次恢复，但这导致
+    // "切走再切回"总是精确停在离开前的中间位置，与用户期望的"总是回到最新
+    // 消息处"相悖，因此改为不再保存——下次进入统一由 _loadController() 跳底部。
+    // 否则若该轮 _runLoop() 仍在跑，之后的 notifyListeners 会命中
+    // ChangeNotifier 的 disposed-assert，导致该轮对话被中断/丢失。
     _controller?.removeListener(_onControllerUpdate);
-    _controller?.dispose();
     _inputController.dispose();
     _scrollController.dispose();
     super.dispose();
@@ -826,6 +813,7 @@ class _AiChatPageState extends State<AiChatPage>
           currentId: _controller!.conversationId,
           onSelect: _switchConversation,
           onNewConversation: _newConversation,
+          onRenamed: _onConversationRenamed,
         ),
         appBar: AppBar(
           automaticallyImplyLeading: false,
@@ -938,7 +926,10 @@ class _AiChatPageState extends State<AiChatPage>
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      _buildPendingTagRow(context),
+                      KeyedSubtree(
+                        key: _pendingTagRowKey,
+                        child: _buildPendingTagRow(context),
+                      ),
                       Row(
                         children: [
                           CompositedTransformTarget(
@@ -1004,16 +995,16 @@ class _AiChatPageState extends State<AiChatPage>
                 listenable: AiDownloadQueue.instance,
                 builder: (context, _) {
                   final count = AiDownloadQueue.instance.items.length;
-                  return FloatingActionButton.small(
-                    heroTag: 'ai_download_queue_fab',
-                    elevation: 2,
-                    onPressed: () => Navigator.of(context).push(
-                      AppPageRoute(builder: (_) => const AiDownloadListPage()),
-                    ),
-                    tooltip: 'AI 下载清单',
-                    child: Badge(
-                      label: count > 0 ? Text('$count') : null,
-                      isLabelVisible: count > 0,
+                  return Badge(
+                    label: count > 0 ? Text('$count') : null,
+                    isLabelVisible: count > 0,
+                    child: FloatingActionButton.small(
+                      heroTag: 'ai_download_queue_fab',
+                      elevation: 2,
+                      onPressed: () => Navigator.of(context).push(
+                        AppPageRoute(builder: (_) => const AiDownloadListPage()),
+                      ),
+                      tooltip: 'AI 下载清单',
                       child: const Icon(Icons.download_outlined, size: 18),
                     ),
                   );
@@ -1109,6 +1100,11 @@ class _MessageBubble extends StatelessWidget {
 
     switch (message.type) {
       case AiChatMessageType.user:
+        final tagNames = message.promptTagNames
+            .map((name) => name.replaceFirst(RegExp(r'^#'), ''))
+            .where((name) => name.isNotEmpty)
+            .toSet()
+            .toList();
         return Align(
           alignment: Alignment.centerRight,
           child: Container(
@@ -1121,7 +1117,32 @@ class _MessageBubble extends StatelessWidget {
               color: colorScheme.primaryContainer,
               borderRadius: BorderRadius.circular(12),
             ),
-            child: _buildSelectableUserText(message, colorScheme),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _buildSelectableUserText(message, colorScheme),
+                if (tagNames.isNotEmpty) ...[
+                  const SizedBox(height: 6),
+                  Wrap(
+                    alignment: WrapAlignment.end,
+                    spacing: 4,
+                    runSpacing: 4,
+                    children: [
+                      for (final name in tagNames)
+                        Text(
+                          '#$name',
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: colorScheme.onPrimaryContainer
+                                .withValues(alpha: 0.65),
+                          ),
+                        ),
+                    ],
+                  ),
+                ],
+              ],
+            ),
           ),
         );
 
@@ -1462,23 +1483,175 @@ class _ResultListEntryCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final items = AiResultItem.fromToolData(message.toolData);
+    if (items.isEmpty) {
+      final colorScheme = Theme.of(context).colorScheme;
+      return Card(
+        margin: const EdgeInsets.symmetric(vertical: 4),
+        color: colorScheme.secondaryContainer,
+        child: ListTile(
+          leading: Icon(Icons.list_alt, color: colorScheme.onSecondaryContainer),
+          title: const Text('共 0 条结果，点击查看清单'),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: null,
+        ),
+      );
+    }
+    return _CompactResultCardRow(items: items);
+  }
+}
+
+/// 结果卡片栏：带封面图的横向可滚动卡片栏，点击单卡进详情页，
+/// 末尾"查看全部"入口进 [AiItemListPage] 全屏清单页。
+/// 不论 [items] 条数多少均使用同一渲染路径，保持展示形态统一。
+class _CompactResultCardRow extends StatelessWidget {
+  const _CompactResultCardRow({required this.items});
+
+  final List<AiResultItem> items;
+
+  static const _cardWidth = 108.0;
+  static const _coverHeight = 132.0;
+
+  void _openDetail(BuildContext context, AiResultItem item) {
+    Widget page;
+    switch (item.source) {
+      case aiSourcePicacg:
+        page = PicacgComicPageV2(item.id);
+      case aiSourceJm:
+        page = JmComicPageV2(item.id);
+      case aiSourceNhentai:
+        page = NhentaiComicPageV2(item.id);
+      case aiSourceEhentai:
+        page = EhentaiComicPageV2(item.id);
+      default:
+        _openList(context);
+        return;
+    }
+    Navigator.of(context).push(AppPageRoute(builder: (_) => page));
+  }
+
+  void _openList(BuildContext context) {
+    Navigator.of(context).push(MaterialPageRoute(
+      builder: (_) => AiItemListPage(title: '工具结果', items: items),
+    ));
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
     return Card(
       margin: const EdgeInsets.symmetric(vertical: 4),
       color: colorScheme.secondaryContainer,
-      child: ListTile(
-        leading: Icon(Icons.list_alt, color: colorScheme.onSecondaryContainer),
-        title: Text('共 ${items.length} 条结果，点击查看清单'),
-        trailing: const Icon(Icons.chevron_right),
-        onTap: items.isEmpty
-            ? null
-            : () => Navigator.of(context).push(MaterialPageRoute(
-                  builder: (_) => AiItemListPage(title: '工具结果', items: items),
-                )),
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            height: _coverHeight + 48,
+            child: ListView.separated(
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.all(8),
+              itemCount: items.length,
+              separatorBuilder: (_, __) => const SizedBox(width: 8),
+              itemBuilder: (context, index) {
+                final item = items[index];
+                return _CompactResultCard(
+                  item: item,
+                  width: _cardWidth,
+                  coverHeight: _coverHeight,
+                  onTap: () => _openDetail(context, item),
+                );
+              },
+            ),
+          ),
+          InkWell(
+            onTap: () => _openList(context),
+            child: Container(
+              color: colorScheme.primaryContainer,
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              child: Row(
+                children: [
+                  Icon(Icons.list_alt,
+                      size: 20, color: colorScheme.onPrimaryContainer),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      '共 ${items.length} 条结果，查看全部',
+                      style: TextStyle(
+                        color: colorScheme.onPrimaryContainer,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                  Icon(Icons.chevron_right, color: colorScheme.onPrimaryContainer),
+                ],
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
 }
+
+/// 卡片栏内单张卡片：封面图 + 限定行数标题。
+class _CompactResultCard extends StatelessWidget {
+  const _CompactResultCard({
+    required this.item,
+    required this.width,
+    required this.coverHeight,
+    required this.onTap,
+  });
+
+  final AiResultItem item;
+  final double width;
+  final double coverHeight;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(6),
+      child: SizedBox(
+        width: width,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            ClipRRect(
+              borderRadius: BorderRadius.circular(6),
+              child: item.coverUrl.isEmpty
+                  ? SizedBox(
+                      width: width,
+                      height: coverHeight,
+                      child: const Icon(Icons.image_not_supported_outlined),
+                    )
+                  : Image.network(
+                      item.coverUrl,
+                      width: width,
+                      height: coverHeight,
+                      fit: BoxFit.cover,
+                      errorBuilder: (_, __, ___) => SizedBox(
+                        width: width,
+                        height: coverHeight,
+                        child: const Icon(Icons.image_not_supported_outlined),
+                      ),
+                    ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              item.title,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontSize: 12),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 
 /// 下载确认卡片
 class _DownloadConfirmCard extends StatelessWidget {
@@ -1562,11 +1735,13 @@ class _ConversationDrawer extends StatefulWidget {
   final String? currentId;
   final Future<void> Function(AiConversationMeta) onSelect;
   final VoidCallback onNewConversation;
+  final void Function(String id, String newTitle) onRenamed;
 
   const _ConversationDrawer({
     required this.currentId,
     required this.onSelect,
     required this.onNewConversation,
+    required this.onRenamed,
   });
 
   @override
@@ -1580,6 +1755,20 @@ class _ConversationDrawerState extends State<_ConversationDrawer> {
   void initState() {
     super.initState();
     _indexFuture = AiConversationStore.loadIndex();
+    // 41号计划：订阅注册表的 loading 广播，使某会话进入/退出后台 AI 处理时，
+    // 侧栏对应行的 trailing 能够重新渲染，而不需要等待下一次手动 _refresh()。
+    AiConversationRegistry.instance.addListener(_onRegistryChanged);
+  }
+
+  @override
+  void dispose() {
+    AiConversationRegistry.instance.removeListener(_onRegistryChanged);
+    super.dispose();
+  }
+
+  void _onRegistryChanged() {
+    if (!mounted) return;
+    setState(() {});
   }
 
   void _refresh() {
@@ -1591,13 +1780,16 @@ class _ConversationDrawerState extends State<_ConversationDrawer> {
     return Drawer(
       child: Column(
         children: [
-          Container(
-            color: Theme.of(context).colorScheme.primaryContainer,
-            padding: const EdgeInsets.fromLTRB(16, 48, 16, 12),
-            width: double.infinity,
-            child: Text(
-              '历史会话',
-              style: Theme.of(context).textTheme.titleMedium,
+          SafeArea(
+            bottom: false,
+            child: Container(
+              color: Theme.of(context).colorScheme.primaryContainer,
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+              width: double.infinity,
+              child: Text(
+                '历史会话',
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
             ),
           ),
           ListTile(
@@ -1625,6 +1817,8 @@ class _ConversationDrawerState extends State<_ConversationDrawer> {
                   itemBuilder: (context, index) {
                     final meta = list[index];
                     final isCurrent = meta.id == widget.currentId;
+                    final isLoading =
+                        AiConversationRegistry.instance.loadingIds.contains(meta.id);
                     return ListTile(
                       selected: isCurrent,
                       title: Text(
@@ -1633,13 +1827,41 @@ class _ConversationDrawerState extends State<_ConversationDrawer> {
                         overflow: TextOverflow.ellipsis,
                       ),
                       subtitle: Text(_formatTime(meta.updatedAt)),
+                      // 41号计划：该会话正在后台 loading 时，用转圈指示器替代
+                      // 三点菜单按钮，让用户在侧栏列表层面看到哪个会话仍在跑；
+                      // 转圈态下不响应菜单点击（没有"取消菜单"这个操作的意义，
+                      // 且此时菜单里的"重命名/删除"对一个正在写入的会话执行
+                      // 语义不明确，直接隐藏交互比允许误触更安全）。
+                      trailing: isLoading
+                          ? const Padding(
+                              padding: EdgeInsets.all(8),
+                              child: SizedBox(
+                                width: 20,
+                                height: 20,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              ),
+                            )
+                          : Builder(
+                              builder: (buttonContext) => IconButton(
+                                icon: const Icon(Icons.more_vert),
+                                tooltip: '更多操作',
+                                padding: EdgeInsets.zero,
+                                constraints: const BoxConstraints(
+                                  minWidth: 36,
+                                  minHeight: 36,
+                                ),
+                                onPressed: () =>
+                                    _showConversationMenu(buttonContext, meta),
+                              ),
+                            ),
                       onTap: () {
                         if (!isCurrent) {
                           Navigator.pop(context);
                           widget.onSelect(meta);
                         }
                       },
-                      onLongPress: () => _confirmDelete(context, meta),
                     );
                   },
                 );
@@ -1649,6 +1871,78 @@ class _ConversationDrawerState extends State<_ConversationDrawer> {
         ],
       ),
     );
+  }
+
+  /// 三个点菜单：定位在按钮附近弹出，含"重命名"、"删除"两项。
+  Future<void> _showConversationMenu(
+      BuildContext context, AiConversationMeta meta) async {
+    final buttonBox = context.findRenderObject() as RenderBox?;
+    final overlayBox = Overlay.of(context, rootOverlay: true)
+        .context
+        .findRenderObject() as RenderBox?;
+    RelativeRect position;
+    if (buttonBox != null && overlayBox != null) {
+      final topLeft =
+          buttonBox.localToGlobal(Offset.zero, ancestor: overlayBox);
+      final bottomRight = buttonBox.localToGlobal(
+        buttonBox.size.bottomRight(Offset.zero),
+        ancestor: overlayBox,
+      );
+      position = RelativeRect.fromRect(
+        Rect.fromPoints(topLeft, bottomRight),
+        Offset.zero & overlayBox.size,
+      );
+    } else {
+      position = const RelativeRect.fromLTRB(0, 0, 0, 0);
+    }
+
+    final action = await showMenu<String>(
+      context: context,
+      position: position,
+      useRootNavigator: true,
+      items: const [
+        PopupMenuItem(value: 'rename', child: Text('重命名')),
+        PopupMenuItem(value: 'delete', child: Text('删除')),
+      ],
+    );
+    if (!context.mounted) return;
+    if (action == 'rename') {
+      await _renameConversation(context, meta);
+    } else if (action == 'delete') {
+      await _confirmDelete(context, meta);
+    }
+  }
+
+  /// 弹出输入框对话框重命名会话，确认后持久化并回调通知外层同步活跃 controller。
+  Future<void> _renameConversation(
+      BuildContext context, AiConversationMeta meta) async {
+    final controller = TextEditingController(text: meta.title);
+    final newTitle = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('重命名会话'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          maxLength: 50,
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('取消'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, controller.text.trim()),
+            child: const Text('确定'),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+    if (newTitle == null || newTitle.isEmpty) return;
+    await AiConversationStore.renameConversation(meta.id, newTitle);
+    widget.onRenamed(meta.id, newTitle);
+    _refresh();
   }
 
   Future<void> _confirmDelete(
@@ -1672,6 +1966,21 @@ class _ConversationDrawerState extends State<_ConversationDrawer> {
     );
     if (confirmed == true) {
       await AiConversationStore.delete(meta.id);
+      // 33号计划：会话被用户显式永久删除时，同步从全局注册表移除并真正
+      // dispose 对应的 controller（若曾被缓存），避免残留一个不会再被
+      // 访问、但仍占内存的对象。放在 UI 层而非 AiConversationStore 内部，
+      // 避免 ai_conversation_store.dart ⇄ ai_conversation.dart 循环 import
+      // （ai_conversation.dart 已 import ai_conversation_store.dart）。
+      //
+      // 例外：若删除的正是当前页面持有的会话（widget.currentId == meta.id），
+      // 不在此处 dispose——_controller 字段仍指向它，页面还在用它渲染消息
+      // 列表/响应用户操作；立即 dispose 会导致后续任何 UI 交互命中
+      // ChangeNotifier 的 disposed-assert。调用方（AiChatPage）在
+      // onSelect/新建会话时才会真正切走该 controller，届时它已不在注册表
+      // 缓存中（本分支跳过了 remove），后续切换不会再复用到已删除的会话。
+      if (meta.id != widget.currentId) {
+        AiConversationRegistry.instance.remove(meta.id);
+      }
       _refresh();
     }
   }

@@ -1,3 +1,5 @@
+import 'ai_sources.dart';
+
 class AiResultItem {
   final String id;
   final String title;
@@ -23,7 +25,7 @@ class AiResultItem {
       title: (json['title'] as String?) ?? '',
       author: (json['author'] as String?) ?? '',
       coverUrl: (json['coverUrl'] as String?) ?? '',
-      source: (json['source'] as String?) ?? '',
+      source: normalizeAiSource(json['source']) ?? '',
       tags: (json['tags'] as List<dynamic>?)
               ?.map((e) => e.toString())
               .toList() ??

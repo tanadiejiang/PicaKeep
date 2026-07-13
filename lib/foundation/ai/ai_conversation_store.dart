@@ -101,6 +101,7 @@ class AiConversationStore {
     Iterable<AiPromptTag> persistentPromptTags = const <AiPromptTag>[],
     Set<String>? persistentAllowedSearchSources,
     bool? persistentLocalOnly,
+    bool titleIsCustom = false,
   }) {
     final json = <String, dynamic>{
       'version': 2,
@@ -121,6 +122,9 @@ class AiConversationStore {
     if (persistentLocalOnly == true) {
       json['persistentLocalOnly'] = true;
     }
+    if (titleIsCustom) {
+      json['titleIsCustom'] = true;
+    }
     return json;
   }
 
@@ -134,6 +138,7 @@ class AiConversationStore {
     Iterable<AiPromptTag> persistentPromptTags = const <AiPromptTag>[],
     Set<String>? persistentAllowedSearchSources,
     bool? persistentLocalOnly,
+    bool titleIsCustom = false,
   }) async {
     try {
       final updatedAt = DateTime.now();
@@ -149,6 +154,7 @@ class AiConversationStore {
         persistentPromptTags: persistentPromptTags,
         persistentAllowedSearchSources: persistentAllowedSearchSources,
         persistentLocalOnly: persistentLocalOnly,
+        titleIsCustom: titleIsCustom,
       );
 
       // 写入对话文件
@@ -184,6 +190,42 @@ class AiConversationStore {
           .writeAsString(jsonEncode(index.map((m) => m.toJson()).toList()));
     } catch (e) {
       print('Failed to save conversation $id: $e');
+    }
+  }
+
+  /// 重命名对话：只改会话文件与索引文件的 title 字段，并在会话文件里标记
+  /// `titleIsCustom: true`（供 [AiConversationController] 加载时识别，跳过
+  /// `_deriveTitle()` 的自动覆盖）。不走完整的 [save]，避免不必要的
+  /// displayMessages/history 重复写入。`updatedAt` 保持不变——重命名不算
+  /// "更新对话内容"，不应影响会话列表按 updatedAt 的排序位置。
+  static Future<void> renameConversation(String id, String newTitle) async {
+    final trimmed = newTitle.trim();
+    if (trimmed.isEmpty) return;
+    try {
+      final data = await loadConversation(id);
+      if (data == null) return;
+      data['title'] = trimmed;
+      data['titleIsCustom'] = true;
+      final dir = await _dir;
+      final file = File('$dir${Platform.pathSeparator}$id.json');
+      await file.writeAsString(jsonEncode(data));
+
+      final index = await loadIndex();
+      final idx = index.indexWhere((meta) => meta.id == id);
+      if (idx >= 0) {
+        final old = index[idx];
+        index[idx] = AiConversationMeta(
+          id: old.id,
+          title: trimmed,
+          createdAt: old.createdAt,
+          updatedAt: old.updatedAt,
+        );
+        final indexFile = File(_indexPath);
+        await indexFile
+            .writeAsString(jsonEncode(index.map((m) => m.toJson()).toList()));
+      }
+    } catch (e) {
+      print('Failed to rename conversation $id: $e');
     }
   }
 

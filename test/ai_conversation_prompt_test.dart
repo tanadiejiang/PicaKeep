@@ -318,6 +318,30 @@ void main() {
       expect(scopeMessages.single.content, contains('#搜jm'));
     });
 
+    test('47号：单一来源时不附加"分别调用"提示，措辞与旧版一致', () {
+      final ctrl = buildCtrl(persistentAllowedSearchSources: ['jm']);
+      final request = ctrl.buildRequestMessagesForTesting();
+      final scopeMessages =
+          request.where((m) => m.content?.contains('本轮范围限定') ?? false).toList();
+      expect(scopeMessages.length, 1);
+      expect(scopeMessages.single.content, isNot(contains('分别调用')));
+    });
+
+    test('47号：多来源（≥2个）时附加"分别调用 search_online"的说明，不再暗示需询问用户', () {
+      final ctrl =
+          buildCtrl(persistentAllowedSearchSources: ['jm', 'picacg']);
+      final request = ctrl.buildRequestMessagesForTesting();
+      final scopeMessages =
+          request.where((m) => m.content?.contains('本轮范围限定') ?? false).toList();
+      expect(scopeMessages.length, 1);
+      final content = scopeMessages.single.content!;
+      expect(content, contains('#搜jm'));
+      expect(content, contains('#搜pica'));
+      expect(content, contains('分别调用一次 search_online'));
+      expect(content, contains('不需要询问用户具体选哪一个'));
+      expect(content, contains('取得各来源结果后自行合并'));
+    });
+
     test('同时选中仅本地与来源标签时，system 指令以仅本地措辞为准', () {
       final ctrl = buildCtrl(
         persistentLocalOnly: true,

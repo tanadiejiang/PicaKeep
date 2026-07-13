@@ -231,11 +231,18 @@ class _AiItemListPageState extends State<AiItemListPage> {
     }
     if (toQueue.isEmpty) return;
 
-    await AiDownloadQueue.instance.addItems(toQueue);
+    final skipped = await AiDownloadQueue.instance.addItems(toQueue);
 
     if (!mounted) return;
+    final addedCount = toQueue.length - skipped;
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('已加入队列 ${toQueue.length} 项')),
+      SnackBar(
+        content: Text(
+          skipped > 0
+              ? '已加入队列 $addedCount 项，$skipped 项因来源信息缺失或重复被跳过'
+              : '已加入队列 $addedCount 项',
+        ),
+      ),
     );
 
     _exitSelection();
