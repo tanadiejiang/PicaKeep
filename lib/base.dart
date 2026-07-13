@@ -169,6 +169,7 @@ class Appdata {
     '0', //136 aiPromptTagsLongTerm
     '0', //137 aiPromptTemplatesInitialized
     '5', //138 aiMaxToolRounds
+    '0', //139 aiCapabilityGetComicDetail
   ];
 
   List<String> implicitData = [

@@ -73,6 +73,36 @@ class _NaviPaneState extends State<NaviPane>
   double get bottomBarHeight =>
       _kBottomBarHeight + MediaQuery.of(context).padding.bottom;
 
+  // 键盘（软键盘等临时遮挡）弹出高度。bottomBarHeight 只感知
+  // padding.bottom（手势条等固定遮挡），不含这一项——若不特殊处理，
+  // 键盘弹出时页面内容区仍会预留 bottomBarHeight 高度的导航栏空间，
+  // 与键盘本身的遮挡叠加，导致内容区（如AI聊天页输入框下方）被顶出一段
+  // 悬浮在键盘和内容之间的多余空白。
+  double get _keyboardInset => MediaQuery.of(context).viewInsets.bottom;
+
+  // 键盘开合过渡阈值：_keyboardInset 从 0 增长到该值的过程中，界面按
+  // 线性插值从"键盘关"端点过渡到"键盘开"端点；超过该值后固定为"键盘开"
+  // 端点（此时键盘遮挡高度可能还在变化，但界面此时已应保持稳定的"键盘
+  // 已弹出"状态，不需要继续跟随）。选用固定阈值而非"相对屏幕高度"或
+  // "相对键盘最终高度"的比例，是因为键盘刚开始弹出时其最终高度尚未
+  // 可知，且固定阈值不受设备屏幕尺寸差异影响，插值速率在各设备上一致。
+  static const _kKeyboardTransitionThreshold = 20.0;
+
+  // 键盘开合过渡插值系数 t（0<=t<=1）：0 表示完全对应"键盘关"端点，1
+  // 表示完全对应"键盘开"端点，中间值随 _keyboardInset 连续变化，逐帧
+  // 跟随系统键盘收起/弹出动画的实际进度，不再存在阈值处的硬切换。
+  // 仅在 animValue<=1（非宽屏侧边栏模式）时生效，与原判定的排除逻辑
+  // 保持一致；宽屏模式下固定返回 0，不受键盘插入高度影响。
+  double _keyboardOpenT(double animValue) {
+    if (animValue > 1) return 0;
+    final inset = _keyboardInset;
+    if (inset <= 0) return 0;
+    if (inset >= _kKeyboardTransitionThreshold) return 1;
+    return inset / _kKeyboardTransitionThreshold;
+  }
+
+  double _lerpDouble(double a, double b, double t) => a + (b - a) * t;
+
   void onNavigatorStateChange() {
     onRebuild(context);
   }
@@ -120,6 +150,36 @@ class _NaviPaneState extends State<NaviPane>
 
   double? animationTarget;
 
+  DateTime? _lastBackPressAt;
+
+  void _handleBackAction() {
+    final mainState = App.mainNavigatorKey?.currentState;
+    if (mainState != null && mainState.canPop()) {
+      mainState.pop();
+    } else if (App.navigatorKey.currentState?.canPop() == true) {
+      App.navigatorKey.currentState!.pop();
+    } else if (!App.isAndroid) {
+      SystemNavigator.pop();
+    } else if (currentPage != 0) {
+      if (App.isNavigationLocked) return;
+      setState(() {
+        currentPage = 0;
+      });
+    } else {
+      final now = DateTime.now();
+      if (_lastBackPressAt != null &&
+          now.difference(_lastBackPressAt!) <= const Duration(seconds: 2)) {
+        SystemNavigator.pop();
+      } else {
+        _lastBackPressAt = now;
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('要退出应用了喵~'.tl),
+          duration: const Duration(seconds: 2),
+        ));
+      }
+    }
+  }
+
   void onRebuild(BuildContext context) {
     double target = targetFormContext(context);
     if (controller.value != target || animationTarget != target) {
@@ -150,28 +210,25 @@ class _NaviPaneState extends State<NaviPane>
   Widget build(BuildContext context) {
     onRebuild(context);
     return _NaviPopScope(
-      action: () {
-        final mainState = App.mainNavigatorKey?.currentState;
-        if (mainState != null && mainState.canPop()) {
-          mainState.pop();
-        } else if (App.navigatorKey.currentState?.canPop() == true) {
-          App.navigatorKey.currentState!.pop();
-        } else {
-          SystemNavigator.pop();
-        }
-      },
+      action: _handleBackAction,
       popGesture: App.isIOS && !UiMode.m1(context),
       child: AnimatedBuilder(
         animation: controller,
         builder: (context, child) {
           final value = controller.value;
+          final keyboardT = _keyboardOpenT(value);
           return Stack(
             children: [
               if (value <= 1)
                 Positioned(
                   left: 0,
                   right: 0,
-                  bottom: bottomBarHeight * (0 - value),
+                  // 键盘弹出时导航栏本身也应完全滑出屏幕（与 value==1 时的
+                  // 隐藏效果一致），避免它悬浮在键盘上方占用空间。keyboardT
+                  // 在"键盘关"（0）与"键盘开"（1）两端点间连续插值，逐帧
+                  // 跟随键盘收起/弹出动画，不再有硬跳变。
+                  bottom: _lerpDouble(
+                      bottomBarHeight * (0 - value), -bottomBarHeight, keyboardT),
                   child: buildBottom(),
                 ),
               if (value <= 1)
@@ -195,7 +252,13 @@ class _NaviPaneState extends State<NaviPane>
                     (_kSideBarWidth - _kFoldedSideBarWidth) *
                         ((value - 2).clamp(0, 1)),
                 right: 0,
-                bottom: bottomBarHeight * ((1 - value).clamp(0, 1)),
+                // 键盘弹出时不再叠加 bottomBarHeight 这段导航栏预留高度，
+                // 让内容区（pageBuilder 返回的页面，例如AI聊天页）的
+                // Scaffold 自己凭 resizeToAvoidBottomInset 收缩到贴合键盘
+                // 顶部，避免"导航栏预留空白"与"键盘遮挡"叠加产生悬浮空白。
+                // keyboardT 连续插值，避免收起动画中途出现硬跳变。
+                bottom: _lerpDouble(
+                    bottomBarHeight * ((1 - value).clamp(0, 1)), 0, keyboardT),
                 child: MediaQuery.removePadding(
                   removeTop: value >= 2 || value == 0,
                   context: context,

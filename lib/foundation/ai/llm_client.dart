@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:dio/dio.dart';
 import 'package:picakeep/base.dart';
 import 'package:picakeep/foundation/ai/ai_settings.dart';
+import 'package:picakeep/foundation/log.dart';
 import 'package:picakeep/network/app_dio.dart';
 
 /// LLM 消息（OpenAI 格式）
@@ -117,13 +118,48 @@ class LlmToolCall {
       };
 }
 
+/// 单次请求的 token 用量，含 DeepSeek 等 provider 的前缀缓存命中拆分。
+/// `cacheHitTokens`/`cacheMissTokens` 来自响应 `usage.prompt_cache_hit_tokens`/
+/// `prompt_cache_miss_tokens`；非 DeepSeek 或不支持该字段的 provider 下二者为 null。
+class LlmUsage {
+  final int promptTokens;
+  final int completionTokens;
+  final int? cacheHitTokens;
+  final int? cacheMissTokens;
+
+  const LlmUsage({
+    required this.promptTokens,
+    required this.completionTokens,
+    this.cacheHitTokens,
+    this.cacheMissTokens,
+  });
+
+  bool get hasCacheInfo => cacheHitTokens != null && cacheMissTokens != null;
+
+  /// 命中率（0~100），无缓存字段或 prompt 为 0 时返回 null。
+  double? get cacheHitRatePercent {
+    if (!hasCacheInfo || promptTokens <= 0) return null;
+    return cacheHitTokens! / promptTokens * 100;
+  }
+
+  factory LlmUsage.fromJson(Map<String, dynamic> json) {
+    return LlmUsage(
+      promptTokens: (json['prompt_tokens'] as num?)?.toInt() ?? 0,
+      completionTokens: (json['completion_tokens'] as num?)?.toInt() ?? 0,
+      cacheHitTokens: (json['prompt_cache_hit_tokens'] as num?)?.toInt(),
+      cacheMissTokens: (json['prompt_cache_miss_tokens'] as num?)?.toInt(),
+    );
+  }
+}
+
 /// LLM 响应
 class LlmResponse {
   final String? content;
   final List<LlmToolCall>? toolCalls;
   final String? error;
+  final LlmUsage? usage;
 
-  const LlmResponse({this.content, this.toolCalls, this.error});
+  const LlmResponse({this.content, this.toolCalls, this.error, this.usage});
 
   bool get hasToolCalls => toolCalls != null && toolCalls!.isNotEmpty;
   bool get hasError => error != null;
@@ -133,12 +169,19 @@ class LlmResponse {
 class LlmClient {
   LlmClient._();
 
+  /// DeepSeek 模板下 Base URL 留空时的官方默认地址。
+  static const _deepseekDefaultBaseUrl = 'https://api.deepseek.com';
+
   /// 发送聊天请求
   static Future<LlmResponse> chat(
     List<LlmMessage> messages, {
     List<Map<String, Object?>>? tools,
   }) async {
-    final baseUrl = appdata.settings[aiBaseUrlSettingIndex].trim();
+    final template = appdata.settings[aiProviderTemplateSettingIndex];
+    var baseUrl = appdata.settings[aiBaseUrlSettingIndex].trim();
+    if (baseUrl.isEmpty && template == 'deepseek') {
+      baseUrl = _deepseekDefaultBaseUrl;
+    }
     final apiKey = appdata.settings[aiApiKeySettingIndex].trim();
     final modelId = appdata.settings[aiModelIdSettingIndex].trim();
 
@@ -231,15 +274,19 @@ class LlmClient {
       final content = message['content']?.toString();
       final toolCallsJson = message['tool_calls'] as List<dynamic>?;
 
+      final usageJson = data['usage'] as Map<String, dynamic>?;
+      final usage = usageJson == null ? null : LlmUsage.fromJson(usageJson);
+      if (usage != null) _logUsage(modelId, usage, messages);
+
       if (toolCallsJson != null && toolCallsJson.isNotEmpty) {
         final toolCalls = toolCallsJson
             .whereType<Map<String, dynamic>>()
             .map((tc) => LlmToolCall.fromJson(tc))
             .toList();
-        return LlmResponse(toolCalls: toolCalls);
+        return LlmResponse(toolCalls: toolCalls, usage: usage);
       }
 
-      return LlmResponse(content: content ?? '');
+      return LlmResponse(content: content ?? '', usage: usage);
     } on DioException catch (e) {
       return LlmResponse(error: e.message ?? 'Network error: $e');
     } catch (e) {
@@ -251,5 +298,50 @@ class LlmClient {
   static List<Map<String, Object?>> wrapToolSchemas(
       List<Map<String, Object?>> schemas) {
     return schemas;
+  }
+
+  /// 记录本次请求的 token 用量到日志（LogManager -> 设置/日志页可查看/导出）。
+  /// 无 `hasCacheInfo` 时说明该 provider 未返回缓存拆分字段，仍记录基础用量供参考。
+  ///
+  /// 同时记录“开头连续 system 前缀”的指纹（条数/字符数/hash）用于诊断缓存击穿：
+  /// - 连续几条请求 sysHash 不变但命中率仍很低 → DeepSeek 前缀缓存 TTL 过期（不可避免）；
+  /// - sysHash 每次都变 → 动态 system 前缀变动击穿缓存（可通过调整 _buildRequestMessages() 修复）。
+  static void _logUsage(
+    String modelId,
+    LlmUsage usage,
+    List<LlmMessage> messages,
+  ) {
+    final buffer = StringBuffer(
+      'model=$modelId prompt=${usage.promptTokens} '
+      'completion=${usage.completionTokens}',
+    );
+    if (usage.hasCacheInfo) {
+      final rate = usage.cacheHitRatePercent?.toStringAsFixed(1) ?? '-';
+      buffer.write(
+        ' cacheHit=${usage.cacheHitTokens} cacheMiss=${usage.cacheMissTokens}'
+        ' hitRate=$rate%',
+      );
+    }
+    buffer.write(' ${_systemPrefixFingerprint(messages)}');
+    LogManager.addLog(LogLevel.info, 'AiUsage', buffer.toString());
+  }
+
+  /// 计算请求开头“连续 system 消息”块的指纹。
+  /// DeepSeek 前缀缓存逐字节从头匹配，这段 system 前缀一旦变动就会击穿缓存。
+  static String _systemPrefixFingerprint(List<LlmMessage> messages) {
+    var count = 0;
+    final buffer = StringBuffer();
+    for (final m in messages) {
+      if (m.role != 'system') break;
+      count++;
+      buffer
+        ..write(m.content ?? '')
+        ..write(' ');
+    }
+    final chars = buffer.length;
+    // 仅需区分“变没变”，用内置 hashCode（同进程内稳定）即可，无需密码学强度。
+    final hash = buffer.toString().hashCode;
+    return 'msgs=${messages.length} sysMsgs=$count sysChars=$chars '
+        'sysHash=$hash';
   }
 }

@@ -21,13 +21,22 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
     'custom': '',
   };
 
-  static const _templateModelHints = <String, String>{
-    'openai_compat': 'qwen3:8b',
-    'ollama': 'qwen3:8b',
-    'deepseek': 'deepseek-chat',
-    'openai': 'gpt-4o-mini',
-    'custom': '',
+  /// Base URL 留空时按模板展示的占位提示（仅提示，不写入 settings；
+  /// DeepSeek 模板留空时 [LlmClient.chat] 会在实际请求时 fallback 到该地址）。
+  static const _templateBaseUrlHints = <String, String>{
+    'openai_compat': 'http://localhost:11434/v1',
+    'ollama': 'http://localhost:11434',
+    'deepseek': 'https://api.deepseek.com',
+    'openai': 'https://api.openai.com/v1',
+    'custom': 'http://localhost:11434/v1',
   };
+
+  /// DeepSeek 模板下的 Model ID 候选项；[_ModelIdAutocompleteField] 用它做下拉
+  /// 建议，同时仍允许直接输入其他任意值。
+  static const _deepseekModelPresets = <String>[
+    'deepseek-v4-flash',
+    'deepseek-v4-pro',
+  ];
 
   bool get _anyCapabilityEnabled {
     return [
@@ -38,6 +47,7 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
       aiCapabilityResolveLocalItemsSettingIndex,
       aiCapabilityGetDownloadStatusSettingIndex,
       aiCapabilityQueryRemoteLibrarySettingIndex,
+      aiCapabilityGetComicDetailSettingIndex,
     ].any((idx) => appdata.settings[idx] == '1');
   }
 
@@ -116,7 +126,10 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
 
   Widget _buildProviderSection() {
     final template = appdata.settings[aiProviderTemplateSettingIndex];
-    final modelHint = _templateModelHints[template] ?? '';
+    final baseUrlHint = _templateBaseUrlHints[template] ??
+        _templateBaseUrlHints['openai_compat']!;
+    final modelPresets =
+        template == 'deepseek' ? _deepseekModelPresets : const <String>[];
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -180,7 +193,7 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
             child: _EditableSettingField(
               label: 'Base URL'.tl,
               settingIndex: aiBaseUrlSettingIndex,
-              hint: 'http://localhost:11434/v1',
+              hint: baseUrlHint,
               onChanged: (v) {
                 setState(() {
                   appdata.settings[aiBaseUrlSettingIndex] = v;
@@ -208,10 +221,10 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
           const SizedBox(height: 12),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: _EditableSettingField(
-              label: 'Model ID'.tl,
+            child: _ModelIdField(
               settingIndex: aiModelIdSettingIndex,
-              hint: modelHint.isEmpty ? 'gpt-4o-mini' : modelHint,
+              presets: modelPresets,
+              hint: modelPresets.isEmpty ? 'gpt-4o-mini' : modelPresets.first,
               onChanged: (v) {
                 setState(() {
                   appdata.settings[aiModelIdSettingIndex] = v;
@@ -611,6 +624,12 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
         leading: const Icon(Icons.info_outline),
       ),
       _buildSwitch(
+        title: '查看详情（不下载）'.tl,
+        subtitle: 'get_comic_detail：按源和ID查看漫画完整详情，不加入下载队列'.tl,
+        settingIndex: aiCapabilityGetComicDetailSettingIndex,
+        leading: const Icon(Icons.visibility_outlined),
+      ),
+      _buildSwitch(
         title: '远程库查询'.tl,
         subtitle: '查询远程服务器已下载漫画（需已连接远程服务）'.tl,
         settingIndex: aiCapabilityQueryRemoteLibrarySettingIndex,
@@ -752,6 +771,129 @@ class _ObscurableSettingFieldState extends State<_ObscurableSettingField> {
         ),
       ),
       onChanged: widget.onChanged,
+    );
+  }
+}
+
+/// Model ID 输入框：`presets` 非空时表现为"文本框 + 聚焦/输入即弹出候选下拉"
+/// （类似 Provider 模板下拉框的框内展开体验），同时保留自由输入任意值的能力；
+/// `presets` 为空时退化为普通文本框。切换 Provider 模板导致 `presets`/底层
+/// setting 值变化时，通过 [didUpdateWidget] 同步文本框显示，不需要外部改 key。
+class _ModelIdField extends StatefulWidget {
+  const _ModelIdField({
+    required this.settingIndex,
+    required this.presets,
+    this.hint = '',
+    required this.onChanged,
+  });
+
+  final int settingIndex;
+  final List<String> presets;
+  final String hint;
+  final ValueChanged<String> onChanged;
+
+  @override
+  State<_ModelIdField> createState() => _ModelIdFieldState();
+}
+
+class _ModelIdFieldState extends State<_ModelIdField> {
+  late TextEditingController _ctrl;
+  late FocusNode _focusNode;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = TextEditingController(text: appdata.settings[widget.settingIndex]);
+    _focusNode = FocusNode();
+  }
+
+  @override
+  void didUpdateWidget(_ModelIdField oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final current = appdata.settings[widget.settingIndex];
+    if (_ctrl.text != current) {
+      _ctrl.text = current;
+    }
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    _focusNode.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (widget.presets.isEmpty) {
+      return TextField(
+        controller: _ctrl,
+        decoration: InputDecoration(
+          labelText: 'Model ID'.tl,
+          hintText: widget.hint,
+          border: const OutlineInputBorder(),
+          contentPadding:
+              const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        ),
+        onChanged: widget.onChanged,
+      );
+    }
+
+    return RawAutocomplete<String>(
+      textEditingController: _ctrl,
+      focusNode: _focusNode,
+      optionsBuilder: (textEditingValue) {
+        final query = textEditingValue.text.trim().toLowerCase();
+        // 文本为空，或当前文本本身就是某个预设的完整值（意味着用户是刚选中/
+        // 尚未主动做过筛选输入），都展示全部预设，而不是按 contains 收窄成
+        // 只剩自己一项——否则点开下拉会看不到另一个预设选项。
+        final isExactPreset =
+            widget.presets.any((p) => p.toLowerCase() == query);
+        if (query.isEmpty || isExactPreset) return widget.presets;
+        return widget.presets
+            .where((p) => p.toLowerCase().contains(query));
+      },
+      onSelected: widget.onChanged,
+      fieldViewBuilder: (context, controller, focusNode, onSubmitted) {
+        return TextField(
+          controller: controller,
+          focusNode: focusNode,
+          decoration: InputDecoration(
+            labelText: 'Model ID'.tl,
+            hintText: widget.hint,
+            border: const OutlineInputBorder(),
+            contentPadding:
+                const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            suffixIcon: const Icon(Icons.arrow_drop_down),
+          ),
+          onChanged: widget.onChanged,
+        );
+      },
+      optionsViewBuilder: (context, onSelected, options) {
+        return Align(
+          alignment: Alignment.topLeft,
+          child: Material(
+            elevation: 4,
+            borderRadius: BorderRadius.circular(4),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxHeight: 200),
+              child: ListView.builder(
+                padding: EdgeInsets.zero,
+                shrinkWrap: true,
+                itemCount: options.length,
+                itemBuilder: (context, index) {
+                  final option = options.elementAt(index);
+                  return ListTile(
+                    dense: true,
+                    title: Text(option),
+                    onTap: () => onSelected(option),
+                  );
+                },
+              ),
+            ),
+          ),
+        );
+      },
     );
   }
 }

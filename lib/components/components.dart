@@ -8,6 +8,7 @@ import '../foundation/app.dart';
 import '../foundation/def.dart';
 import '../foundation/ui_mode.dart';
 import '../base.dart';
+import '../tools/translations.dart';
 
 part 'consts.dart';
 part 'message.dart';
