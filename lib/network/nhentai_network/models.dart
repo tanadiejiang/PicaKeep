@@ -18,7 +18,8 @@ class NhentaiComicBrief extends BaseComic {
   @override
   final List<String> tags;
 
-  const NhentaiComicBrief(this.title, this.cover, this.id, this.lang, this.tags);
+  const NhentaiComicBrief(
+      this.title, this.cover, this.id, this.lang, this.tags);
 
   @override
   String get description => lang;
@@ -62,18 +63,33 @@ class NhentaiComic {
         "title": title,
         "subTitle": subTitle,
         "cover": cover,
+        "tags": tags.map(
+          (key, values) => MapEntry(key, List<String>.from(values)),
+        ),
       };
 
   NhentaiComic.fromMap(Map<String, dynamic> map)
-      : id = map["id"],
-        title = map["title"],
-        subTitle = map["subTitle"],
-        cover = map["cover"],
-        tags = {},
+      : id = map["id"]?.toString() ?? '',
+        title = map["title"]?.toString() ?? '',
+        subTitle = map["subTitle"]?.toString() ?? '',
+        cover = map["cover"]?.toString() ?? '',
+        tags = _parseTags(map["tags"]),
         favorite = false,
         thumbnails = [],
         recommendations = [],
         token = "";
+
+  static Map<String, List<String>> _parseTags(dynamic raw) {
+    if (raw is! Map) return {};
+    return {
+      for (final entry in raw.entries)
+        entry.key.toString(): entry.value is List
+            ? (entry.value as List)
+                .map<String>((value) => value.toString())
+                .toList()
+            : <String>[],
+    };
+  }
 
   HistoryType get historyType => HistoryType.nhentai;
 

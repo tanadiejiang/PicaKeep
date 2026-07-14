@@ -530,6 +530,7 @@ class OnlineDownloadManager {
         downloadedChapters: downloadedEps,
         size: _directoryMb(root),
         tagList: task.comic.tags,
+        sourceTime: task.comic.updatedAt,
       )
         ..directory = safeDirectory
         ..time = DateTime.now();
@@ -803,6 +804,7 @@ class OnlineDownloadManager {
           coverPath: gallery.coverPath,
           size: _directoryMb(root),
           tagList: gallery.toBrief().tags,
+          sourceTime: gallery.time,
           pageCount: completedPages,
         )
           ..directory = safeDirectory
@@ -920,6 +922,7 @@ class OnlineDownloadManager {
           coverPath: gallery.coverPath,
           size: _directoryMb(root),
           tagList: gallery.toBrief().tags,
+          sourceTime: gallery.time,
           pageCount: imageFiles.length,
         )
           ..directory = safeDirectory
@@ -1033,6 +1036,7 @@ class OnlineDownloadManager {
         size: _directoryMb(root),
         cover: comic.cover,
         tagList: comic.tags['Tags'] ?? const [],
+        categorizedTags: comic.tags,
       )
         ..directory = safeDirectory
         ..time = DateTime.now();
@@ -1742,6 +1746,7 @@ class OnlineDownloadedComic extends DownloadedComic {
     required super.downloadedChapters,
     super.size,
     super.tagList,
+    super.sourceTime,
   });
 
   factory OnlineDownloadedComic.fromDownloadedComic(
@@ -1761,6 +1766,7 @@ class OnlineDownloadedComic extends DownloadedComic {
       downloadedChapters: comic.downloadedChapters,
       size: comic.size,
       tagList: comic.tagList,
+      sourceTime: comic.sourceTime,
     )
       ..time = comic.time
       ..directory = directoryName;
@@ -1902,6 +1908,7 @@ class OnlineDownloadedGallery extends DownloadedGallery {
     super.coverPath,
     super.size,
     super.tagList,
+    super.sourceTime,
     super.pageCount,
   });
 
@@ -1920,6 +1927,7 @@ class OnlineDownloadedGallery extends DownloadedGallery {
       coverPath: gallery.coverPath,
       size: gallery.size,
       tagList: gallery.tagList,
+      sourceTime: gallery.sourceTime,
       pageCount: gallery.pageCount,
     )
       ..time = gallery.time
@@ -1978,6 +1986,7 @@ class OnlineDownloadedNhentai extends NhentaiDownloadedComic {
     super.size,
     super.cover,
     super.tagList,
+    super.categorizedTags,
   });
 
   factory OnlineDownloadedNhentai.fromNhentaiDownloadedComic(
@@ -1993,6 +2002,7 @@ class OnlineDownloadedNhentai extends NhentaiDownloadedComic {
       size: comic.size,
       cover: comic.cover,
       tagList: comic.tagList,
+      categorizedTags: comic.categorizedTags,
     )
       ..time = comic.time
       ..directory = directoryName;

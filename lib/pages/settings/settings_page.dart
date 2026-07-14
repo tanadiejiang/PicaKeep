@@ -7,6 +7,7 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:local_auth/local_auth.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:picakeep/base.dart';
 import 'package:picakeep/tools/translations.dart';
 import 'package:picakeep/components/select.dart' hide AnimatedContainer;
@@ -37,6 +38,7 @@ import 'package:picakeep/foundation/ai/ai_prompt_tags.dart';
 import 'package:picakeep/foundation/ai/ai_settings.dart';
 import 'package:picakeep/pages/ai/ai_page.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 part 'app_settings.dart';
 part 'log_settings.dart';
@@ -55,6 +57,26 @@ void refreshLocalDataCaches() {
 }
 
 const double _settingsWideLayoutBreakpoint = 900;
+
+typedef PackageInfoLoader = Future<PackageInfo> Function();
+typedef AboutUrlLauncher = Future<bool> Function(Uri uri, LaunchMode mode);
+
+String formatAboutVersionText({
+  required String version,
+  required String buildNumber,
+}) {
+  final normalizedVersion = version.trim();
+  if (normalizedVersion.isEmpty) {
+    return '版本未知';
+  }
+
+  final normalizedBuildNumber = buildNumber.trim();
+  final versionText = 'V$normalizedVersion';
+  if (normalizedBuildNumber.isEmpty || normalizedBuildNumber == '0') {
+    return versionText;
+  }
+  return '$versionText ($normalizedBuildNumber)';
+}
 
 Widget _buildSettingColorDot(Color color) {
   return Container(
@@ -90,9 +112,16 @@ class SettingsPage extends StatefulWidget {
     App.globalTo(() => SettingsPage(initialPage: initialPage));
   }
 
-  const SettingsPage({this.initialPage = -1, super.key});
+  const SettingsPage({
+    this.initialPage = -1,
+    this.packageInfoLoader,
+    this.aboutUrlLauncher,
+    super.key,
+  });
 
   final int initialPage;
+  final PackageInfoLoader? packageInfoLoader;
+  final AboutUrlLauncher? aboutUrlLauncher;
 
   @override
   State<SettingsPage> createState() => _SettingsPageState();
@@ -140,6 +169,12 @@ class _SettingsPageState extends State<SettingsPage> {
   bool _isRemovingSubPageHistoryEntry = false;
 
   late final HorizontalDragGestureRecognizer gestureRecognizer;
+  late final Future<PackageInfo> _packageInfoFuture;
+
+  static final Uri _projectUrl =
+      Uri.parse('https://github.com/tanadiejiang/PicaKeep');
+  static final Uri _issuesUrl =
+      Uri.parse('https://github.com/tanadiejiang/PicaKeep/issues');
 
   void _openPage(int id) {
     if (enableTwoViews) {
@@ -238,7 +273,11 @@ class _SettingsPageState extends State<SettingsPage> {
 
   @override
   void initState() {
+    super.initState();
     currentPage = widget.initialPage;
+    _packageInfoFuture = Future<PackageInfo>.sync(
+      () => widget.packageInfoLoader?.call() ?? PackageInfo.fromPlatform(),
+    );
     gestureRecognizer = HorizontalDragGestureRecognizer(debugOwner: this)
       ..onUpdate = (details) {
         final width = MediaQuery.of(context).size.width;
@@ -269,7 +308,6 @@ class _SettingsPageState extends State<SettingsPage> {
           _isDraggingPage = false;
         });
       };
-    super.initState();
   }
 
   @override
@@ -619,28 +657,100 @@ class _SettingsPageState extends State<SettingsPage> {
         ],
       );
 
+  Widget _buildAboutVersion() {
+    return FutureBuilder<PackageInfo>(
+      future: _packageInfoFuture,
+      builder: (context, snapshot) {
+        // Each state uses the same text style and a single line, so the header
+        // reserves space while the platform channel is still resolving.
+        final versionText = snapshot.hasData
+            ? formatAboutVersionText(
+                version: snapshot.data!.version,
+                buildNumber: snapshot.data!.buildNumber,
+              )
+            : snapshot.hasError
+                ? '版本未知'
+                : '版本读取中';
+        return Center(
+          child: Semantics(
+            liveRegion: true,
+            child: Text(
+              versionText,
+              key: const ValueKey('about-version'),
+              style: Theme.of(context).textTheme.titleSmall,
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _openAboutUrl(Uri url, String failureMessage) async {
+    var launched = false;
+    try {
+      launched = await (widget.aboutUrlLauncher?.call(
+            url,
+            LaunchMode.externalApplication,
+          ) ??
+          launchUrl(url, mode: LaunchMode.externalApplication));
+    } catch (_) {
+      launched = false;
+    }
+    if (!mounted || launched) {
+      return;
+    }
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(failureMessage.tl)),
+    );
+  }
+
   Widget buildAbout(double width) => buildTwoColumnLayout(
         width,
         [
-          const SizedBox(
-            height: 130,
-            width: double.infinity,
-            child: Center(
-              child: Icon(Icons.book_rounded, size: 80),
+          const SizedBox(height: 32),
+          Center(
+            child: Image.asset(
+              'assets/app_icon.png',
+              width: 96,
+              height: 96,
+              semanticLabel: 'PicaKeep 应用图标',
             ),
           ),
+          const SizedBox(height: 16),
           const Center(
             child: Text(
-              "PicaKeep",
+              'PicaKeep',
               style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
             ),
           ),
-          const Center(
-            child: Text("V1.9.9", style: TextStyle(fontSize: 16)),
-          ),
           const SizedBox(height: 4),
-          const Center(
-            child: Text("本地漫画阅读器 / 收藏管理器"),
+          _buildAboutVersion(),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(24, 20, 24, 16),
+            child: Center(
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 560),
+                child: Text(
+                  '把喜欢的漫画好好留在身边。\n专注本地收藏、整理与阅读，也支持多源下载和局域网跨设备浏览。',
+                  textAlign: TextAlign.center,
+                  style: Theme.of(context).textTheme.bodyLarge,
+                ),
+              ),
+            ),
+          ),
+          ListTile(
+            contentPadding: const EdgeInsets.symmetric(horizontal: 24),
+            leading: const Icon(Icons.link),
+            title: Text('项目地址'.tl),
+            trailing: const Icon(Icons.open_in_new),
+            onTap: () => _openAboutUrl(_projectUrl, '无法打开项目地址'),
+          ),
+          ListTile(
+            contentPadding: const EdgeInsets.symmetric(horizontal: 24),
+            leading: const Icon(Icons.bug_report_outlined),
+            title: Text('问题反馈 (GitHub)'.tl),
+            trailing: const Icon(Icons.open_in_new),
+            onTap: () => _openAboutUrl(_issuesUrl, '无法打开问题反馈页面'),
           ),
           Padding(
             padding:

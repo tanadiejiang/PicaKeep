@@ -215,6 +215,10 @@ class DownloadedComic extends DownloadedItem {
   String chineseTeam;
   List<String> categories;
 
+  /// 来源站最近更新时间。下载时间仍由 [DownloadedItem.time] 承载，不能混用。
+  /// 旧 download.db 记录没有此键时保留空字符串。
+  String sourceTime;
+
   DownloadedComic({
     required this.comicId,
     required this.title,
@@ -227,6 +231,7 @@ class DownloadedComic extends DownloadedItem {
     this.tagList = const [],
     this.chineseTeam = '',
     this.categories = const [],
+    this.sourceTime = '',
   });
 
   @override
@@ -242,6 +247,7 @@ class DownloadedComic extends DownloadedItem {
         "tagList": tagList,
         "chineseTeam": chineseTeam,
         "categories": categories,
+        "sourceTime": sourceTime,
       };
 
   DownloadedComic.fromJson(Map<String, dynamic> json)
@@ -258,6 +264,9 @@ class DownloadedComic extends DownloadedItem {
             (json["chineseTeam"] ?? json["comicItem"]?["chineseTeam"] ?? '')
                 .toString(),
         categories = const [],
+        sourceTime =
+            (json["sourceTime"] ?? json["comicItem"]?["sourceTime"] ?? '')
+                .toString(),
         downloadedChapters = [] {
     if (json["downloadedChapters"] != null) {
       downloadedChapters = List<int>.from(json["downloadedChapters"]);
@@ -426,6 +435,9 @@ class DownloadedGallery extends DownloadedItem {
   double? size;
   List<String> tagList;
 
+  /// 来源站显示的上传/更新时间。旧记录缺失时为空，不使用本地下载时间回填。
+  String sourceTime;
+
   /// 真实页数（ehentai 单画廊多图、无章节）。页图平铺在下载目录根，
   /// 文件名为 1.{ext}…pageCount.{ext}。旧数据缺该键时回退 1（向后兼容）。
   int pageCount;
@@ -438,6 +450,7 @@ class DownloadedGallery extends DownloadedItem {
     this.coverPath = '',
     this.size,
     this.tagList = const [],
+    this.sourceTime = '',
     this.pageCount = 1,
   });
 
@@ -450,6 +463,7 @@ class DownloadedGallery extends DownloadedItem {
         "coverPath": coverPath,
         "size": size,
         "tagList": tagList,
+        "sourceTime": sourceTime,
         "pageCount": pageCount,
       };
 
@@ -464,6 +478,7 @@ class DownloadedGallery extends DownloadedItem {
         coverPath: g["cover"] ?? g["coverPath"] ?? '',
         size: _parseSize(json["size"] ?? g["size"]),
         tagList: _parseTags(g["tagList"] ?? g["tags"]),
+        sourceTime: (json["sourceTime"] ?? g["sourceTime"] ?? '').toString(),
         pageCount: _parsePageCount(json["pageCount"] ?? g["maxPage"]),
       );
     }
@@ -475,6 +490,7 @@ class DownloadedGallery extends DownloadedItem {
       coverPath: json["coverPath"] ?? '',
       size: _parseSize(json["size"]),
       tagList: _parseTags(json["tagList"] ?? json["tags"]),
+      sourceTime: (json["sourceTime"] ?? '').toString(),
       pageCount: _parsePageCount(json["pageCount"]),
     );
   }

@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:picakeep/foundation/download_model.dart';
 import 'package:picakeep/foundation/local_library.dart';
@@ -7,6 +9,7 @@ LocalLibraryComicItem _localItem({
   required String itemId,
   required String originalId,
   DownloadType type = DownloadType.jm,
+  String? sourceRowJson,
 }) {
   return LocalLibraryComicItem(
     itemId: itemId,
@@ -24,6 +27,7 @@ LocalLibraryComicItem _localItem({
     localStorageExists: true,
     canDelete: false,
     aliases: const [],
+    sourceRowJson: sourceRowJson,
   );
 }
 
@@ -76,6 +80,73 @@ void main() {
     test('rejects non-numeric/empty rawId', () {
       expect(extractNhentaiNumericId('nhentai'), isNull);
       expect(extractNhentaiNumericId(''), isNull);
+    });
+  });
+
+  group('resolveEhGalleryLink', () {
+    const link = 'https://e-hentai.org/g/220980/abc123def/';
+
+    test('uses the persisted link on a direct DownloadedGallery', () {
+      final gallery = DownloadedGallery(
+        galleryTitle: 'EH',
+        link: link,
+      );
+
+      expect(resolveEhGalleryLink(gallery), link);
+    });
+
+    test('restores both current flat and historical nested local JSON', () {
+      final current = DownloadedGallery(
+        galleryTitle: 'EH',
+        link: link,
+      );
+      final currentItem = _localItem(
+        itemId: 'local_download::current_download::220980-abc123def',
+        originalId: '220980-abc123def',
+        type: DownloadType.ehentai,
+        sourceRowJson: jsonEncode(current.toJson()),
+      );
+      final historicalItem = _localItem(
+        itemId: 'local_download::current_download::220981-abc456def',
+        originalId: '220981-abc456def',
+        type: DownloadType.ehentai,
+        sourceRowJson: jsonEncode({
+          'gallery': {
+            'title': 'legacy EH',
+            'link': 'https://exhentai.org/g/220981/abc456def/',
+            'tags': <String, List<String>>{},
+          },
+        }),
+      );
+
+      expect(resolveEhGalleryLink(currentItem), link);
+      expect(
+        resolveEhGalleryLink(historicalItem),
+        'https://exhentai.org/g/220981/abc456def/',
+      );
+    });
+
+    test('rejects missing, non-HTTP, foreign-host and invalid gallery links',
+        () {
+      DownloadedGallery galleryFor(String value) => DownloadedGallery(
+            galleryTitle: 'EH',
+            link: value,
+          );
+
+      expect(resolveEhGalleryLink(galleryFor('')), isNull);
+      expect(resolveEhGalleryLink(galleryFor('220980-abc123def')), isNull);
+      expect(
+        resolveEhGalleryLink(galleryFor('ftp://e-hentai.org/g/220980/abc/')),
+        isNull,
+      );
+      expect(
+        resolveEhGalleryLink(galleryFor('https://example.com/g/220980/abc/')),
+        isNull,
+      );
+      expect(
+        resolveEhGalleryLink(galleryFor('https://e-hentai.org/g/not-id/abc/')),
+        isNull,
+      );
     });
   });
 }

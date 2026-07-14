@@ -58,6 +58,7 @@ dependencies:
       path: packages/desktop_webview_window
       ref: 7801fc5
   flutter_markdown: ^0.7.7
+  package_info_plus: ^8.3.1
 
 dependency_overrides:
   local_auth_windows:
@@ -72,6 +73,7 @@ dev_dependencies:
 flutter:
   uses-material-design: true
   assets:
+    - assets/app_icon.png
     - assets/tags.json
     - assets/translation.json
     - assets/tags_tw.json

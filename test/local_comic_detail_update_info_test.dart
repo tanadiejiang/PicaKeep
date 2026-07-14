@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:picakeep/foundation/download_model.dart';
 import 'package:picakeep/foundation/local_library.dart';
+import 'package:picakeep/network/eh_network/eh_models.dart';
 import 'package:picakeep/network/jm_network/jm_models.dart';
 import 'package:picakeep/network/nhentai_network/models.dart';
 import 'package:picakeep/network/picacg_network/models.dart';
@@ -65,6 +66,7 @@ PicacgComicItem _picacgInfo({
   String chineseTeam = '新汉化组',
   List<String> categories = const ['新分类'],
   List<String> tags = const ['新标签'],
+  String updatedAt = '2026-07-14T12:34:56Z',
 }) {
   return PicacgComicItem(
     id: 'abc',
@@ -90,7 +92,7 @@ PicacgComicItem _picacgInfo({
     isFavourite: false,
     epsCount: 0,
     pagesCount: 0,
-    updatedAt: '',
+    updatedAt: updatedAt,
     eps: const [],
     recommendation: const [],
   );
@@ -115,16 +117,42 @@ NhentaiComic _nhentaiInfo({
   );
 }
 
+Gallery _ehInfo() {
+  return Gallery(
+    '在线标题',
+    'type',
+    '7 months ago',
+    '新上传者',
+    0,
+    null,
+    'online-cover',
+    {
+      'artist': ['新画师'],
+      'language': ['english'],
+    },
+    const [],
+    null,
+    false,
+    'https://e-hentai.org/g/220980/abc123def/',
+    '99',
+    20,
+    const [],
+    'jpg',
+    100,
+    'online subtitle',
+  );
+}
+
 void main() {
   group('supportsUpdateInfo', () {
-    test('jm/picacg/nhentai are supported', () {
+    test('jm/picacg/nhentai/ehentai are supported', () {
       expect(supportsUpdateInfo(DownloadType.jm), isTrue);
       expect(supportsUpdateInfo(DownloadType.picacg), isTrue);
       expect(supportsUpdateInfo(DownloadType.nhentai), isTrue);
+      expect(supportsUpdateInfo(DownloadType.ehentai), isTrue);
     });
 
-    test('other sources (including ehentai) are not supported', () {
-      expect(supportsUpdateInfo(DownloadType.ehentai), isFalse);
+    test('other sources are not supported', () {
       expect(supportsUpdateInfo(DownloadType.hitomi), isFalse);
       expect(supportsUpdateInfo(DownloadType.htmanga), isFalse);
       expect(supportsUpdateInfo(DownloadType.copyManga), isFalse);
@@ -235,8 +263,8 @@ void main() {
         works: const [],
         actors: const [],
       ));
-      final updated = buildUpdatedDownloadedRecord(existing, result)
-          as DownloadedJmComic;
+      final updated =
+          buildUpdatedDownloadedRecord(existing, result) as DownloadedJmComic;
       expect(updated.author, ''); // authors.join 空列表 -> ''
       expect(updated.works, isEmpty);
       expect(updated.actors, isEmpty);
@@ -263,6 +291,7 @@ void main() {
       expect(updated.tagList, ['新标签']);
       expect(updated.chineseTeam, '新汉化组');
       expect(updated.categories, ['新分类']);
+      expect(updated.sourceTime, '2026-07-14T12:34:56Z');
       // ID/结构性字段不变。
       expect(updated.comicId, 'abc123');
       expect(updated.size, 10.0);
@@ -293,6 +322,37 @@ void main() {
       expect(updated.comicID, '123456');
       expect(updated.cover, 'cover.jpg');
       expect(updated.size, 5.0);
+    });
+
+    test(
+        'ehentai: overwrites uploader/tags/source time and preserves local structure',
+        () {
+      final existing = DownloadedGallery(
+        galleryTitle: '本地标题',
+        subtitle: '本地副标题',
+        uploader: '旧上传者',
+        link: 'https://exhentai.org/g/220980/abc123def/',
+        coverPath: 'local-cover',
+        size: 12.5,
+        tagList: const ['artist:旧画师'],
+        sourceTime: 'old source time',
+        pageCount: 12,
+      );
+
+      final updated = buildUpdatedDownloadedRecord(
+        existing,
+        UpdateInfoFetchResult.ehentai(_ehInfo()),
+      ) as DownloadedGallery;
+
+      expect(updated.uploader, '新上传者');
+      expect(updated.tagList, ['artist:新画师', 'language:english']);
+      expect(updated.sourceTime, '7 months ago');
+      expect(updated.galleryTitle, '本地标题');
+      expect(updated.subtitle, '本地副标题');
+      expect(updated.link, 'https://exhentai.org/g/220980/abc123def/');
+      expect(updated.coverPath, 'local-cover');
+      expect(updated.size, 12.5);
+      expect(updated.pageCount, 12);
     });
 
     test('returns null when existing type does not match fetch result type',
