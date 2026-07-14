@@ -24,6 +24,7 @@ Z_性能数据/
 .vscode/
 .codegraph/
 .reasonix/
+.claude/
 
 # Flutter/Dart/Pub related
 **/doc/api/

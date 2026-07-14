@@ -323,6 +323,56 @@ extension TrashManagerDelete on TrashManager {
     App.notifyLocalDataChanged();
   }
 
+  /// 07号计划"更新信息"写回入口：更新 [sourceDbPath] 对应 download.db 里
+  /// 某一行的 title/subtitle/json 三列，不改动 time/directory/size（这三者
+  /// 在本地"信息"区有独立于在线数据的语义——下载时间/本地文件页数/本地记录标识，
+  /// 不应被在线覆盖流程改写）。
+  ///
+  /// 复用既有的 [_mutateSourceDbFile]（含 root/Shizuku 特权IO fallback），
+  /// 不重复实现一套数据库写入基础设施——评估过直接把 [_mutateSourceDbFile]
+  /// 整体提升为公开方法的成本：它依赖大量 trash 场景私有辅助
+  /// （_isPermissionDenied/_resolvePrivilegedWriteModeForOperation/
+  /// _privilegedReadFileBytes/_privilegedWriteFileBytes/_joinTrashPath等），
+  /// 这些私有函数分散在 trash.dart/trash_io.dart 多个 part 文件里，把它们
+  /// 一并公开化会扩大 TrashManager 的公开面且与 trash 场景语义混淆，故只新增
+  /// 这一个职责单一的公开方法作为最小对外入口，内部仍走同一套私有实现。
+  ///
+  /// 返回 true 表示确认目标行存在且写入成功；false 表示数据库文件不存在、
+  /// 目标行不存在，或写入过程失败（详见 [_mutateSourceDbFile] 的异常语义，
+  /// 该方法本身不吞异常，调用方需自行 catch）。
+  Future<bool> updateSourceDbRowMetadata({
+    required String sourceDbPath,
+    required String sourceDbId,
+    required String newTitle,
+    required String newSubtitle,
+    required String newJson,
+  }) async {
+    final dbPath = sourceDbPath.trim();
+    final dbId = sourceDbId.trim();
+    if (dbPath.isEmpty || dbId.isEmpty) {
+      return false;
+    }
+    var rowFound = false;
+    final ok = await _mutateSourceDbFile(
+      dbPath,
+      mutate: (db) async {
+        final existing = db.select(
+          'select 1 from download where id = ? limit 1',
+          [dbId],
+        );
+        if (existing.isEmpty) {
+          return;
+        }
+        rowFound = true;
+        db.execute(
+          'update download set title = ?, subtitle = ?, json = ? where id = ?',
+          [newTitle, newSubtitle, newJson, dbId],
+        );
+      },
+    );
+    return ok && rowFound;
+  }
+
   Future<bool> _removeSourceDbRecord(_LocalDeleteTarget target) async {
     final sourceDbPath = target.sourceDbPath?.trim() ?? '';
     final sourceDbId = target.sourceDbId?.trim().isNotEmpty == true

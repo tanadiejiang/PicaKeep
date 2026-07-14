@@ -658,32 +658,12 @@ class AiConversationController extends ChangeNotifier {
       mergedPromptTagsByName[tag.name] = tag;
     }
     final mergedPromptTags = mergedPromptTagsByName.values.toList();
-    // 本轮实际用到的来源/本地限定类范围标签（面板 chip 选中、未必手打进正文），
-    // 不区分是否长期模式，都应折入气泡回显名单。
-    final scopeTagNames = <String>[
-      for (final source in selectedSources)
-        if (aiPromptTagNameForSource(source) != null)
-          aiPromptTagNameForSource(source)!,
-      if (localOnlyRequested) aiLocalOnlyScopeTagName,
-    ];
-    final mergedRecognizedNames = <String>[
-      ...parsed.recognizedNames,
-      for (final tag in mergedPromptTagsByName.keys)
-        if (!parsed.recognizedNames.contains(tag)) tag,
-      for (final name in scopeTagNames)
-        if (!parsed.recognizedNames.contains(name) &&
-            !mergedPromptTagsByName.containsKey(name))
-          name,
-    ];
 
-    displayMessages.add(
-      AiChatMessage.user(
-        parsed.displayText,
-        promptTagNames: mergedRecognizedNames,
-      ),
-    );
-    _history.add(LlmMessage.user(parsed.userText));
-
+    // 先落地本轮的长期持久化/临时覆盖状态，再基于“最终生效范围”计算气泡
+    // 回显标签，确保回显与 effectiveAllowedSearchSources/effectiveLocalOnly
+    // （system prompt 注入、工具调用约束用的同一份判定）完全一致：本轮有
+    // 手动覆盖时按本轮，没有手动覆盖时回落到长期生效状态，而不是本轮没选就
+    // 直接不显示。
     if (shouldPersistSelections) {
       _mergePersistentPromptTags(mergedPromptTags);
       if (hasSourceOverride) {
@@ -708,6 +688,36 @@ class AiConversationController extends ChangeNotifier {
         localOnly: hasLocalOverride ? true : null,
       );
     }
+
+    // 本轮气泡展示的来源/本地限定标签：本轮显式选中的（临时或长期）与长期
+    // 生效但本轮未手动选中的，都应折入名单；两条路径共用同一个“最终生效
+    // 范围”读出，天然去重，不会同一标签重复出现，也不会展示与实际生效范围
+    // 不符的标签。
+    final effectiveSources = effectiveAllowedSearchSources;
+    final scopeTagNames = <String>[
+      for (final source in _orderedAiSources)
+        if (effectiveSources?.contains(source) ?? false)
+          if (aiPromptTagNameForSource(source) != null)
+            aiPromptTagNameForSource(source)!,
+      if (effectiveLocalOnly) aiLocalOnlyScopeTagName,
+    ];
+    final mergedRecognizedNames = <String>[
+      ...parsed.recognizedNames,
+      for (final tag in mergedPromptTagsByName.keys)
+        if (!parsed.recognizedNames.contains(tag)) tag,
+      for (final name in scopeTagNames)
+        if (!parsed.recognizedNames.contains(name) &&
+            !mergedPromptTagsByName.containsKey(name))
+          name,
+    ];
+
+    displayMessages.add(
+      AiChatMessage.user(
+        parsed.displayText,
+        promptTagNames: mergedRecognizedNames,
+      ),
+    );
+    _history.add(LlmMessage.user(parsed.userText));
 
     isLoading = true;
     error = null;
@@ -832,11 +842,7 @@ $lines''';
     }
 
     if (!response.hasToolCalls) {
-      final text = response.content ?? '';
-      displayMessages.add(AiChatMessage.assistant(text));
-      _history.add(LlmMessage.assistant(content: text));
-      _flushPendingDisplayItems();
-      _finishActiveTurn();
+      _handleFinalTextResponse(response.content);
       return _RunLoopOutcome.finished;
     }
 
@@ -844,6 +850,35 @@ $lines''';
     _history.add(LlmMessage.assistant(toolCalls: response.toolCalls));
 
     return _processToolCalls(response.toolCalls!);
+  }
+
+  /// 处理一轮"LLM 无 tool_calls"的最终文本回复：
+  /// - 有实际内容（trim 后非空）：正常生成气泡并写入 `_history`。
+  /// - 无内容（`null`/空字符串/纯空白）：不生成空文本气泡（避免灰色空块）；
+  ///   若此时也没有待展示的工具结果（清单卡等），改为展示一条轻量提示气泡，
+  ///   让用户感知"AI本轮没有回复内容"而不是完全静默；该提示气泡只展示给
+  ///   用户，不写入 `_history`，避免污染后续请求的历史上下文。
+  void _handleFinalTextResponse(String? rawText) {
+    final trimmedText = rawText?.trim() ?? '';
+    if (trimmedText.isNotEmpty) {
+      // 保留原始文本（未 trim）写入气泡与历史，与修复前的展示行为保持一致，
+      // 只用 trim 后的结果判断“是否算有内容”。
+      displayMessages.add(AiChatMessage.assistant(rawText!));
+      _history.add(LlmMessage.assistant(content: rawText));
+    } else if (_pendingDisplayItems == null || _pendingDisplayItems!.isEmpty) {
+      displayMessages.add(AiChatMessage.assistant('（AI本轮未返回有效内容）'));
+    }
+    _flushPendingDisplayItems();
+    _finishActiveTurn();
+  }
+
+  /// 测试用：绕过真实网络请求，直接模拟"LLM 一轮回复的 `content`（可能为
+  /// `null`/空字符串/纯空白/正常文本），且本轮没有 tool_calls"这一场景，
+  /// 驱动与 [_runLoop] 完全相同的收尾逻辑（[_handleFinalTextResponse]）。
+  /// 用于验证空/空白 content 不再产生空文本气泡（02号计划）。
+  @visibleForTesting
+  void simulateFinalTextResponseForTesting(String? content) {
+    _handleFinalTextResponse(content);
   }
 
   /// 处理一轮 LLM 回复里的全部 tool_call（不含往 `_history` 追加那条 assistant

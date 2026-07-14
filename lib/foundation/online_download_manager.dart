@@ -740,36 +740,56 @@ class OnlineDownloadManager {
         }
         task.currentEp = 1;
         task.currentEpName = gallery.title;
-        task.currentPage = 0;
+        // 续传：不无条件重置 currentPage（暂停/失败前的进度需要保留）；
+        // totalPages 每次都以画廊真实页数重新赋值，不受续传影响。
         task.totalPages = totalPages;
         _notify();
 
+        // ehgt.org 闸限 3 并发（对齐 eh_main_network.dart 的 acquireEhgtSlot），
+        // 页级流水线（reader页解析+解密+下载）并发度与之对齐，避免突破官方限流契约。
+        const ehConcurrency = 3;
+        final semaphore = _Semaphore(ehConcurrency);
         var completedPages = 0;
         final errors = <String>[];
+        final futures = <Future<void>>[];
         for (var pageIndex = 0; pageIndex < totalPages; pageIndex++) {
           _throwIfCancelled(task);
           final page = pageIndex + 1;
-          try {
-            final (imageUrl, _) =
-                await EhNetwork().getEhImageUrl(gallery, page);
-            final file = File(
-              '${root.path}${Platform.pathSeparator}$page${_imageExtension(imageUrl)}',
-            );
-            await _downloadFile(task, imageUrl, file, headers: headers);
+          // 续传兜底：本地文件已存在（暂停/失败前已下载完成）直接计入完成数，
+          // 不再对该页发起 getEhImageUrl 网络请求——避免"缓慢爬升"式空转
+          // （旧实现必须先跑完整解密请求才能判断是否需要下载，这才是真正耗时点）。
+          if (_ehPageFileExists(root, page)) {
             completedPages++;
             task.currentPage = completedPages;
             _notify();
-          } on _OnlineDownloadCancelled {
-            rethrow;
-          } catch (e) {
-            errors.add('page $page: $e');
-            LogManager.addLog(
-                LogLevel.warning, 'OnlineDownload', 'eh page $page failed: $e');
+            continue;
           }
+          futures.add(semaphore.run(() async {
+            _throwIfCancelled(task);
+            try {
+              final (imageUrl, _) =
+                  await EhNetwork().getEhImageUrl(gallery, page);
+              final file = File(
+                '${root.path}${Platform.pathSeparator}$page${_imageExtension(imageUrl)}',
+              );
+              await _downloadFile(task, imageUrl, file, headers: headers);
+            } catch (e) {
+              if (e is _OnlineDownloadCancelled) rethrow;
+              errors.add('page $page: $e');
+              LogManager.addLog(LogLevel.warning, 'OnlineDownload',
+                  'eh page $page failed: $e');
+              return;
+            }
+            // 已完成页数量计数（而非页序直接赋值），保证并发乱序完成时进度单调递增。
+            completedPages++;
+            task.currentPage = completedPages;
+            _notify();
+          }));
           if (pageIndex % 5 == 0) {
             unawaited(_saveQueue());
           }
         }
+        await Future.wait(futures);
         _throwIfCancelled(task);
         if (completedPages == 0) {
           throw Exception(errors.isNotEmpty ? errors.first : 'No page downloaded');
@@ -1185,6 +1205,11 @@ class OnlineDownloadManager {
     File file, {
     Map<String, String>? headers,
   }) async {
+    // ehgt.org 3 并发闸：acquireEhgtSlot/releaseEhgtSlot 内部会先判断 url 是否
+    // 指向 ehgt.org/s.exhentai.org，非该域名直接空操作返回，故对 picacg/jm/
+    // nhentai 的下载请求无影响；这里补上真实图片字节下载请求接入这个闸——
+    // 此前该闸只包住了 _verifyImageReachable 探测请求，从未限制过真实下载。
+    await EhNetwork().acquireEhgtSlot(url);
     final dio = logDio();
     final cancelToken = CancelToken();
     task.addToken(cancelToken);
@@ -1224,6 +1249,7 @@ class OnlineDownloadManager {
     await sink.close();
     } finally {
       task.removeToken(cancelToken);
+      EhNetwork().releaseEhgtSlot(url);
     }
   }
 
@@ -1231,6 +1257,19 @@ class OnlineDownloadManager {
     if (task.cancelled || task.paused) {
       throw const _OnlineDownloadCancelled();
     }
+  }
+
+  /// 续传兜底：判断第 [page] 页是否已经真实落盘（任一已知扩展名、非空文件）。
+  /// 用于并发改造后跳过已完成页而不发起 getEhImageUrl 网络请求，
+  /// 同时不依赖 currentPage 数值本身语义（暂停瞬间的计数可能与实际落盘不完全一致）。
+  bool _ehPageFileExists(Directory root, int page) {
+    for (final ext in const ['.jpg', '.png', '.webp', '.jpeg']) {
+      final file = File('${root.path}${Platform.pathSeparator}$page$ext');
+      if (file.existsSync() && file.lengthSync() > 0) {
+        return true;
+      }
+    }
+    return false;
   }
 
   String _safeName(String value) {
