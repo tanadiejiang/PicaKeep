@@ -209,6 +209,11 @@ class DownloadedComic extends DownloadedItem {
   List<int> downloadedChapters;
   double? size;
   List<String> tagList;
+  // 汉化组 / 分类：仅 picacg 来源元数据标签，07号计划"更新信息"覆盖目标。
+  // 旧记录（升级前写入的 json）不含这两个键，fromJson 必须安全兜底为空
+  // 字符串/空列表，不能因为键缺失而抛异常（详情见类顶注释与07号计划回写记录）。
+  String chineseTeam;
+  List<String> categories;
 
   DownloadedComic({
     required this.comicId,
@@ -220,6 +225,8 @@ class DownloadedComic extends DownloadedItem {
     required this.downloadedChapters,
     this.size,
     this.tagList = const [],
+    this.chineseTeam = '',
+    this.categories = const [],
   });
 
   @override
@@ -233,6 +240,8 @@ class DownloadedComic extends DownloadedItem {
         "size": size,
         "downloadedChapters": downloadedChapters,
         "tagList": tagList,
+        "chineseTeam": chineseTeam,
+        "categories": categories,
       };
 
   DownloadedComic.fromJson(Map<String, dynamic> json)
@@ -245,6 +254,10 @@ class DownloadedComic extends DownloadedItem {
         chapters = _parseChapters(json),
         size = json["size"]?.toDouble(),
         tagList = const [],
+        chineseTeam =
+            (json["chineseTeam"] ?? json["comicItem"]?["chineseTeam"] ?? '')
+                .toString(),
+        categories = const [],
         downloadedChapters = [] {
     if (json["downloadedChapters"] != null) {
       downloadedChapters = List<int>.from(json["downloadedChapters"]);
@@ -254,6 +267,8 @@ class DownloadedComic extends DownloadedItem {
       }
     }
     tagList = _parseTagsList(json["tagList"] ?? json["comicItem"]?["tags"]);
+    categories =
+        _parseTagsList(json["categories"] ?? json["comicItem"]?["categories"]);
   }
 
   static List<String> _parseChapters(Map<String, dynamic> json) {
@@ -278,7 +293,9 @@ class DownloadedComic extends DownloadedItem {
                 v["name"]?.toString() ??
                 "Ch ${e.key}";
           }
-          if (v is String) { return v; }
+          if (v is String) {
+            return v;
+          }
           return "Ch ${e.key}";
         }).toList();
       }
@@ -368,8 +385,8 @@ class ScannedDownloadedComic extends DownloadedComic {
       chapters: chapters,
       downloadedChapters: downloadedChapters,
       size: json["size"]?.toDouble(),
-      tagList:
-          DownloadedComic._parseTagsList(json["tagList"] ?? json["comicItem"]?["tags"]),
+      tagList: DownloadedComic._parseTagsList(
+          json["tagList"] ?? json["comicItem"]?["tags"]),
     );
   }
 
@@ -445,8 +462,8 @@ class DownloadedGallery extends DownloadedItem {
         uploader: g["uploader"] ?? '',
         link: g["link"] ?? '',
         coverPath: g["cover"] ?? g["coverPath"] ?? '',
-        size: json["size"]?.toDouble(),
-        tagList: _parseTags(g["tags"]),
+        size: _parseSize(json["size"] ?? g["size"]),
+        tagList: _parseTags(g["tagList"] ?? g["tags"]),
         pageCount: _parsePageCount(json["pageCount"] ?? g["maxPage"]),
       );
     }
@@ -456,10 +473,16 @@ class DownloadedGallery extends DownloadedItem {
       uploader: json["uploader"] ?? '',
       link: json["link"] ?? '',
       coverPath: json["coverPath"] ?? '',
-      size: json["size"]?.toDouble(),
-      tagList: _parseTags(json["tags"]),
+      size: _parseSize(json["size"]),
+      tagList: _parseTags(json["tagList"] ?? json["tags"]),
       pageCount: _parsePageCount(json["pageCount"]),
     );
+  }
+
+  /// 兼容历史 download.db 中字符串化的 MB 大小；坏值保留为未知大小。
+  static double? _parseSize(dynamic value) {
+    if (value is num) return value.toDouble();
+    return double.tryParse(value?.toString().trim() ?? '');
   }
 
   /// 安全解析页数：支持 int / String / null（旧数据），下限 1。
@@ -541,6 +564,10 @@ class DownloadedJmComic extends DownloadedItem {
   List<int> downloadedChapters;
   List<String> epNames;
   List<String> tagList;
+  // 07号计划新增：作品/演员，用于"更新信息"整体覆盖来源元数据标签。
+  // 旧记录没有这两个键时 fromMap 默认空列表，不抛异常（见下方 fromMap）。
+  List<String> works;
+  List<String> actors;
 
   DownloadedJmComic({
     required this.comicId,
@@ -550,6 +577,8 @@ class DownloadedJmComic extends DownloadedItem {
     required this.downloadedChapters,
     this.epNames = const [],
     this.tagList = const [],
+    this.works = const [],
+    this.actors = const [],
   });
 
   Map<String, dynamic> toMap() => {
@@ -562,8 +591,8 @@ class DownloadedJmComic extends DownloadedItem {
           "views": "",
           "series": _buildSeriesMap(comicId, downloadedChapters, epNames),
           "tags": tagList,
-          "works": const <String>[],
-          "actors": const <String>[],
+          "works": works,
+          "actors": actors,
           "relatedComics": const <dynamic>[],
           "liked": "",
           "favorite": "",
@@ -580,6 +609,8 @@ class DownloadedJmComic extends DownloadedItem {
         size = map["size"]?.toDouble(),
         epNames = const [],
         tagList = const [],
+        works = const [],
+        actors = const [],
         downloadedChapters = [] {
     if (map["downloadedChapters"] != null) {
       downloadedChapters = List<int>.from(map["downloadedChapters"]);
@@ -587,6 +618,8 @@ class DownloadedJmComic extends DownloadedItem {
     epNames =
         List<String>.from(map["epNames"] ?? map["comic"]?["epNames"] ?? []);
     tagList = List<String>.from(map["tagList"] ?? map["comic"]?["tags"] ?? []);
+    works = List<String>.from(map["works"] ?? map["comic"]?["works"] ?? []);
+    actors = List<String>.from(map["actors"] ?? map["comic"]?["actors"] ?? []);
   }
 
   static List<String> _buildAuthorList(String author) {
@@ -849,6 +882,11 @@ class NhentaiDownloadedComic extends DownloadedItem {
   double? size;
   String cover;
   List<String> tagList;
+  // 07号计划新增：保留在线接口返回的分类桶结构（原作/角色/团队/语言/分类等），
+  // 现有 tagList 是拍扁后的单一列表，丢失分类信息，故新增此字段而不是改造 tagList
+  // （tagList 可能被其他代码路径依赖做扁平标签展示/搜索匹配，保留不删）。
+  // 旧记录没有这个键时 fromJson 默认空 Map，不抛异常。
+  Map<String, List<String>> categorizedTags;
 
   NhentaiDownloadedComic({
     required String comicID,
@@ -856,9 +894,11 @@ class NhentaiDownloadedComic extends DownloadedItem {
     this.size,
     this.cover = '',
     List<String>? tagList,
+    Map<String, List<String>>? categorizedTags,
   })  : _comicID = comicID,
         _title = title,
-        tagList = tagList ?? [];
+        tagList = tagList ?? [],
+        categorizedTags = categorizedTags ?? {};
 
   @override
   double? get comicSize => size;
@@ -888,16 +928,28 @@ class NhentaiDownloadedComic extends DownloadedItem {
         "size": size,
         "cover": cover,
         "tags": tagList,
+        "categorizedTags": categorizedTags,
       };
 
   factory NhentaiDownloadedComic.fromJson(Map<String, dynamic> json) {
     final comicTags = json["tags"];
+    final rawCategorized = json["categorizedTags"];
+    Map<String, List<String>> parsedCategorized = const {};
+    if (rawCategorized is Map) {
+      parsedCategorized = rawCategorized.map((key, value) {
+        final values = value is List
+            ? value.map((e) => e.toString()).toList()
+            : <String>[];
+        return MapEntry(key.toString(), values);
+      });
+    }
     return NhentaiDownloadedComic(
       comicID: json["comicID"] ?? '',
       title: json["title"] ?? '',
       size: json["size"],
       tagList: comicTags != null ? List<String>.from(comicTags) : const [],
       cover: json["cover"] ?? '',
+      categorizedTags: parsedCategorized,
     );
   }
 
@@ -974,7 +1026,8 @@ class CustomDownloadedItem extends DownloadedItem {
   });
 
   @override
-  String get sourceDisplayName => sourceName.isEmpty ? downloadTypeDisplayName(type) : sourceName;
+  String get sourceDisplayName =>
+      sourceName.isEmpty ? downloadTypeDisplayName(type) : sourceName;
 
   @override
   String? get localCoverPath {

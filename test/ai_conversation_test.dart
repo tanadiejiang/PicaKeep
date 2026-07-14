@@ -181,6 +181,78 @@ void main() {
         containsAll(['搜jm', aiLocalOnlyScopeTagName]));
   });
 
+  test(
+      '05号：长期生效（来源+本地限定）但本轮未手动选中时，promptTagNames 仍应'
+      '回显长期生效的标签（气泡展示与实际生效范围保持一致）', () async {
+    final ctrl = AiConversationController.restoreForTesting({
+      'id': 'id-scope-persistent-no-turn-override',
+      'title': '新会话',
+      'createdAt': '2026-07-10T00:00:00.000Z',
+      'displayMessages': <dynamic>[],
+      'history': <dynamic>[],
+      'version': 2,
+      'persistentAllowedSearchSources': ['jm'],
+      'persistentLocalOnly': true,
+    });
+
+    await ctrl.send(
+      '帮我搜一下',
+      availablePromptTags: const [],
+      persistSelections: false,
+    );
+
+    final userMessage = ctrl.displayMessages.first;
+    expect(userMessage.promptTagNames,
+        containsAll(['搜jm', aiLocalOnlyScopeTagName]));
+  });
+
+  test(
+      '05号：长期生效来源为 jm，但本轮手动选中不同来源 eh 时，气泡应按本轮'
+      '实际生效范围展示 搜eh，不应同时展示矛盾的 搜jm', () async {
+    final ctrl = AiConversationController.restoreForTesting({
+      'id': 'id-scope-persistent-turn-override',
+      'title': '新会话',
+      'createdAt': '2026-07-10T00:00:00.000Z',
+      'displayMessages': <dynamic>[],
+      'history': <dynamic>[],
+      'version': 2,
+      'persistentAllowedSearchSources': ['jm'],
+    });
+
+    await ctrl.send(
+      '帮我搜一下',
+      availablePromptTags: const [],
+      persistSelections: false,
+      allowedSearchSources: const {'ehentai'},
+    );
+
+    final userMessage = ctrl.displayMessages.first;
+    expect(userMessage.promptTagNames, contains('搜eh'));
+    expect(userMessage.promptTagNames, isNot(contains('搜jm')));
+  });
+
+  test(
+      '05号：无长期生效状态且本轮未手动选中来源/本地限定时，气泡不回显任何'
+      '范围类标签（保持47号计划前的原有行为不受影响）', () async {
+    final ctrl = AiConversationController.restoreForTesting({
+      'id': 'id-scope-no-persistent-no-turn',
+      'title': '新会话',
+      'createdAt': '2026-07-10T00:00:00.000Z',
+      'displayMessages': <dynamic>[],
+      'history': <dynamic>[],
+      'version': 2,
+    });
+
+    await ctrl.send(
+      '帮我搜一下',
+      availablePromptTags: const [],
+      persistSelections: false,
+    );
+
+    final userMessage = ctrl.displayMessages.first;
+    expect(userMessage.promptTagNames, isEmpty);
+  });
+
   test('重命名一个未打开的历史会话：直接操作 AiConversationStore，不依赖任何 controller 实例',
       () async {
     const id = 'history-conv-untouched';
@@ -342,6 +414,151 @@ void main() {
           history.where((message) => message.role == 'tool').toList();
       expect(toolMessages.length, 1);
       expect(toolMessages.single.toolCallId, 'call-search');
+    });
+  });
+
+  group('02号：空/空白 content 不再产生空文本气泡', () {
+    test('content 为 null 且无工具调用：不产生空文本气泡，改为轻量提示气泡', () {
+      final ctrl = AiConversationController.restoreForTesting({
+        'id': 'id-empty-content-null',
+        'title': '新会话',
+        'createdAt': '2026-07-10T00:00:00.000Z',
+        'displayMessages': <dynamic>[],
+        'history': <dynamic>[],
+        'version': 2,
+      });
+
+      ctrl.simulateFinalTextResponseForTesting(null);
+
+      final assistantMessages = ctrl.displayMessages
+          .where((m) => m.type == AiChatMessageType.assistant)
+          .toList();
+      expect(assistantMessages.length, 1);
+      expect(assistantMessages.single.text, isNotEmpty);
+      expect(assistantMessages.single.text, isNot(''));
+
+      // 不应写入空 assistant 消息到 _history（避免污染后续请求历史）。
+      final history = ctrl.historyForTesting();
+      expect(
+        history.where((m) => m.role == 'assistant').toList(),
+        isEmpty,
+      );
+    });
+
+    test('content 为空字符串且无工具调用：不产生空文本气泡，改为轻量提示气泡', () {
+      final ctrl = AiConversationController.restoreForTesting({
+        'id': 'id-empty-content-empty-string',
+        'title': '新会话',
+        'createdAt': '2026-07-10T00:00:00.000Z',
+        'displayMessages': <dynamic>[],
+        'history': <dynamic>[],
+        'version': 2,
+      });
+
+      ctrl.simulateFinalTextResponseForTesting('');
+
+      final assistantMessages = ctrl.displayMessages
+          .where((m) => m.type == AiChatMessageType.assistant)
+          .toList();
+      expect(assistantMessages.length, 1);
+      expect(assistantMessages.single.text, isNotEmpty);
+
+      final history = ctrl.historyForTesting();
+      expect(
+        history.where((m) => m.role == 'assistant').toList(),
+        isEmpty,
+      );
+    });
+
+    test('content 为纯空白字符串且无工具调用：不产生空文本气泡，改为轻量提示气泡', () {
+      final ctrl = AiConversationController.restoreForTesting({
+        'id': 'id-empty-content-whitespace',
+        'title': '新会话',
+        'createdAt': '2026-07-10T00:00:00.000Z',
+        'displayMessages': <dynamic>[],
+        'history': <dynamic>[],
+        'version': 2,
+      });
+
+      ctrl.simulateFinalTextResponseForTesting('   ');
+
+      final assistantMessages = ctrl.displayMessages
+          .where((m) => m.type == AiChatMessageType.assistant)
+          .toList();
+      expect(assistantMessages.length, 1);
+      expect(assistantMessages.single.text, isNotEmpty);
+
+      final history = ctrl.historyForTesting();
+      expect(
+        history.where((m) => m.role == 'assistant').toList(),
+        isEmpty,
+      );
+    });
+
+    test('content 有实际内容且无工具调用：气泡内容与原文一致（回归保护）', () {
+      final ctrl = AiConversationController.restoreForTesting({
+        'id': 'id-normal-content',
+        'title': '新会话',
+        'createdAt': '2026-07-10T00:00:00.000Z',
+        'displayMessages': <dynamic>[],
+        'history': <dynamic>[],
+        'version': 2,
+      });
+
+      ctrl.simulateFinalTextResponseForTesting('正常内容');
+
+      final assistantMessages = ctrl.displayMessages
+          .where((m) => m.type == AiChatMessageType.assistant)
+          .toList();
+      expect(assistantMessages.length, 1);
+      expect(assistantMessages.single.text, '正常内容');
+
+      // 有实际内容时应正常写入 _history，供后续请求带上下文。
+      final history = ctrl.historyForTesting();
+      final assistantHistory =
+          history.where((m) => m.role == 'assistant').toList();
+      expect(assistantHistory.length, 1);
+      expect(assistantHistory.single.content, '正常内容');
+    });
+
+    test('content 为空但存在待展示的工具结果（清单卡）时：不追加轻量提示气泡，只展示清单卡',
+        () async {
+      final ctrl = AiConversationController.restoreForTesting({
+        'id': 'id-empty-content-with-pending-items',
+        'title': '新会话',
+        'createdAt': '2026-07-10T00:00:00.000Z',
+        'displayMessages': <dynamic>[],
+        'history': <dynamic>[],
+        'version': 2,
+      });
+
+      // 先模拟一次 display_result_list 工具调用，返回非空清单项，产生待展示
+      // 清单卡（_pendingDisplayItems 非空）。
+      await ctrl.simulateToolCallRoundForTesting([
+        const LlmToolCall(
+          id: 'call-display-list',
+          name: 'display_result_list',
+          arguments: {
+            'items': [
+              {'title': '结果一'},
+            ],
+          },
+        ),
+      ]);
+
+      ctrl.simulateFinalTextResponseForTesting('');
+
+      final assistantMessages = ctrl.displayMessages
+          .where((m) => m.type == AiChatMessageType.assistant)
+          .toList();
+      // 存在非空待展示清单项时，不应追加轻量提示气泡（避免与清单卡同时出现
+      // 造成冗余提示）。
+      expect(assistantMessages, isEmpty);
+
+      final resultListMessages = ctrl.displayMessages
+          .where((m) => m.type == AiChatMessageType.resultList)
+          .toList();
+      expect(resultListMessages.length, 1);
     });
   });
 }

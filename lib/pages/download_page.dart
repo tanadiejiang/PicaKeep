@@ -412,7 +412,10 @@ class _DownloadedPageComicTile extends DownloadedComicTile {
     required super.onTap,
     required super.onLongTap,
     required super.onSecondaryTap,
-  }) : super(optimizeCoverDecode: true);
+  }) : super(
+          optimizeCoverDecode: true,
+          maxTagRows: 2,
+        );
 
   final String comicId;
 

@@ -798,38 +798,25 @@ int _downloadRowPriority(String id, String directory) {
   return 0;
 }
 
+// 10号计划修复：本函数曾是 download_model.dart::parseDownloadedItemRecordData
+// 的一份并行拷贝，长期与其分叉维护，导致这里缺失了后者已经修复过的
+// ehentai 画廊 id（形如 '123-abc'，含连字符）精准拦截——本地库扫描路径下
+// EH 已下载记录被 `id.contains('-')` 分支误判为 CustomDownloadedItem
+// （DownloadType.other），连带其 comicSize 读取的是 json["comicSize"]
+// （DownloadedGallery.toJson 实际写的键是 "size"，两者不匹配），显示为
+// “未知大小”。现在直接委托给唯一权威实现，消除重复判定逻辑分叉的可能性。
 DownloadedItem? _parseDownloadedItem(
   String id,
   String json,
   DateTime time,
   String? directory,
 ) {
-  try {
-    final data = jsonDecode(json) as Map<String, dynamic>;
-    DownloadedItem? comic;
-    if (id.contains('-')) {
-      comic = CustomDownloadedItem.fromJson(data);
-    } else if (id.startsWith('jm')) {
-      comic = DownloadedJmComic.fromMap(data);
-    } else if (id.startsWith('hitomi')) {
-      comic = DownloadedHitomiComic.fromMap(data);
-    } else if (id.startsWith('nhentai')) {
-      comic = NhentaiDownloadedComic.fromJson(data);
-    } else if (id.startsWith('Ht')) {
-      comic = DownloadedHtComic.fromJson(data);
-    } else if (RegExp(r'^\d+$').hasMatch(id)) {
-      comic = DownloadedGallery.fromJson(data);
-    } else {
-      comic = RegExp(r'^[0-9a-fA-F]{24}$').hasMatch(id.trim())
-          ? DownloadedComic.fromJson(data)
-          : ScannedDownloadedComic.fromJson(data);
-    }
-    comic.time = time;
-    comic.directory = directory;
-    return comic;
-  } catch (_) {
-    return null;
-  }
+  return parseDownloadedItemRecordJson(
+    id,
+    json,
+    time: time,
+    directory: directory,
+  );
 }
 
 DownloadedItem? _downloadedItemFromDbRow(

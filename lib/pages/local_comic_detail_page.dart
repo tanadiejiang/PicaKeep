@@ -1,3 +1,5 @@
+import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
 
@@ -13,9 +15,13 @@ import 'package:picakeep/foundation/archive/archive_password_store.dart';
 import 'package:picakeep/foundation/download.dart';
 import 'package:picakeep/foundation/download_model.dart';
 import 'package:picakeep/foundation/local_library.dart';
+import 'package:picakeep/foundation/log.dart';
 import 'package:picakeep/foundation/local_library_settings.dart';
 import 'package:picakeep/foundation/remote_library_data_source.dart';
 import 'package:picakeep/foundation/trash.dart';
+import 'package:picakeep/network/jm_network/jm_network.dart';
+import 'package:picakeep/network/nhentai_network/nhentai_main_network.dart';
+import 'package:picakeep/network/picacg_network/picacg_network.dart';
 import 'package:picakeep/tools/read_history_helper.dart';
 import 'package:picakeep/pages/online_comic/jm_comic_page_v2.dart';
 import 'package:picakeep/pages/online_comic/picacg_comic_page_v2.dart';
@@ -24,6 +30,257 @@ import 'package:picakeep/tools/tags_translation.dart';
 import 'package:picakeep/tools/translations.dart';
 
 import 'local_search_page.dart';
+
+// 提取为顶层纯函数，便于单元测试覆盖（不依赖 State/BuildContext）。
+// LocalLibraryComicItem.id 返回内部拼接键 itemId（如
+// "local_download::current_download::jm1228705"），不是真实来源ID；
+// 真实ID存放在 originalId。取错字段会导致下面的 startsWith/正则校验必然失配，
+// 误判为"缺少有效在线ID"（即使该记录本身ID合法）。
+String resolveOnlineRawId(DownloadedItem comic) {
+  return comic is LocalLibraryComicItem ? comic.originalId : comic.id;
+}
+
+// 历史遗留/异常路径的落库数据可能缺少 comicId（jm 前缀去除后为空或非纯数字），
+// 直接放行会把空/非法 id 打到服务端，命中 jm_network.dart 的通用
+// 'Empty data' 兜底，报错文案对用户毫无意义。返回 null 表示应拦截。
+String? extractJmNumericId(String rawId) {
+  final numericId = rawId.startsWith('jm') ? rawId.substring(2) : rawId;
+  if (numericId.isEmpty || !RegExp(r'^\d+$').hasMatch(numericId)) {
+    return null;
+  }
+  return numericId;
+}
+
+String? extractNhentaiNumericId(String rawId) {
+  final numericId = rawId.startsWith('nhentai') ? rawId.substring(7) : rawId;
+  if (numericId.isEmpty || !RegExp(r'^\d+$').hasMatch(numericId)) {
+    return null;
+  }
+  return numericId;
+}
+
+// 07号计划：菜单"更新信息"可见性条件必须与"在线详情"动作项共用同一判断，
+// 不重新发明一套条件（计划执行范围第1节明确要求）。提取为顶层纯函数便于
+// 单元测试覆盖，_buildComicInfo 的"在线详情"入口与 _showTitleActionsMenu
+// 的"更新信息"菜单项都调用这一个函数。
+bool supportsUpdateInfo(DownloadType type) {
+  return type == DownloadType.jm ||
+      type == DownloadType.picacg ||
+      type == DownloadType.nhentai;
+}
+
+// 07号计划：信息区渲染需要 works/actors/chineseTeam/categories/categorizedTags
+// 这些具体子类字段，但 _comic 运行时大多是 LocalLibraryComicItem 包装层，其
+// toJson() 不包含底层具体子类字段。用 sourceRowJson（download.db 该行原始
+// json 列）还原出具体子类实例。parseDownloadedItemRecordJson 内部已经把
+// jsonDecode/解析异常吞掉返回 null，这里再包一层显式判空/类型检查，确保
+// 非 LocalLibraryComicItem 来源、或 sourceRowJson 为空/非法时都安全返回
+// null，不能让信息区因为这个还原失败而崩掉或空白（调用方必须静默回退）。
+DownloadedItem? restoreConcreteDownloadedRecord(DownloadedItem comic) {
+  if (comic is! LocalLibraryComicItem) {
+    return null;
+  }
+  final rawJson = comic.sourceRowJson;
+  if (rawJson == null || rawJson.trim().isEmpty) {
+    return null;
+  }
+  try {
+    return parseDownloadedItemRecordJson(comic.originalId, rawJson);
+  } catch (_) {
+    return null;
+  }
+}
+
+/// 本地详情标签的显示值与源站原始值。显示文本只用于界面；搜索必须使用
+/// [rawText]/[rawNamespace]，不能拿翻译后的 [displayText] 反查。
+class LocalDetailTagDisplayValue {
+  const LocalDetailTagDisplayValue({
+    required this.displayText,
+    required this.rawText,
+    required this.rawValue,
+    required this.rawNamespace,
+  });
+
+  final String displayText;
+
+  /// 平铺记录中的完整原始文本；分类桶记录中与 [rawValue] 相同。
+  final String rawText;
+
+  /// 拆分后的原始源站值，不含 namespace。
+  final String rawValue;
+
+  /// 原始 namespace/分类桶名；没有 namespace 时为空字符串。
+  final String rawNamespace;
+}
+
+/// 本地详情中一个来源感知的标签分类组。
+class LocalDetailTagDisplayGroup {
+  const LocalDetailTagDisplayGroup({
+    required this.displayName,
+    required this.rawNamespace,
+    required this.values,
+  });
+
+  final String displayName;
+  final String rawNamespace;
+  final List<LocalDetailTagDisplayValue> values;
+}
+
+/// EH/NH 在线详情只在中文环境启用标签翻译；本地详情沿用这一来源边界。
+bool shouldTranslateLocalDetailTags(
+  DownloadType source,
+  String languageCode,
+) {
+  return languageCode.trim().toLowerCase() == 'zh' &&
+      (source == DownloadType.ehentai || source == DownloadType.nhentai);
+}
+
+/// 将本地保存的平铺标签或 NH 分类桶转换为详情页显示模型。
+///
+/// - EH/NH 平铺数据只按第一个冒号拆分，避免丢失 value 中的后续冒号。
+/// - NH 有分类桶时优先使用分类桶，避免和历史 flat 标签重复。
+/// - JM/Picacg 等非 EH/NH 来源保持 flat 标签原样，不套用 EH/NH 翻译表。
+List<LocalDetailTagDisplayGroup> buildLocalDetailTagDisplayGroups({
+  required DownloadType source,
+  required Iterable<String> flatTags,
+  Map<String, List<String>> categorizedTags = const <String, List<String>>{},
+  required String languageCode,
+}) {
+  final translate = shouldTranslateLocalDetailTags(source, languageCode);
+
+  LocalDetailTagDisplayValue buildValue({
+    required String rawText,
+    required String rawValue,
+    required String rawNamespace,
+  }) {
+    final displayText = translate && rawNamespace.isNotEmpty
+        ? tagTranslateWithNs(rawValue, rawNamespace)
+        : rawValue;
+    return LocalDetailTagDisplayValue(
+      displayText: displayText,
+      rawText: rawText,
+      rawValue: rawValue,
+      rawNamespace: rawNamespace,
+    );
+  }
+
+  LocalDetailTagDisplayGroup buildGroup(
+    String namespace,
+    List<LocalDetailTagDisplayValue> values,
+  ) {
+    return LocalDetailTagDisplayGroup(
+      displayName: namespace.isEmpty
+          ? '标签'
+          : (translate ? tagTranslateCategory(namespace) : namespace),
+      rawNamespace: namespace,
+      values: values,
+    );
+  }
+
+  if (source != DownloadType.ehentai && source != DownloadType.nhentai) {
+    final values = <LocalDetailTagDisplayValue>[];
+    final seen = <String>{};
+    for (final tag in flatTags) {
+      final raw = tag.trim();
+      if (raw.isEmpty || !seen.add(raw)) continue;
+      values.add(LocalDetailTagDisplayValue(
+        displayText: raw,
+        rawText: raw,
+        rawValue: raw,
+        rawNamespace: '',
+      ));
+    }
+    return values.isEmpty
+        ? const <LocalDetailTagDisplayGroup>[]
+        : [buildGroup('', values)];
+  }
+
+  final groupedValues = <String, List<LocalDetailTagDisplayValue>>{};
+  final seen = <String>{};
+
+  void addValue({
+    required String rawText,
+    required String rawValue,
+    required String rawNamespace,
+  }) {
+    final text = rawText.trim();
+    final value = rawValue.trim();
+    final namespace = rawNamespace.trim();
+    if (text.isEmpty || value.isEmpty) return;
+    final identity = '$namespace\u0000$text';
+    if (!seen.add(identity)) return;
+    groupedValues
+        .putIfAbsent(namespace, () => <LocalDetailTagDisplayValue>[])
+        .add(buildValue(
+          rawText: text,
+          rawValue: value,
+          rawNamespace: namespace,
+        ));
+  }
+
+  final hasUsableCategorizedTags = source == DownloadType.nhentai &&
+      categorizedTags.entries.any(
+        (entry) =>
+            entry.key.trim().isNotEmpty &&
+            entry.value.any((value) => value.trim().isNotEmpty),
+      );
+  if (hasUsableCategorizedTags) {
+    for (final entry in categorizedTags.entries) {
+      final namespace = entry.key.trim();
+      if (namespace.isEmpty) continue;
+      for (final rawValue in entry.value) {
+        final value = rawValue.trim();
+        addValue(
+          rawText: value,
+          rawValue: value,
+          rawNamespace: namespace,
+        );
+      }
+    }
+  } else {
+    for (final tag in flatTags) {
+      final raw = tag.trim();
+      if (raw.isEmpty) continue;
+      final separator = raw.indexOf(':');
+      final namespace = separator < 0 ? '' : raw.substring(0, separator).trim();
+      final value = separator < 0 ? raw : raw.substring(separator + 1).trim();
+      addValue(
+        rawText: raw,
+        rawValue: value,
+        rawNamespace: namespace,
+      );
+    }
+  }
+
+  return [
+    for (final entry in groupedValues.entries)
+      buildGroup(entry.key, entry.value),
+  ];
+}
+
+class _LocalDetailInfoValue {
+  const _LocalDetailInfoValue({
+    required this.displayText,
+    this.rawTagSearchValue,
+  });
+
+  final String displayText;
+  final String? rawTagSearchValue;
+}
+
+class _LocalDetailInfoGroup {
+  const _LocalDetailInfoGroup({
+    required this.name,
+    required this.values,
+    this.isTagGroup = false,
+    this.localizeName = true,
+  });
+
+  final String name;
+  final List<_LocalDetailInfoValue> values;
+  final bool isTagGroup;
+  final bool localizeName;
+}
 
 class LocalComicDetailPage extends StatefulWidget {
   final DownloadedItem comic;
@@ -46,6 +303,102 @@ class _LocalRecommendation {
   final String reason;
 }
 
+/// 07号计划"更新信息"拉取结果的统一载体。三源 `getComicInfo` 返回类型互不
+/// 相同（JmComicInfo/PicacgComicItem/NhentaiComic），用这个小包装收敛成单一
+/// 返回类型，方便 `_onUpdateInfo` 用同一套 await/校验流程处理三个分支，
+/// 避免为每个来源单独写一套几乎相同的成功/失败判断代码。
+class UpdateInfoFetchResult {
+  const UpdateInfoFetchResult._({
+    this.jmData,
+    this.picacgData,
+    this.nhentaiData,
+    this.errorMessage,
+  });
+
+  factory UpdateInfoFetchResult.jm(JmComicInfo data) =>
+      UpdateInfoFetchResult._(jmData: data);
+
+  factory UpdateInfoFetchResult.picacg(PicacgComicItem data) =>
+      UpdateInfoFetchResult._(picacgData: data);
+
+  factory UpdateInfoFetchResult.nhentai(NhentaiComic data) =>
+      UpdateInfoFetchResult._(nhentaiData: data);
+
+  factory UpdateInfoFetchResult.failure(String message) =>
+      UpdateInfoFetchResult._(errorMessage: message);
+
+  final JmComicInfo? jmData;
+  final PicacgComicItem? picacgData;
+  final NhentaiComic? nhentaiData;
+  final String? errorMessage;
+}
+
+/// 07号计划的核心覆盖契约，提取为顶层纯函数便于不依赖真实网络请求做单元测试：
+/// 用 [fetchResult] 里拉到的新元数据整体覆盖 [existing]（旧的具体子类实例），
+/// 构造出一个新的具体子类实例。
+///
+/// 契约（对应计划"覆盖策略"与"覆盖字段范围"）：
+/// - 整体覆盖，不做字段级 merge：新值直接替换旧值，即使新值为空也照样替换。
+/// - 只覆盖"来源元数据标签"字段（作者/标签/以及各源特有分类），不覆盖
+///   ID/时间/页数——因此这里不去处理 comicId/directory/size 之外的结构性字段，
+///   调用方（`_applyUpdateInfoOverwrite`）在拿到返回值后还会再顶一层
+///   `updated.time = existing.time`，确保"下载时间"语义不被在线的"上传时间"覆盖。
+/// - [existing] 的具体类型与 [fetchResult] 携带的数据源类型不匹配时返回 null
+///   （理论上不应该发生，因为来源类型在拉取分支时已经按 `comic.type` 分流；
+///   保守起见拒绝写入而不是猜测转换）。
+DownloadedItem? buildUpdatedDownloadedRecord(
+  DownloadedItem existing,
+  UpdateInfoFetchResult fetchResult,
+) {
+  try {
+    if (fetchResult.jmData != null && existing is DownloadedJmComic) {
+      final data = fetchResult.jmData!;
+      return DownloadedJmComic(
+        comicId: existing.comicId,
+        name: existing.name,
+        author: data.authors.join(', '),
+        size: existing.size,
+        downloadedChapters: existing.downloadedChapters,
+        epNames: existing.epNames,
+        tagList: data.tags,
+        works: data.works,
+        actors: data.actors,
+      );
+    }
+    if (fetchResult.picacgData != null && existing is DownloadedComic) {
+      final data = fetchResult.picacgData!;
+      return DownloadedComic(
+        comicId: existing.comicId,
+        title: existing.title,
+        author: data.author,
+        description: existing.description,
+        thumbUrl: existing.thumbUrl,
+        chapters: existing.chapters,
+        downloadedChapters: existing.downloadedChapters,
+        size: existing.size,
+        tagList: data.tags,
+        chineseTeam: data.chineseTeam,
+        categories: data.categories,
+      );
+    }
+    if (fetchResult.nhentaiData != null && existing is NhentaiDownloadedComic) {
+      final data = fetchResult.nhentaiData!;
+      final flatTags = data.tags.values.expand((v) => v).toList();
+      return NhentaiDownloadedComic(
+        comicID: existing.comicID,
+        title: existing.title,
+        size: existing.size,
+        cover: existing.cover,
+        tagList: flatTags,
+        categorizedTags: data.tags,
+      );
+    }
+    return null;
+  } catch (_) {
+    return null;
+  }
+}
+
 class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
   final _scrollController = ScrollController();
   final _remoteDataSource = const RemoteLibraryDataSource();
@@ -61,6 +414,9 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
   String _deleteProgressActionLabel = '';
   int _recommendationPage = 0;
   double _bottomPullDistance = 0;
+
+  // 07号计划"更新信息"：网络拉取进行中标记，用于按钮置灰等待反馈。
+  bool _isUpdatingInfo = false;
 
   // 异步解析出的封面路径：本地项首帧可能 episodeFiles 为空、localCoverPath 为 null
   // （图集 / 本地扫描项按需补全），同步的 resolveLocalComicCover 找不到封面会破图。
@@ -87,6 +443,26 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
     _loadRemoteDetailIfNeeded();
     _loadLocalItems();
     _resolveCoverIfNeeded();
+    unawaited(_refreshTagTranslationsWhenReady());
+  }
+
+  /// 启动阶段的标签表是异步预热的。详情页可能先于它完成构建，因此在完成后
+  /// 只重建当前页面一次，避免用户必须退出再进入才能看到 EH/NH 中文标签。
+  Future<void> _refreshTagTranslationsWhenReady() async {
+    if (!shouldTranslateLocalDetailTags(
+      _comic.type,
+      App.locale.languageCode,
+    )) {
+      return;
+    }
+    try {
+      await loadTagTranslations();
+    } catch (_) {
+      return;
+    }
+    if (mounted) {
+      setState(() {});
+    }
   }
 
   Future<void> _resolveCoverIfNeeded() async {
@@ -201,20 +577,6 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
   String _formatTime(DateTime? time) {
     if (time == null) return '';
     return '${time.year}-${time.month.toString().padLeft(2, '0')}-${time.day.toString().padLeft(2, '0')} ${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}';
-  }
-
-  String _translateTagIfNeeded(String tag) {
-    if (App.locale.languageCode != 'zh') return tag;
-    try {
-      for (final map in tagTranslations.values) {
-        for (final entry in map.entries) {
-          if (entry.key.toLowerCase() == tag.toLowerCase()) {
-            return entry.value.isNotEmpty ? entry.value : tag;
-          }
-        }
-      }
-    } catch (_) {}
-    return tag;
   }
 
   String _recommendationAuthor(DownloadedItem item) {
@@ -677,9 +1039,9 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
     });
   }
 
-  Map<String, List<String>> _buildInfoGroups() {
+  List<_LocalDetailInfoGroup> _buildInfoGroups() {
     final comic = _comic;
-    final groups = <String, List<String>>{};
+    final groups = <_LocalDetailInfoGroup>[];
 
     void add(String key, Iterable<String?> values) {
       final normalized = values
@@ -688,7 +1050,16 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
           .where((e) => e.isNotEmpty)
           .toSet()
           .toList();
-      if (normalized.isNotEmpty) groups[key] = normalized;
+      if (normalized.isEmpty) return;
+      groups.add(
+        _LocalDetailInfoGroup(
+          name: key,
+          values: [
+            for (final value in normalized)
+              _LocalDetailInfoValue(displayText: value),
+          ],
+        ),
+      );
     }
 
     add('ID', [_displayIdFor(comic)]);
@@ -709,10 +1080,61 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
         add('章节数', ['$chapterCount']);
       }
     }
-    if (comic.tags.isNotEmpty) {
-      groups['标签'] = comic.tags.map(_translateTagIfNeeded).toSet().toList();
+
+    final restored = restoreConcreteDownloadedRecord(comic);
+    final concrete =
+        restored ?? (comic is LocalLibraryComicItem ? null : comic);
+    final concreteTags = concrete?.tags ?? const <String>[];
+    final flatTags = concreteTags.isNotEmpty ? concreteTags : comic.tags;
+    final categorizedTags = concrete is NhentaiDownloadedComic
+        ? concrete.categorizedTags
+        : const <String, List<String>>{};
+    final tagGroups = buildLocalDetailTagDisplayGroups(
+      source: comic.type,
+      flatTags: flatTags,
+      categorizedTags: categorizedTags,
+      languageCode: App.locale.languageCode,
+    );
+    for (final tagGroup in tagGroups) {
+      groups.add(
+        _LocalDetailInfoGroup(
+          name: tagGroup.displayName,
+          isTagGroup: true,
+          // 无 namespace 时仍是原有通用“标签”标题，交给应用语言包；有
+          // namespace 的分类名已由在线权威翻译函数决定，不再二次翻译。
+          localizeName: tagGroup.rawNamespace.isEmpty,
+          values: [
+            for (final value in tagGroup.values)
+              _LocalDetailInfoValue(
+                displayText: value.displayText,
+                // 传入完整原始 flat 标签，保留 EH 的 namespace；分类桶值仍
+                // 通过 value.rawNamespace 保持关联，不能用中文显示值替代。
+                rawTagSearchValue: value.rawText,
+              ),
+          ],
+        ),
+      );
     }
+    _appendConcreteInfoGroups(concrete, add);
     return groups;
+  }
+
+  // 07号计划：还原具体子类实例后追加 JM/Picacg 的来源元数据分组。NH 分类桶
+  // 已在来源感知标签显示模型中统一处理，以免和 flat 标签重复。
+  void _appendConcreteInfoGroups(
+    DownloadedItem? concrete,
+    void Function(String key, Iterable<String?> values) add,
+  ) {
+    if (concrete == null) {
+      return;
+    }
+    if (concrete is DownloadedJmComic) {
+      add('作品', concrete.works);
+      add('演员', concrete.actors);
+    } else if (concrete is DownloadedComic) {
+      add('汉化组', [concrete.chineseTeam]);
+      add('分类', concrete.categories);
+    }
   }
 
   List<_LocalRecommendation> _buildRecommendations() {
@@ -1005,7 +1427,8 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
             : null;
     final ImageProvider<Object>? coverProvider = remoteProvider ??
         (effectiveCoverPath.isNotEmpty
-            ? LocalLibraryManager().imageProviderForLocalPath(effectiveCoverPath)
+            ? LocalLibraryManager()
+                .imageProviderForLocalPath(effectiveCoverPath)
             : _comic is LocalLibraryComicItem
                 ? LocalLibraryManager()
                     .coverImageProviderForItem(_comic as LocalLibraryComicItem)
@@ -1144,7 +1567,12 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
     );
   }
 
-  Widget _infoCard(String text, {bool title = false, String? group}) {
+  Widget _infoCard(
+    String text, {
+    bool title = false,
+    String? group,
+    String? rawTagSearchValue,
+  }) {
     if (text.trim().isEmpty) text = '未知'.tl;
     final colorScheme = Theme.of(context).colorScheme;
     return Container(
@@ -1157,7 +1585,7 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
                   details.globalPosition,
                   text,
                   searchAuthor: group == '作者' ? text : null,
-                  searchTag: group == '标签' ? text : null,
+                  searchTag: rawTagSearchValue ?? (group == '标签' ? text : null),
                 ),
         onSecondaryTapDown: title
             ? null
@@ -1165,7 +1593,7 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
                   details.globalPosition,
                   text,
                   searchAuthor: group == '作者' ? text : null,
-                  searchTag: group == '标签' ? text : null,
+                  searchTag: rawTagSearchValue ?? (group == '标签' ? text : null),
                 ),
         child: Card(
           margin: EdgeInsets.zero,
@@ -1191,16 +1619,273 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
 
   void _onVisitOnline() {
     final comic = _comic;
+    final rawId = resolveOnlineRawId(comic);
     if (comic.type == DownloadType.jm) {
-      final numericId =
-          comic.id.startsWith('jm') ? comic.id.substring(2) : comic.id;
+      final numericId = extractJmNumericId(rawId);
+      if (numericId == null) {
+        LogManager.addLog(
+          LogLevel.warning,
+          'LocalComicDetailPage',
+          '_onVisitOnline: invalid JM numericId, rawId="$rawId"',
+        );
+        _showMessage('该本地记录缺少有效的在线ID，无法查看在线详情'.tl);
+        return;
+      }
       App.pushInner(() => JmComicPageV2(numericId));
     } else if (comic.type == DownloadType.picacg) {
-      App.pushInner(() => PicacgComicPageV2(comic.id));
+      if (rawId.isEmpty) {
+        LogManager.addLog(
+          LogLevel.warning,
+          'LocalComicDetailPage',
+          '_onVisitOnline: empty picacg rawId, comic.id="${comic.id}"',
+        );
+        _showMessage('该本地记录缺少有效的在线ID，无法查看在线详情'.tl);
+        return;
+      }
+      App.pushInner(() => PicacgComicPageV2(rawId));
     } else if (comic.type == DownloadType.nhentai) {
-      final numericId =
-          comic.id.startsWith('nhentai') ? comic.id.substring(7) : comic.id;
+      final numericId = extractNhentaiNumericId(rawId);
+      if (numericId == null) {
+        LogManager.addLog(
+          LogLevel.warning,
+          'LocalComicDetailPage',
+          '_onVisitOnline: invalid nhentai numericId, rawId="$rawId"',
+        );
+        _showMessage('该本地记录缺少有效的在线ID，无法查看在线详情'.tl);
+        return;
+      }
       App.pushInner(() => NhentaiComicPageV2(numericId));
+    }
+  }
+
+  /// 07号计划：右上角"更新信息"菜单项的入口。仅 jm/picacg/nhentai 三源可见
+  /// （与 `_onVisitOnline`/在线详情动作项共用同一可见性判断，不重新发明）。
+  ///
+  /// 校验前置逻辑与 `_onVisitOnline` 保持一致：先用 06号计划的
+  /// resolveOnlineRawId/extractJmNumericId/extractNhentaiNumericId 校验，
+  /// 校验失败直接提示中断，不发起网络请求。
+  ///
+  /// 契约：网络拉取必须完全成功（getComicInfo 一次调用返回完整对象）之后才
+  /// 触发写库；任一环节失败（网络异常/写回失败）都不改动 `_comic` 内存状态
+  /// 与磁盘数据，不做部分覆盖的中间状态。
+  Future<void> _onUpdateInfo() async {
+    if (_isUpdatingInfo) {
+      return;
+    }
+    final comic = _comic;
+    if (comic is! LocalLibraryComicItem) {
+      // 理论上菜单可见性已经排除了这种情况，这里是纯防御，不应该真的走到。
+      return;
+    }
+    final rawId = resolveOnlineRawId(comic);
+
+    Future<UpdateInfoFetchResult?> fetchOverlay(
+      Future<UpdateInfoFetchResult?> Function() body,
+    ) async {
+      setState(() => _isUpdatingInfo = true);
+      try {
+        return await body();
+      } finally {
+        if (mounted) setState(() => _isUpdatingInfo = false);
+      }
+    }
+
+    UpdateInfoFetchResult? fetchResult;
+    if (comic.type == DownloadType.jm) {
+      final numericId = extractJmNumericId(rawId);
+      if (numericId == null) {
+        _showMessage('该本地记录缺少有效的在线ID，无法更新信息'.tl);
+        return;
+      }
+      fetchResult = await fetchOverlay(() async {
+        final res = await JmNetwork().getComicInfo(numericId);
+        if (res.error) {
+          return UpdateInfoFetchResult.failure(res.errorMessageWithoutNull);
+        }
+        return UpdateInfoFetchResult.jm(res.data);
+      });
+    } else if (comic.type == DownloadType.picacg) {
+      if (rawId.isEmpty) {
+        _showMessage('该本地记录缺少有效的在线ID，无法更新信息'.tl);
+        return;
+      }
+      fetchResult = await fetchOverlay(() async {
+        final res = await PicacgNetwork().getComicInfo(rawId);
+        if (res.error) {
+          return UpdateInfoFetchResult.failure(res.errorMessageWithoutNull);
+        }
+        return UpdateInfoFetchResult.picacg(res.data);
+      });
+    } else if (comic.type == DownloadType.nhentai) {
+      final numericId = extractNhentaiNumericId(rawId);
+      if (numericId == null) {
+        _showMessage('该本地记录缺少有效的在线ID，无法更新信息'.tl);
+        return;
+      }
+      fetchResult = await fetchOverlay(() async {
+        final res = await NhentaiNetwork().getComicInfo(numericId);
+        if (res.error) {
+          return UpdateInfoFetchResult.failure(res.errorMessageWithoutNull);
+        }
+        return UpdateInfoFetchResult.nhentai(res.data);
+      });
+    } else {
+      // 菜单可见性已排除其它来源，这里同样是防御性兜底。
+      return;
+    }
+
+    if (!mounted || fetchResult == null) {
+      return;
+    }
+    if (fetchResult.errorMessage != null) {
+      _showMessage('更新信息失败：${fetchResult.errorMessage}'.tl);
+      return;
+    }
+
+    final ok = await _applyUpdateInfoOverwrite(comic, fetchResult);
+    if (!mounted) return;
+    if (ok) {
+      _showMessage('信息已更新'.tl);
+    } else {
+      _showMessage('更新信息失败：写回本地数据库失败'.tl);
+    }
+  }
+
+  /// 网络拉取已完全成功后才调用：把新拉取的元数据整体覆盖进具体子类实例，
+  /// 序列化写回 sourceDbPath 对应行的 json/title/subtitle 列，成功后刷新
+  /// `_comic` 内存状态。任一步失败都直接返回 false，不做半成品覆盖
+  /// （旧实例保持不变，_comic 与磁盘数据不会产生不一致）。
+  Future<bool> _applyUpdateInfoOverwrite(
+    LocalLibraryComicItem comic,
+    UpdateInfoFetchResult fetchResult,
+  ) async {
+    final sourceDbPath = comic.sourceDbPath?.trim();
+    final sourceDbId = comic.sourceDbId?.trim();
+    if (sourceDbPath == null ||
+        sourceDbPath.isEmpty ||
+        sourceDbId == null ||
+        sourceDbId.isEmpty) {
+      return false;
+    }
+    final rawJson = comic.sourceRowJson;
+    if (rawJson == null || rawJson.trim().isEmpty) {
+      return false;
+    }
+    final existing = restoreConcreteDownloadedRecord(comic);
+    if (existing == null) {
+      return false;
+    }
+
+    final updated = buildUpdatedDownloadedRecord(existing, fetchResult);
+    if (updated == null) {
+      return false;
+    }
+
+    String newJson;
+    try {
+      newJson = jsonEncode(updated.toJson());
+    } catch (_) {
+      return false;
+    }
+
+    bool wrote;
+    try {
+      wrote = await TrashManager.instance.updateSourceDbRowMetadata(
+        sourceDbPath: sourceDbPath,
+        sourceDbId: sourceDbId,
+        newTitle: updated.name,
+        newSubtitle: updated.subTitle,
+        newJson: newJson,
+      );
+    } catch (e) {
+      LogManager.addLog(
+        LogLevel.error,
+        'LocalComicDetailPage',
+        '_applyUpdateInfoOverwrite: write failed: $e',
+      );
+      return false;
+    }
+    if (!wrote) {
+      return false;
+    }
+
+    // 写回成功后刷新页面状态：复用页面初始化时加载 _comic 的同一套逻辑，重新读取
+    // 该行数据，让"信息"区立即显示新值，不需要用户手动退出再重进页面。
+    final refreshed = LocalLibraryComicItem(
+      itemId: comic.itemId,
+      originalId: comic.originalId,
+      type: comic.type,
+      name: updated.name,
+      subTitle: updated.subTitle,
+      tags: updated.tags,
+      sourceDisplayName: comic.sourceDisplayName,
+      fileSystemPath: comic.fileSystemPath ?? '',
+      episodeFiles: comic.episodeFiles,
+      downloadedEps: comic.downloadedEps,
+      eps: comic.eps,
+      localCoverPath: comic.localCoverPath,
+      localStorageExists: comic.localStorageExists,
+      canDelete: comic.canDelete,
+      aliases: comic.aliases,
+      favoriteTarget: comic.favoriteTarget,
+      comicSize: comic.comicSize,
+      sourceDbPath: comic.sourceDbPath,
+      sourceDbId: comic.sourceDbId,
+      sourceDirectory: comic.sourceDirectory,
+      sourceDbRowId: comic.sourceDbRowId,
+      sourceRowJson: newJson,
+      sourceRowTimeMillis: comic.sourceRowTimeMillis,
+    )..time = comic.time;
+    if (mounted) {
+      setState(() {
+        _comic = refreshed;
+      });
+    }
+    App.notifyLocalDataChanged();
+    return true;
+  }
+
+  Future<void> _showTitleActionsMenu(Offset position) async {
+    final comic = _comic;
+    final overlay = Overlay.of(context).context.findRenderObject();
+    if (overlay is! RenderBox) {
+      return;
+    }
+    final localPosition = overlay.globalToLocal(position);
+    final size = overlay.size;
+    final dx = localPosition.dx.clamp(0.0, size.width);
+    final dy = localPosition.dy.clamp(0.0, size.height);
+    final showUpdateInfo = supportsUpdateInfo(comic.type);
+    final action = await showMenu<String>(
+      context: context,
+      position: RelativeRect.fromLTRB(
+        dx,
+        dy,
+        size.width - dx,
+        size.height - dy,
+      ),
+      items: [
+        PopupMenuItem<String>(
+          value: 'copy_title',
+          child: Text('复制标题'.tl),
+        ),
+        if (showUpdateInfo)
+          PopupMenuItem<String>(
+            value: 'update_info',
+            child: Text('更新信息'.tl),
+          ),
+      ],
+    );
+    if (!mounted || action == null) {
+      return;
+    }
+    switch (action) {
+      case 'copy_title':
+        _copyText(comic.name);
+        break;
+      case 'update_info':
+        await _onUpdateInfo();
+        break;
     }
   }
 
@@ -1351,10 +2036,22 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
                 ),
               ),
               actions: [
-                IconButton(
-                  tooltip: '复制标题'.tl,
-                  icon: const Icon(Icons.more_horiz),
-                  onPressed: () => _copyText(comic.name),
+                Builder(
+                  builder: (buttonContext) => IconButton(
+                    tooltip: '更多'.tl,
+                    icon: const Icon(Icons.more_horiz),
+                    onPressed: () {
+                      // 参考 _showTextActionsAt 的坐标定位写法：取按钮的
+                      // RenderBox 全局位置构造菜单弹出坐标（按钮左下角）。
+                      final renderBox =
+                          buttonContext.findRenderObject() as RenderBox?;
+                      if (renderBox == null) return;
+                      final position = renderBox.localToGlobal(
+                        Offset(0, renderBox.size.height),
+                      );
+                      _showTitleActionsMenu(position);
+                    },
+                  ),
                 ),
               ],
             ),
@@ -1366,14 +2063,23 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    for (final entry in infoGroups.entries)
+                    for (final group in infoGroups)
                       Padding(
                         padding: const EdgeInsets.only(bottom: 2),
                         child: Wrap(
                           children: [
-                            _infoCard(entry.key.tl, title: true),
-                            for (final value in entry.value)
-                              _infoCard(value, group: entry.key),
+                            _infoCard(
+                              group.localizeName ? group.name.tl : group.name,
+                              title: true,
+                            ),
+                            for (final value in group.values)
+                              _infoCard(
+                                value.displayText,
+                                group: group.name,
+                                rawTagSearchValue: group.isTagGroup
+                                    ? value.rawTagSearchValue
+                                    : null,
+                              ),
                           ],
                         ),
                       ),
@@ -1428,9 +2134,7 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
             () => _onRead(ep: comic.eps.length > 1 ? 1 : 0),
           ),
           _buildActionItem('分享', Icons.share, () => _copyText(comic.name)),
-          if (_comic.type == DownloadType.jm ||
-              _comic.type == DownloadType.picacg ||
-              _comic.type == DownloadType.nhentai)
+          if (supportsUpdateInfo(_comic.type))
             _buildActionItem('在线详情', Icons.public, _onVisitOnline),
           if (comic is LocalLibraryComicItem &&
               comic.isArchiveItem &&
@@ -1524,7 +2228,8 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
       return title;
     }
     final rest = normalizedTitle.substring(itemTitle.length).trimLeft();
-    final cleaned = rest.replaceFirst(RegExp(r'^[\s/_\\\-—:：]+'), '').trimLeft();
+    final cleaned =
+        rest.replaceFirst(RegExp(r'^[\s/_\\\-—:：]+'), '').trimLeft();
     return cleaned.isEmpty ? title : cleaned;
   }
 
@@ -1547,8 +2252,7 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
     if (comic is LocalLibraryComicItem && comic.isArchiveItem) {
       return LocalLibraryManager.archiveDisplayChapterNames(comic);
     }
-    if (comic is LocalLibraryComicItem &&
-        comic.sourceDisplayName == '合集图集') {
+    if (comic is LocalLibraryComicItem && comic.sourceDisplayName == '合集图集') {
       final titles = comic.eps
           .map((title) => _stripCollectionShellPrefix(comic, title))
           .toList(growable: false);

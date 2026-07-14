@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:picakeep/base.dart';
 import 'package:picakeep/foundation/history.dart';
@@ -14,13 +15,14 @@ class DownloadedComicTile extends StatelessWidget {
     this.readingHistoryOverride,
     this.isFavoriteOverride,
     this.optimizeCoverDecode = false,
+    this.maxTagRows,
     required this.type,
     required this.tag,
     required this.size,
     required this.onTap,
     required this.onLongTap,
     required this.onSecondaryTap,
-  });
+  }) : assert(maxTagRows == null || maxTagRows > 0);
 
   final String size;
   final File imagePath;
@@ -28,6 +30,10 @@ class DownloadedComicTile extends StatelessWidget {
   final History? readingHistoryOverride;
   final bool? isFavoriteOverride;
   final bool optimizeCoverDecode;
+
+  /// Limits the number of visual tag rows when set. Other callers keep the
+  /// historical unrestricted tag layout by leaving this null.
+  final int? maxTagRows;
   final String author;
   final String name;
   final void Function() onTap;
@@ -166,6 +172,7 @@ class DownloadedComicTile extends StatelessWidget {
                   badge: badge,
                   tags: tags,
                   maxLines: 2,
+                  maxTagRows: maxTagRows,
                 ),
               ),
             ],
@@ -327,6 +334,7 @@ class _ComicDescription extends StatelessWidget {
     this.subDescription,
     this.badge,
     this.maxLines = 2,
+    this.maxTagRows,
     this.tags,
   });
 
@@ -337,6 +345,7 @@ class _ComicDescription extends StatelessWidget {
   final String? badge;
   final List<String>? tags;
   final int maxLines;
+  final int? maxTagRows;
 
   @override
   Widget build(BuildContext context) {
@@ -344,6 +353,9 @@ class _ComicDescription extends StatelessWidget {
         ?.map((element) => element.trim())
         .where((element) => element.isNotEmpty)
         .toList(growable: false);
+    if (maxTagRows != null) {
+      return _buildLimitedLayout(context, visibleTags);
+    }
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: <Widget>[
@@ -415,4 +427,278 @@ class _ComicDescription extends StatelessWidget {
       ],
     );
   }
+
+  Widget _buildLimitedLayout(
+    BuildContext context,
+    List<String>? visibleTags,
+  ) {
+    final hasTags = visibleTags != null && visibleTags.isNotEmpty;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        Flexible(
+          fit: FlexFit.loose,
+          child: Text(
+            title,
+            style: const TextStyle(fontWeight: FontWeight.w500, fontSize: 14.0),
+            maxLines: maxLines,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+        if (user.isNotEmpty)
+          Text(
+            user,
+            style: const TextStyle(fontSize: 10.0),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+        if (hasTags) ...[
+          const SizedBox(height: 4),
+          Expanded(
+            child: Align(
+              alignment: Alignment.topLeft,
+              child: _LimitedTagWrap(
+                tags: visibleTags,
+                maxRows: maxTagRows!,
+              ),
+            ),
+          ),
+        ],
+        const SizedBox(height: 2),
+        _buildLimitedFooter(context),
+      ],
+    );
+  }
+
+  Widget _buildLimitedFooter(BuildContext context) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.end,
+      children: [
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (subDescription != null) subDescription!,
+              Text(
+                description,
+                style: const TextStyle(fontSize: 12.0),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ],
+          ),
+        ),
+        if (badge != null && badge!.isNotEmpty)
+          Container(
+            padding: const EdgeInsets.fromLTRB(6, 4, 6, 4),
+            decoration: BoxDecoration(
+              color: Theme.of(context).colorScheme.tertiaryContainer,
+              borderRadius: const BorderRadius.all(Radius.circular(8)),
+            ),
+            child: Text(badge!, style: const TextStyle(fontSize: 12)),
+          )
+      ],
+    );
+  }
+}
+
+const _tagChipHorizontalPadding = 3.0;
+const _tagChipTopPadding = 1.0;
+const _tagChipBottomPadding = 3.0;
+const _tagChipTrailingGap = 4.0;
+const _tagChipRunGap = 3.0;
+const _tagChipTextStyle = TextStyle(fontSize: 12);
+
+class _LimitedTagWrap extends StatelessWidget {
+  const _LimitedTagWrap({
+    required this.tags,
+    required this.maxRows,
+  });
+
+  final List<String> tags;
+  final int maxRows;
+
+  @override
+  Widget build(BuildContext context) {
+    final textStyle =
+        DefaultTextStyle.of(context).style.merge(_tagChipTextStyle);
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final visibleTags = _visibleTagPrefix(
+          tags: tags,
+          maxRows: maxRows,
+          maxWidth: constraints.maxWidth,
+          maxHeight: constraints.maxHeight,
+          textStyle: textStyle,
+          textScaler: MediaQuery.textScalerOf(context),
+          textDirection: Directionality.of(context),
+          locale: Localizations.maybeLocaleOf(context),
+        );
+        if (visibleTags.isEmpty) {
+          return const SizedBox.shrink();
+        }
+
+        final maxChipWidth =
+            math.max(0.0, constraints.maxWidth - _tagChipTrailingGap);
+        return Wrap(
+          runAlignment: WrapAlignment.start,
+          crossAxisAlignment: WrapCrossAlignment.end,
+          children: [
+            for (final tag in visibleTags)
+              _LimitedTagChip(
+                tag: tag,
+                maxWidth: maxChipWidth,
+              ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+class _LimitedTagChip extends StatelessWidget {
+  const _LimitedTagChip({
+    required this.tag,
+    required this.maxWidth,
+  });
+
+  final String tag;
+  final double maxWidth;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding:
+          const EdgeInsets.fromLTRB(0, 0, _tagChipTrailingGap, _tagChipRunGap),
+      child: ConstrainedBox(
+        constraints: BoxConstraints(maxWidth: maxWidth),
+        child: Container(
+          padding: const EdgeInsets.fromLTRB(
+            _tagChipHorizontalPadding,
+            _tagChipTopPadding,
+            _tagChipHorizontalPadding,
+            _tagChipBottomPadding,
+          ),
+          decoration: BoxDecoration(
+            color: tag == "Unavailable"
+                ? Theme.of(context).colorScheme.errorContainer
+                : Theme.of(context).colorScheme.secondaryContainer,
+            borderRadius: const BorderRadius.all(Radius.circular(8)),
+          ),
+          child: Text(
+            tag,
+            style: _tagChipTextStyle,
+            maxLines: 1,
+            softWrap: false,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+List<String> _visibleTagPrefix({
+  required List<String> tags,
+  required int maxRows,
+  required double maxWidth,
+  required double maxHeight,
+  required TextStyle textStyle,
+  required TextScaler textScaler,
+  required TextDirection textDirection,
+  required Locale? locale,
+}) {
+  if (maxRows <= 0 ||
+      !maxWidth.isFinite ||
+      maxWidth <= _tagChipTrailingGap ||
+      maxHeight <= 0) {
+    return const <String>[];
+  }
+
+  final maxChipWidth = maxWidth - _tagChipTrailingGap;
+  final maxTextWidth = math.max(
+    0.0,
+    maxChipWidth - _tagChipHorizontalPadding * 2,
+  );
+  final visibleTags = <String>[];
+  var completedRowsHeight = 0.0;
+  var currentRowWidth = 0.0;
+  var currentRowHeight = 0.0;
+  var row = 0;
+
+  for (final tag in tags) {
+    final metrics = _measureTagChip(
+      tag,
+      textStyle: textStyle,
+      textScaler: textScaler,
+      textDirection: textDirection,
+      locale: locale,
+      maxChipWidth: maxChipWidth,
+      maxTextWidth: maxTextWidth,
+    );
+    final startsNewRow =
+        currentRowWidth > 0 && currentRowWidth + metrics.width > maxWidth;
+    if (startsNewRow) {
+      completedRowsHeight += currentRowHeight;
+      currentRowWidth = 0;
+      currentRowHeight = 0;
+      row++;
+    }
+    if (row >= maxRows) {
+      break;
+    }
+
+    final candidateRowHeight = math.max(currentRowHeight, metrics.height);
+    if (maxHeight.isFinite &&
+        completedRowsHeight + candidateRowHeight > maxHeight) {
+      break;
+    }
+
+    visibleTags.add(tag);
+    currentRowWidth += metrics.width;
+    currentRowHeight = candidateRowHeight;
+  }
+  return visibleTags;
+}
+
+_TagChipMetrics _measureTagChip(
+  String tag, {
+  required TextStyle textStyle,
+  required TextScaler textScaler,
+  required TextDirection textDirection,
+  required Locale? locale,
+  required double maxChipWidth,
+  required double maxTextWidth,
+}) {
+  final textPainter = TextPainter(
+    text: TextSpan(text: tag, style: textStyle),
+    textDirection: textDirection,
+    textScaler: textScaler,
+    locale: locale,
+    maxLines: 1,
+    ellipsis: '...',
+  )..layout(maxWidth: maxTextWidth);
+  final metrics = _TagChipMetrics(
+    width: math.min(
+          maxChipWidth,
+          textPainter.width + _tagChipHorizontalPadding * 2,
+        ) +
+        _tagChipTrailingGap,
+    height: textPainter.height +
+        _tagChipTopPadding +
+        _tagChipBottomPadding +
+        _tagChipRunGap,
+  );
+  textPainter.dispose();
+  return metrics;
+}
+
+class _TagChipMetrics {
+  const _TagChipMetrics({
+    required this.width,
+    required this.height,
+  });
+
+  final double width;
+  final double height;
 }
