@@ -15,6 +15,7 @@ import 'package:picakeep/network/eh_network/get_gallery_id.dart';
 import 'package:picakeep/network/res.dart';
 import 'package:picakeep/pages/online_comic/base_online_comic_page.dart';
 import 'package:picakeep/pages/online_comic/eh_comments_page.dart';
+import 'package:picakeep/pages/online_comic/eh_content_warning.dart';
 import 'package:picakeep/pages/online_comic/online_comic_page_components.dart';
 import 'package:picakeep/pages/online_search/online_search_result_page.dart';
 import 'package:picakeep/pages/reader/comic_reading_page.dart';
@@ -47,36 +48,11 @@ class EhentaiComicPageV2 extends BaseOnlineComicPage<Gallery> {
 
   @override
   Future<Res<Gallery>> loadData() async {
-    var res = await EhNetwork().getGalleryInfo(link);
-    // Content Warning 命中时弹二次确认，确认后带绕过参数重试
-    if (res.error && (res.errorMessage ?? '').contains('Content Warning')) {
-      final ctx = App.globalContext;
-      if (ctx != null) {
-        final confirmed = await showDialog<bool>(
-          context: ctx,
-          builder: (_) => AlertDialog(
-            title: const Text('内容警告'),
-            content: const Text(
-              '该画廊标记了成人内容警告。确认继续查看吗？',
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.of(ctx).pop(false),
-                child: const Text('取消'),
-              ),
-              FilledButton(
-                onPressed: () => Navigator.of(ctx).pop(true),
-                child: const Text('继续'),
-              ),
-            ],
-          ),
-        );
-        if (confirmed == true) {
-          return EhNetwork().getGalleryInfo(link, false);
-        }
-      }
+    final context = App.globalContext;
+    if (context == null) {
+      return EhNetwork().getGalleryInfo(link);
     }
-    return res;
+    return getEhGalleryInfoWithContentWarning(context: context, link: link);
   }
 
   // ── 数据提取方法 ──────────────────────────────────────────────────────────

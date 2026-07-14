@@ -19,10 +19,13 @@ import 'package:picakeep/foundation/log.dart';
 import 'package:picakeep/foundation/local_library_settings.dart';
 import 'package:picakeep/foundation/remote_library_data_source.dart';
 import 'package:picakeep/foundation/trash.dart';
+import 'package:picakeep/network/eh_network/eh_models.dart';
 import 'package:picakeep/network/jm_network/jm_network.dart';
 import 'package:picakeep/network/nhentai_network/nhentai_main_network.dart';
 import 'package:picakeep/network/picacg_network/picacg_network.dart';
 import 'package:picakeep/tools/read_history_helper.dart';
+import 'package:picakeep/pages/online_comic/eh_comic_page_v2.dart';
+import 'package:picakeep/pages/online_comic/eh_content_warning.dart';
 import 'package:picakeep/pages/online_comic/jm_comic_page_v2.dart';
 import 'package:picakeep/pages/online_comic/picacg_comic_page_v2.dart';
 import 'package:picakeep/pages/online_comic/nhentai_comic_page_v2.dart';
@@ -66,7 +69,8 @@ String? extractNhentaiNumericId(String rawId) {
 bool supportsUpdateInfo(DownloadType type) {
   return type == DownloadType.jm ||
       type == DownloadType.picacg ||
-      type == DownloadType.nhentai;
+      type == DownloadType.nhentai ||
+      type == DownloadType.ehentai;
 }
 
 // 07号计划：信息区渲染需要 works/actors/chineseTeam/categories/categorizedTags
@@ -89,6 +93,40 @@ DownloadedItem? restoreConcreteDownloadedRecord(DownloadedItem comic) {
   } catch (_) {
     return null;
   }
+}
+
+/// Restores an EH gallery's persisted canonical link without inventing a
+/// domain from its `gid-token` local id. Both current flat and historical
+/// nested JSON records are handled by [restoreConcreteDownloadedRecord].
+String? resolveEhGalleryLink(DownloadedItem comic) {
+  final record = comic is DownloadedGallery
+      ? comic
+      : comic is LocalLibraryComicItem
+          ? restoreConcreteDownloadedRecord(comic)
+          : null;
+  if (record is! DownloadedGallery) {
+    return null;
+  }
+
+  final link = record.link.trim();
+  final uri = Uri.tryParse(link);
+  if (uri == null ||
+      (uri.scheme != 'http' && uri.scheme != 'https') ||
+      uri.host.isEmpty) {
+    return null;
+  }
+  const validHosts = {
+    'e-hentai.org',
+    'www.e-hentai.org',
+    'exhentai.org',
+    'www.exhentai.org',
+  };
+  if (!validHosts.contains(uri.host.toLowerCase()) ||
+      !RegExp(r'^/g/\d+/[a-z0-9]+/?$', caseSensitive: false)
+          .hasMatch(uri.path)) {
+    return null;
+  }
+  return link;
 }
 
 /// 本地详情标签的显示值与源站原始值。显示文本只用于界面；搜索必须使用
@@ -258,28 +296,232 @@ List<LocalDetailTagDisplayGroup> buildLocalDetailTagDisplayGroups({
   ];
 }
 
-class _LocalDetailInfoValue {
-  const _LocalDetailInfoValue({
+/// Stable roles drive the local-detail order without depending on translated
+/// labels such as "画师" or "语言".
+enum LocalDetailInfoRole {
+  id,
+  creator,
+  uploader,
+  downloadTime,
+  language,
+  pageCount,
+  sourceTime,
+  normal,
+}
+
+const localDetailDownloadTimeLabel = '下载时间';
+
+/// A value keeps its source-search representation separate from its display
+/// text, so translated EH/NH tags never change the recommendation query.
+class LocalDetailInfoValue {
+  const LocalDetailInfoValue({
     required this.displayText,
     this.rawTagSearchValue,
+    this.rawNamespace = '',
   });
 
   final String displayText;
   final String? rawTagSearchValue;
+  final String rawNamespace;
 }
 
-class _LocalDetailInfoGroup {
-  const _LocalDetailInfoGroup({
+/// One titled information group in a local comic detail page.
+class LocalDetailInfoGroup {
+  const LocalDetailInfoGroup({
     required this.name,
     required this.values,
     this.isTagGroup = false,
     this.localizeName = true,
+    this.role = LocalDetailInfoRole.normal,
+    this.rawNamespace = '',
   });
 
   final String name;
-  final List<_LocalDetailInfoValue> values;
+  final List<LocalDetailInfoValue> values;
   final bool isTagGroup;
   final bool localizeName;
+  final LocalDetailInfoRole role;
+
+  /// The original tag namespace used to derive [role], never a translated
+  /// display label. Values retain their individual namespace as well.
+  final String rawNamespace;
+
+  bool get hasDisplayValues =>
+      values.any((value) => value.displayText.trim().isNotEmpty);
+}
+
+/// Classifies an original source namespace. Display labels are intentionally
+/// not considered because translations and app locales are mutable.
+LocalDetailInfoRole localDetailInfoRoleForNamespace(String rawNamespace) {
+  switch (rawNamespace.trim().toLowerCase()) {
+    case 'artist':
+    case 'artists':
+    case '画师':
+    case '作者':
+      return LocalDetailInfoRole.creator;
+    case 'language':
+    case 'languages':
+    case '语言':
+      return LocalDetailInfoRole.language;
+    case 'page':
+    case 'pages':
+    case '页数':
+      return LocalDetailInfoRole.pageCount;
+    case 'time':
+    case '时间':
+    case 'uploaded':
+      return LocalDetailInfoRole.sourceTime;
+    default:
+      return LocalDetailInfoRole.normal;
+  }
+}
+
+bool _isLocalDetailSummaryRole(LocalDetailInfoRole role) {
+  return role == LocalDetailInfoRole.pageCount ||
+      role == LocalDetailInfoRole.language ||
+      role == LocalDetailInfoRole.sourceTime;
+}
+
+/// Applies the fixed information hierarchy before rows are rendered.
+///
+/// The function is intentionally independent of widgets so that ordering and
+/// missing-value behavior can be unit tested without a BuildContext.
+List<LocalDetailInfoGroup> orderLocalDetailInfoGroups(
+  Iterable<LocalDetailInfoGroup> groups,
+) {
+  final validGroups =
+      groups.where((group) => group.hasDisplayValues).toList(growable: false);
+  final result = <LocalDetailInfoGroup>[];
+
+  void addRole(LocalDetailInfoRole role) {
+    result.addAll(validGroups.where((group) => group.role == role));
+  }
+
+  addRole(LocalDetailInfoRole.id);
+  addRole(LocalDetailInfoRole.creator);
+  addRole(LocalDetailInfoRole.downloadTime);
+
+  for (final group in validGroups) {
+    if (group.role == LocalDetailInfoRole.id ||
+        group.role == LocalDetailInfoRole.creator ||
+        group.role == LocalDetailInfoRole.downloadTime ||
+        _isLocalDetailSummaryRole(group.role)) {
+      continue;
+    }
+    result.add(group);
+  }
+
+  for (final role in const [
+    LocalDetailInfoRole.pageCount,
+    LocalDetailInfoRole.language,
+    LocalDetailInfoRole.sourceTime,
+  ]) {
+    addRole(role);
+  }
+  return result;
+}
+
+/// Converts ordered groups into visual rows. Ordinary groups occupy one row;
+/// page count, language and source time share a single responsive Wrap row.
+List<List<LocalDetailInfoGroup>> buildLocalDetailInfoRows(
+  Iterable<LocalDetailInfoGroup> groups,
+) {
+  final rows = <List<LocalDetailInfoGroup>>[];
+  final summaryGroups = <LocalDetailInfoGroup>[];
+  for (final group in orderLocalDetailInfoGroups(groups)) {
+    if (_isLocalDetailSummaryRole(group.role)) {
+      summaryGroups.add(group);
+    } else {
+      rows.add([group]);
+    }
+  }
+  if (summaryGroups.isNotEmpty) {
+    rows.add(summaryGroups);
+  }
+  return rows;
+}
+
+/// Counts the readable local image files recorded for every episode.
+///
+/// The scanner may surface a root `cover.*` file alongside page files; it is
+/// artwork for the detail header rather than a readable page. Repeated paths
+/// are also counted once because they refer to the same on-disk image.
+int countLocalComicPageFiles(Map<int, Iterable<String>> episodeFiles) {
+  final seenPaths = <String>{};
+  var count = 0;
+  for (final files in episodeFiles.values) {
+    for (final file in files) {
+      final normalized = file.trim().replaceAll('\\', '/');
+      if (normalized.isEmpty ||
+          _isLocalDetailCoverPath(normalized) ||
+          !seenPaths.add(normalized)) {
+        continue;
+      }
+      count++;
+    }
+  }
+  return count;
+}
+
+bool _isLocalDetailCoverPath(String normalizedPath) {
+  final fileName = normalizedPath.split('/').last.toLowerCase();
+  return RegExp(r'^cover\.(?:jpe?g|png|webp)$').hasMatch(fileName);
+}
+
+/// Resolves the displayed local page count without treating online totals as
+/// authoritative. EH and legacy NH have the only explicit fallback paths.
+int? resolveLocalDetailPageCount({
+  required DownloadType source,
+  required Map<int, Iterable<String>> episodeFiles,
+  int? ehFallbackPageCount,
+  Iterable<String> nhSourcePageValues = const <String>[],
+}) {
+  if (source != DownloadType.jm &&
+      source != DownloadType.ehentai &&
+      source != DownloadType.nhentai &&
+      source != DownloadType.picacg) {
+    return null;
+  }
+
+  final localPageCount = countLocalComicPageFiles(episodeFiles);
+  if (localPageCount > 0) {
+    return localPageCount;
+  }
+
+  if (source == DownloadType.ehentai &&
+      ehFallbackPageCount != null &&
+      ehFallbackPageCount > 0) {
+    return ehFallbackPageCount;
+  }
+
+  if (source == DownloadType.nhentai) {
+    for (final value in nhSourcePageValues) {
+      final normalized = value.trim();
+      if (!RegExp(r'^\d+$').hasMatch(normalized)) {
+        continue;
+      }
+      final parsed = int.tryParse(normalized);
+      if (parsed != null && parsed > 0) {
+        return parsed;
+      }
+    }
+  }
+  return null;
+}
+
+String formatLocalDetailDateTime(DateTime time) {
+  return '${time.year}-${time.month.toString().padLeft(2, '0')}-${time.day.toString().padLeft(2, '0')} ${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}';
+}
+
+/// Formats an upstream timestamp while leaving human-readable source strings
+/// (for example, "7 months ago") unchanged.
+String? formatLocalDetailSourceTime(String? sourceTime) {
+  final raw = sourceTime?.trim();
+  if (raw == null || raw.isEmpty) {
+    return null;
+  }
+  final parsed = DateTime.tryParse(raw);
+  return parsed == null ? raw : formatLocalDetailDateTime(parsed.toLocal());
 }
 
 class LocalComicDetailPage extends StatefulWidget {
@@ -312,6 +554,7 @@ class UpdateInfoFetchResult {
     this.jmData,
     this.picacgData,
     this.nhentaiData,
+    this.ehentaiData,
     this.errorMessage,
   });
 
@@ -324,12 +567,16 @@ class UpdateInfoFetchResult {
   factory UpdateInfoFetchResult.nhentai(NhentaiComic data) =>
       UpdateInfoFetchResult._(nhentaiData: data);
 
+  factory UpdateInfoFetchResult.ehentai(Gallery data) =>
+      UpdateInfoFetchResult._(ehentaiData: data);
+
   factory UpdateInfoFetchResult.failure(String message) =>
       UpdateInfoFetchResult._(errorMessage: message);
 
   final JmComicInfo? jmData;
   final PicacgComicItem? picacgData;
   final NhentaiComic? nhentaiData;
+  final Gallery? ehentaiData;
   final String? errorMessage;
 }
 
@@ -379,6 +626,7 @@ DownloadedItem? buildUpdatedDownloadedRecord(
         tagList: data.tags,
         chineseTeam: data.chineseTeam,
         categories: data.categories,
+        sourceTime: data.updatedAt,
       );
     }
     if (fetchResult.nhentaiData != null && existing is NhentaiDownloadedComic) {
@@ -391,6 +639,20 @@ DownloadedItem? buildUpdatedDownloadedRecord(
         cover: existing.cover,
         tagList: flatTags,
         categorizedTags: data.tags,
+      );
+    }
+    if (fetchResult.ehentaiData != null && existing is DownloadedGallery) {
+      final data = fetchResult.ehentaiData!;
+      return DownloadedGallery(
+        galleryTitle: existing.galleryTitle,
+        subtitle: existing.subtitle,
+        uploader: data.uploader,
+        link: existing.link,
+        coverPath: existing.coverPath,
+        size: existing.size,
+        tagList: data.toBrief().tags,
+        sourceTime: data.time,
+        pageCount: existing.pageCount,
       );
     }
     return null;
@@ -576,7 +838,7 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
 
   String _formatTime(DateTime? time) {
     if (time == null) return '';
-    return '${time.year}-${time.month.toString().padLeft(2, '0')}-${time.day.toString().padLeft(2, '0')} ${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}';
+    return formatLocalDetailDateTime(time);
   }
 
   String _recommendationAuthor(DownloadedItem item) {
@@ -1039,11 +1301,18 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
     });
   }
 
-  List<_LocalDetailInfoGroup> _buildInfoGroups() {
+  List<LocalDetailInfoGroup> _buildInfoGroups() {
     final comic = _comic;
-    final groups = <_LocalDetailInfoGroup>[];
+    final groups = <LocalDetailInfoGroup>[];
 
-    void add(String key, Iterable<String?> values) {
+    void add(
+      String key,
+      Iterable<String?> values, {
+      LocalDetailInfoRole role = LocalDetailInfoRole.normal,
+      bool isTagGroup = false,
+      bool localizeName = true,
+      String rawNamespace = '',
+    }) {
       final normalized = values
           .whereType<String>()
           .map((e) => e.trim())
@@ -1052,19 +1321,96 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
           .toList();
       if (normalized.isEmpty) return;
       groups.add(
-        _LocalDetailInfoGroup(
+        LocalDetailInfoGroup(
           name: key,
+          role: role,
+          isTagGroup: isTagGroup,
+          localizeName: localizeName,
+          rawNamespace: rawNamespace,
           values: [
             for (final value in normalized)
-              _LocalDetailInfoValue(displayText: value),
+              LocalDetailInfoValue(displayText: value),
           ],
         ),
       );
     }
 
-    add('ID', [_displayIdFor(comic)]);
-    add('作者', [comic.subTitle]);
-    add('时间', [_formatTime(comic.time)]);
+    final restored = restoreConcreteDownloadedRecord(comic);
+    final concrete =
+        restored ?? (comic is LocalLibraryComicItem ? null : comic);
+
+    void addTagGroup(
+      LocalDetailTagDisplayGroup tagGroup,
+      LocalDetailInfoRole role,
+    ) {
+      groups.add(
+        LocalDetailInfoGroup(
+          name: tagGroup.displayName,
+          role: role,
+          isTagGroup: true,
+          // 无 namespace 时仍是原有通用“标签”标题，交给应用语言包；有
+          // namespace 的分类名已由在线权威翻译函数决定，不再二次翻译。
+          localizeName: tagGroup.rawNamespace.isEmpty,
+          rawNamespace: tagGroup.rawNamespace,
+          values: [
+            for (final value in tagGroup.values)
+              LocalDetailInfoValue(
+                displayText: value.displayText,
+                // 传入完整原始 flat 标签，保留 EH 的 namespace；分类桶值仍
+                // 通过 value.rawNamespace 保持关联，不能用中文显示值替代。
+                rawTagSearchValue: value.rawText,
+                rawNamespace: value.rawNamespace,
+              ),
+          ],
+        ),
+      );
+    }
+
+    void addMergedTagGroups(
+      List<LocalDetailTagDisplayGroup> tagGroups,
+      LocalDetailInfoRole role,
+    ) {
+      if (tagGroups.isEmpty) return;
+      final values = <LocalDetailInfoValue>[];
+      final seen = <String>{};
+      for (final tagGroup in tagGroups) {
+        for (final value in tagGroup.values) {
+          final identity = '${value.rawNamespace}\u0000${value.rawText}';
+          if (!seen.add(identity)) continue;
+          values.add(LocalDetailInfoValue(
+            displayText: value.displayText,
+            rawTagSearchValue: value.rawText,
+            rawNamespace: value.rawNamespace,
+          ));
+        }
+      }
+      if (values.isEmpty) return;
+      final firstGroup = tagGroups.first;
+      groups.add(LocalDetailInfoGroup(
+        name: firstGroup.displayName,
+        role: role,
+        isTagGroup: true,
+        localizeName: firstGroup.rawNamespace.isEmpty,
+        rawNamespace: firstGroup.rawNamespace,
+        values: values,
+      ));
+    }
+
+    add('ID', [_displayIdFor(comic)], role: LocalDetailInfoRole.id);
+    if (comic.type == DownloadType.jm || comic.type == DownloadType.picacg) {
+      add('作者', [comic.subTitle], role: LocalDetailInfoRole.creator);
+    }
+    add(
+      localDetailDownloadTimeLabel,
+      [_formatTime(comic.time)],
+      role: LocalDetailInfoRole.downloadTime,
+    );
+    if (comic.type == DownloadType.ehentai) {
+      final uploader =
+          concrete is DownloadedGallery ? concrete.uploader : comic.subTitle;
+      add('上传者', [uploader], role: LocalDetailInfoRole.uploader);
+    }
+
     if (comic is LocalLibraryComicItem && comic.isArchiveItem) {
       add('格式', [comic.archiveFormatDisplay]);
       final path = comic.fileSystemPath;
@@ -1081,9 +1427,6 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
       }
     }
 
-    final restored = restoreConcreteDownloadedRecord(comic);
-    final concrete =
-        restored ?? (comic is LocalLibraryComicItem ? null : comic);
     final concreteTags = concrete?.tags ?? const <String>[];
     final flatTags = concreteTags.isNotEmpty ? concreteTags : comic.tags;
     final categorizedTags = concrete is NhentaiDownloadedComic
@@ -1095,28 +1438,64 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
       categorizedTags: categorizedTags,
       languageCode: App.locale.languageCode,
     );
+    final languageTagGroups = <LocalDetailTagDisplayGroup>[];
+    final sourceTimeTagValues = <String>[];
+    final nhSourcePageValues = <String>[];
     for (final tagGroup in tagGroups) {
-      groups.add(
-        _LocalDetailInfoGroup(
-          name: tagGroup.displayName,
-          isTagGroup: true,
-          // 无 namespace 时仍是原有通用“标签”标题，交给应用语言包；有
-          // namespace 的分类名已由在线权威翻译函数决定，不再二次翻译。
-          localizeName: tagGroup.rawNamespace.isEmpty,
-          values: [
-            for (final value in tagGroup.values)
-              _LocalDetailInfoValue(
-                displayText: value.displayText,
-                // 传入完整原始 flat 标签，保留 EH 的 namespace；分类桶值仍
-                // 通过 value.rawNamespace 保持关联，不能用中文显示值替代。
-                rawTagSearchValue: value.rawText,
-              ),
-          ],
-        ),
-      );
+      final role = localDetailInfoRoleForNamespace(tagGroup.rawNamespace);
+      switch (role) {
+        case LocalDetailInfoRole.creator:
+          addTagGroup(tagGroup, role);
+          break;
+        case LocalDetailInfoRole.language:
+          languageTagGroups.add(tagGroup);
+          break;
+        case LocalDetailInfoRole.sourceTime:
+          sourceTimeTagValues.addAll(
+            tagGroup.values.map((value) => value.rawValue),
+          );
+          break;
+        case LocalDetailInfoRole.pageCount:
+          nhSourcePageValues.addAll(
+            tagGroup.values.map((value) => value.rawValue),
+          );
+          break;
+        default:
+          addTagGroup(tagGroup, role);
+          break;
+      }
     }
-    _appendConcreteInfoGroups(concrete, add);
-    return groups;
+    _appendConcreteInfoGroups(concrete, (key, values) => add(key, values));
+
+    final episodeFiles = comic is LocalLibraryComicItem
+        ? comic.episodeFiles
+        : const <int, Iterable<String>>{};
+    final pageCount = resolveLocalDetailPageCount(
+      source: comic.type,
+      episodeFiles: episodeFiles,
+      ehFallbackPageCount:
+          concrete is DownloadedGallery ? concrete.pageCount : null,
+      nhSourcePageValues: nhSourcePageValues,
+    );
+    if (pageCount != null) {
+      add('页数', ['$pageCount'], role: LocalDetailInfoRole.pageCount);
+    }
+    addMergedTagGroups(languageTagGroups, LocalDetailInfoRole.language);
+
+    final concreteSourceTime = concrete is DownloadedGallery
+        ? concrete.sourceTime
+        : concrete is DownloadedComic
+            ? concrete.sourceTime
+            : '';
+    final sourceTimeValues = concreteSourceTime.trim().isNotEmpty
+        ? <String>[concreteSourceTime]
+        : sourceTimeTagValues;
+    add(
+      '时间',
+      sourceTimeValues.map(formatLocalDetailSourceTime),
+      role: LocalDetailInfoRole.sourceTime,
+    );
+    return orderLocalDetailInfoGroups(groups);
   }
 
   // 07号计划：还原具体子类实例后追加 JM/Picacg 的来源元数据分组。NH 分类桶
@@ -1570,7 +1949,7 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
   Widget _infoCard(
     String text, {
     bool title = false,
-    String? group,
+    String? searchAuthor,
     String? rawTagSearchValue,
   }) {
     if (text.trim().isEmpty) text = '未知'.tl;
@@ -1584,16 +1963,16 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
             : (details) => _showTextActionsAt(
                   details.globalPosition,
                   text,
-                  searchAuthor: group == '作者' ? text : null,
-                  searchTag: rawTagSearchValue ?? (group == '标签' ? text : null),
+                  searchAuthor: searchAuthor,
+                  searchTag: rawTagSearchValue,
                 ),
         onSecondaryTapDown: title
             ? null
             : (details) => _showTextActionsAt(
                   details.globalPosition,
                   text,
-                  searchAuthor: group == '作者' ? text : null,
-                  searchTag: rawTagSearchValue ?? (group == '标签' ? text : null),
+                  searchAuthor: searchAuthor,
+                  searchTag: rawTagSearchValue,
                 ),
         child: Card(
           margin: EdgeInsets.zero,
@@ -1655,6 +2034,18 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
         return;
       }
       App.pushInner(() => NhentaiComicPageV2(numericId));
+    } else if (comic.type == DownloadType.ehentai) {
+      final link = resolveEhGalleryLink(comic);
+      if (link == null) {
+        LogManager.addLog(
+          LogLevel.warning,
+          'LocalComicDetailPage',
+          '_onVisitOnline: missing or invalid EH gallery link',
+        );
+        _showMessage('该本地记录缺少有效的在线链接，无法查看在线详情'.tl);
+        return;
+      }
+      App.pushInner(() => EhentaiComicPageV2(link));
     }
   }
 
@@ -1674,7 +2065,7 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
     }
     final comic = _comic;
     if (comic is! LocalLibraryComicItem) {
-      // 理论上菜单可见性已经排除了这种情况，这里是纯防御，不应该真的走到。
+      _showMessage('该本地记录未关联本地数据库，无法更新信息'.tl);
       return;
     }
     final rawId = resolveOnlineRawId(comic);
@@ -1728,6 +2119,24 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
           return UpdateInfoFetchResult.failure(res.errorMessageWithoutNull);
         }
         return UpdateInfoFetchResult.nhentai(res.data);
+      });
+    } else if (comic.type == DownloadType.ehentai) {
+      final link = resolveEhGalleryLink(comic);
+      if (link == null) {
+        _showMessage('该本地记录缺少有效的在线链接，无法更新信息'.tl);
+        return;
+      }
+      fetchResult = await fetchOverlay(() async {
+        final res = await getEhGalleryInfoWithContentWarning(
+          context: context,
+          link: link,
+        );
+        if (res.error) {
+          return UpdateInfoFetchResult.failure(
+            isEhContentWarning(res) ? '已取消内容警告确认' : res.errorMessageWithoutNull,
+          );
+        }
+        return UpdateInfoFetchResult.ehentai(res.data);
       });
     } else {
       // 菜单可见性已排除其它来源，这里同样是防御性兜底。
@@ -1893,16 +2302,30 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
     return InkWell(
       onTap: onTap,
       borderRadius: const BorderRadius.all(Radius.circular(8)),
-      child: SizedBox(
-        height: 72,
-        width: 72,
-        child: Column(
-          children: [
-            const SizedBox(height: 12),
-            Icon(icon, size: 24, color: Theme.of(context).colorScheme.primary),
-            const SizedBox(height: 8),
-            Text(title.tl, style: const TextStyle(fontSize: 12), maxLines: 1),
-          ],
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(minWidth: 72, minHeight: 72),
+        child: SizedBox(
+          width: 72,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(4, 12, 4, 8),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  icon,
+                  size: 24,
+                  color: Theme.of(context).colorScheme.primary,
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  title.tl,
+                  textAlign: TextAlign.center,
+                  softWrap: true,
+                  style: const TextStyle(fontSize: 12),
+                ),
+              ],
+            ),
+          ),
         ),
       ),
     );
@@ -2007,6 +2430,7 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
     final description = _getDescription();
     final history = _historyFor(comic);
     final infoGroups = _buildInfoGroups();
+    final infoRows = buildLocalDetailInfoRows(infoGroups);
     final recommendations = _buildRecommendations();
     final start = recommendations.isEmpty
         ? 0
@@ -2063,23 +2487,29 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    for (final group in infoGroups)
+                    for (final row in infoRows)
                       Padding(
                         padding: const EdgeInsets.only(bottom: 2),
                         child: Wrap(
                           children: [
-                            _infoCard(
-                              group.localizeName ? group.name.tl : group.name,
-                              title: true,
-                            ),
-                            for (final value in group.values)
+                            for (final group in row) ...[
                               _infoCard(
-                                value.displayText,
-                                group: group.name,
-                                rawTagSearchValue: group.isTagGroup
-                                    ? value.rawTagSearchValue
-                                    : null,
+                                group.localizeName ? group.name.tl : group.name,
+                                title: true,
                               ),
+                              for (final value in group.values)
+                                _infoCard(
+                                  value.displayText,
+                                  searchAuthor: group.role ==
+                                              LocalDetailInfoRole.creator &&
+                                          !group.isTagGroup
+                                      ? value.displayText
+                                      : null,
+                                  rawTagSearchValue: group.isTagGroup
+                                      ? value.rawTagSearchValue
+                                      : null,
+                                ),
+                            ],
                           ],
                         ),
                       ),
