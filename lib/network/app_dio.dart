@@ -6,10 +6,24 @@ import 'package:dio/dio.dart';
 import 'package:dio/io.dart';
 import 'package:picakeep/base.dart';
 import 'package:picakeep/foundation/log.dart';
+import 'package:picakeep/foundation/log_file_service.dart';
 
 const Duration networkConnectTimeout = Duration(seconds: 20);
 const Duration networkReceiveTimeout = Duration(seconds: 30);
 const Duration networkSendTimeout = Duration(seconds: 20);
+
+/// Testable, non-mutating redactor for values copied into network logs.
+class NetworkLogRedactor {
+  NetworkLogRedactor._();
+
+  static Object? redactCopy(Object? value) =>
+      LogCredentialRedactor.redactCopy(value);
+
+  static Uri redactUri(Uri uri) => LogCredentialRedactor.redactUri(uri);
+
+  static String redactText(String text) =>
+      LogCredentialRedactor.redactText(text);
+}
 
 class MyLogInterceptor extends Interceptor {
   @override
@@ -19,10 +33,14 @@ class MyLogInterceptor extends Interceptor {
     options.sendTimeout ??= networkSendTimeout;
     final headers = Map<String, dynamic>.from(options.headers);
     headers.removeWhere((key, _) => key.toLowerCase() == 'cookie');
+    final message = '${options.method} '
+        '${NetworkLogRedactor.redactUri(options.uri)}\n'
+        'headers:${NetworkLogRedactor.redactCopy(headers)}\n'
+        'data:${NetworkLogRedactor.redactCopy(options.data)}';
     LogManager.addLog(
       LogLevel.info,
       'Network',
-      '${options.method} ${options.uri}\nheaders:$headers\ndata:${options.data}',
+      NetworkLogRedactor.redactText(message),
     );
     handler.next(options);
   }
@@ -35,24 +53,32 @@ class MyLogInterceptor extends Interceptor {
         value.length == 1 ? value.first : value.toString(),
       ),
     )..remove('cookie');
+    final redactedData = NetworkLogRedactor.redactCopy(response.data);
+    final message = 'Response '
+        '${NetworkLogRedactor.redactUri(response.realUri)} '
+        '${response.statusCode}\n'
+        'headers:${NetworkLogRedactor.redactCopy(headers)}\n'
+        '${NetworkLogRedactor.redactText(_responsePreview(redactedData))}';
     LogManager.addLog(
       response.statusCode != null && response.statusCode! < 400
           ? LogLevel.info
           : LogLevel.error,
       'Network',
-      'Response ${response.realUri} ${response.statusCode}\n'
-          'headers:$headers\n${_responsePreview(response.data)}',
+      NetworkLogRedactor.redactText(message),
     );
     handler.next(response);
   }
 
   @override
   void onError(DioException err, ErrorInterceptorHandler handler) {
+    final message = '${err.requestOptions.method} '
+        '${NetworkLogRedactor.redactUri(err.requestOptions.uri)}\n'
+        '${NetworkLogRedactor.redactText(err.toString())}\n'
+        '${NetworkLogRedactor.redactCopy(err.response?.data)}';
     LogManager.addLog(
       LogLevel.error,
       'Network',
-      '${err.requestOptions.method} ${err.requestOptions.uri}\n$err\n'
-          '${err.response?.data}',
+      NetworkLogRedactor.redactText(message),
     );
     handler.next(_friendlyError(err));
   }
@@ -156,7 +182,10 @@ class RetryHttpClientAdapter extends IOHttpClientAdapter {
         LogManager.addLog(
           LogLevel.warning,
           'Network',
-          '${options.method} ${options.uri}\n$error\nRetrying...',
+          NetworkLogRedactor.redactText(
+            '${options.method} ${NetworkLogRedactor.redactUri(options.uri)}\n'
+            '${NetworkLogRedactor.redactText(error.toString())}\nRetrying...',
+          ),
         );
         await Future<void>.delayed(const Duration(seconds: 1));
       }

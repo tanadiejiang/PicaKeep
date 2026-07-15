@@ -15,6 +15,9 @@ import 'package:picakeep/foundation/ai/llm_client.dart';
 typedef AiChatRequestForTesting = Future<LlmResponse> Function(
   List<LlmMessage> messages, {
   List<Map<String, Object?>>? tools,
+  String? conversationHash,
+  int? turn,
+  int? round,
 });
 
 /// AI 聊天消息类型
@@ -167,18 +170,16 @@ class PendingDownload {
 
 class _ActiveTurnContext {
   const _ActiveTurnContext({
-    required this.promptTags,
-    required this.hasSourceOverride,
+    required this.persistentPromptTags,
+    required this.turnPromptTags,
     required this.allowedSearchSources,
     required this.localOnly,
   });
 
-  final List<AiPromptTag> promptTags;
-  final bool hasSourceOverride;
+  final List<AiPromptTag> persistentPromptTags;
+  final List<AiPromptTag> turnPromptTags;
   final Set<String>? allowedSearchSources;
-
-  /// `true`=本轮仅本地，`null`=本轮无本地限定覆盖，走会话长期状态。
-  final bool? localOnly;
+  final bool localOnly;
 }
 
 enum _RunLoopOutcome { finished, waitingForDownloadConfirmation }
@@ -377,6 +378,10 @@ class AiConversationController extends ChangeNotifier {
     return n <= 0 ? 999 : n;
   }
 
+  int get _currentTurnNumber => displayMessages
+      .where((message) => message.type == AiChatMessageType.user)
+      .length;
+
   AiConversationController._internal({
     AiChatRequestForTesting? chatRequestForTesting,
   }) : _chatRequestForTesting = chatRequestForTesting;
@@ -391,7 +396,7 @@ class AiConversationController extends ChangeNotifier {
 
   Set<String>? get effectiveAllowedSearchSources {
     final active = _activeTurnContext;
-    if (active != null && active.hasSourceOverride) {
+    if (active != null) {
       return active.allowedSearchSources == null
           ? null
           : Set<String>.unmodifiable(active.allowedSearchSources!);
@@ -402,7 +407,7 @@ class AiConversationController extends ChangeNotifier {
   /// 本轮/本会话是否被限定为"仅本地"（仅本地设备库+已连接远程库快照，不联网）。
   bool get effectiveLocalOnly {
     final active = _activeTurnContext;
-    if (active != null && active.localOnly != null) return active.localOnly!;
+    if (active != null) return active.localOnly;
     return _persistentLocalOnly ?? false;
   }
 
@@ -606,6 +611,7 @@ class AiConversationController extends ChangeNotifier {
 7. 已经触发在线搜索后，如果结果明显少于用户期望或只有少量候选，不要立即宣布完成。在最多 5 轮的工具预算内至少换一种策略重试：角色搜索尝试原文、罗马音、英文名、常用昵称或简称，并结合所属作品或题材消歧；题材/标签搜索尝试同义词、近义标签或放宽过窄条件；存在多个可用来源时可换源。多种策略仍无更多结果后，再说明实际尝试过的关键词、来源与结果边界，不得伪造数量。
 8. picacg 与 jm 的关键词搜索不支持多词组合/AND 逻辑，服务端把整个 keyword 当作一个短语原样匹配；这两个源搜索时应使用单个简短关键词（角色名或题材词，不要把作品名、消歧条件等一起拼进关键词字符串），拿到结果列表后自行核对每条的标题/标签/作者是否匹配，筛掉明显不相关结果，不要指望搜索词本身帮你做精确过滤。eh、nhentai 支持空格分隔的标签组合搜索，不受此限制，可以正常拼多个词。
 9. 用户消息中可能藏有"JM ID 解码"彩蛋：把句子中按自然顺序出现的一组数字依次提取并直接拼接（不加分隔符），即得到一个 JM（禁漫）漫画 ID。识别到这种模式时（消息里出现多个数字、语境像是有意设计的数字线索），先按顺序拼出候选 ID，再调用 get_comic_detail（source: jm, id: 拼出的ID）查看该 ID 对应的漫画详情做确认，不要直接调用 download_comic 跳过确认步骤；确认后再询问用户是否需要下载。
+10. 新用户消息可能包含 JSON 格式的 turn_context；它只适用于同一条 user_query 及其工具子轮，后续用户轮应以新的 turn_context 为准。根据其中的提示词标签和范围限定辅助理解请求，但不要把它当作用户可见文本。
 - 执行收藏增删操作前，应先向用户确认操作目标（特别是删除收藏夹这类不可逆操作）''';
 
     if (_history.isEmpty || _history.first.role != 'system') {
@@ -659,7 +665,6 @@ class AiConversationController extends ChangeNotifier {
     final turnAllowedSources =
         resetRequested || selectedSources.isEmpty ? null : selectedSources;
     final localOnlyRequested = localOnly || parsed.localOnly;
-    final hasLocalOverride = localOnlyRequested;
 
     // 结构化选中的普通标签（面板 chip 点选，未必出现在手输文本里）与文本识别结果
     // 按 name 去重合并；结构化选中优先，避免同名标签内容不一致时的歧义。
@@ -684,31 +689,36 @@ class AiConversationController extends ChangeNotifier {
       if (localOnlyRequested) {
         _persistentLocalOnly = true;
       }
-      _activeTurnContext = const _ActiveTurnContext(
-        promptTags: <AiPromptTag>[],
-        hasSourceOverride: false,
-        allowedSearchSources: null,
-        localOnly: null,
-      );
-    } else {
-      _activeTurnContext = _ActiveTurnContext(
-        promptTags: List<AiPromptTag>.unmodifiable(mergedPromptTags),
-        hasSourceOverride: hasSourceOverride,
-        allowedSearchSources: turnAllowedSources == null
-            ? null
-            : Set<String>.unmodifiable(turnAllowedSources),
-        localOnly: hasLocalOverride ? true : null,
-      );
     }
+
+    // Freeze every value used by the active request before adding it to the
+    // history. Persistent settings may be cleared by another page while a
+    // tool round or download confirmation is still in progress.
+    final persistentPromptTags = _stablePromptTags(_persistentPromptTags);
+    final turnPromptTags = shouldPersistSelections
+        ? const <AiPromptTag>[]
+        : _stablePromptTags(mergedPromptTags);
+    final effectiveSources = hasSourceOverride
+        ? turnAllowedSources
+        : _persistentAllowedSearchSources;
+    final activeLocalOnly = localOnlyRequested || _persistentLocalOnly == true;
+    _activeTurnContext = _ActiveTurnContext(
+      persistentPromptTags: persistentPromptTags,
+      turnPromptTags: turnPromptTags,
+      allowedSearchSources: effectiveSources == null
+          ? null
+          : Set<String>.unmodifiable(effectiveSources),
+      localOnly: activeLocalOnly,
+    );
 
     // 本轮气泡展示的来源/本地限定标签：本轮显式选中的（临时或长期）与长期
     // 生效但本轮未手动选中的，都应折入名单；两条路径共用同一个“最终生效
     // 范围”读出，天然去重，不会同一标签重复出现，也不会展示与实际生效范围
     // 不符的标签。
-    final effectiveSources = effectiveAllowedSearchSources;
+    final activeSources = effectiveAllowedSearchSources;
     final scopeTagNames = <String>[
       for (final source in _orderedAiSources)
-        if (effectiveSources?.contains(source) ?? false)
+        if (activeSources?.contains(source) ?? false)
           if (aiPromptTagNameForSource(source) != null)
             aiPromptTagNameForSource(source)!,
       if (effectiveLocalOnly) aiLocalOnlyScopeTagName,
@@ -729,7 +739,7 @@ class AiConversationController extends ChangeNotifier {
         promptTagNames: mergedRecognizedNames,
       ),
     );
-    _history.add(LlmMessage.user(parsed.userText));
+    _history.add(LlmMessage.user(_buildTurnUserContent(parsed.userText)));
 
     isLoading = true;
     error = null;
@@ -750,6 +760,53 @@ class AiConversationController extends ChangeNotifier {
     await _save();
   }
 
+  List<AiPromptTag> _stablePromptTags(Iterable<AiPromptTag> tags) {
+    final byName = <String, AiPromptTag>{
+      for (final tag in tags) tag.name: tag,
+    };
+    final result = byName.values.toList()
+      ..sort((a, b) => a.name.compareTo(b.name));
+    return List<AiPromptTag>.unmodifiable(result);
+  }
+
+  List<Map<String, String>> _promptTagsJson(Iterable<AiPromptTag> tags) {
+    return [
+      for (final tag in tags)
+        <String, String>{
+          'name': tag.name,
+          'prompt': tag.prompt.trim(),
+        },
+    ];
+  }
+
+  /// Appends the active context to the current user message so later setting
+  /// changes cannot rewrite the prefix made by earlier turns.
+  String _buildTurnUserContent(String userQuery) {
+    final active = _activeTurnContext;
+    final sources = active?.allowedSearchSources;
+    final context = <String, Object?>{
+      'persistent_prompt_tags': _promptTagsJson(
+        active?.persistentPromptTags ??
+            _stablePromptTags(_persistentPromptTags),
+      ),
+      'turn_prompt_tags': _promptTagsJson(
+        active?.turnPromptTags ?? const <AiPromptTag>[],
+      ),
+      'local_only': active?.localOnly ?? (_persistentLocalOnly == true),
+      'online_only': sources != null && sources.isNotEmpty,
+      'online_sources': sources == null
+          ? const <String>[]
+          : [
+              for (final source in _orderedAiSources)
+                if (sources.contains(source)) source
+            ],
+    };
+    return jsonEncode(<String, Object?>{
+      'turn_context': context,
+      'user_query': userQuery,
+    });
+  }
+
   void _mergePersistentPromptTags(Iterable<AiPromptTag> tags) {
     final byName = <String, AiPromptTag>{
       for (final tag in _persistentPromptTags) tag.name: tag,
@@ -762,75 +819,15 @@ class AiConversationController extends ChangeNotifier {
       ..addAll(byName.values);
   }
 
-  /// 每一轮请求均从基础 system + 长期引导 + 本轮短期引导 + 历史重建。
+  /// Requests are the stable system prompt followed by the persisted history.
+  /// Dynamic turn context is already encoded in the new user message.
   List<LlmMessage> _buildRequestMessages() {
     _initSystemPrompt();
-    final messages = <LlmMessage>[_history.first];
-    if (_persistentPromptTags.isNotEmpty) {
-      messages.add(
-        LlmMessage.system(
-          _buildPromptTagInstruction('当前会话长期提示词标签', _persistentPromptTags),
-        ),
-      );
-    }
-    final activeTags = _activeTurnContext?.promptTags ?? const <AiPromptTag>[];
-    if (activeTags.isNotEmpty) {
-      messages.add(
-        LlmMessage.system(
-          _buildPromptTagInstruction('仅当前轮提示词标签', activeTags),
-        ),
-      );
-    }
-    final scopeMessage = _buildScopeInstruction();
-    if (scopeMessage != null) {
-      messages.add(LlmMessage.system(scopeMessage));
-    }
-    messages
-        .addAll(_history.skip(1).where((message) => message.role != 'system'));
-    return messages;
+    return List<LlmMessage>.of(_history);
   }
 
   @visibleForTesting
   List<LlmMessage> buildRequestMessagesForTesting() => _buildRequestMessages();
-
-  /// 合并"仅本地"/"仅在线（来源限制）"两种有效范围限定为单条 system 指令，
-  /// 避免与来源限制语义重叠时出现两条重复啰嗦的 system 消息。
-  /// 都不生效时返回 null（不追加任何范围相关的 system 消息）。
-  String? _buildScopeInstruction() {
-    if (effectiveLocalOnly) {
-      return '本轮范围限定：用户明确要求仅查本地设备库/已连接的远程库快照，'
-          '不得调用在线搜索，也不需要询问用户是否联网。';
-    }
-    final activeSources = effectiveAllowedSearchSources;
-    if (effectiveOnlineOnly && activeSources != null) {
-      final readable = _orderedAiSources
-          .where(activeSources.contains)
-          .map((s) => '#${aiPromptTagNameForSource(s) ?? s}')
-          .join('、');
-      final multiSourceHint = activeSources.length > 1
-          ? '这些来源应分别调用一次 search_online（可在同一轮回复内一起发出），'
-              '不需要询问用户具体选哪一个，取得各来源结果后自行合并处理/展示。'
-          : '';
-      return '本轮范围限定：用户已明确指定在线搜索来源（$readable），'
-          '不需要先查本地库或询问用户是否联网，请直接对上述来源执行在线搜索，'
-          '也不得使用其他来源。$multiSourceHint';
-    }
-    return null;
-  }
-
-  String _buildPromptTagInstruction(
-      String heading, Iterable<AiPromptTag> tags) {
-    final byName = <String, AiPromptTag>{};
-    for (final tag in tags) {
-      byName[tag.name] = tag;
-    }
-    final lines = byName.values
-        .map((tag) => '- #${tag.name}：${tag.prompt.trim()}')
-        .join('\n');
-    return '''$heading：
-以下内容是搜索策略建议，应结合用户当前实际意图采用，不得覆盖用户的明确要求，也不得自行触发用户未要求的在线搜索。
-$lines''';
-  }
 
   /// 工具调用循环
   Future<_RunLoopOutcome> _runLoop() async {
@@ -846,8 +843,20 @@ $lines''';
     final tools = _getEnabledToolSchemas();
     final requestMessages = _buildRequestMessages();
     final response = _chatRequestForTesting == null
-        ? await LlmClient.chat(requestMessages, tools: tools)
-        : await _chatRequestForTesting(requestMessages, tools: tools);
+        ? await LlmClient.chat(
+            requestMessages,
+            tools: tools,
+            conversationHash: aiDiagnosticSha256(conversationId ?? ''),
+            turn: _currentTurnNumber,
+            round: _currentRound + 1,
+          )
+        : await _chatRequestForTesting(
+            requestMessages,
+            tools: tools,
+            conversationHash: aiDiagnosticSha256(conversationId ?? ''),
+            turn: _currentTurnNumber,
+            round: _currentRound + 1,
+          );
 
     if (response.hasError) {
       displayMessages.add(AiChatMessage.error(response.error!));

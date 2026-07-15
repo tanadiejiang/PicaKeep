@@ -127,7 +127,7 @@ void main() {
     expect(current.persistentAllowedSearchSources, {'jm'});
     final request = current.buildRequestMessagesForTesting();
     expect(request.first.content, contains('结果明显少于用户期望'));
-    expect(request[1].content, contains('#搜角色：策略'));
+    expect(request.length, 1);
   });
 
   test('schema 收窄深复制且不污染原 schema', () {
@@ -299,59 +299,42 @@ void main() {
       );
     });
 
-    test('_getEnabledToolSchemas 在仅本地时剔除 search_online', () {
+    test('仅本地状态不再作为动态 system 插入全部历史之前', () {
       final ctrl = buildCtrl(persistentLocalOnly: true);
       final request = ctrl.buildRequestMessagesForTesting();
-      expect(request.last.role, 'system');
-      expect(request.last.content, contains('不得调用在线搜索'));
-      expect(request.last.content, contains('不需要询问用户是否联网'));
+      expect(ctrl.effectiveLocalOnly, isTrue);
+      expect(request.length, 1);
+      expect(request.single.role, 'system');
+      expect(request.single.content, isNot(contains('本轮范围限定')));
     });
 
-    test('_buildRequestMessages 在仅在线（已选来源）时合并为单条 system 指令', () {
+    test('仅在线来源状态不再作为动态 system 插入全部历史之前', () {
       final ctrl = buildCtrl(persistentAllowedSearchSources: ['jm']);
       final request = ctrl.buildRequestMessagesForTesting();
-      final scopeMessages =
-          request.where((m) => m.content?.contains('本轮范围限定') ?? false).toList();
-      // 只应有一条范围相关 system 消息，不与来源限制消息重复啰嗦
-      expect(scopeMessages.length, 1);
-      expect(scopeMessages.single.content, contains('不需要先查本地库'));
-      expect(scopeMessages.single.content, contains('#搜jm'));
+      expect(ctrl.effectiveOnlineOnly, isTrue);
+      expect(request.length, 1);
+      expect(request.single.content, isNot(contains('本轮范围限定')));
     });
 
-    test('47号：单一来源时不附加"分别调用"提示，措辞与旧版一致', () {
+    test('47号：单一来源仍保留来源限制状态', () {
       final ctrl = buildCtrl(persistentAllowedSearchSources: ['jm']);
-      final request = ctrl.buildRequestMessagesForTesting();
-      final scopeMessages =
-          request.where((m) => m.content?.contains('本轮范围限定') ?? false).toList();
-      expect(scopeMessages.length, 1);
-      expect(scopeMessages.single.content, isNot(contains('分别调用')));
+      expect(ctrl.effectiveAllowedSearchSources, {'jm'});
+      expect(ctrl.effectiveOnlineOnly, isTrue);
     });
 
-    test('47号：多来源（≥2个）时附加"分别调用 search_online"的说明，不再暗示需询问用户', () {
-      final ctrl =
-          buildCtrl(persistentAllowedSearchSources: ['jm', 'picacg']);
-      final request = ctrl.buildRequestMessagesForTesting();
-      final scopeMessages =
-          request.where((m) => m.content?.contains('本轮范围限定') ?? false).toList();
-      expect(scopeMessages.length, 1);
-      final content = scopeMessages.single.content!;
-      expect(content, contains('#搜jm'));
-      expect(content, contains('#搜pica'));
-      expect(content, contains('分别调用一次 search_online'));
-      expect(content, contains('不需要询问用户具体选哪一个'));
-      expect(content, contains('取得各来源结果后自行合并'));
+    test('47号：多来源状态保持有序', () {
+      final ctrl = buildCtrl(persistentAllowedSearchSources: ['jm', 'picacg']);
+      expect(ctrl.effectiveAllowedSearchSources, {'jm', 'picacg'});
+      expect(ctrl.effectiveOnlineOnly, isTrue);
     });
 
-    test('同时选中仅本地与来源标签时，system 指令以仅本地措辞为准', () {
+    test('同时选中仅本地与来源标签时，工具范围仍以仅本地为准', () {
       final ctrl = buildCtrl(
         persistentLocalOnly: true,
         persistentAllowedSearchSources: ['jm'],
       );
-      final request = ctrl.buildRequestMessagesForTesting();
-      final scopeMessages =
-          request.where((m) => m.content?.contains('本轮范围限定') ?? false).toList();
-      expect(scopeMessages.length, 1);
-      expect(scopeMessages.single.content, contains('仅查本地设备库'));
+      expect(ctrl.effectiveLocalOnly, isTrue);
+      expect(ctrl.effectiveOnlineOnly, isFalse);
     });
   });
 }

@@ -47,7 +47,13 @@ void main() {
         'history': <dynamic>[],
         'version': 2,
       },
-      chatRequestForTesting: (messages, {tools}) async {
+      chatRequestForTesting: (
+        messages, {
+        tools,
+        conversationHash,
+        turn,
+        round,
+      }) async {
         callCount++;
         if (callCount == 1) {
           return const LlmResponse(
