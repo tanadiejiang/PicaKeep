@@ -35,6 +35,79 @@ void main() {
     expect(ctrl.titleIsCustomForTesting, isTrue);
   });
 
+  test('脚本化 LLM 回合会看到 retryable 工具失败并按修正参数重试', () async {
+    var callCount = 0;
+    var sawRetryableFailure = false;
+    final ctrl = AiConversationController.restoreForTesting(
+      {
+        'id': 'id-scripted-display-list-retry',
+        'title': '新会话',
+        'createdAt': '2026-07-10T00:00:00.000Z',
+        'displayMessages': <dynamic>[],
+        'history': <dynamic>[],
+        'version': 2,
+      },
+      chatRequestForTesting: (messages, {tools}) async {
+        callCount++;
+        if (callCount == 1) {
+          return const LlmResponse(
+            toolCalls: [
+              LlmToolCall(
+                id: 'script-invalid',
+                name: 'display_result_list',
+                arguments: {
+                  'items': [
+                    {'id': 'missing-title'},
+                  ],
+                },
+              ),
+            ],
+          );
+        }
+        if (callCount == 2) {
+          sawRetryableFailure = messages.any(
+            (message) =>
+                message.role == 'tool' &&
+                message.content?.contains('"retryable":true') == true,
+          );
+          return const LlmResponse(
+            toolCalls: [
+              LlmToolCall(
+                id: 'script-fixed',
+                name: 'display_result_list',
+                arguments: {
+                  'items': [
+                    {
+                      'id': 'fixed-id',
+                      'title': '修正结果',
+                      'source': 'nhentai',
+                      'availability': '7页，汉化',
+                    },
+                  ],
+                },
+              ),
+            ],
+          );
+        }
+        return const LlmResponse(content: '清单已展示');
+      },
+    );
+
+    await ctrl.runLlmLoopForTesting();
+
+    expect(callCount, 3);
+    expect(sawRetryableFailure, isTrue);
+    expect(
+      ctrl.displayMessages
+          .where((message) => message.type == AiChatMessageType.resultList),
+      hasLength(1),
+    );
+    expect(
+      ctrl.historyForTesting().where((message) => message.role == 'tool'),
+      hasLength(2),
+    );
+  });
+
   test('restoreForTesting 缺失 titleIsCustom 字段时默认 false（旧数据兼容）', () {
     final ctrl = AiConversationController.restoreForTesting({
       'id': 'id-default',
@@ -100,8 +173,7 @@ void main() {
       'history': <dynamic>[],
       'version': 2,
     });
-    autoCtrl.displayMessages
-        .add(AiChatMessage.user('自动派生标题的第一条用户消息内容很长很长'));
+    autoCtrl.displayMessages.add(AiChatMessage.user('自动派生标题的第一条用户消息内容很长很长'));
     await autoCtrl.saveForTesting();
 
     final autoData =
@@ -133,8 +205,7 @@ void main() {
     expect(userMessage.promptTagNames, containsAll(['搜jm', '搜pica']));
   });
 
-  test(
-      '47号：localOnly:true 且不在正文打字时，promptTagNames 包含 aiLocalOnlyScopeTagName',
+  test('47号：localOnly:true 且不在正文打字时，promptTagNames 包含 aiLocalOnlyScopeTagName',
       () async {
     final ctrl = AiConversationController.restoreForTesting({
       'id': 'id-scope-local-only-tag',
@@ -253,8 +324,7 @@ void main() {
     expect(userMessage.promptTagNames, isEmpty);
   });
 
-  test('重命名一个未打开的历史会话：直接操作 AiConversationStore，不依赖任何 controller 实例',
-      () async {
+  test('重命名一个未打开的历史会话：直接操作 AiConversationStore，不依赖任何 controller 实例', () async {
     const id = 'history-conv-untouched';
     await AiConversationStore.save(
       id: id,
@@ -521,8 +591,7 @@ void main() {
       expect(assistantHistory.single.content, '正常内容');
     });
 
-    test('content 为空但存在待展示的工具结果（清单卡）时：不追加轻量提示气泡，只展示清单卡',
-        () async {
+    test('content 为空但存在待展示的工具结果（清单卡）时：不追加轻量提示气泡，只展示清单卡', () async {
       final ctrl = AiConversationController.restoreForTesting({
         'id': 'id-empty-content-with-pending-items',
         'title': '新会话',
@@ -540,7 +609,7 @@ void main() {
           name: 'display_result_list',
           arguments: {
             'items': [
-              {'title': '结果一'},
+              {'id': 'result-1', 'title': '结果一'},
             ],
           },
         ),
@@ -559,6 +628,75 @@ void main() {
           .where((m) => m.type == AiChatMessageType.resultList)
           .toList();
       expect(resultListMessages.length, 1);
+    });
+
+    test('清单工具失败交回模型后，修正调用只生成一次清单且不保留脏数据', () async {
+      final ctrl = AiConversationController.restoreForTesting({
+        'id': 'id-display-list-retry',
+        'title': '新会话',
+        'createdAt': '2026-07-10T00:00:00.000Z',
+        'displayMessages': <dynamic>[],
+        'history': <dynamic>[],
+        'version': 2,
+      });
+
+      await ctrl.simulateToolCallRoundForTesting(
+        [
+          const LlmToolCall(
+            id: 'call-invalid-list',
+            name: 'display_result_list',
+            arguments: {
+              'items': [
+                {'id': 'only-id'},
+              ],
+            },
+          ),
+        ],
+        continueWithLlm: false,
+      );
+      expect(
+        ctrl.displayMessages
+            .where((message) => message.type == AiChatMessageType.resultList),
+        isEmpty,
+      );
+      final firstFailure = ctrl.displayMessages.firstWhere(
+          (message) => message.type == AiChatMessageType.toolResult);
+      expect(firstFailure.text, contains('校验失败'));
+      expect((firstFailure.toolData as Map)['retryable'], isTrue);
+
+      await ctrl.simulateToolCallRoundForTesting(
+        [
+          const LlmToolCall(
+            id: 'call-fixed-list',
+            name: 'display_result_list',
+            arguments: {
+              'items': [
+                {
+                  'id': 'fixed-id',
+                  'title': '修正后的结果',
+                  'source': 'nhentai',
+                  'availability': '7页，汉化',
+                },
+              ],
+            },
+          ),
+        ],
+        continueWithLlm: false,
+      );
+      ctrl.simulateFinalTextResponseForTesting(null);
+
+      final resultLists = ctrl.displayMessages
+          .where((message) => message.type == AiChatMessageType.resultList)
+          .toList();
+      expect(resultLists, hasLength(1));
+      expect(
+        (resultLists.single.toolData as Map)['items'],
+        hasLength(1),
+      );
+      expect(
+        ctrl.historyForTesting().where((message) => message.role == 'tool'),
+        hasLength(2),
+      );
     });
   });
 }

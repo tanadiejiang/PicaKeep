@@ -6,10 +6,16 @@ import 'package:picakeep/base.dart';
 import 'package:picakeep/foundation/ai/ai_capabilities.dart';
 import 'package:picakeep/foundation/ai/ai_conversation_store.dart';
 import 'package:picakeep/foundation/ai/ai_prompt_tags.dart';
+import 'package:picakeep/foundation/ai/ai_result_item.dart';
 import 'package:picakeep/foundation/ai/ai_settings.dart';
 import 'package:picakeep/foundation/ai/ai_sources.dart';
 import 'package:picakeep/foundation/ai/ai_tool.dart';
 import 'package:picakeep/foundation/ai/llm_client.dart';
+
+typedef AiChatRequestForTesting = Future<LlmResponse> Function(
+  List<LlmMessage> messages, {
+  List<Map<String, Object?>>? tools,
+});
 
 /// AI 聊天消息类型
 enum AiChatMessageType {
@@ -363,6 +369,7 @@ class AiConversationController extends ChangeNotifier {
   /// 取消本地限定直接把该字段置回 `null`。
   bool? _persistentLocalOnly;
   _ActiveTurnContext? _activeTurnContext;
+  final AiChatRequestForTesting? _chatRequestForTesting;
 
   int get _effectiveMaxRounds {
     final raw = appdata.settings[aiMaxToolRoundsSettingIndex];
@@ -370,7 +377,9 @@ class AiConversationController extends ChangeNotifier {
     return n <= 0 ? 999 : n;
   }
 
-  AiConversationController._internal();
+  AiConversationController._internal({
+    AiChatRequestForTesting? chatRequestForTesting,
+  }) : _chatRequestForTesting = chatRequestForTesting;
 
   List<AiPromptTag> get persistentPromptTags =>
       List<AiPromptTag>.unmodifiable(_persistentPromptTags);
@@ -427,8 +436,11 @@ class AiConversationController extends ChangeNotifier {
   static AiConversationController restoreForTesting(
     Map<String, dynamic> data, {
     String fallbackId = 'test-conversation',
+    AiChatRequestForTesting? chatRequestForTesting,
   }) {
-    final ctrl = AiConversationController._internal();
+    final ctrl = AiConversationController._internal(
+      chatRequestForTesting: chatRequestForTesting,
+    );
     ctrl._restoreStoredConversation(data, fallbackId: fallbackId);
     return ctrl;
   }
@@ -722,6 +734,7 @@ class AiConversationController extends ChangeNotifier {
     isLoading = true;
     error = null;
     _currentRound = 0;
+    _pendingDisplayItems = null;
     notifyListeners();
 
     try {
@@ -831,8 +844,10 @@ $lines''';
     }
 
     final tools = _getEnabledToolSchemas();
-    final response =
-        await LlmClient.chat(_buildRequestMessages(), tools: tools);
+    final requestMessages = _buildRequestMessages();
+    final response = _chatRequestForTesting == null
+        ? await LlmClient.chat(requestMessages, tools: tools)
+        : await _chatRequestForTesting(requestMessages, tools: tools);
 
     if (response.hasError) {
       displayMessages.add(AiChatMessage.error(response.error!));
@@ -881,6 +896,12 @@ $lines''';
     _handleFinalTextResponse(content);
   }
 
+  /// Runs the real tool loop with an injected scripted chat function.
+  /// Production code never supplies the callback, so it continues to use the
+  /// static LLM client; tests can verify failure -> model retry -> success.
+  @visibleForTesting
+  Future<void> runLlmLoopForTesting() => _runLoop().then((_) {});
+
   /// 处理一轮 LLM 回复里的全部 tool_call（不含往 `_history` 追加那条 assistant
   /// tool_calls 消息本身——调用方负责，见 [_runLoop] 与
   /// [processToolCallsForTesting]）。
@@ -893,8 +914,9 @@ $lines''';
   /// 要暂停：只要队列非空就必须暂停等待确认，不能带着未回填的 tool_calls
   /// 继续请求下一轮。
   Future<_RunLoopOutcome> _processToolCalls(
-    List<LlmToolCall> toolCalls,
-  ) async {
+    List<LlmToolCall> toolCalls, {
+    bool continueWithLlm = true,
+  }) async {
     for (final toolCall in toolCalls) {
       final toolName = toolCall.name;
       final toolArgs = toolCall.arguments;
@@ -941,7 +963,10 @@ $lines''';
       return _RunLoopOutcome.waitingForDownloadConfirmation;
     }
 
-    return _runLoop();
+    if (continueWithLlm) {
+      return _runLoop();
+    }
+    return _RunLoopOutcome.finished;
   }
 
   /// 测试用：绕过真实网络请求，直接模拟"LLM 一轮回复带有这些 tool_calls"，
@@ -950,11 +975,15 @@ $lines''';
   /// download_comic"场景下不会产生孤儿 tool_call。
   @visibleForTesting
   Future<void> simulateToolCallRoundForTesting(
-    List<LlmToolCall> toolCalls,
-  ) async {
+    List<LlmToolCall> toolCalls, {
+    bool continueWithLlm = true,
+  }) async {
     _currentRound++;
     _history.add(LlmMessage.assistant(toolCalls: toolCalls));
-    final outcome = await _processToolCalls(toolCalls);
+    final outcome = await _processToolCalls(
+      toolCalls,
+      continueWithLlm: continueWithLlm,
+    );
     if (outcome == _RunLoopOutcome.waitingForDownloadConfirmation) {
       notifyListeners();
     }
@@ -963,7 +992,8 @@ $lines''';
   /// 测试用：直接读取内部 LLM 历史（只读快照），用于断言每个 tool_call_id
   /// 是否都有且仅有一条对应的 `tool` 消息（46号计划核心不变式）。
   @visibleForTesting
-  List<LlmMessage> historyForTesting() => List<LlmMessage>.unmodifiable(_history);
+  List<LlmMessage> historyForTesting() =>
+      List<LlmMessage>.unmodifiable(_history);
 
   void _appendToolResult(
     String toolCallId,
@@ -985,12 +1015,11 @@ $lines''';
         message: result.message,
       ),
     );
-    if (toolName == 'display_result_list' && result.ok && result.data is Map) {
-      final rawItems = (result.data as Map)['items'];
-      if (rawItems is List) {
-        _pendingDisplayItems =
-            rawItems.whereType<Map<String, dynamic>>().toList();
-      }
+    if (toolName == 'display_result_list' && result.ok) {
+      final report = AiResultItem.decodeToolData(result.data);
+      _pendingDisplayItems = report.items.isEmpty
+          ? null
+          : report.items.map((item) => item.toJson()).toList(growable: false);
     }
     notifyListeners();
   }
@@ -1171,7 +1200,8 @@ class AiConversationRegistry extends ChangeNotifier {
   /// 前后值，变化时更新 [_loadingIds] 并广播。同一个 conversationId 只挂
   /// 一次；`conversationId` 为 null（新建会话尚未落盘出 id 前）的场景不适用
   /// 本方法，由调用方保证只在 id 非空时调用。
-  void _attachLoadingListener(String conversationId, AiConversationController ctrl) {
+  void _attachLoadingListener(
+      String conversationId, AiConversationController ctrl) {
     if (_loadingListeners.containsKey(conversationId)) return;
     var lastLoading = ctrl.isLoading;
     if (lastLoading) {
@@ -1188,6 +1218,7 @@ class AiConversationRegistry extends ChangeNotifier {
       }
       notifyListeners();
     }
+
     ctrl.addListener(listener);
     _loadingListeners[conversationId] = listener;
   }
@@ -1233,7 +1264,8 @@ class AiConversationRegistry extends ChangeNotifier {
     return ctrl;
   }
 
-  Future<AiConversationController> _createAndCache(String conversationId) async {
+  Future<AiConversationController> _createAndCache(
+      String conversationId) async {
     final ctrl = await AiConversationController.create(loadId: conversationId);
     final id = ctrl.conversationId;
     if (id != null) {

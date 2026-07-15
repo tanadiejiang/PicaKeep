@@ -70,4 +70,102 @@ void main() {
       expect(item.source, 'picacg');
     });
   });
+
+  test('非规范字段按条目隔离并生成稳定规范形状', () {
+    final report = AiResultItem.decodeToolData({
+      'items': [
+        {
+          'id': 123,
+          'title': '数字 ID',
+          'author': ['甲', '乙'],
+          'coverUrl': null,
+          'source': 'eh',
+          'tags': '单个标签',
+          'availability': '7页，汉化',
+        },
+        {
+          'id': '2',
+          'title': 'Map 标签',
+          'tags': {
+            'artist': ['a', 'b'],
+            'language': ['ja'],
+          },
+          'availability': ['已收藏', 2],
+          'source': 'unknown-source',
+        },
+        {'id': '', 'title': '不可展示'},
+      ],
+    });
+
+    expect(report.inputCount, 3);
+    expect(report.items.length, 3);
+    expect(report.discardedCount, 0);
+    expect(report.items[0].id, '123');
+    expect(report.items[0].author, '甲 / 乙');
+    expect(report.items[0].tags, ['单个标签']);
+    expect(report.items[0].availability, {'summary': '7页，汉化'});
+    expect(report.items[0].source, 'ehentai');
+    expect(report.items[1].tags, ['artist: a', 'artist: b', 'language: ja']);
+    expect(report.items[1].availability, {
+      'states': ['已收藏', '2'],
+    });
+    expect(report.items[1].source, '');
+    expect(report.normalizedFields['availability'], 2);
+
+    final json = report.items.first.toJson();
+    expect(
+        json.keys,
+        containsAll(<String>[
+          'id',
+          'title',
+          'author',
+          'coverUrl',
+          'source',
+          'tags',
+          'availability'
+        ]));
+    expect(AiResultItem.fromJson(json).availability, {'summary': '7页，汉化'});
+  });
+
+  test('12 条字符串 availability fixture 全部可恢复', () {
+    final fixture = List<Map<String, dynamic>>.generate(12, (index) {
+      final isEhentai = index < 2;
+      return {
+        'id': isEhentai ? 'https://e-hentai.org/g/$index/hash' : '$index',
+        'title': '脱敏标题 $index',
+        'author': '作者 $index',
+        'coverUrl': 'https://example.invalid/$index.jpg',
+        'source': isEhentai ? 'ehentai' : 'nhentai',
+        'tags': <String>['fixture'],
+        'availability': '7页，汉化',
+      };
+    });
+
+    final report = AiResultItem.decodeToolData({'items': fixture});
+    expect(report.items, hasLength(12));
+    expect(report.discardedCount, 0);
+    expect(
+        report.items.every((item) => item.availability['summary'] == '7页，汉化'),
+        isTrue);
+  });
+
+  test('顶层异常返回脱敏问题而不是抛出', () {
+    final report = AiResultItem.decodeToolData({'items': 'not-an-array'});
+    expect(report.isValid, isFalse);
+    expect(report.topLevelIssue?.field, 'items');
+    expect(report.topLevelIssue?.actualType, 'string');
+  });
+
+  test('宽松历史解码保留只有 id 或 title 的部分可读条目', () {
+    final report = AiResultItem.decodeToolData({
+      'items': [
+        {'id': 'id-only'},
+        {'title': 'title-only'},
+        {},
+      ],
+    });
+    expect(report.items, hasLength(2));
+    expect(report.discardedCount, 1);
+    expect(report.issues, hasLength(4));
+  });
 }
