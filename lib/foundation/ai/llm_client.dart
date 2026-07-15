@@ -1,10 +1,35 @@
 import 'dart:convert';
 
+import 'package:crypto/crypto.dart';
 import 'package:dio/dio.dart';
 import 'package:picakeep/base.dart';
 import 'package:picakeep/foundation/ai/ai_settings.dart';
 import 'package:picakeep/foundation/log.dart';
 import 'package:picakeep/network/app_dio.dart';
+
+/// Canonical JSON used by local cache-shape diagnostics.
+///
+/// Map keys are sorted recursively while list order is preserved. The result
+/// is a diagnostic fingerprint only; it is not an authentication primitive.
+String aiDiagnosticSha256(Object? value) {
+  final digest = sha256.convert(utf8.encode(_canonicalJson(value))).toString();
+  return digest.substring(0, 16);
+}
+
+String _canonicalJson(Object? value) {
+  if (value is Map) {
+    final keys = value.keys.map((key) => key.toString()).toSet().toList()
+      ..sort();
+    return '{${keys.map((key) => '${jsonEncode(key)}:${_canonicalJson(value[key])}').join(',')}}';
+  }
+  if (value is Iterable) {
+    return '[${value.map(_canonicalJson).join(',')}]';
+  }
+  if (value == null || value is String || value is num || value is bool) {
+    return jsonEncode(value);
+  }
+  return jsonEncode(value.toString());
+}
 
 /// LLM 消息（OpenAI 格式）
 class LlmMessage {
@@ -50,8 +75,7 @@ class LlmMessage {
     final json = <String, dynamic>{'role': role};
     if (content != null) json['content'] = content;
     if (toolCalls != null && toolCalls!.isNotEmpty) {
-      json['tool_calls'] =
-          toolCalls!.map((tc) => tc.toJson()).toList();
+      json['tool_calls'] = toolCalls!.map((tc) => tc.toJson()).toList();
     }
     if (toolCallId != null) json['tool_call_id'] = toolCallId;
     if (name != null) json['name'] = name;
@@ -176,6 +200,9 @@ class LlmClient {
   static Future<LlmResponse> chat(
     List<LlmMessage> messages, {
     List<Map<String, Object?>>? tools,
+    String? conversationHash,
+    int? turn,
+    int? round,
   }) async {
     final template = appdata.settings[aiProviderTemplateSettingIndex];
     var baseUrl = appdata.settings[aiBaseUrlSettingIndex].trim();
@@ -276,7 +303,17 @@ class LlmClient {
 
       final usageJson = data['usage'] as Map<String, dynamic>?;
       final usage = usageJson == null ? null : LlmUsage.fromJson(usageJson);
-      if (usage != null) _logUsage(modelId, usage, messages);
+      if (usage != null) {
+        _logUsage(
+          modelId,
+          usage,
+          messages,
+          tools: tools,
+          conversationHash: conversationHash,
+          turn: turn,
+          round: round,
+        );
+      }
 
       if (toolCallsJson != null && toolCallsJson.isNotEmpty) {
         final toolCalls = toolCallsJson
@@ -309,20 +346,32 @@ class LlmClient {
   static void _logUsage(
     String modelId,
     LlmUsage usage,
-    List<LlmMessage> messages,
-  ) {
+    List<LlmMessage> messages, {
+    List<Map<String, Object?>>? tools,
+    String? conversationHash,
+    int? turn,
+    int? round,
+  }) {
     final buffer = StringBuffer(
       'model=$modelId prompt=${usage.promptTokens} '
       'completion=${usage.completionTokens}',
     );
-    if (usage.hasCacheInfo) {
-      final rate = usage.cacheHitRatePercent?.toStringAsFixed(1) ?? '-';
-      buffer.write(
-        ' cacheHit=${usage.cacheHitTokens} cacheMiss=${usage.cacheMissTokens}'
-        ' hitRate=$rate%',
-      );
-    }
-    buffer.write(' ${_systemPrefixFingerprint(messages)}');
+    final rate = usage.cacheHitRatePercent?.toStringAsFixed(1) ?? '-';
+    buffer.write(
+      ' cacheHit=${usage.cacheHitTokens ?? '-'}'
+      ' cacheMiss=${usage.cacheMissTokens ?? '-'}'
+      ' hitRate=${rate == '-' ? '-' : '$rate%'}',
+    );
+    final messageJson = messages.map((message) => message.toJson()).toList();
+    buffer
+      ..write(' shapeV=2')
+      ..write(' conversation=${conversationHash ?? '-'}')
+      ..write(' turn=${turn ?? '-'} round=${round ?? '-'}')
+      ..write(' messageCount=${messages.length}')
+      ..write(' messagesHash=${aiDiagnosticSha256(messageJson)}')
+      ..write(' toolCount=${tools?.length ?? 0}')
+      ..write(' toolsHash=${aiDiagnosticSha256(tools ?? const [])}')
+      ..write(' ${_systemPrefixFingerprint(messages)}');
     LogManager.addLog(LogLevel.info, 'AiUsage', buffer.toString());
   }
 
@@ -339,8 +388,7 @@ class LlmClient {
         ..write(' ');
     }
     final chars = buffer.length;
-    // 仅需区分“变没变”，用内置 hashCode（同进程内稳定）即可，无需密码学强度。
-    final hash = buffer.toString().hashCode;
+    final hash = aiDiagnosticSha256(buffer.toString());
     return 'msgs=${messages.length} sysMsgs=$count sysChars=$chars '
         'sysHash=$hash';
   }

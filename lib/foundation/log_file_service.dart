@@ -7,6 +7,119 @@ import 'package:path_provider/path_provider.dart';
 import 'app.dart';
 import 'log.dart';
 
+/// Creates sanitized copies of values that may be written to or exported as logs.
+class LogCredentialRedactor {
+  LogCredentialRedactor._();
+
+  static const replacement = '<redacted>';
+
+  static const _credentialKeys = <String>{
+    'authorization',
+    'cookie',
+    'setcookie',
+    'xapikey',
+    'apikey',
+    'accesstoken',
+    'refreshtoken',
+    'password',
+    'passwd',
+    'pwd',
+    'passcode',
+    'passphrase',
+  };
+
+  static final _urlUserInfoPattern = RegExp(
+    r'(\b[a-z][a-z0-9+.-]*://)[^/\s?#@]+@',
+    caseSensitive: false,
+  );
+  static final _urlCredentialPattern = RegExp(
+    r'([?&](?:authorization|cookie|set[-_]?cookie|x[-_]?api[-_]?key|api[-_]?key|access[-_]?token|refresh[-_]?token|password|passwd|pwd|passcode|passphrase)=)[^&#\s]*',
+    caseSensitive: false,
+  );
+  static final _bearerPattern = RegExp(
+    r'\bBearer[ \t]+[a-z0-9._~+/=-]+',
+    caseSensitive: false,
+  );
+  static final _headerValuePattern = RegExp(
+    r'''(\b(?:authorization|cookie|set-cookie)\b["']?\s*[:=]\s*)(?:"[^"\r\n]*"|'[^'\r\n]*'|.*?)(?=,\s*["']?[a-z0-9_-]+["']?\s*:|[}\]\r\n]|$)''',
+    caseSensitive: false,
+  );
+  static final _fieldValuePattern = RegExp(
+    r'''(\b(?:x[-_]?api[-_]?key|api[-_]?key|access[-_]?token|refresh[-_]?token|password|passwd|pwd|passcode|passphrase)\b["']?\s*[:=]\s*)(?:"[^"\r\n]*"|'[^'\r\n]*'|[^,\s&}\]\r\n]+)''',
+    caseSensitive: false,
+  );
+
+  static bool _isCredentialKey(Object? key) {
+    if (key is! String) return false;
+    final normalized =
+        key.trim().toLowerCase().replaceAll('-', '').replaceAll('_', '');
+    return _credentialKeys.contains(normalized);
+  }
+
+  /// Recursively copies Map/List values so the value used by the request is
+  /// never changed while its log representation is sanitized.
+  static Object? redactCopy(Object? value) {
+    if (value is Uri) return redactUri(value);
+    if (value is String) return redactText(value);
+    if (value is List<int>) return List<int>.from(value);
+    if (value is List) {
+      return value.map<Object?>(redactCopy).toList(growable: false);
+    }
+    if (value is Map) {
+      return <Object?, Object?>{
+        for (final entry in value.entries)
+          entry.key: _isCredentialKey(entry.key)
+              ? replacement
+              : redactCopy(entry.value),
+      };
+    }
+    return value;
+  }
+
+  static Uri redactUri(Uri uri) {
+    final hasSensitiveUserInfo = uri.userInfo.isNotEmpty;
+    var hasSensitiveQuery = false;
+    final queryParameters = <String, List<String>>{};
+    for (final entry in uri.queryParametersAll.entries) {
+      if (_isCredentialKey(entry.key)) {
+        hasSensitiveQuery = true;
+        queryParameters[entry.key] = List<String>.filled(
+          entry.value.isEmpty ? 1 : entry.value.length,
+          replacement,
+        );
+      } else {
+        queryParameters[entry.key] = List<String>.from(entry.value);
+      }
+    }
+    if (!hasSensitiveUserInfo && !hasSensitiveQuery) return uri;
+    return uri.replace(
+      userInfo: hasSensitiveUserInfo ? replacement : null,
+      queryParameters: hasSensitiveQuery ? queryParameters : null,
+    );
+  }
+
+  static String redactText(String text) {
+    return text
+        .replaceAllMapped(
+          _urlUserInfoPattern,
+          (match) => '${match.group(1)}$replacement@',
+        )
+        .replaceAllMapped(
+          _urlCredentialPattern,
+          (match) => '${match.group(1)}$replacement',
+        )
+        .replaceAll(_bearerPattern, 'Bearer $replacement')
+        .replaceAllMapped(
+          _headerValuePattern,
+          (match) => '${match.group(1)}$replacement',
+        )
+        .replaceAllMapped(
+          _fieldValuePattern,
+          (match) => '${match.group(1)}$replacement',
+        );
+  }
+}
+
 /// 日志文件服务：每次启动创建独立日志文件，实时写入，管理历史。
 class LogFileService {
   LogFileService._();
@@ -16,6 +129,7 @@ class LogFileService {
 
   static const maxHistoryFiles = 30;
   static const flushInterval = Duration(seconds: 2);
+  static const _tempExportDirectoryName = 'picakeep_redacted_logs';
 
   Directory? _logDir;
   File? _currentFile;
@@ -67,52 +181,97 @@ class LogFileService {
     await flush();
     final file = _currentFile;
     if (file != null && await file.exists()) {
-      return file.readAsString();
+      return LogCredentialRedactor.redactText(await file.readAsString());
     }
     // fallback：从 LogManager 内存队列读取（逆序拼接）
     final lines = LogManager.logs.reversed.map((log) => log.toFileLine());
-    return lines.join('\n');
+    return LogCredentialRedactor.redactText(lines.join('\n'));
   }
 
-  /// 导出当前日志文件路径
-  Future<String?> exportCurrent() async {
-    await flush();
-    return _currentFile?.path;
+  /// 导出当前日志的临时脱敏副本路径。
+  Future<String?> exportCurrent({Directory? temporaryDirectory}) async {
+    try {
+      await flush();
+      final file = _currentFile;
+      if (file == null || !await file.exists()) return null;
+      return await _exportRedactedFile(
+        file,
+        temporaryDirectory: temporaryDirectory,
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// 导出历史日志的临时脱敏副本路径。
+  Future<String?> exportHistory(
+    String path, {
+    Directory? temporaryDirectory,
+  }) async {
+    try {
+      final file = File(path);
+      if (!await file.exists()) return null;
+      return await _exportRedactedFile(
+        file,
+        temporaryDirectory: temporaryDirectory,
+      );
+    } catch (_) {
+      return null;
+    }
   }
 
   /// 打包所有历史日志为 ZIP，返回临时 ZIP 路径
-  Future<String?> exportAllAsZip() async {
-    final dir = _logDir;
-    if (dir == null || !await dir.exists()) return null;
-
-    // 先记一条导出日志，再 flush，使这条记录也进入打包内容
-    writeLine('=== 打包导出所有日志 ===');
-    await flush();
-
-    final files = await _listLogFiles(dir);
-    if (files.isEmpty) return null;
-
-    final now = DateTime.now();
-    final temp = await getTemporaryDirectory();
-    await _cleanupTempZips(temp);
-
-    final zipName = 'picakeep_logs_${now.year}'
-        '${_pad(now.month)}${_pad(now.day)}_'
-        '${_pad(now.hour)}${_pad(now.minute)}${_pad(now.second)}.zip';
-    final zipPath = '${temp.path}${Platform.pathSeparator}$zipName';
-
-    final encoder = ZipFileEncoder();
-    encoder.create(zipPath);
+  Future<String?> exportAllAsZip({Directory? temporaryDirectory}) async {
+    String? zipPath;
+    Directory? redactedDir;
     try {
+      final dir = _logDir;
+      if (dir == null || !await dir.exists()) return null;
+
+      // 先记一条导出日志，再 flush，使这条记录也进入打包内容
+      writeLine('=== 打包导出所有日志 ===');
+      await flush();
+
+      final files = await _listLogFiles(dir);
+      if (files.isEmpty) return null;
+
+      final now = DateTime.now();
+      final temp = temporaryDirectory ?? await getTemporaryDirectory();
+      redactedDir = await _prepareTempExportDirectory(temp);
+      final redactedFiles = <File>[];
       for (final file in files) {
-        // 必须用同步版本：addFile 是异步的，不 await 会在写入完成前
-        // 就 close，导致打出空压缩包。
-        encoder.addFileSync(file, _fileName(file.path));
+        final redacted = await _writeRedactedCopy(file, redactedDir);
+        if (redacted == null) throw StateError('日志脱敏副本生成失败');
+        redactedFiles.add(redacted);
       }
+
+      final zipName = 'picakeep_logs_${now.year}'
+          '${_pad(now.month)}${_pad(now.day)}_'
+          '${_pad(now.hour)}${_pad(now.minute)}${_pad(now.second)}.zip';
+      zipPath = '${temp.path}${Platform.pathSeparator}$zipName';
+
+      final encoder = ZipFileEncoder();
+      encoder.create(zipPath);
+      try {
+        for (final file in redactedFiles) {
+          // 必须用同步版本：addFile 是异步的，不 await 会在写入完成前
+          // 就 close，导致打出空压缩包。
+          encoder.addFileSync(file, _fileName(file.path));
+        }
+      } finally {
+        encoder.closeSync();
+      }
+      return zipPath;
+    } catch (_) {
+      if (zipPath != null) {
+        await File(zipPath).delete().catchError((_) => File(zipPath!));
+      }
+      return null;
     } finally {
-      encoder.closeSync();
+      await redactedDir
+          ?.delete(recursive: true)
+          .catchError((_) => redactedDir!);
     }
-    return zipPath;
   }
 
   /// 列出历史日志文件信息
@@ -155,7 +314,8 @@ class LogFileService {
     if (dir == null) return;
 
     final files = await _listLogFiles(dir);
-    files.sort((a, b) => b.statSync().modified.compareTo(a.statSync().modified));
+    files
+        .sort((a, b) => b.statSync().modified.compareTo(a.statSync().modified));
 
     for (final file in files.skip(maxHistoryFiles - 1)) {
       await file.delete();
@@ -172,7 +332,42 @@ class LogFileService {
     ];
   }
 
-  Future<void> _cleanupTempZips(Directory temp) async {
+  Future<String?> _exportRedactedFile(
+    File source, {
+    Directory? temporaryDirectory,
+  }) async {
+    final temp = temporaryDirectory ?? await getTemporaryDirectory();
+    final exportDir = await _prepareTempExportDirectory(temp);
+    final copy = await _writeRedactedCopy(source, exportDir);
+    return copy?.path;
+  }
+
+  Future<Directory> _prepareTempExportDirectory(Directory temp) async {
+    await _cleanupTempExports(temp);
+    final exportDir = Directory(
+      '${temp.path}${Platform.pathSeparator}$_tempExportDirectoryName',
+    );
+    await exportDir.create(recursive: true);
+    return exportDir;
+  }
+
+  Future<File?> _writeRedactedCopy(File source, Directory exportDir) async {
+    try {
+      final text = await source.readAsString();
+      final target = File(
+        '${exportDir.path}${Platform.pathSeparator}${_fileName(source.path)}',
+      );
+      await target.writeAsString(
+        LogCredentialRedactor.redactText(text),
+        flush: true,
+      );
+      return target;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> _cleanupTempExports(Directory temp) async {
     try {
       final entries = await temp.list().toList();
       for (final entity in entries) {
@@ -180,6 +375,9 @@ class LogFileService {
             entity.path.contains('picakeep_logs_') &&
             entity.path.endsWith('.zip')) {
           await entity.delete().catchError((_) => entity);
+        } else if (entity is Directory &&
+            _fileName(entity.path) == _tempExportDirectoryName) {
+          await entity.delete(recursive: true).catchError((_) => entity);
         }
       }
     } catch (_) {

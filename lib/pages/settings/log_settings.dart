@@ -9,49 +9,61 @@ class LogSetting extends StatefulWidget {
 
 class _LogSettingState extends State<LogSetting> {
   Future<void> _exportLogs() async {
-    final path = await LogFileService.instance.exportCurrent();
-    if (path == null) {
-      if (mounted) _showSettingMessage(context, '当前日志文件不存在'.tl);
-      return;
-    }
+    try {
+      final path = await LogFileService.instance.exportCurrent();
+      if (path == null) {
+        if (mounted) _showSettingMessage(context, '日志导出失败'.tl);
+        return;
+      }
 
-    if (App.isDesktop) {
-      final location = await getSaveLocation(
-        suggestedName: path.split(Platform.pathSeparator).last,
-      );
-      if (location == null) return;
-      await XFile(path).saveTo(location.path);
-      if (mounted) _showSettingMessage(context, '日志已导出'.tl);
-      return;
-    }
+      if (App.isDesktop) {
+        final location = await getSaveLocation(
+          suggestedName: path.split(Platform.pathSeparator).last,
+        );
+        if (location == null) return;
+        await XFile(path).saveTo(location.path);
+        if (mounted) _showSettingMessage(context, '日志已导出'.tl);
+        return;
+      }
 
-    await Share.shareXFiles([XFile(path)], text: 'PicaKeep Log');
+      await Share.shareXFiles([XFile(path)], text: 'PicaKeep Log');
+    } catch (_) {
+      if (mounted) _showSettingMessage(context, '日志导出失败'.tl);
+    }
   }
 
   Future<void> _copyAll() async {
-    final text = await LogFileService.instance.copyAll();
-    await Clipboard.setData(ClipboardData(text: text));
-    if (mounted) _showSettingMessage(context, '已复制到剪贴板'.tl);
+    try {
+      final text = await LogFileService.instance.copyAll();
+      await Clipboard.setData(ClipboardData(text: text));
+      if (mounted) _showSettingMessage(context, '已复制到剪贴板'.tl);
+    } catch (_) {
+      if (mounted) _showSettingMessage(context, '复制日志失败'.tl);
+    }
   }
 
   Future<void> _exportAllAsZip() async {
-    final zipPath = await LogFileService.instance.exportAllAsZip();
-    if (zipPath == null) {
-      if (mounted) _showSettingMessage(context, '无可导出的日志'.tl);
-      return;
-    }
+    try {
+      final zipPath = await LogFileService.instance.exportAllAsZip();
+      if (zipPath == null) {
+        if (mounted) _showSettingMessage(context, '无可导出的日志'.tl);
+        return;
+      }
 
-    if (App.isDesktop) {
-      final location = await getSaveLocation(
-        suggestedName: zipPath.split(Platform.pathSeparator).last,
-      );
-      if (location == null) return;
-      await XFile(zipPath).saveTo(location.path);
-      if (mounted) _showSettingMessage(context, '日志已打包导出'.tl);
-      return;
-    }
+      if (App.isDesktop) {
+        final location = await getSaveLocation(
+          suggestedName: zipPath.split(Platform.pathSeparator).last,
+        );
+        if (location == null) return;
+        await XFile(zipPath).saveTo(location.path);
+        if (mounted) _showSettingMessage(context, '日志已打包导出'.tl);
+        return;
+      }
 
-    await Share.shareXFiles([XFile(zipPath)], text: 'PicaKeep Logs');
+      await Share.shareXFiles([XFile(zipPath)], text: 'PicaKeep Logs');
+    } catch (_) {
+      if (mounted) _showSettingMessage(context, '日志打包导出失败'.tl);
+    }
   }
 
   void _showHistory() {
@@ -294,7 +306,8 @@ class _LogHistorySheetState extends State<_LogHistorySheet> {
                 return ListTile(
                   leading: const Icon(Icons.description),
                   title: Text(file.name),
-                  subtitle: Text('${(file.sizeBytes / 1024).toStringAsFixed(1)} KB · ${_formatDate(file.modified)}'),
+                  subtitle: Text(
+                      '${(file.sizeBytes / 1024).toStringAsFixed(1)} KB · ${_formatDate(file.modified)}'),
                   onTap: () => Navigator.of(context).push(
                     MaterialPageRoute<void>(
                       builder: (_) => _LogFileViewerPage(file: file),
@@ -306,17 +319,15 @@ class _LogHistorySheetState extends State<_LogHistorySheet> {
                       IconButton(
                         tooltip: '分享'.tl,
                         onPressed: () async {
-                          await Share.shareXFiles(
-                            [XFile(file.path)],
-                            text: file.name,
-                          );
+                          await _shareHistoryLog(context, file);
                         },
                         icon: const Icon(Icons.share),
                       ),
                       IconButton(
                         tooltip: '删除'.tl,
                         onPressed: () async {
-                          await LogFileService.instance.deleteHistory(file.path);
+                          await LogFileService.instance
+                              .deleteHistory(file.path);
                           if (context.mounted) _reload();
                         },
                         icon: const Icon(Icons.delete_outline),
@@ -354,10 +365,7 @@ class _LogFileViewerPage extends StatelessWidget {
         actions: [
           IconButton(
             tooltip: '分享'.tl,
-            onPressed: () => Share.shareXFiles(
-              [XFile(file.path)],
-              text: file.name,
-            ),
+            onPressed: () => _shareHistoryLog(context, file),
             icon: const Icon(Icons.share),
           ),
         ],
@@ -379,5 +387,21 @@ class _LogFileViewerPage extends StatelessWidget {
         },
       ),
     );
+  }
+}
+
+Future<void> _shareHistoryLog(
+  BuildContext context,
+  LogFileInfo file,
+) async {
+  try {
+    final path = await LogFileService.instance.exportHistory(file.path);
+    if (path == null) {
+      if (context.mounted) _showSettingMessage(context, '日志分享失败'.tl);
+      return;
+    }
+    await Share.shareXFiles([XFile(path)], text: file.name);
+  } catch (_) {
+    if (context.mounted) _showSettingMessage(context, '日志分享失败'.tl);
   }
 }
