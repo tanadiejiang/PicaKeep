@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:picakeep/foundation/ai/ai_conversation.dart';
 import 'package:picakeep/foundation/ai/ai_conversation_store.dart';
+import 'package:picakeep/foundation/ai/ai_result_item.dart';
 import 'package:picakeep/foundation/app.dart';
 
 /// 34号计划：AiConversationStore.renameConversation() 单元测试。
@@ -11,8 +12,7 @@ void main() {
   late Directory tempDir;
 
   setUpAll(() {
-    tempDir =
-        Directory.systemTemp.createTempSync('ai_conversation_store_test');
+    tempDir = Directory.systemTemp.createTempSync('ai_conversation_store_test');
     App.dataPath = tempDir.path;
   });
 
@@ -62,8 +62,7 @@ void main() {
   test('renameConversation 保持 updatedAt 不变（重命名不算更新对话内容）', () async {
     final id = await createConversation();
     final beforeIndex = await AiConversationStore.loadIndex();
-    final beforeUpdatedAt =
-        beforeIndex.firstWhere((m) => m.id == id).updatedAt;
+    final beforeUpdatedAt = beforeIndex.firstWhere((m) => m.id == id).updatedAt;
 
     await AiConversationStore.renameConversation(id, '新标题2');
 
@@ -125,5 +124,38 @@ void main() {
     final onDisk = jsonDecode(await file.readAsString()) as Map;
     expect(onDisk['title'], '安全性验证标题');
     expect(onDisk['titleIsCustom'], true);
+  });
+
+  test('旧会话中的非规范 resultList toolData 序列化往返后仍可安全读取', () {
+    final rawItems = List<Map<String, dynamic>>.generate(
+      12,
+      (index) => {
+        'id': '$index',
+        'title': '脱敏标题 $index',
+        'source': index < 2 ? 'ehentai' : 'nhentai',
+        'availability': '7页，汉化',
+      },
+    );
+    final stored = AiConversationStore.serializeConversationForTesting(
+      id: 'legacy-result-list',
+      title: '旧会话',
+      createdAt: DateTime.utc(2026),
+      updatedAt: DateTime.utc(2026, 1, 2),
+      displayMessages: [
+        AiChatMessage(
+          type: AiChatMessageType.resultList,
+          text: '共 12 条结果',
+          toolData: {'items': rawItems},
+        ),
+      ],
+      history: const [],
+    );
+
+    final restored = AiConversationController.restoreForTesting(stored);
+    final report =
+        AiResultItem.decodeToolData(restored.displayMessages.single.toolData);
+    expect(report.items, hasLength(12));
+    expect(report.items.first.availability['summary'], '7页，汉化');
+    expect(restored.displayMessages.single.text, '共 12 条结果');
   });
 }

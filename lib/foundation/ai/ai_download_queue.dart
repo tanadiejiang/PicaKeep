@@ -62,7 +62,8 @@ class AiDownloadQueue extends ChangeNotifier {
             _logStartDownloadError(item, res.errorMessageWithoutNull);
             return false;
           }
-          final enq = await OnlineDownloadManager.instance.enqueuePicacg(res.data);
+          final enq =
+              await OnlineDownloadManager.instance.enqueuePicacg(res.data);
           if (enq.error) {
             _logStartDownloadError(item, enq.errorMessageWithoutNull);
             return false;
@@ -88,7 +89,8 @@ class AiDownloadQueue extends ChangeNotifier {
             _logStartDownloadError(item, res.errorMessageWithoutNull);
             return false;
           }
-          final enq = await OnlineDownloadManager.instance.enqueueEhentai(res.data);
+          final enq =
+              await OnlineDownloadManager.instance.enqueueEhentai(res.data);
           if (enq.error) {
             _logStartDownloadError(item, enq.errorMessageWithoutNull);
             return false;
@@ -103,7 +105,8 @@ class AiDownloadQueue extends ChangeNotifier {
             _logStartDownloadError(item, res.errorMessageWithoutNull);
             return false;
           }
-          final enq = await OnlineDownloadManager.instance.enqueueNhentai(res.data);
+          final enq =
+              await OnlineDownloadManager.instance.enqueueNhentai(res.data);
           if (enq.error) {
             _logStartDownloadError(item, enq.errorMessageWithoutNull);
             return false;
@@ -195,8 +198,7 @@ class AiDownloadQueue extends ChangeNotifier {
   Future<int> addItems(List<AiResultItem> newItems) async {
     final existingKeys = _items.map(_key).toSet();
     final valid = newItems.where((e) => isSupportedAiSource(e.source));
-    final toAdd =
-        valid.where((e) => !existingKeys.contains(_key(e))).toList();
+    final toAdd = valid.where((e) => !existingKeys.contains(_key(e))).toList();
     final skipped = newItems.length - toAdd.length;
     _items.addAll(toAdd);
     if (toAdd.isNotEmpty) {
@@ -242,7 +244,7 @@ class AiDownloadQueue extends ChangeNotifier {
 
   Future<void> _save() async {
     try {
-      final jsonList = _items.map(_itemToJson).toList();
+      final jsonList = _items.map((item) => item.toJson()).toList();
       final file = File(_file());
       await file.writeAsString(jsonEncode(jsonList));
     } catch (e) {
@@ -256,15 +258,4 @@ class AiDownloadQueue extends ChangeNotifier {
 
   /// 去重键：`source:id`。
   static String _key(AiResultItem item) => '${item.source}:${item.id}';
-
-  /// 序列化为 JSON（AiResultItem 暂无 toJson，在此补充）。
-  static Map<String, dynamic> _itemToJson(AiResultItem item) => {
-        'id': item.id,
-        'title': item.title,
-        'author': item.author,
-        'coverUrl': item.coverUrl,
-        'source': item.source,
-        'tags': item.tags,
-        'availability': item.availability,
-      };
 }

@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -96,5 +97,38 @@ void main() {
       await AiDownloadQueue.instance.removeAll([_item('jm', '999')]);
       expect(AiDownloadQueue.instance.items.length, 1);
     });
+  });
+
+  test('保存时复用 AiResultItem.toJson，文件形状保持七个规范字段', () async {
+    await AiDownloadQueue.instance.addItems([
+      const AiResultItem(
+        id: 'persisted-id',
+        title: '持久化条目',
+        author: '作者',
+        coverUrl: '',
+        source: 'nhentai',
+        tags: ['fixture'],
+        availability: {'remoteDownloaded': true},
+      ),
+    ]);
+
+    final file = File(
+      '${tempDir.path}${Platform.pathSeparator}ai_download_queue.json',
+    );
+    final stored = jsonDecode(await file.readAsString()) as List;
+    final item = stored.single as Map;
+    expect(
+        item.keys,
+        containsAll(<String>[
+          'id',
+          'title',
+          'author',
+          'coverUrl',
+          'source',
+          'tags',
+          'availability',
+        ]));
+    expect(item['id'], 'persisted-id');
+    expect(item['availability'], {'remoteDownloaded': true});
   });
 }

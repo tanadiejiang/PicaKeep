@@ -1002,7 +1002,8 @@ class _AiChatPageState extends State<AiChatPage>
                       heroTag: 'ai_download_queue_fab',
                       elevation: 2,
                       onPressed: () => Navigator.of(context).push(
-                        AppPageRoute(builder: (_) => const AiDownloadListPage()),
+                        AppPageRoute(
+                            builder: (_) => const AiDownloadListPage()),
                       ),
                       tooltip: 'AI 下载清单',
                       child: const Icon(Icons.download_outlined, size: 18),
@@ -1216,14 +1217,14 @@ class _MessageBubble extends StatelessWidget {
         );
 
       case AiChatMessageType.toolCall:
-        return _ToolCard(
+        return AiToolResultCard(
           toolName: message.toolName!,
           toolArgs: message.toolArgs,
           isResult: false,
         );
 
       case AiChatMessageType.toolResult:
-        return _ToolCard(
+        return AiToolResultCard(
           toolName: message.toolName!,
           resultText: message.text,
           resultData: message.toolData,
@@ -1253,7 +1254,7 @@ class _MessageBubble extends StatelessWidget {
         );
 
       case AiChatMessageType.resultList:
-        return _ResultListEntryCard(message: message);
+        return AiResultListEntryCard(message: message);
 
       default:
         return const SizedBox.shrink();
@@ -1311,7 +1312,7 @@ class _ToolGroupCardState extends State<_ToolGroupCard> {
                   key: ValueKey(msg.hashCode),
                   padding:
                       const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                  child: _ToolCard(
+                  child: AiToolResultCard(
                     toolName: msg.toolName ?? group.toolName,
                     toolArgs: msg.toolArgs,
                     resultText: msg.type == AiChatMessageType.toolResult
@@ -1331,8 +1332,9 @@ class _ToolGroupCardState extends State<_ToolGroupCard> {
 }
 
 /// 工具调用/结果卡片
-class _ToolCard extends StatefulWidget {
-  const _ToolCard({
+class AiToolResultCard extends StatefulWidget {
+  const AiToolResultCard({
+    super.key,
     required this.toolName,
     this.toolArgs,
     this.resultText,
@@ -1347,23 +1349,18 @@ class _ToolCard extends StatefulWidget {
   final bool isResult;
 
   @override
-  State<_ToolCard> createState() => _ToolCardState();
+  State<AiToolResultCard> createState() => _ToolCardState();
 }
 
-class _ToolCardState extends State<_ToolCard> {
+class _ToolCardState extends State<AiToolResultCard> {
   bool _expanded = false;
 
   bool _hasItems(Object? data) {
-    if (data is! Map) return false;
-    final items = data['items'];
-    return items is List && items.isNotEmpty;
+    return AiResultItem.decodeToolData(data).items.isNotEmpty;
   }
 
   int _itemCount(Object? data) {
-    if (data is! Map) return 0;
-    final items = data['items'];
-    if (items is! List) return 0;
-    return items.length;
+    return AiResultItem.decodeToolData(data).items.length;
   }
 
   @override
@@ -1411,11 +1408,8 @@ class _ToolCardState extends State<_ToolCard> {
                 alignment: Alignment.centerLeft,
                 child: TextButton.icon(
                   onPressed: () {
-                    final items = AiResultItem.fromToolData(
-                      widget.resultData is Map<String, dynamic>
-                          ? widget.resultData as Map<String, dynamic>
-                          : null,
-                    );
+                    final items =
+                        AiResultItem.decodeToolData(widget.resultData).items;
                     Navigator.push(
                       context,
                       MaterialPageRoute(
@@ -1475,28 +1469,49 @@ class _ToolCardState extends State<_ToolCard> {
 }
 
 /// 结果清单入口卡片
-class _ResultListEntryCard extends StatelessWidget {
-  const _ResultListEntryCard({required this.message});
+class AiResultListEntryCard extends StatelessWidget {
+  const AiResultListEntryCard({super.key, required this.message});
 
   final AiChatMessage message;
 
   @override
   Widget build(BuildContext context) {
-    final items = AiResultItem.fromToolData(message.toolData);
+    final report = AiResultItem.decodeToolData(message.toolData);
+    final items = report.items;
     if (items.isEmpty) {
       final colorScheme = Theme.of(context).colorScheme;
       return Card(
         margin: const EdgeInsets.symmetric(vertical: 4),
         color: colorScheme.secondaryContainer,
         child: ListTile(
-          leading: Icon(Icons.list_alt, color: colorScheme.onSecondaryContainer),
-          title: const Text('共 0 条结果，点击查看清单'),
-          trailing: const Icon(Icons.chevron_right),
+          leading:
+              Icon(Icons.list_alt, color: colorScheme.onSecondaryContainer),
+          title: const Text('清单结果暂不可读取'),
+          subtitle: const Text('没有可展示的结果'),
           onTap: null,
         ),
       );
     }
-    return _CompactResultCardRow(items: items);
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        _CompactResultCardRow(items: items),
+        if (report.discardedCount > 0)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 0, 12, 4),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                '${report.discardedCount} 条结果无法读取',
+                style: TextStyle(
+                  color: Theme.of(context).colorScheme.error,
+                  fontSize: 12,
+                ),
+              ),
+            ),
+          ),
+      ],
+    );
   }
 }
 
@@ -1583,7 +1598,8 @@ class _CompactResultCardRow extends StatelessWidget {
                       ),
                     ),
                   ),
-                  Icon(Icons.chevron_right, color: colorScheme.onPrimaryContainer),
+                  Icon(Icons.chevron_right,
+                      color: colorScheme.onPrimaryContainer),
                 ],
               ),
             ),
@@ -1651,7 +1667,6 @@ class _CompactResultCard extends StatelessWidget {
     );
   }
 }
-
 
 /// 下载确认卡片
 class _DownloadConfirmCard extends StatelessWidget {
@@ -1817,8 +1832,8 @@ class _ConversationDrawerState extends State<_ConversationDrawer> {
                   itemBuilder: (context, index) {
                     final meta = list[index];
                     final isCurrent = meta.id == widget.currentId;
-                    final isLoading =
-                        AiConversationRegistry.instance.loadingIds.contains(meta.id);
+                    final isLoading = AiConversationRegistry.instance.loadingIds
+                        .contains(meta.id);
                     return ListTile(
                       selected: isCurrent,
                       title: Text(
