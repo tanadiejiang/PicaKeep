@@ -2,6 +2,8 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:picakeep/base.dart';
+import 'package:picakeep/foundation/log.dart';
+import 'package:picakeep/network/remote_service_network_policy.dart';
 import 'package:picakeep/server/local_server_runtime.dart';
 
 import 'app_runtime_mode.dart';
@@ -89,6 +91,31 @@ class RuntimeServiceDataSourceResolver {
   }
 }
 
+HttpClient _createRemoteServiceClient({
+  Duration? connectionTimeout,
+  Duration? idleTimeout,
+  int? maxConnectionsPerHost,
+  bool forceDirect = false,
+}) {
+  return RemoteServiceNetworkPolicy.createClient(
+    manualProxy: appdata.settings[8],
+    connectionTimeout: connectionTimeout,
+    idleTimeout: idleTimeout,
+    maxConnectionsPerHost: maxConnectionsPerHost,
+    forceDirect: forceDirect,
+    onDecision: (decision, uri) {
+      final local = decision.hostKind == RemoteServiceHostKind.loopback ||
+          decision.hostKind == RemoteServiceHostKind.lan ||
+          decision.hostKind == RemoteServiceHostKind.linkLocal;
+      Log.info(
+        'RemoteNet',
+        '${local ? 'local-direct' : decision.source.name} '
+            '${uri.scheme}://${uri.host}',
+      );
+    },
+  );
+}
+
 class RemoteRuntimeServiceDataSource implements RuntimeServiceDataSource {
   @override
   Future<ServiceInfoSnapshot> fetchSnapshot() async {
@@ -138,8 +165,9 @@ class RemoteRuntimeServiceDataSource implements RuntimeServiceDataSource {
 
     final stopwatch = Stopwatch()..start();
     try {
-      final client = HttpClient()
-        ..connectionTimeout = const Duration(seconds: 3);
+      final client = _createRemoteServiceClient(
+        connectionTimeout: const Duration(seconds: 3),
+      );
       try {
         final request = await client.getUrl(statusUri).timeout(
               const Duration(seconds: 3),
@@ -390,9 +418,11 @@ class LocalNetworkServiceDiscovery {
         scannedSubnetCount: 0,
       );
     }
-    final client = HttpClient()
-      ..connectionTimeout = const Duration(milliseconds: 900)
-      ..maxConnectionsPerHost = 16;
+    final client = _createRemoteServiceClient(
+      connectionTimeout: const Duration(milliseconds: 900),
+      maxConnectionsPerHost: 16,
+      forceDirect: true,
+    );
     final candidatesByAddress = <String, ServiceDiscoveryCandidate>{};
     try {
       final results = await Future.wait([
@@ -474,9 +504,11 @@ class LocalNetworkServiceDiscovery {
       );
     }
 
-    final client = HttpClient()
-      ..connectionTimeout = const Duration(milliseconds: 450)
-      ..maxConnectionsPerHost = 64;
+    final client = _createRemoteServiceClient(
+      connectionTimeout: const Duration(milliseconds: 450),
+      maxConnectionsPerHost: 64,
+      forceDirect: true,
+    );
     final candidatesByAddress = <String, ServiceDiscoveryCandidate>{};
     var scannedHostCount = 0;
     try {

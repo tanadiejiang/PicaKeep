@@ -18,6 +18,7 @@ import 'foundation/log_file_service.dart';
 import 'foundation/ai/ai_download_queue.dart';
 import 'foundation/online_download_manager.dart';
 import 'foundation/remote_library_event_channel.dart';
+import 'foundation/remote_library_data_source.dart';
 import 'network/cookie_jar.dart';
 import 'network/jm_network/jm_network.dart';
 import 'pages/auth_page.dart';
@@ -312,6 +313,7 @@ class _PicaKeepAppState extends State<PicaKeepApp> with WidgetsBindingObserver {
     }
     App.serviceConfigVersion.removeListener(_handleServiceStateSyncRequest);
     App.serviceRuntimeVersion.removeListener(_handleServiceStateSyncRequest);
+    RemoteLibraryEventChannel.instance.stop();
     if (App.updater == _refreshApp) {
       App.updater = null;
     }
@@ -426,6 +428,7 @@ class _PicaKeepAppState extends State<PicaKeepApp> with WidgetsBindingObserver {
     }
 
     if (state == AppLifecycleState.resumed) {
+      RemoteLibraryClient.rebuildAllTransports();
       RemoteLibraryEventChannel.instance.onForeground();
       _scheduleDynamicColorRefresh();
       final backgroundDuration = _lastBackgroundedAt == null
@@ -555,7 +558,8 @@ class _PicaKeepAppState extends State<PicaKeepApp> with WidgetsBindingObserver {
             : _MobileSystemUiFrame(child: child);
         // 字号设置：屏蔽系统「字体大小/显示大小」差异，按 App 自身设定固定显示。
         // 选「跟随系统」时返回 null，保持系统 textScaler 不变。
-        final scale = resolveAppTextScale(appdata.settings[appTextScaleSettingIndex]);
+        final scale =
+            resolveAppTextScale(appdata.settings[appTextScaleSettingIndex]);
         if (scale == null) {
           return framedChild;
         }

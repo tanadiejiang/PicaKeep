@@ -2,8 +2,8 @@ part of 'settings_page.dart';
 
 /// 网络设置分组（位于「APP」与「下载」之间）。
 ///
-/// 目前承载代理地址设置 settings[8]：填写后 dio 与 WebView 都走该代理；
-/// 留空则自动跟随系统代理（dio 由 dart:io 处理，WebView 经原生 channel 读系统代理）。
+/// 目前承载代理地址设置 settings[8]：填写后在线源、WebView 和公网远程服务
+/// 使用该 HTTP 代理；局域网远程服务仍按策略直连。留空时各网络栈回退到自身环境规则。
 Widget buildNetworkSettings(double width, BuildContext context) {
   return buildTwoColumnLayout(width, [
     SettingsTitle('代理'.tl),
@@ -13,9 +13,7 @@ Widget buildNetworkSettings(double width, BuildContext context) {
 
 /// 代理地址设置项：读写 settings[8]（host:port，可空）。
 ///
-/// 背景：Android 系统 WebView 不会自动读取 dart:io 所用的系统代理，导致
-/// picacg/jm（走 dio）能联网、而 WebView 内被墙站点（如 e-hentai 登录页）卡在
-/// Cloudflare 验证。手填代理后 dio 与 WebView 都会用它；留空则各自回退系统代理。
+/// Android WebView 与 Dart 网络栈的环境代理来源不同；手填代理后两者都会使用它。
 class _ProxyAddressTile extends StatefulWidget {
   const _ProxyAddressTile();
 
@@ -26,6 +24,17 @@ class _ProxyAddressTile extends StatefulWidget {
 class _ProxyAddressTileState extends State<_ProxyAddressTile> {
   // 形如 host:port，host 不含空白与冒号，port 为数字。
   static final _proxyReg = RegExp(r'^[^:\s]+:\d+$');
+
+  Future<void> _saveProxy(String value) async {
+    final normalized = value.trim();
+    if (appdata.settings[8].trim() == normalized) {
+      return;
+    }
+    appdata.settings[8] = normalized;
+    await appdata.updateSettings();
+    RemoteLibraryClient.rebuildAllTransports();
+    App.notifyServiceConfigChanged();
+  }
 
   void _editProxy() {
     final ctrl = TextEditingController(text: appdata.settings[8]);
@@ -75,8 +84,7 @@ class _ProxyAddressTileState extends State<_ProxyAddressTile> {
       _showSettingMessage(context, '代理地址格式应为 host:port'.tl);
       return;
     }
-    appdata.settings[8] = val;
-    await appdata.updateSettings();
+    await _saveProxy(val);
     if (ctx.mounted) Navigator.of(ctx).pop();
     if (mounted) setState(() {});
   }
@@ -84,7 +92,7 @@ class _ProxyAddressTileState extends State<_ProxyAddressTile> {
   @override
   Widget build(BuildContext context) {
     final addr = appdata.settings[8].trim();
-    final display = addr.isEmpty ? '未设置（跟随系统代理）'.tl : addr;
+    final display = addr.isEmpty ? '未设置（按各网络栈规则）'.tl : addr;
     return ListTile(
       leading: const Icon(Icons.vpn_key_outlined),
       title: Text('代理地址'.tl),
@@ -100,8 +108,7 @@ class _ProxyAddressTileState extends State<_ProxyAddressTile> {
               tooltip: '清除'.tl,
               icon: const Icon(Icons.clear),
               onPressed: () async {
-                appdata.settings[8] = '';
-                await appdata.updateSettings();
+                await _saveProxy('');
                 if (mounted) setState(() {});
               },
             ),
