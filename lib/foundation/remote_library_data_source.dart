@@ -17,6 +17,7 @@ import 'package:picakeep/foundation/local_favorites.dart';
 import 'package:picakeep/foundation/local_library_settings.dart';
 import 'package:picakeep/foundation/log.dart';
 import 'package:picakeep/pages/reader/comic_reading_page.dart';
+import 'package:picakeep/network/remote_service_network_policy.dart';
 
 class RemoteLibraryDataSourceException implements Exception {
   const RemoteLibraryDataSourceException(this.message);
@@ -1482,36 +1483,40 @@ class _ImageConcurrencyLimiter {
   }
 }
 
+HttpClient _createRemoteServiceClient({required int maxConnectionsPerHost}) {
+  return RemoteServiceNetworkPolicy.createClient(
+    manualProxy: appdata.settings[8],
+    connectionTimeout: const Duration(seconds: 5),
+    idleTimeout: const Duration(seconds: 20),
+    maxConnectionsPerHost: maxConnectionsPerHost,
+    onDecision: (decision, uri) {
+      final local = decision.hostKind == RemoteServiceHostKind.loopback ||
+          decision.hostKind == RemoteServiceHostKind.lan ||
+          decision.hostKind == RemoteServiceHostKind.linkLocal;
+      Log.info(
+        'RemoteNet',
+        '${local ? 'local-direct' : decision.source.name} '
+            '${uri.scheme}://${uri.host}',
+      );
+    },
+  );
+}
+
 class RemoteLibraryClient {
   RemoteLibraryClient._({
     required this.baseUrl,
     required this.baseUri,
-  })  : _httpClient = HttpClient()
-          ..connectionTimeout = const Duration(seconds: 5)
-          ..idleTimeout = const Duration(seconds: 20)
-          // Must be >= the sum of both image concurrency limiters' maximums
-          // (reader up to 12 + browse up to 12 = 24). The limiters already cap
-          // how many requests we launch; sizing the pool to match guarantees a
-          // launched request never has to queue inside getUrl, so the 5s
-          // "acquire a connection" timeout — and the orphaned-connection pool
-          // exhaustion it used to cause — cannot happen under normal use.
-          ..maxConnectionsPerHost = 24,
-        // Separate client for control-plane requests (JSON list/detail/
-        // favorites) so the bulk image pool used by the reader cannot starve
-        // them. Reader sessions can hold dozens of in-flight image streams
-        // and saturate _httpClient; lightweight metadata calls would then time
-        // out, breaking favorites lists and remote tab loads.
-        _controlClient = HttpClient()
-          ..connectionTimeout = const Duration(seconds: 5)
-          ..idleTimeout = const Duration(seconds: 20)
-          ..maxConnectionsPerHost = 6;
+  }) {
+    _rebuildTransports();
+  }
 
   static final Map<String, RemoteLibraryClient> _instances = {};
 
   final String baseUrl;
   final Uri baseUri;
-  final HttpClient _httpClient;
-  final HttpClient _controlClient;
+  late HttpClient _httpClient;
+  late HttpClient _controlClient;
+  int _transportGeneration = 0;
 
   // Caps in-flight remote image requests so they never exceed the connection
   // pool. Reader pages and browse covers get separate budgets because they are
@@ -1531,9 +1536,39 @@ class RemoteLibraryClient {
   final Map<String, Future<RemoteLibraryComicItem>> _pendingDetailRequests = {};
   Future<_RemoteLibrarySnapshot>? _pendingSnapshotRequest;
   _RemoteLibrarySnapshot? _snapshotCache;
+  int _cacheGeneration = 0;
   int? _lastLocalDataVersion;
   int? _lastServiceConfigVersion;
   int? _lastServiceRuntimeVersion;
+
+  static void rebuildAllTransports() {
+    for (final client in _instances.values) {
+      client._rebuildTransports();
+    }
+  }
+
+  void _rebuildTransports() {
+    final oldImageClient = _httpClientOrNull;
+    final oldControlClient = _controlClientOrNull;
+    _transportGeneration++;
+    oldImageClient?.close(force: true);
+    oldControlClient?.close(force: true);
+    _httpClient = _createRemoteServiceClient(maxConnectionsPerHost: 24);
+    _controlClient = _createRemoteServiceClient(maxConnectionsPerHost: 6);
+    _clearCaches();
+  }
+
+  HttpClient? get _httpClientOrNull =>
+      _transportGeneration == 0 ? null : _httpClient;
+
+  HttpClient? get _controlClientOrNull =>
+      _transportGeneration == 0 ? null : _controlClient;
+
+  void _rebuildTransportsIfCurrent(int generation) {
+    if (_transportGeneration == generation) {
+      _rebuildTransports();
+    }
+  }
 
   void _invalidateCachesForAppStateIfNeeded() {
     final localDataVersion = App.localDataVersion.value;
@@ -1552,6 +1587,7 @@ class RemoteLibraryClient {
   }
 
   void _clearCaches() {
+    _cacheGeneration++;
     _snapshotCache = null;
     _pendingSnapshotRequest = null;
     _detailCache.clear();
@@ -1594,6 +1630,7 @@ class RemoteLibraryClient {
   }
 
   String? get currentSignature {
+    _invalidateCachesForAppStateIfNeeded();
     final signature = _snapshotCache?.signature.trim() ?? '';
     return signature.isEmpty ? null : signature;
   }
@@ -1979,13 +2016,20 @@ class RemoteLibraryClient {
       }
     }
 
+    final generation = _cacheGeneration;
     final request = _fetchSnapshotFromNetwork();
     _pendingSnapshotRequest = request;
     try {
       final snapshot = await request;
-      _snapshotCache = snapshot;
-      for (final item in snapshot.items) {
-        _detailCache[item.id] = item;
+      if (generation == _cacheGeneration &&
+          identical(_pendingSnapshotRequest, request)) {
+        _snapshotCache = snapshot;
+        for (final item in snapshot.items) {
+          final existing = _detailCache[item.id];
+          if (existing == null || !existing.hasUsableDetailPayload) {
+            _detailCache[item.id] = item;
+          }
+        }
       }
       return snapshot;
     } finally {
@@ -2025,9 +2069,8 @@ class RemoteLibraryClient {
   }) {
     if (rootId.isNotEmpty) {
       return _RemoteLibrarySnapshot(
-        roots: snapshot.roots
-            .where((r) => r.id == rootId)
-            .toList(growable: false),
+        roots:
+            snapshot.roots.where((r) => r.id == rootId).toList(growable: false),
         items: snapshot.items
             .where((item) => item.rootId == rootId)
             .toList(growable: false),
@@ -2048,7 +2091,8 @@ class RemoteLibraryClient {
     return snapshot;
   }
 
-  Future<_RemoteLibrarySnapshot> _fetchSnapshotFromNetwork([String path = '/api/library/items']) async {
+  Future<_RemoteLibrarySnapshot> _fetchSnapshotFromNetwork(
+      [String path = '/api/library/items']) async {
     final sw = Stopwatch()..start();
     final payload = await _getJsonMap(path);
     final fetchMs = sw.elapsedMilliseconds;
@@ -2222,6 +2266,7 @@ class RemoteLibraryClient {
   }
 
   Future<RemoteLibraryComicItem> fetchItemDetail(String itemId) async {
+    _invalidateCachesForAppStateIfNeeded();
     final cached = _detailCache[itemId];
     if (cached != null && cached.hasUsableDetailPayload) {
       return cached;
@@ -2232,10 +2277,16 @@ class RemoteLibraryClient {
       return pending;
     }
 
+    final generation = _cacheGeneration;
     final request = _fetchItemDetailFromNetwork(itemId);
     _pendingDetailRequests[itemId] = request;
     try {
-      return await request;
+      final detail = await request;
+      if (generation == _cacheGeneration &&
+          identical(_pendingDetailRequests[itemId], request)) {
+        _detailCache[itemId] = detail;
+      }
+      return detail;
     } finally {
       if (identical(_pendingDetailRequests[itemId], request)) {
         _pendingDetailRequests.remove(itemId);
@@ -2248,9 +2299,7 @@ class RemoteLibraryClient {
     final payload = await _getJsonMap(
       '/api/library/items/${Uri.encodeComponent(itemId)}',
     );
-    final detail = RemoteLibraryComicItem.fromJson(payload, this);
-    _detailCache[itemId] = detail;
-    return detail;
+    return RemoteLibraryComicItem.fromJson(payload, this);
   }
 
   /// Opens an HTTP connection with a timeout that does NOT leak the socket.
@@ -2336,6 +2385,7 @@ class RemoteLibraryClient {
     bool isCover = false,
     StreamImageAbortSignal? abortSignal,
   }) async {
+    final transportGeneration = _transportGeneration;
     final client = lightweight ? _controlClient : _httpClient;
     // Acquire a concurrency permit BEFORE touching getUrl. This is the core
     // fix: without it, a reader/grid that fires dozens of image requests at
@@ -2439,7 +2489,12 @@ class RemoteLibraryClient {
       // Permit ownership transfers to the body stream — released in its finally
       // (on normal completion, error, or consumer cancellation).
       return StreamImageLoadResult(
-        stream: _guardedImageBody(request, response, releasePermit),
+        stream: _guardedImageBody(
+          request,
+          response,
+          releasePermit,
+          () => _rebuildTransportsIfCurrent(transportGeneration),
+        ),
         expectedTotalBytes:
             response.contentLength >= 0 ? response.contentLength : null,
       );
@@ -2453,14 +2508,30 @@ class RemoteLibraryClient {
       try {
         request?.abort();
       } catch (_) {}
+      _rebuildTransportsIfCurrent(transportGeneration);
       releasePermit();
       rethrow;
     } on SocketException {
       try {
         request?.abort();
       } catch (_) {}
+      _rebuildTransportsIfCurrent(transportGeneration);
       releasePermit();
       throw const RemoteLibraryDataSourceException('无法连接远程图片资源');
+    } on HandshakeException {
+      try {
+        request?.abort();
+      } catch (_) {}
+      _rebuildTransportsIfCurrent(transportGeneration);
+      releasePermit();
+      throw const RemoteLibraryDataSourceException('远程图片连接握手失败');
+    } on HttpException {
+      try {
+        request?.abort();
+      } catch (_) {}
+      _rebuildTransportsIfCurrent(transportGeneration);
+      releasePermit();
+      throw const RemoteLibraryDataSourceException('远程图片连接失败');
     } catch (_) {
       // Any other failure before the stream is handed off must still free the
       // permit, or the limiter would leak slots and eventually deadlock.
@@ -2491,8 +2562,10 @@ class RemoteLibraryClient {
     HttpClientRequest request,
     HttpClientResponse response,
     void Function() releasePermit,
+    void Function() onTransportFailure,
   ) async* {
     var completed = false;
+    var transportFailure = false;
     try {
       yield* response.timeout(
         const Duration(seconds: 15),
@@ -2500,6 +2573,7 @@ class RemoteLibraryClient {
           try {
             request.abort();
           } catch (_) {}
+          transportFailure = true;
           sink.addError(
             const RemoteLibraryDataSourceException('远程图片传输超时'),
           );
@@ -2507,11 +2581,20 @@ class RemoteLibraryClient {
         },
       );
       completed = true;
+    } on SocketException {
+      transportFailure = true;
+      rethrow;
+    } on HttpException {
+      transportFailure = true;
+      rethrow;
     } finally {
       if (!completed) {
         try {
           request.abort();
         } catch (_) {}
+      }
+      if (transportFailure) {
+        onTransportFailure();
       }
       releasePermit();
     }
@@ -2560,10 +2643,12 @@ class RemoteLibraryClient {
     String path, {
     Object? body,
   }) async {
+    final transportGeneration = _transportGeneration;
+    final targetUri = resolveUri(path);
     HttpClientRequest? request;
     try {
       request = await _openWithTimeout(
-        _controlClient.openUrl(method, resolveUri(path)),
+        _controlClient.openUrl(method, targetUri),
         const Duration(seconds: 5),
       );
       request.headers.set(HttpHeaders.acceptHeader, 'application/json');
@@ -2580,11 +2665,15 @@ class RemoteLibraryClient {
           );
       Log.info(
         'RemoteLib',
-        'req $method $path -> ${response.statusCode} bodyBytes=${bodyText.length}',
+        'req $method ${targetUri.scheme}://${targetUri.host} '
+            'g=$transportGeneration -> ${response.statusCode} '
+            'bodyBytes=${bodyText.length}',
       );
       // ignore: avoid_print
       print(
-        '[PicaKeep][RemoteLib] req $method $path -> ${response.statusCode} bodyBytes=${bodyText.length}',
+        '[PicaKeep][RemoteLib] req $method ${targetUri.scheme}://${targetUri.host} '
+        'g=$transportGeneration -> ${response.statusCode} '
+        'bodyBytes=${bodyText.length}',
       );
       if (response.statusCode < 200 || response.statusCode >= 300) {
         throw RemoteLibraryRequestException(
@@ -2610,12 +2699,26 @@ class RemoteLibraryClient {
       try {
         request?.abort();
       } catch (_) {}
+      _rebuildTransportsIfCurrent(transportGeneration);
       throw const RemoteLibraryDataSourceException('远程服务响应超时');
     } on SocketException {
       try {
         request?.abort();
       } catch (_) {}
+      _rebuildTransportsIfCurrent(transportGeneration);
       throw const RemoteLibraryDataSourceException('无法连接远程服务');
+    } on HandshakeException {
+      try {
+        request?.abort();
+      } catch (_) {}
+      _rebuildTransportsIfCurrent(transportGeneration);
+      throw const RemoteLibraryDataSourceException('远程服务连接握手失败');
+    } on HttpException {
+      try {
+        request?.abort();
+      } catch (_) {}
+      _rebuildTransportsIfCurrent(transportGeneration);
+      throw const RemoteLibraryDataSourceException('远程服务连接失败');
     } on FormatException {
       try {
         request?.abort();

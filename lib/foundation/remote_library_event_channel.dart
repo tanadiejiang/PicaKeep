@@ -5,8 +5,10 @@ import 'dart:io';
 import 'package:picakeep/base.dart';
 import 'package:picakeep/foundation/app.dart';
 import 'package:picakeep/foundation/app_runtime_mode.dart';
+import 'package:picakeep/foundation/log.dart';
 import 'package:picakeep/foundation/remote_library_data_source.dart';
 import 'package:picakeep/foundation/service_data_source.dart';
+import 'package:picakeep/network/remote_service_network_policy.dart';
 import 'package:web_socket_channel/io.dart';
 import 'package:web_socket_channel/status.dart' as web_socket_status;
 
@@ -39,6 +41,8 @@ class RemoteLibraryEventChannel {
   Timer? _reconnectTimer;
   StreamSubscription<dynamic>? _socketSubscription;
   IOWebSocketChannel? _channel;
+  HttpClient? _ownedHttpClient;
+  int _connectionGeneration = 0;
   int _reconnectAttempt = 0;
   int _suppressedRuntimeVersionReactions = 0;
   bool _statusProbeInFlight = false;
@@ -54,9 +58,22 @@ class RemoteLibraryEventChannel {
     _ensureConnectedOrProbe(resetBackoff: true, forceStatusProbe: true);
   }
 
+  void stop() {
+    if (!_started) {
+      _disconnect();
+      return;
+    }
+    _started = false;
+    App.serviceConfigVersion.removeListener(_handleServiceConfigChanged);
+    App.serviceRuntimeVersion.removeListener(_handleServiceRuntimeChanged);
+    App.isReadingActive.removeListener(_handleReadingStateChanged);
+    _disconnect();
+  }
+
   void onForeground() {
     _foreground = true;
-    _ensureConnectedOrProbe(forceStatusProbe: true);
+    _resetReconnectBackoff();
+    _ensureConnectedOrProbe(resetBackoff: true, forceStatusProbe: true);
   }
 
   void onBackground() {
@@ -141,37 +158,76 @@ class RemoteLibraryEventChannel {
     if (uri == null) {
       return;
     }
+    final generation = ++_connectionGeneration;
+    final client = RemoteServiceNetworkPolicy.createClient(
+      manualProxy: appdata.settings[8],
+      onDecision: (decision, target) {
+        final local = decision.hostKind == RemoteServiceHostKind.loopback ||
+            decision.hostKind == RemoteServiceHostKind.lan ||
+            decision.hostKind == RemoteServiceHostKind.linkLocal;
+        Log.info(
+          'RemoteNet',
+          '${local ? 'local-direct' : decision.source.name} '
+              '${target.scheme}://${target.host}',
+        );
+      },
+    );
     _connecting = true;
     try {
-      final socket = await WebSocket.connect(uri.toString()).timeout(
+      final socket = await WebSocket.connect(
+        uri.toString(),
+        customClient: client,
+      ).timeout(
         const Duration(seconds: 5),
       );
-      if (!_shouldConnect) {
-        await socket.close(web_socket_status.goingAway);
+      if (!_isCurrentConnection(generation, uri)) {
+        await _closeSocket(socket);
+        client.close(force: true);
         return;
       }
       final channel = IOWebSocketChannel(socket);
       _channel = channel;
+      _ownedHttpClient = client;
       _lastMessageAt = DateTime.now();
       _reconnectAttempt = 0;
       _socketSubscription = channel.stream.listen(
-        _handleSocketMessage,
-        onDone: _handleSocketClosed,
-        onError: (_) => _handleSocketClosed(),
+        (payload) => _handleSocketMessage(payload, generation),
+        onDone: () => _handleSocketClosed(generation, channel),
+        onError: (_, __) => _handleSocketClosed(generation, channel),
         cancelOnError: true,
       );
       _heartbeatTimer?.cancel();
       _heartbeatTimer = Timer.periodic(_heartbeatInterval, (_) {
-        _sendHeartbeatOrReconnect();
+        _sendHeartbeatOrReconnect(generation);
       });
     } catch (_) {
-      _scheduleReconnect();
+      client.close(force: true);
+      if (_isCurrentConnection(generation, uri)) {
+        _scheduleReconnect();
+      }
     } finally {
-      _connecting = false;
+      if (_connectionGeneration == generation) {
+        _connecting = false;
+      }
     }
   }
 
-  void _handleSocketMessage(dynamic payload) {
+  bool _isCurrentConnection(int generation, Uri uri) {
+    return generation == _connectionGeneration &&
+        _shouldConnect &&
+        _buildEventsUri() == uri;
+  }
+
+  Future<void> _closeSocket(WebSocket socket) async {
+    try {
+      await socket.close(web_socket_status.goingAway);
+    } catch (_) {}
+  }
+
+  void _handleSocketMessage(dynamic payload, int generation) {
+    if (generation != _connectionGeneration) {
+      return;
+    }
     _lastMessageAt = DateTime.now();
     final text = switch (payload) {
       String value => value,
@@ -218,10 +274,12 @@ class RemoteLibraryEventChannel {
     if (normalized.isEmpty) {
       return;
     }
-    final currentClientSignature =
-        RemoteLibraryClient.tryFromCurrentSettings()?.currentSignature?.trim() ??
-            '';
-    if (_lastKnownSignature == normalized || currentClientSignature == normalized) {
+    final currentClientSignature = RemoteLibraryClient.tryFromCurrentSettings()
+            ?.currentSignature
+            ?.trim() ??
+        '';
+    if (_lastKnownSignature == normalized ||
+        currentClientSignature == normalized) {
       _lastKnownSignature = normalized;
       return;
     }
@@ -230,12 +288,21 @@ class RemoteLibraryEventChannel {
     App.notifyServiceRuntimeChanged();
   }
 
-  void _handleSocketClosed() {
+  void _handleSocketClosed(
+    int generation,
+    IOWebSocketChannel channel,
+  ) {
+    if (generation != _connectionGeneration || !identical(_channel, channel)) {
+      return;
+    }
     _disconnect();
     _scheduleReconnect();
   }
 
-  void _sendHeartbeatOrReconnect() {
+  void _sendHeartbeatOrReconnect(int generation) {
+    if (generation != _connectionGeneration) {
+      return;
+    }
     final now = DateTime.now();
     final lastMessageAt = _lastMessageAt;
     if (lastMessageAt == null ||
@@ -277,6 +344,7 @@ class RemoteLibraryEventChannel {
   }
 
   void _disconnect() {
+    _connectionGeneration++;
     _heartbeatTimer?.cancel();
     _heartbeatTimer = null;
     _reconnectTimer?.cancel();
@@ -286,6 +354,8 @@ class RemoteLibraryEventChannel {
     try {
       _channel?.sink.close(web_socket_status.goingAway);
     } catch (_) {}
+    _ownedHttpClient?.close(force: true);
+    _ownedHttpClient = null;
     _channel = null;
     _connecting = false;
     _lastMessageAt = null;
@@ -303,8 +373,14 @@ class RemoteLibraryEventChannel {
     }
     _statusProbeInFlight = true;
     _lastStatusProbeAt = now;
+    final generation = _connectionGeneration;
+    final targetUri = _buildEventsUri();
     try {
       final snapshot = await RemoteRuntimeServiceDataSource().fetchSnapshot();
+      if (generation != _connectionGeneration ||
+          targetUri != _buildEventsUri()) {
+        return;
+      }
       if (snapshot.connectionState != ServiceConnectionState.online) {
         return;
       }
