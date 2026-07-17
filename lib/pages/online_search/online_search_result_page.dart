@@ -1,14 +1,53 @@
+import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
 
 import 'package:picakeep/comic_source/comic_source.dart';
 import 'package:picakeep/components/comic_tile.dart';
 import 'package:picakeep/foundation/app_page_route.dart';
+import 'package:picakeep/foundation/untranslated_tags/untranslated_tag_coordinator.dart';
+import 'package:picakeep/foundation/download_author_resolver.dart';
 import 'package:picakeep/foundation/image_loader/stream_image_provider.dart';
 import 'package:picakeep/network/base_comic.dart';
 import 'package:picakeep/network/online_image/online_image_manager.dart';
+import 'package:uuid/uuid.dart';
+import 'package:picakeep/network/eh_network/eh_models.dart';
+import 'package:picakeep/network/nhentai_network/models.dart';
+import 'package:picakeep/tools/tags_translation.dart';
 
 import 'online_search_logic.dart';
+
+/// Converts only the tags already present in a search brief into observations.
+/// Search must not issue detail requests just to fill the untranslated-tag
+/// store, and pagination must reuse the caller's operation id.
+@visibleForTesting
+List<UntranslatedTagObservation> buildOnlineSearchTagObservations({
+  required String sourceKey,
+  required Iterable<BaseComic> items,
+  required String operationId,
+}) {
+  final source = sourceKey.trim().toLowerCase();
+  if (source != 'ehentai' && source != 'nhentai') {
+    return const <UntranslatedTagObservation>[];
+  }
+  final observations = <UntranslatedTagObservation>[];
+  for (final item in items) {
+    final tags = item.tags;
+    if (tags.isEmpty) continue;
+    if (source == 'ehentai' && item is! EhGalleryBrief) continue;
+    if (source == 'nhentai' && item is! NhentaiComicBrief) continue;
+    observations.add(
+      UntranslatedTagObservation(
+        source: source,
+        comicId: item.id,
+        flat: tags,
+        operationId: operationId,
+        context: 'online-search',
+      ),
+    );
+  }
+  return observations;
+}
 
 class OnlineSearchResultPage extends StatefulWidget {
   const OnlineSearchResultPage({
@@ -29,8 +68,7 @@ class OnlineSearchResultPage extends StatefulWidget {
 class _OnlineSearchResultPageState extends State<OnlineSearchResultPage> {
   final _logic = OnlineSearchLogic();
   final _scrollController = ScrollController();
-  late final _keywordController =
-      TextEditingController(text: widget.keyword);
+  late final _keywordController = TextEditingController(text: widget.keyword);
   final _items = <BaseComic>[];
 
   late String _keyword = widget.keyword;
@@ -38,6 +76,8 @@ class _OnlineSearchResultPageState extends State<OnlineSearchResultPage> {
   int? _maxPage;
   bool _loading = false;
   String? _error;
+  int _searchGeneration = 0;
+  String _searchOperationId = '';
 
   @override
   void initState() {
@@ -64,7 +104,13 @@ class _OnlineSearchResultPageState extends State<OnlineSearchResultPage> {
   }
 
   Future<void> _search({bool loadMore = false}) async {
-    if (_loading) return;
+    if (_loading && loadMore) return;
+    if (!loadMore) {
+      _searchGeneration++;
+      _searchOperationId = 'online-search-${const Uuid().v4()}';
+    }
+    final generation = _searchGeneration;
+    final operationId = _searchOperationId;
     final nextPage = loadMore ? _page + 1 : 1;
     setState(() {
       _loading = true;
@@ -80,7 +126,7 @@ class _OnlineSearchResultPageState extends State<OnlineSearchResultPage> {
       page: nextPage,
       option: widget.option,
     );
-    if (!mounted) return;
+    if (!mounted || generation != _searchGeneration) return;
     setState(() {
       _loading = false;
       if (res.error) {
@@ -92,6 +138,7 @@ class _OnlineSearchResultPageState extends State<OnlineSearchResultPage> {
       _maxPage = sub is int ? sub : int.tryParse('$sub');
       _items.addAll(res.data);
     });
+    unawaited(_observeSearchResults(res.data, operationId));
   }
 
   void _submitSearch(String keyword) {
@@ -105,7 +152,35 @@ class _OnlineSearchResultPageState extends State<OnlineSearchResultPage> {
       _items.clear();
       _error = null;
     });
-    _search();
+    unawaited(_search());
+  }
+
+  Future<void> _observeSearchResults(
+    Iterable<BaseComic> items,
+    String operationId,
+  ) async {
+    final sourceKey = widget.source.key;
+    final observations = buildOnlineSearchTagObservations(
+      sourceKey: sourceKey,
+      items: items,
+      operationId: operationId,
+    );
+    try {
+      if (!tagTranslationsReady) {
+        try {
+          await loadTagTranslations();
+        } catch (_) {
+          // The coordinator retains observations while the table is unavailable.
+        }
+      }
+      if (tagTranslationsReady) {
+        await UntranslatedTagCoordinator.instance.flushPending();
+      }
+      if (observations.isEmpty) return;
+      await UntranslatedTagCoordinator.instance.observeBatch(observations);
+    } catch (_) {
+      // Tag collection is side data and must not affect search rendering.
+    }
   }
 
   void _openComic(BaseComic comic) {
@@ -205,7 +280,11 @@ class _OnlineSearchResultPageState extends State<OnlineSearchResultPage> {
                         height: 164,
                         child: DownloadedComicTile(
                           name: comic.title,
-                          author: comic.subTitle,
+                          author: resolveSourceAuthors(
+                            source: widget.source.key,
+                            flatTags: comic.tags,
+                            fallbackAuthor: comic.subTitle,
+                          ).join(', '),
                           imagePath: File(''),
                           imageProvider: _coverProvider(comic),
                           type: null,

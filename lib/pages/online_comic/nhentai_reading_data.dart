@@ -25,6 +25,18 @@ class NhentaiReadingData extends ReadingData {
   String get sourceKey => 'nhentai';
 
   @override
+  String get untranslatedTagComicId => comic.id;
+
+  @override
+  Iterable<String> get untranslatedTagFlatTags => [
+        for (final entry in comic.tags.entries)
+          for (final tag in entry.value) '${entry.key}:$tag',
+      ];
+
+  @override
+  Map<String, List<String>> get untranslatedTagCategorizedTags => comic.tags;
+
+  @override
   ComicType get comicType => ComicType.nhentai;
 
   @override

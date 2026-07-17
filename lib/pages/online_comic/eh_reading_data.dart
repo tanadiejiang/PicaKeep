@@ -26,6 +26,18 @@ class EhReadingData extends ReadingData {
   String get sourceKey => 'ehentai';
 
   @override
+  String get untranslatedTagComicId => getGalleryId(gallery.link);
+
+  @override
+  Iterable<String> get untranslatedTagFlatTags => [
+        for (final entry in gallery.tags.entries)
+          for (final tag in entry.value) '${entry.key}:$tag',
+      ];
+
+  @override
+  Map<String, List<String>> get untranslatedTagCategorizedTags => gallery.tags;
+
+  @override
   ComicType get comicType => ComicType.ehentai;
 
   @override

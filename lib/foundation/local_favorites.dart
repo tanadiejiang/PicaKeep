@@ -4,6 +4,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:picakeep/foundation/download_model.dart';
+import 'package:picakeep/foundation/download_author_resolver.dart';
 import 'package:picakeep/foundation/local_data_source.dart';
 import 'package:sqlite3/sqlite3.dart';
 
@@ -304,7 +305,7 @@ class FavoriteItem {
       target: target,
       name: comic.name,
       coverPath: coverPath,
-      author: comic.subTitle,
+      author: resolveDownloadedAuthors(comic).join(', '),
       type: type,
       tags: comic.tags,
     );

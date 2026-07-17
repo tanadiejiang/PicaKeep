@@ -19,6 +19,7 @@ import 'foundation/ai/ai_download_queue.dart';
 import 'foundation/online_download_manager.dart';
 import 'foundation/remote_library_event_channel.dart';
 import 'foundation/remote_library_data_source.dart';
+import 'foundation/untranslated_tags/untranslated_tag_coordinator.dart';
 import 'network/cookie_jar.dart';
 import 'network/jm_network/jm_network.dart';
 import 'pages/auth_page.dart';
@@ -174,10 +175,19 @@ Future<void> _initializeOnlineFoundation() async {
   await AiDownloadQueue.instance.load();
   unawaited(OnlineDownloadManager.instance.loadQueue());
   // tags 翻译数据：非阻塞预热，搜索/详情页翻译按需使用。
-  unawaited(loadTagTranslations());
+  unawaited(_warmTagTranslations());
   // jm 启动预热：活域名重选 + 已登录则用存储账密重换新鲜会话 cookie。
   // 必须在 ComicSource.init() 之后（账密已读回内存）。
   JmNetwork().warmUpOnStartup();
+}
+
+Future<void> _warmTagTranslations() async {
+  try {
+    await loadTagTranslations();
+    await UntranslatedTagCoordinator.instance.flushPending();
+  } catch (_) {
+    // A missing translation asset must not prevent the app from starting.
+  }
 }
 
 Future<void> _showDesktopWindowWhenReady() async {

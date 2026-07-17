@@ -12,8 +12,7 @@ String _albumDisplayTitleForLeafDirectory(String dirPath) {
   return parentTitle.isEmpty ? leafTitle : parentTitle;
 }
 
-String _episodeTitleForLeafDirectory(
-    String dirPath, String displayTitle) {
+String _episodeTitleForLeafDirectory(String dirPath, String displayTitle) {
   final leafTitle = _basename(dirPath).trim();
   final normalizedDisplay = displayTitle.trim();
   if (_isPlainNumericTitle(leafTitle)) {
@@ -126,8 +125,7 @@ int _rescanManagedDownloadSource(String rootPath) {
           .whereType<Directory>()
           .where(_containsVisibleImages)
           .toList()
-      ..sort(
-          (a, b) => _naturalCompare(_basename(a.path), _basename(b.path)));
+        ..sort((a, b) => _naturalCompare(_basename(a.path), _basename(b.path)));
       final hasFlatImages = subEntries.any(_isVisibleImageFile);
       if (chapterDirs.isEmpty && !hasFlatImages) {
         continue;
@@ -299,8 +297,8 @@ Future<bool> _shouldTreatAsSingleAlbumSource(String rootPath) async {
   if (children.isEmpty) {
     return false;
   }
-  if (children.any(
-      (entry) => !entry.isDirectory && _isVisibleImagePath(entry.path))) {
+  if (children
+      .any((entry) => !entry.isDirectory && _isVisibleImagePath(entry.path))) {
     return true;
   }
   final childDirs =
@@ -314,8 +312,7 @@ Future<bool> _shouldTreatAsSingleAlbumSource(String rootPath) async {
       imageBearingDirs.add(childDir);
     }
   }
-  if (imageBearingDirs.isEmpty ||
-      imageBearingDirs.length != childDirs.length) {
+  if (imageBearingDirs.isEmpty || imageBearingDirs.length != childDirs.length) {
     return false;
   }
   return imageBearingDirs.every(
@@ -373,8 +370,7 @@ Future<List<String>> _sortedImageFilesForPath(
 
   files.sort((a, b) => _compareImagePaths(a, b, sortMode));
 
-  final visibleFiles =
-      files.where((path) => !_isCoverLikePath(path)).toList();
+  final visibleFiles = files.where((path) => !_isCoverLikePath(path)).toList();
   if (visibleFiles.isNotEmpty) {
     return visibleFiles;
   }
@@ -510,9 +506,7 @@ String _resolveDownloadItemDirectoryFromMetadata(
   if (candidate == null) {
     return rootPath;
   }
-  return candidate.startsWith('/')
-      ? candidate
-      : _joinPath(rootPath, candidate);
+  return candidate.startsWith('/') ? candidate : _joinPath(rootPath, candidate);
 }
 
 bool _managedDownloadDirectoryExistsInIndex(
@@ -657,9 +651,9 @@ Future<bool> _hasRootAccess({
 }
 
 bool _isAndroidPrivilegedAccessEnabled() {
-  final rootEnabled = normalizeAndroidRootMode(
-          appdata.settings[androidRootModeSettingIndex]) ==
-      '1';
+  final rootEnabled =
+      normalizeAndroidRootMode(appdata.settings[androidRootModeSettingIndex]) ==
+          '1';
   if (rootEnabled) {
     return true;
   }
@@ -738,10 +732,7 @@ int _naturalCompare(String a, String b) {
 }
 
 List<String> _splitNatural(String value) {
-  return RegExp(r'\d+|\D+')
-      .allMatches(value)
-      .map((e) => e.group(0)!)
-      .toList();
+  return RegExp(r'\d+|\D+').allMatches(value).map((e) => e.group(0)!).toList();
 }
 
 String _basename(String path) {
@@ -969,18 +960,19 @@ String _metadataAuthorForDownloadedRow(
   String json,
   DownloadedItem fallback,
 ) {
-  final fromRow = _downloadRowText(row, const [
-    'subtitle',
-    'subTitle',
-    'author',
-    'artist',
-    'uploader',
-    'user',
-  ]);
-  if (fromRow != null) {
-    return fromRow;
+  final resolved = resolveDownloadedAuthorsFromRecord(
+    fallback.id,
+    json,
+    fallback: fallback,
+  );
+  if (resolved.isNotEmpty) {
+    return resolved.join(', ');
   }
-  return _metadataAuthorForDownloadedJson(json, fallback);
+  if (fallback.type == DownloadType.ehentai ||
+      fallback.type == DownloadType.nhentai) {
+    return '';
+  }
+  return resolveDownloadedAuthors(fallback).join(', ');
 }
 
 List<String> _metadataTagsForDownloadedRow(
@@ -998,59 +990,6 @@ List<String> _metadataTagsForDownloadedRow(
     return fromRow;
   }
   return _metadataTagsForDownloadedJson(json, fallback);
-}
-
-String _metadataAuthorForDownloadedJson(
-  String json,
-  DownloadedItem fallback,
-) {
-  final direct = fallback.subTitle.trim();
-  if (direct.isNotEmpty) {
-    return direct;
-  }
-
-  try {
-    final data = jsonDecode(json) as Map<String, dynamic>;
-    String? pick(Map data, Iterable<String> keys) {
-      for (final key in keys) {
-        final value = data[key]?.toString().trim();
-        if (value != null && value.isNotEmpty) {
-          return value;
-        }
-      }
-      return null;
-    }
-
-    final root = pick(data, const [
-      'subtitle',
-      'subTitle',
-      'author',
-      'artist',
-      'uploader',
-      'user',
-    ]);
-    if (root != null) {
-      return root;
-    }
-
-    for (final nestedKey in const ['comicItem', 'comic', 'metadata']) {
-      final nested = data[nestedKey];
-      if (nested is Map) {
-        final value = pick(nested, const [
-          'subtitle',
-          'subTitle',
-          'author',
-          'artist',
-          'uploader',
-          'user',
-        ]);
-        if (value != null) {
-          return value;
-        }
-      }
-    }
-  } catch (_) {}
-  return '';
 }
 
 List<String> _metadataTagsForDownloadedJson(
@@ -1087,8 +1026,7 @@ List<String> _metadataTagsForDownloadedJson(
     for (final nestedKey in const ['comicItem', 'comic', 'metadata']) {
       final nested = data[nestedKey];
       if (nested is Map) {
-      final values =
-          pick(nested, const ['tags', 'tagList', 'metadataTags']);
+        final values = pick(nested, const ['tags', 'tagList', 'metadataTags']);
         if (values != null) {
           return values;
         }
@@ -1098,8 +1036,7 @@ List<String> _metadataTagsForDownloadedJson(
   return const <String>[];
 }
 
-String? _favoriteTargetForDownloaded(
-    DownloadedItem comic, String rawId) {
+String? _favoriteTargetForDownloaded(DownloadedItem comic, String rawId) {
   final json = comic.toJson();
   String? nonEmpty(Object? value) {
     final text = value?.toString().trim();

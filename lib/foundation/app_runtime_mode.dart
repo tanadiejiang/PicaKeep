@@ -1,4 +1,141 @@
+import 'dart:convert';
+
 import 'package:flutter/foundation.dart';
+
+enum ServiceScanPortValidationCode {
+  valid,
+  empty,
+  notAnInteger,
+  outOfRange,
+  builtIn,
+  duplicate,
+  quotaExceeded,
+}
+
+class ServiceScanPortValidation {
+  const ServiceScanPortValidation({
+    required this.code,
+    this.port,
+  });
+
+  final ServiceScanPortValidationCode code;
+  final int? port;
+
+  bool get isValid => code == ServiceScanPortValidationCode.valid;
+
+  String get message => switch (code) {
+        ServiceScanPortValidationCode.valid => '',
+        ServiceScanPortValidationCode.empty => '请输入端口号。',
+        ServiceScanPortValidationCode.notAnInteger => '端口必须是整数。',
+        ServiceScanPortValidationCode.outOfRange => '端口范围必须是 1–65535。',
+        ServiceScanPortValidationCode.builtIn => '9527 和 8080 是内置预设，无需重复添加。',
+        ServiceScanPortValidationCode.duplicate => '这个自定义端口已经添加。',
+        ServiceScanPortValidationCode.quotaExceeded => '最多添加 8 个自定义端口。',
+      };
+}
+
+ServiceScanPortValidation validateServiceScanPortInput(
+  String value, {
+  Iterable<int> existing = const <int>[],
+}) {
+  final text = value.trim();
+  if (text.isEmpty) {
+    return const ServiceScanPortValidation(
+      code: ServiceScanPortValidationCode.empty,
+    );
+  }
+  final port = int.tryParse(text);
+  if (port == null) {
+    return const ServiceScanPortValidation(
+      code: ServiceScanPortValidationCode.notAnInteger,
+    );
+  }
+  if (port < serviceScanPortMin || port > serviceScanPortMax) {
+    return ServiceScanPortValidation(
+      code: ServiceScanPortValidationCode.outOfRange,
+      port: port,
+    );
+  }
+  if (serviceScanBuiltInPorts.contains(port)) {
+    return ServiceScanPortValidation(
+      code: ServiceScanPortValidationCode.builtIn,
+      port: port,
+    );
+  }
+  if (existing.contains(port)) {
+    return ServiceScanPortValidation(
+      code: ServiceScanPortValidationCode.duplicate,
+      port: port,
+    );
+  }
+  if (existing.length >= maxServiceScanCustomPorts) {
+    return ServiceScanPortValidation(
+      code: ServiceScanPortValidationCode.quotaExceeded,
+      port: port,
+    );
+  }
+  return ServiceScanPortValidation(
+    code: ServiceScanPortValidationCode.valid,
+    port: port,
+  );
+}
+
+List<int> normalizeServiceScanCustomPorts(Iterable<Object?> values) {
+  final normalized = <int>[];
+  for (final value in values) {
+    final port = _tryReadServiceScanPort(value);
+    if (port == null ||
+        serviceScanBuiltInPorts.contains(port) ||
+        normalized.contains(port)) {
+      continue;
+    }
+    normalized.add(port);
+    if (normalized.length == maxServiceScanCustomPorts) {
+      break;
+    }
+  }
+  return normalized;
+}
+
+List<int> decodeServiceScanCustomPorts(String value) {
+  if (value.trim().isEmpty) {
+    return const <int>[];
+  }
+  try {
+    final decoded = jsonDecode(value);
+    if (decoded is! List) {
+      return const <int>[];
+    }
+    return normalizeServiceScanCustomPorts(decoded);
+  } catch (_) {
+    return const <int>[];
+  }
+}
+
+String encodeServiceScanCustomPorts(Iterable<int> ports) {
+  return jsonEncode(normalizeServiceScanCustomPorts(ports.cast<Object?>()));
+}
+
+List<int> effectiveServiceScanPorts(String customPortsJson) {
+  return <int>[
+    ...serviceScanBuiltInPorts,
+    ...decodeServiceScanCustomPorts(customPortsJson),
+  ];
+}
+
+int? _tryReadServiceScanPort(Object? value) {
+  final port = switch (value) {
+    int value => value,
+    num value when value.isFinite && value == value.roundToDouble() =>
+      value.toInt(),
+    String value => int.tryParse(value.trim()),
+    _ => null,
+  };
+  if (port == null || port < serviceScanPortMin || port > serviceScanPortMax) {
+    return null;
+  }
+  return port;
+}
 
 String normalizeAppRuntimeMode(String value) {
   return switch (value.trim()) {
@@ -175,6 +312,7 @@ const remoteServerAddressSettingIndex = 98;
 const serviceDiscoveryModeSettingIndex = 99;
 const serviceAdminPortSettingIndex = 100;
 const serviceDiscoveryMdnsFallbackSettingIndex = 117;
+const serviceScanCustomPortsSettingIndex = 140;
 
 const serviceDiscoveryModeMdns = 'mdns';
 const serviceDiscoveryModeSubnetScan = 'subnet_scan';
@@ -184,6 +322,10 @@ const defaultServiceAdminPort = '9527';
 // 同一个默认端口的 int 形态，供服务端配置（port 字段为 int）复用，
 // 避免 9527 在 server_config / local_server_runtime 等处各写一遍裸字面量。
 const defaultServiceAdminPortInt = 9527;
+const List<int> serviceScanBuiltInPorts = <int>[9527, 8080];
+const maxServiceScanCustomPorts = 8;
+const serviceScanPortMin = 1;
+const serviceScanPortMax = 65535;
 
 const serverPlatformTierFull = 'full';
 const serverPlatformTierEnhanced = 'enhanced';

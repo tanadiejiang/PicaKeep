@@ -8,6 +8,7 @@ import 'package:picakeep/foundation/app.dart';
 import 'package:picakeep/foundation/app_runtime_mode.dart';
 import 'package:picakeep/foundation/history.dart';
 import 'package:picakeep/foundation/download.dart';
+import 'package:picakeep/foundation/download_author_resolver.dart';
 import 'package:picakeep/foundation/download_model.dart';
 import 'package:picakeep/foundation/local_data_source.dart';
 import 'package:picakeep/foundation/local_library.dart';
@@ -112,7 +113,8 @@ class _MePageState extends State<MePage> {
     App.serviceConfigVersion.addListener(_handleServiceStateChanged);
     App.serviceRuntimeVersion.addListener(_handleServiceStateChanged);
     App.toolDisplayConfigVersion.addListener(_handleToolDisplayConfigChanged);
-    OnlineDownloadManager.instance.version.addListener(_handleDownloadVersionChanged);
+    OnlineDownloadManager.instance.version
+        .addListener(_handleDownloadVersionChanged);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       AppStartupTrace.log('MePage.firstPostFrame');
       if (!mounted) {
@@ -577,7 +579,8 @@ class _MePageState extends State<MePage> {
     } else if (host.contains('nhentai')) {
       final m = RegExp(r'/g/(\d+)').firstMatch(uri.path);
       if (m != null) App.pushInner(() => NhentaiComicPageV2(m.group(1)!));
-    } else if (host.contains('18comic') || host.contains('jmcomic') ||
+    } else if (host.contains('18comic') ||
+        host.contains('jmcomic') ||
         result.toLowerCase().contains('jm')) {
       final m = RegExp(r'/album/(\d+)|/(\d+)').firstMatch(uri.path);
       if (m != null) {
@@ -1025,7 +1028,7 @@ class _MePageState extends State<MePage> {
             );
             history.target = comic.id;
             history.title = comic.name;
-            history.subtitle = comic.subTitle;
+            history.subtitle = resolveDownloadedAuthors(comic).join(', ');
             if (cover.existsSync()) {
               history.cover = cover.path;
             }
@@ -1460,8 +1463,7 @@ class _MePageCard extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               ListTile(
-                contentPadding:
-                    const EdgeInsets.symmetric(horizontal: 12),
+                contentPadding: const EdgeInsets.symmetric(horizontal: 12),
                 horizontalTitleGap: 8,
                 minLeadingWidth: 0,
                 leading: icon,

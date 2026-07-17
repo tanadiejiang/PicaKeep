@@ -1,4 +1,5 @@
 import 'download_model.dart';
+import 'download_author_resolver.dart';
 import 'local_library.dart';
 
 Iterable<String> localSearchTagTerms(String tag) sync* {
@@ -15,7 +16,7 @@ Iterable<String> localSearchTagTerms(String tag) sync* {
 
 Iterable<String> localDownloadedItemSearchTerms(DownloadedItem item) sync* {
   yield item.name.toLowerCase();
-  yield item.subTitle.toLowerCase();
+  yield resolveDownloadedAuthors(item).join(', ').toLowerCase();
   yield item.sourceDisplayName.toLowerCase();
 
   for (final tag in item.tags) {
@@ -72,8 +73,7 @@ bool matchesLocalDownloadedItem(DownloadedItem item, String keyword) {
   if (words.isEmpty) {
     return true;
   }
-  final terms = localDownloadedItemSearchTerms(item)
-      .where((e) => e.isNotEmpty)
-      .toList();
+  final terms =
+      localDownloadedItemSearchTerms(item).where((e) => e.isNotEmpty).toList();
   return words.every((word) => terms.any((term) => term.contains(word)));
 }

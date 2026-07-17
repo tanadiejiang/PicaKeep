@@ -29,7 +29,6 @@ String _deviceName() {
   return hostName.isEmpty ? '当前设备' : hostName;
 }
 
-
 class PicaKeepMdnsEndpoint {
   const PicaKeepMdnsEndpoint({
     required this.instanceName,
@@ -46,27 +45,83 @@ class PicaKeepMdnsEndpoint {
   final Map<String, String> txt;
 }
 
+class DiscoveryCancellationToken {
+  final Completer<void> _cancelledCompleter = Completer<void>();
+  bool _isCancelled = false;
+
+  bool get isCancelled => _isCancelled;
+  Future<void> get whenCancelled => _cancelledCompleter.future;
+
+  void cancel() {
+    if (_isCancelled) {
+      return;
+    }
+    _isCancelled = true;
+    _cancelledCompleter.complete();
+  }
+}
+
 class PicaKeepMdnsDiscovery {
+  RawDatagramSocket? _socket;
+  StreamSubscription<RawSocketEvent>? _subscription;
+  Timer? _retryTimer;
+  Completer<void>? _stopSignal;
+  Future<List<PicaKeepMdnsEndpoint>>? _activeDiscovery;
+  bool _stopping = false;
+  bool _multicastLockAcquired = false;
+
+  bool get isRunning => _activeDiscovery != null;
+
   Future<List<PicaKeepMdnsEndpoint>> discover({
     Duration timeout = const Duration(seconds: 3),
+    DiscoveryCancellationToken? cancellationToken,
   }) async {
-    RawDatagramSocket? socket;
-    StreamSubscription<RawSocketEvent>? subscription;
-    Timer? retryTimer;
-    final collector = _MdnsDiscoveryCollector();
-    final completer = Completer<List<PicaKeepMdnsEndpoint>>();
+    final active = _activeDiscovery;
+    if (active != null) {
+      return active;
+    }
+    _stopping = false;
+    final future = _discover(
+      timeout: timeout,
+      cancellationToken: cancellationToken,
+    );
+    _activeDiscovery = future;
+    return future.whenComplete(() {
+      if (identical(_activeDiscovery, future)) {
+        _activeDiscovery = null;
+      }
+    });
+  }
 
-    await AndroidMulticastLock.instance.acquire();
+  Future<List<PicaKeepMdnsEndpoint>> _discover({
+    required Duration timeout,
+    required DiscoveryCancellationToken? cancellationToken,
+  }) async {
+    final collector = _MdnsDiscoveryCollector();
+    final stopSignal = Completer<void>();
+    _stopSignal = stopSignal;
+    if (cancellationToken != null) {
+      unawaited(cancellationToken.whenCancelled.then((_) => stop()));
+    }
+
     try {
-      socket = await _bindMdnsSocket();
+      await AndroidMulticastLock.instance.acquire();
+      _multicastLockAcquired = true;
+      if (_stopping || cancellationToken?.isCancelled == true) {
+        return const <PicaKeepMdnsEndpoint>[];
+      }
+      _socket = await _bindMdnsSocket();
+      if (_stopping || cancellationToken?.isCancelled == true) {
+        return const <PicaKeepMdnsEndpoint>[];
+      }
       final interfaces = await _resolveMdnsInterfaces();
-      await _joinMdnsInterfaces(socket, interfaces);
-      subscription = socket.listen((event) {
+      await _joinMdnsInterfaces(_socket!, interfaces);
+      _subscription = _socket!.listen((event) {
         if (event != RawSocketEvent.read) {
           return;
         }
         Datagram? datagram;
-        while ((datagram = socket!.receive()) != null) {
+        while ((datagram = _socket?.receive()) != null) {
           final packet = _MdnsPacket.tryParse(datagram!.data);
           if (packet == null || !packet.isResponse) {
             continue;
@@ -80,12 +135,12 @@ class PicaKeepMdnsDiscovery {
           picaKeepMdnsServiceType,
           _MdnsRecordType.ptr,
         );
-        socket?.send(query, _mdnsIpv4Address, picaKeepMdnsServicePort);
+        _socket?.send(query, _mdnsIpv4Address, picaKeepMdnsServicePort);
       }
 
       sendQuery();
       var retryCount = 0;
-      retryTimer = Timer.periodic(const Duration(milliseconds: 650), (timer) {
+      _retryTimer = Timer.periodic(const Duration(milliseconds: 650), (timer) {
         retryCount += 1;
         if (retryCount >= 3) {
           timer.cancel();
@@ -94,19 +149,50 @@ class PicaKeepMdnsDiscovery {
         sendQuery();
       });
 
-      await Future<void>.delayed(timeout);
-      completer.complete(collector.endpoints());
-    } catch (_) {
-      if (!completer.isCompleted) {
-        completer.complete(const <PicaKeepMdnsEndpoint>[]);
+      final waiters = <Future<void>>[
+        Future<void>.delayed(timeout),
+        stopSignal.future,
+      ];
+      if (cancellationToken != null) {
+        waiters.add(cancellationToken.whenCancelled);
       }
+      await Future.any(waiters);
+      if (_stopping || cancellationToken?.isCancelled == true) {
+        return const <PicaKeepMdnsEndpoint>[];
+      }
+      return collector.endpoints();
+    } catch (_) {
+      return const <PicaKeepMdnsEndpoint>[];
     } finally {
-      retryTimer?.cancel();
-      await subscription?.cancel();
-      socket?.close();
+      if (identical(_stopSignal, stopSignal)) {
+        _stopSignal = null;
+      }
+      await _closeDiscoveryResources();
+    }
+  }
+
+  Future<void> stop() async {
+    _stopping = true;
+    final stopSignal = _stopSignal;
+    if (stopSignal != null && !stopSignal.isCompleted) {
+      stopSignal.complete();
+    }
+    await _closeDiscoveryResources();
+  }
+
+  Future<void> _closeDiscoveryResources() async {
+    _retryTimer?.cancel();
+    _retryTimer = null;
+    final subscription = _subscription;
+    _subscription = null;
+    await subscription?.cancel();
+    final socket = _socket;
+    _socket = null;
+    socket?.close();
+    if (_multicastLockAcquired) {
+      _multicastLockAcquired = false;
       await AndroidMulticastLock.instance.release();
     }
-    return completer.future;
   }
 }
 
@@ -400,7 +486,8 @@ class _MdnsPacketBuilder {
       ..writeUint16(0)
       ..writeName(name)
       ..writeUint16(type)
-      ..writeUint16(_MdnsRecordClass.internetWithCacheFlush); // QU bit: request unicast response
+      ..writeUint16(_MdnsRecordClass
+          .internetWithCacheFlush); // QU bit: request unicast response
     return writer.toBytes();
   }
 
@@ -892,7 +979,6 @@ Future<RawDatagramSocket> _bindMdnsSocket() {
     reusePort: !Platform.isWindows && !Platform.isAndroid,
   );
 }
-
 
 Future<List<InternetAddress>> _resolveAdvertisedIpv4Addresses(
     String host) async {

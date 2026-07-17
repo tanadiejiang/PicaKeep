@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:picakeep/comic_source/comic_source.dart';
 import 'package:picakeep/foundation/app_page_route.dart';
+import 'package:picakeep/components/info_value_action.dart';
 import 'package:picakeep/foundation/history.dart';
+import 'package:picakeep/foundation/download_author_resolver.dart';
 import 'package:picakeep/foundation/local_favorites.dart';
 import 'package:picakeep/foundation/online_download_manager.dart';
 import 'package:picakeep/network/nhentai_network/nhentai_main_network.dart';
@@ -40,7 +42,8 @@ class NhentaiComicPageV2 extends BaseOnlineComicPage<NhentaiComic> {
   // ── 数据加载 ────────────────────────────────────────────────────────────
 
   @override
-  Future<Res<NhentaiComic>> loadData() => NhentaiNetwork().getComicInfo(comicId);
+  Future<Res<NhentaiComic>> loadData() =>
+      NhentaiNetwork().getComicInfo(comicId);
 
   // ── 数据提取 ────────────────────────────────────────────────────────────
 
@@ -87,7 +90,8 @@ class NhentaiComicPageV2 extends BaseOnlineComicPage<NhentaiComic> {
   // ── 图片鉴权（封面/缩略图带 Referer 规避防盗链）──────────────────────────
 
   @override
-  Map<String, String>? get imageHeaders => const {'Referer': 'https://nhentai.net/'};
+  Map<String, String>? get imageHeaders =>
+      const {'Referer': 'https://nhentai.net/'};
 
   // ── 收藏态初始化（平台 OR 本地）────────────────────────────────────────
 
@@ -128,12 +132,18 @@ class NhentaiComicPageV2 extends BaseOnlineComicPage<NhentaiComic> {
       BuildContext context, NhentaiComic data, Map<String, List<String>> tags) {
     final cs = Theme.of(context).colorScheme;
     final palette = <Color>[
-      cs.primaryContainer, cs.tertiaryContainer, cs.secondaryContainer,
-      cs.errorContainer, cs.primaryContainer,
+      cs.primaryContainer,
+      cs.tertiaryContainer,
+      cs.secondaryContainer,
+      cs.errorContainer,
+      cs.primaryContainer,
     ];
     final onPalette = <Color>[
-      cs.onPrimaryContainer, cs.onTertiaryContainer, cs.onSecondaryContainer,
-      cs.onErrorContainer, cs.onPrimaryContainer,
+      cs.onPrimaryContainer,
+      cs.onTertiaryContainer,
+      cs.onSecondaryContainer,
+      cs.onErrorContainer,
+      cs.onPrimaryContainer,
     ];
 
     Widget catChip(String label, int i) => OnlineComicInfoChip(
@@ -146,6 +156,25 @@ class NhentaiComicPageV2 extends BaseOnlineComicPage<NhentaiComic> {
           color: cs.primary.withValues(alpha: 0.10),
           textColor: cs.primary,
         );
+    Widget valueAction({
+      required String raw,
+      required String display,
+      String category = '',
+    }) {
+      final normalized = raw.trim();
+      return InfoValueAction(
+        data: InfoValueData(
+          displayText: display,
+          rawSearchValue: normalized,
+          rawNamespace: category,
+        ),
+        onSearch: normalized.isEmpty
+            ? null
+            : () => onTagTap(context, normalized, category),
+        child: valChip(display),
+      );
+    }
+
     Widget tagRow(Widget wrap) =>
         Padding(padding: const EdgeInsets.only(bottom: 4), child: wrap);
 
@@ -164,10 +193,7 @@ class NhentaiComicPageV2 extends BaseOnlineComicPage<NhentaiComic> {
     // ID 行（置顶）
     rows.add(tagRow(Wrap(spacing: 6, runSpacing: 4, children: [
       catChip('ID', idx),
-      GestureDetector(
-        onTap: () => onTagTap(context, data.id, 'ID'),
-        child: valChip(data.id),
-      ),
+      valueAction(raw: data.id, display: data.id),
     ])));
     idx++;
 
@@ -178,9 +204,10 @@ class NhentaiComicPageV2 extends BaseOnlineComicPage<NhentaiComic> {
       rows.add(tagRow(Wrap(spacing: 6, runSpacing: 4, children: [
         catChip(tagTranslateCategory(e.key), idx),
         for (final v in e.value)
-          GestureDetector(
-            onTap: () => onTagTap(context, v, e.key),
-            child: valChip(tagTranslateWithNs(v, e.key)),
+          valueAction(
+            raw: v,
+            display: tagTranslateWithNs(v, e.key),
+            category: e.key,
           ),
       ])));
       idx++;
@@ -193,11 +220,11 @@ class NhentaiComicPageV2 extends BaseOnlineComicPage<NhentaiComic> {
       rows.add(tagRow(Wrap(spacing: 6, runSpacing: 4, children: [
         if (pagesVal.isNotEmpty) ...[
           catChip('页数', idx),
-          valChip(pagesVal),
+          valueAction(raw: pagesVal, display: pagesVal),
         ],
         if (timeVal.isNotEmpty) ...[
           catChip(timeKey ?? '时间', idx + 1),
-          valChip(timeVal),
+          valueAction(raw: timeVal, display: timeVal),
         ],
       ])));
     }
@@ -225,11 +252,12 @@ class NhentaiComicPageV2 extends BaseOnlineComicPage<NhentaiComic> {
   @override
   Future<void> onRead(BuildContext context, NhentaiComic data,
       {int ep = 1}) async {
+    final authors = resolveNhentaiAuthors(data.tags).join(', ');
     await History.ensureForLocalRead(
       target: data.id,
       type: HistoryType.nhentai,
       title: data.title,
-      subtitle: data.subTitle,
+      subtitle: authors,
       cover: data.cover,
     );
     if (!context.mounted) return;
@@ -274,13 +302,14 @@ class NhentaiComicPageV2 extends BaseOnlineComicPage<NhentaiComic> {
         },
         onLocalAdd: () {
           Navigator.of(ctx).pop();
+          final authors = resolveNhentaiAuthors(data.tags).join(', ');
           LocalFavoritesManager().addComic(
             'local',
             FavoriteItem(
               target: data.id,
               name: data.title,
               coverPath: data.cover,
-              author: data.subTitle,
+              author: authors,
               type: FavoriteType.nhentai,
               tags: data.tags.values.expand((l) => l).toList(),
             ),
@@ -364,9 +393,8 @@ class _NhentaiFavoritePanel extends StatelessWidget {
           ListTile(
             leading: Icon(
               localFavorite ? Icons.bookmark : Icons.bookmark_border,
-              color: localFavorite
-                  ? Theme.of(context).colorScheme.primary
-                  : null,
+              color:
+                  localFavorite ? Theme.of(context).colorScheme.primary : null,
             ),
             title: Text(localFavorite ? '已本地收藏（点击取消）' : '添加到本地收藏'),
             onTap: localFavorite ? onLocalRemove : onLocalAdd,

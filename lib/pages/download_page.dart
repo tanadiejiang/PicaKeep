@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:collection';
 import 'dart:math' as math;
-import 'dart:io' show File, Platform, Process;
+import 'dart:io' show File;
 
 import 'package:flutter/rendering.dart';
 import 'package:flutter/gestures.dart';
@@ -12,6 +12,8 @@ import 'package:picakeep/foundation/app.dart';
 import 'package:picakeep/foundation/app_page_route.dart';
 import 'package:picakeep/foundation/app_runtime_mode.dart';
 import 'package:picakeep/foundation/download.dart';
+import 'package:picakeep/foundation/download_author_resolver.dart';
+import 'package:picakeep/foundation/download_export/download_export.dart';
 import 'package:picakeep/foundation/download_model.dart';
 import 'package:picakeep/foundation/history.dart';
 import 'package:picakeep/foundation/archive/archive_password_store.dart';
@@ -125,9 +127,9 @@ extension ReadComic on DownloadedItem {
 String _translateDownloadedTag(String tag) {
   try {
     var value = tag.trim();
-    if (value.contains(':')) {
-      value = value.split(':').last.trim();
-    }
+    final separator = value.indexOf(':');
+    final namespace = separator > 0 ? value.substring(0, separator) : 'tags';
+    if (separator > 0) value = value.substring(separator + 1).trim();
     var suffix = '';
     if (value.endsWith(' ♀')) {
       suffix = '♀';
@@ -136,12 +138,9 @@ String _translateDownloadedTag(String tag) {
       suffix = '♂';
       value = value.substring(0, value.length - 2).trim();
     }
-    final lowerValue = value.toLowerCase();
-    for (final map in tagTranslations.values) {
-      final hit = map[lowerValue];
-      if (hit != null && hit.isNotEmpty) {
-        return '$hit$suffix';
-      }
+    final result = lookupTagTranslation(value, namespace);
+    if (result.found) {
+      return '${result.displayText}$suffix';
     }
     return '$value$suffix';
   } catch (_) {}
@@ -178,7 +177,7 @@ Iterable<String> _searchTermsForDownloadedTag(String tag) sync* {
 
 Iterable<String> _searchTermsForDownloadedItem(DownloadedItem item) sync* {
   yield item.name.toLowerCase();
-  yield item.subTitle.toLowerCase();
+  yield resolveDownloadedAuthors(item).join(', ').toLowerCase();
   yield item.sourceDisplayName.toLowerCase();
 
   for (final tag in item.tags) {
@@ -243,29 +242,21 @@ bool _matchesDownloadedKeyword(DownloadedItem item, String keyword) {
 }
 
 String _downloadedItemAuthor(DownloadedItem item) {
-  final direct = item.subTitle.trim();
-  if (direct.isNotEmpty) {
-    return direct;
+  if (item is LocalLibraryComicItem) {
+    final raw = item.sourceRowJson?.trim() ?? '';
+    if (raw.isNotEmpty) {
+      return resolveDownloadedAuthorsFromRecord(
+        item.originalId,
+        raw,
+        fallback: item,
+      ).join(', ');
+    }
+    if (item.type == DownloadType.ehentai ||
+        item.type == DownloadType.nhentai) {
+      return '';
+    }
   }
-  try {
-    final json = item.toJson();
-    for (final key in const ['subtitle', 'subTitle', 'author']) {
-      final value = json[key]?.toString().trim();
-      if (value != null && value.isNotEmpty) {
-        return value;
-      }
-    }
-    final comicItem = json['comicItem'];
-    if (comicItem is Map) {
-      for (final key in const ['subtitle', 'subTitle', 'author']) {
-        final value = comicItem[key]?.toString().trim();
-        if (value != null && value.isNotEmpty) {
-          return value;
-        }
-      }
-    }
-  } catch (_) {}
-  return '';
+  return resolveDownloadedAuthors(item).join(', ');
 }
 
 List<String> _downloadedItemTags(DownloadedItem item) {
@@ -986,8 +977,18 @@ class _DownloadPageState extends State<DownloadPage>
             },
           ),
         PopupMenuItem(
+          height: kMinInteractiveDimension,
           child: Text("导出".tl),
-          onTap: () => _exportComic(context, logic, logic.comics[index]),
+          onTap: () => unawaited(
+            _exportComic(context, logic, logic.comics[index]),
+          ),
+        ),
+        PopupMenuItem(
+          height: kMinInteractiveDimension,
+          child: Text("导出清单".tl),
+          onTap: () => unawaited(
+            _exportComicManifest(context, logic, logic.comics[index]),
+          ),
         ),
         PopupMenuItem(
           child: Text("查看漫画详情".tl),
@@ -1010,18 +1011,75 @@ class _DownloadPageState extends State<DownloadPage>
     );
   }
 
-  void _exportComic(
-      BuildContext context, DownloadPageLogic logic, DownloadedItem comic) {
-    final fullPath = logic.pathFor(comic);
-    if (fullPath.isEmpty) {
+  Future<void> _exportComic(
+    BuildContext context,
+    DownloadPageLogic logic,
+    DownloadedItem comic,
+  ) {
+    return _exportItems(
+      context,
+      logic,
+      [comic],
+      includeContent: true,
+    );
+  }
+
+  Future<void> _exportComicManifest(
+    BuildContext context,
+    DownloadPageLogic logic,
+    DownloadedItem comic,
+  ) {
+    return _exportItems(
+      context,
+      logic,
+      [comic],
+      includeContent: false,
+    );
+  }
+
+  Future<void> _exportItems(
+    BuildContext context,
+    DownloadPageLogic logic,
+    Iterable<DownloadedItem> items, {
+    required bool includeContent,
+  }) async {
+    final snapshot = List<DownloadedItem>.unmodifiable(items);
+    if (snapshot.isEmpty) return;
+    if (!includeContent &&
+        snapshot.any((item) => item is RemoteLibraryRootItem)) {
+      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+        const SnackBar(content: Text('远程目录不是漫画，不能导出清单')),
+      );
       return;
     }
-    if (Platform.isWindows) {
-      Process.run('explorer', [fullPath]);
-    } else if (Platform.isMacOS) {
-      Process.run('open', [fullPath]);
-    } else if (Platform.isLinux) {
-      Process.run('xdg-open', [fullPath]);
+    try {
+      final requests = await Future.wait(
+        snapshot.map(
+          (item) => DownloadExportRequestFactory.fromItem(
+            item,
+            // Remote requests deliberately ignore this value. It is only a
+            // local fallback for legacy DownloadedItem records.
+            fallbackPath: logic.pathFor(item),
+            translateTag: _translateDownloadedTag,
+          ),
+        ),
+      );
+      if (!context.mounted) return;
+      final page = includeContent
+          ? DownloadExportProgressPage(
+              requests: requests,
+              fields: DownloadExportFieldConfiguration.compact(),
+              includeContent: true,
+            )
+          : DownloadExportFieldConfigPage(requests: requests);
+      await Navigator.of(context).push(
+        MaterialPageRoute<void>(builder: (_) => page),
+      );
+    } catch (error) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+        SnackBar(content: Text('无法准备导出：$error')),
+      );
     }
   }
 
@@ -1371,6 +1429,7 @@ class _DownloadPageState extends State<DownloadPage>
                 ),
                 items: [
                   PopupMenuItem(
+                    height: kMinInteractiveDimension,
                     child: Text("全选".tl),
                     onTap: () {
                       for (int i = 0; i < logic.selected.length; i++) {
@@ -1381,8 +1440,18 @@ class _DownloadPageState extends State<DownloadPage>
                     },
                   ),
                   PopupMenuItem(
+                    height: kMinInteractiveDimension,
                     child: Text("导出".tl),
-                    onTap: () => _exportSelected(context, logic),
+                    onTap: () => unawaited(
+                      _exportSelected(context, logic),
+                    ),
+                  ),
+                  PopupMenuItem(
+                    height: kMinInteractiveDimension,
+                    child: Text("导出清单".tl),
+                    onTap: () => unawaited(
+                      _exportSelectedManifest(context, logic),
+                    ),
                   ),
                   PopupMenuItem(
                     child: Text("查看漫画详情".tl),
@@ -1432,13 +1501,38 @@ class _DownloadPageState extends State<DownloadPage>
     ];
   }
 
-  void _exportSelected(BuildContext context, DownloadPageLogic logic) {
-    if (logic.selectedNum == 0) return;
+  Future<void> _exportSelected(
+    BuildContext context,
+    DownloadPageLogic logic,
+  ) async {
+    final items = <DownloadedItem>[];
     for (int i = 0; i < logic.selected.length; i++) {
-      if (logic.selected[i]) {
-        _exportComic(context, logic, logic.comics[i]);
-      }
+      if (logic.selected[i]) items.add(logic.comics[i]);
     }
+    if (items.isEmpty) return;
+    await _exportItems(
+      context,
+      logic,
+      items,
+      includeContent: true,
+    );
+  }
+
+  Future<void> _exportSelectedManifest(
+    BuildContext context,
+    DownloadPageLogic logic,
+  ) async {
+    final items = <DownloadedItem>[];
+    for (int i = 0; i < logic.selected.length; i++) {
+      if (logic.selected[i]) items.add(logic.comics[i]);
+    }
+    if (items.isEmpty) return;
+    await _exportItems(
+      context,
+      logic,
+      items,
+      includeContent: false,
+    );
   }
 
   void _addToLocalFavoriteFolder(DownloadPageLogic logic) {
@@ -1670,6 +1764,89 @@ class _DownloadPageState extends State<DownloadPage>
   }
 }
 
+const _previewTagHorizontalPadding = 8.0;
+const _previewTagVerticalPadding = 4.0;
+const _previewTagSpacing = 6.0;
+const _previewTagRunSpacing = 6.0;
+const _previewTagMaxWidth = 140.0;
+const _previewTagTextStyle = TextStyle(fontSize: 12);
+
+bool _previewTextOverflows({
+  required String text,
+  required TextStyle style,
+  required double maxWidth,
+  required TextScaler textScaler,
+  required TextDirection textDirection,
+  required Locale? locale,
+  required int maxLines,
+}) {
+  if (text.trim().isEmpty || !maxWidth.isFinite || maxWidth <= 0) {
+    return false;
+  }
+  final painter = TextPainter(
+    text: TextSpan(text: text, style: style),
+    textDirection: textDirection,
+    textScaler: textScaler,
+    locale: locale,
+    maxLines: maxLines,
+    ellipsis: '\u2026',
+  )..layout(maxWidth: maxWidth);
+  final overflowed = painter.didExceedMaxLines;
+  painter.dispose();
+  return overflowed;
+}
+
+List<String> _previewVisibleTagPrefix({
+  required List<String> tags,
+  required int maxRows,
+  required double maxWidth,
+  required TextStyle textStyle,
+  required TextScaler textScaler,
+  required TextDirection textDirection,
+  required Locale? locale,
+}) {
+  if (tags.isEmpty || maxRows <= 0 || !maxWidth.isFinite || maxWidth <= 0) {
+    return const <String>[];
+  }
+
+  final maxChipWidth = math.min(_previewTagMaxWidth, maxWidth);
+  final maxTextWidth = math.max(
+    1.0,
+    maxChipWidth - _previewTagHorizontalPadding * 2,
+  );
+  final visible = <String>[];
+  var row = 0;
+  var rowWidth = 0.0;
+  for (final tag in tags) {
+    final painter = TextPainter(
+      text: TextSpan(text: tag, style: textStyle),
+      textDirection: textDirection,
+      textScaler: textScaler,
+      locale: locale,
+      maxLines: 1,
+      ellipsis: '\u2026',
+    )..layout(maxWidth: maxTextWidth);
+    final chipWidth = math.min(
+      maxChipWidth,
+      painter.width + _previewTagHorizontalPadding * 2,
+    );
+    painter.dispose();
+    final nextWidth =
+        rowWidth == 0 ? chipWidth : rowWidth + _previewTagSpacing + chipWidth;
+    if (rowWidth > 0 && nextWidth > maxWidth) {
+      row++;
+      rowWidth = chipWidth;
+    } else {
+      rowWidth = nextWidth;
+    }
+    if (row >= maxRows) {
+      break;
+    }
+    visible.add(tag);
+  }
+  return visible;
+}
+
 class DownloadedComicInfoView extends StatefulWidget {
   const DownloadedComicInfoView(
     this.item,
@@ -1815,6 +1992,8 @@ class _DownloadedComicInfoViewState extends State<DownloadedComicInfoView> {
   late DownloadedItem _comic;
   String? _resolvedCoverPath;
   bool _loadingRemoteDetail = false;
+  bool _authorExpanded = false;
+  bool _tagsExpanded = false;
 
   @override
   void initState() {
@@ -1853,6 +2032,8 @@ class _DownloadedComicInfoViewState extends State<DownloadedComicInfoView> {
       setState(() {
         _comic = detail;
         _syncInfo();
+        _authorExpanded = false;
+        _tagsExpanded = false;
       });
       _resolveCoverIfNeeded();
     } catch (_) {
@@ -1938,7 +2119,7 @@ class _DownloadedComicInfoViewState extends State<DownloadedComicInfoView> {
                 ),
                 if (author.isNotEmpty) ...[
                   const SizedBox(height: 8),
-                  Text(author, style: theme.textTheme.bodyMedium),
+                  _buildAuthorSection(theme),
                 ],
                 if (source.isNotEmpty) ...[
                   const SizedBox(height: 6),
@@ -1980,35 +2161,166 @@ class _DownloadedComicInfoViewState extends State<DownloadedComicInfoView> {
                 ),
                 if (tags.isNotEmpty) ...[
                   const SizedBox(height: 12),
-                  Wrap(
-                    spacing: 6,
-                    runSpacing: 6,
-                    children: [
-                      for (final tag in tags)
-                        Container(
-                          constraints: const BoxConstraints(maxWidth: 140),
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 8,
-                            vertical: 4,
-                          ),
-                          decoration: BoxDecoration(
-                            color: theme.colorScheme.secondaryContainer,
-                            borderRadius: BorderRadius.circular(999),
-                          ),
-                          child: Text(
-                            _translateDownloadedTag(tag),
-                            style: const TextStyle(fontSize: 12),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                    ],
-                  ),
+                  _buildTagsSection(theme),
                 ],
               ],
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildAuthorSection(ThemeData theme) {
+    final style = theme.textTheme.bodyMedium ?? const TextStyle();
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final overflow = _previewTextOverflows(
+          text: author,
+          style: style,
+          maxWidth: constraints.maxWidth,
+          textScaler: MediaQuery.textScalerOf(context),
+          textDirection: Directionality.of(context),
+          locale: Localizations.maybeLocaleOf(context),
+          maxLines: 2,
+        );
+        final expanded = overflow && _authorExpanded;
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              author,
+              style: style,
+              maxLines: expanded ? null : 2,
+              overflow: expanded ? TextOverflow.visible : TextOverflow.ellipsis,
+            ),
+            if (overflow)
+              _buildDisclosureChip(
+                key: const ValueKey('downloaded-preview-author-disclosure'),
+                theme: theme,
+                expanded: expanded,
+                label: (expanded ? '收起作者' : '展开作者').tl,
+                onTap: () => setState(() {
+                  _authorExpanded = !expanded;
+                }),
+              ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _buildTagsSection(ThemeData theme) {
+    final translatedTags = tags
+        .map(_translateDownloadedTag)
+        .map((tag) => tag.trim())
+        .where((tag) => tag.isNotEmpty)
+        .toList(growable: false);
+    if (translatedTags.isEmpty) {
+      return const SizedBox.shrink();
+    }
+    final textStyle =
+        DefaultTextStyle.of(context).style.merge(_previewTagTextStyle);
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final visibleTags = _previewVisibleTagPrefix(
+          tags: translatedTags,
+          maxRows: 2,
+          maxWidth: constraints.maxWidth,
+          textStyle: textStyle,
+          textScaler: MediaQuery.textScalerOf(context),
+          textDirection: Directionality.of(context),
+          locale: Localizations.maybeLocaleOf(context),
+        );
+        final overflow = visibleTags.length < translatedTags.length;
+        final displayTags = _tagsExpanded ? translatedTags : visibleTags;
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Wrap(
+              spacing: _previewTagSpacing,
+              runSpacing: _previewTagRunSpacing,
+              children: [
+                for (final tag in displayTags) _buildPreviewTag(theme, tag),
+              ],
+            ),
+            if (overflow)
+              _buildDisclosureChip(
+                key: const ValueKey('downloaded-preview-tags-disclosure'),
+                theme: theme,
+                expanded: _tagsExpanded,
+                label: (_tagsExpanded ? '收起标签' : '展开标签').tl,
+                onTap: () => setState(() {
+                  _tagsExpanded = !_tagsExpanded;
+                }),
+              ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _buildPreviewTag(ThemeData theme, String tag) {
+    return Container(
+      constraints: const BoxConstraints(maxWidth: _previewTagMaxWidth),
+      padding: const EdgeInsets.symmetric(
+        horizontal: _previewTagHorizontalPadding,
+        vertical: _previewTagVerticalPadding,
+      ),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.secondaryContainer,
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Text(
+        tag,
+        style: _previewTagTextStyle,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+      ),
+    );
+  }
+
+  Widget _buildDisclosureChip({
+    required Key key,
+    required ThemeData theme,
+    required bool expanded,
+    required String label,
+    required VoidCallback onTap,
+  }) {
+    final colorScheme = theme.colorScheme;
+    return Semantics(
+      key: key,
+      button: true,
+      expanded: expanded,
+      label: label,
+      child: SizedBox(
+        height: 44,
+        child: Material(
+          type: MaterialType.transparency,
+          child: InkWell(
+            onTap: onTap,
+            borderRadius: BorderRadius.circular(999),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: _previewTagHorizontalPadding,
+                  vertical: _previewTagVerticalPadding,
+                ),
+                decoration: BoxDecoration(
+                  color: colorScheme.tertiaryContainer,
+                  borderRadius: BorderRadius.circular(999),
+                ),
+                child: Text(
+                  label,
+                  style: _previewTagTextStyle.copyWith(
+                    color: colorScheme.onTertiaryContainer,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
       ),
     );
   }
@@ -2039,50 +2351,53 @@ class _DownloadedComicInfoViewState extends State<DownloadedComicInfoView> {
   }
 
   Widget _buildChapterGrid(ThemeData theme) {
-    return GridView.builder(
-      controller: _scrollController,
+    return SliverPadding(
       padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-      gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-        maxCrossAxisExtent: 300,
-        childAspectRatio: 4,
-      ),
-      itemCount: eps.length,
-      itemBuilder: (BuildContext context, int i) {
-        final isDownloaded = _isArchive || downloadedEps.contains(i);
-        final displayNames = _displayNames;
-        return Padding(
-          padding: const EdgeInsets.all(4),
-          child: InkWell(
-            borderRadius: const BorderRadius.all(Radius.circular(16)),
-            onTap: () => readSpecifiedEps(i),
-            onLongPress: () => deleteEpisode(i),
-            onSecondaryTapDown: (_) => deleteEpisode(i),
-            child: Material(
-              color: isDownloaded
-                  ? theme.colorScheme.primaryContainer
-                  : theme.colorScheme.surfaceContainerHighest,
-              surfaceTintColor: theme.colorScheme.surfaceTint,
-              borderRadius: const BorderRadius.all(Radius.circular(16)),
-              child: Row(
-                children: [
-                  const SizedBox(width: 16),
-                  Expanded(
-                    child: Text(
-                      i < displayNames.length ? displayNames[i] : eps[i],
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
+      sliver: SliverGrid(
+        gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+          maxCrossAxisExtent: 300,
+          childAspectRatio: 4,
+        ),
+        delegate: SliverChildBuilderDelegate(
+          (BuildContext context, int i) {
+            final isDownloaded = _isArchive || downloadedEps.contains(i);
+            final displayNames = _displayNames;
+            return Padding(
+              padding: const EdgeInsets.all(4),
+              child: InkWell(
+                borderRadius: const BorderRadius.all(Radius.circular(16)),
+                onTap: () => readSpecifiedEps(i),
+                onLongPress: () => deleteEpisode(i),
+                onSecondaryTapDown: (_) => deleteEpisode(i),
+                child: Material(
+                  color: isDownloaded
+                      ? theme.colorScheme.primaryContainer
+                      : theme.colorScheme.surfaceContainerHighest,
+                  surfaceTintColor: theme.colorScheme.surfaceTint,
+                  borderRadius: const BorderRadius.all(Radius.circular(16)),
+                  child: Row(
+                    children: [
+                      const SizedBox(width: 16),
+                      Expanded(
+                        child: Text(
+                          i < displayNames.length ? displayNames[i] : eps[i],
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      const SizedBox(width: 4),
+                      if (!_isArchive && isDownloaded)
+                        const Icon(Icons.download_done_outlined),
+                      const SizedBox(width: 16),
+                    ],
                   ),
-                  const SizedBox(width: 4),
-                  if (!_isArchive && isDownloaded)
-                    const Icon(Icons.download_done_outlined),
-                  const SizedBox(width: 16),
-                ],
+                ),
               ),
-            ),
-          ),
-        );
-      },
+            );
+          },
+          childCount: eps.length,
+        ),
+      ),
     );
   }
 
@@ -2092,11 +2407,26 @@ class _DownloadedComicInfoViewState extends State<DownloadedComicInfoView> {
     final mediaQuery = MediaQuery.of(context);
     final topSpacer =
         widget.scrollController != null ? 12.0 : mediaQuery.padding.top + 12.0;
-    Widget grid = _buildChapterGrid(theme);
+    Widget content = CustomScrollView(
+      controller: _scrollController,
+      slivers: [
+        SliverToBoxAdapter(child: SizedBox(height: topSpacer)),
+        SliverToBoxAdapter(child: _buildHeader(theme)),
+        if (_loadingRemoteDetail)
+          const SliverToBoxAdapter(
+            child: Padding(
+              padding: EdgeInsets.fromLTRB(16, 10, 16, 0),
+              child: LinearProgressIndicator(minHeight: 2),
+            ),
+          ),
+        SliverToBoxAdapter(child: _buildChapterTitleRow(theme)),
+        _buildChapterGrid(theme),
+      ],
+    );
     if (widget.sheetController != null) {
-      grid = Listener(
+      content = Listener(
         onPointerSignal: _handleSheetWheel,
-        child: grid,
+        child: content,
       );
     }
     return SafeArea(
@@ -2104,15 +2434,7 @@ class _DownloadedComicInfoViewState extends State<DownloadedComicInfoView> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          SizedBox(height: topSpacer),
-          _buildHeader(theme),
-          if (_loadingRemoteDetail)
-            const Padding(
-              padding: EdgeInsets.fromLTRB(16, 10, 16, 0),
-              child: LinearProgressIndicator(minHeight: 2),
-            ),
-          _buildChapterTitleRow(theme),
-          Expanded(child: grid),
+          Expanded(child: content),
           Padding(
             padding: EdgeInsets.fromLTRB(
               16,
@@ -2201,8 +2523,8 @@ class _DownloadedComicInfoViewState extends State<DownloadedComicInfoView> {
     } else if (comic is LocalLibraryComicItem) {
       coverProvider = LocalLibraryManager().coverImageProviderForItem(comic);
     } else {
-      coverProvider = widget.logic?.coverImageProviderFor(comic)
-          ?? (comic is RemoteLibraryComicItem ? comic.coverImageProvider : null);
+      coverProvider = widget.logic?.coverImageProviderFor(comic) ??
+          (comic is RemoteLibraryComicItem ? comic.coverImageProvider : null);
     }
 
     final file = widget.logic?.coverFor(comic) ?? File('');

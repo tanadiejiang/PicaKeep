@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:shimmer_animation/shimmer_animation.dart';
+import 'package:picakeep/components/info_value_action.dart';
 import 'package:picakeep/tools/tags_translation.dart'
     show tagTranslateCategory, tagTranslateWithNs;
 
@@ -470,7 +470,7 @@ class OnlineComicInfoChip extends StatelessWidget {
 /// 标签分组区。每个分类一行：分类名 chip（不可点）+ 该类标签 chip（可点）。
 ///
 /// - 点击标签：触发 [onTagTap]（子类通常跳搜索）。
-/// - 长按标签：弹菜单「复制 / 搜索」。复制由组件内置；搜索复用 [onTagTap]。
+/// - 长按标签：直接复制当前显示值；搜索复用 [onTagTap]。
 class OnlineComicTagsSection extends StatelessWidget {
   const OnlineComicTagsSection({
     super.key,
@@ -487,35 +487,6 @@ class OnlineComicTagsSection extends StatelessWidget {
 
   /// 是否启用标签中文翻译（eh/nh 开启，jm/picacg 保持 false）。
   final bool enableTagTranslation;
-
-  Future<void> _onLongPressAt(
-      BuildContext context, String value, String category, Offset pos) async {
-    final overlay =
-        Overlay.of(context).context.findRenderObject() as RenderBox?;
-    if (overlay == null) return;
-    final local = overlay.globalToLocal(pos);
-    final size = overlay.size;
-    final action = await showMenu<String>(
-      context: context,
-      position: RelativeRect.fromLTRB(
-          local.dx, local.dy, size.width - local.dx, size.height - local.dy),
-      items: const [
-        PopupMenuItem(value: 'copy', child: Text('复制')),
-        PopupMenuItem(value: 'search', child: Text('搜索')),
-      ],
-    );
-    if (action == null || !context.mounted) return;
-    switch (action) {
-      case 'copy':
-        await Clipboard.setData(ClipboardData(text: value));
-        if (context.mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-              content: Text('已复制'), duration: Duration(seconds: 1)));
-        }
-      case 'search':
-        onTagTap(value, category);
-    }
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -556,10 +527,13 @@ class OnlineComicTagsSection extends StatelessWidget {
                   textColor: onPalette[i % onPalette.length],
                 ),
                 for (final v in e.value)
-                  GestureDetector(
-                    onTap: () => onTagTap(v, e.key),
-                    onLongPressStart: (d) =>
-                        _onLongPressAt(context, v, e.key, d.globalPosition),
+                  InfoValueAction(
+                    data: InfoValueData(
+                      displayText: enableTagTranslation
+                          ? tagTranslateWithNs(v, e.key)
+                          : v,
+                    ),
+                    onSearch: () => onTagTap(v, e.key),
                     child: OnlineComicInfoChip(
                       label: enableTagTranslation
                           ? tagTranslateWithNs(v, e.key)
@@ -621,9 +595,8 @@ class _OnlineComicEpisodesListState extends State<OnlineComicEpisodesList> {
     final textTheme = Theme.of(context).textTheme;
     final colorScheme = Theme.of(context).colorScheme;
     final total = widget.episodes.length;
-    final collapsed = widget.collapsible &&
-        !_expanded &&
-        total > widget.defaultCollapseCount;
+    final collapsed =
+        widget.collapsible && !_expanded && total > widget.defaultCollapseCount;
     final shown = collapsed ? widget.defaultCollapseCount : total;
 
     // 生成展示用的 1-based 序号序列（支持倒序）。
@@ -651,9 +624,7 @@ class _OnlineComicEpisodesListState extends State<OnlineComicEpisodesList> {
                 visualDensity: VisualDensity.compact,
                 tooltip: _reversed ? '正序' : '倒序',
                 icon: Icon(
-                  _reversed
-                      ? Icons.arrow_downward
-                      : Icons.arrow_upward,
+                  _reversed ? Icons.arrow_downward : Icons.arrow_upward,
                   size: 20,
                 ),
                 onPressed: () => setState(() => _reversed = !_reversed),
@@ -680,8 +651,9 @@ class _OnlineComicEpisodesListState extends State<OnlineComicEpisodesList> {
           itemCount: order.length,
           itemBuilder: (context, i) {
             final ep = order[i];
-            final name =
-                ep - 1 < widget.episodes.length ? widget.episodes[ep - 1] : '第$ep章';
+            final name = ep - 1 < widget.episodes.length
+                ? widget.episodes[ep - 1]
+                : '第$ep章';
             return InkWell(
               borderRadius: BorderRadius.circular(8),
               onTap: () => widget.onEpisodeTap(ep),

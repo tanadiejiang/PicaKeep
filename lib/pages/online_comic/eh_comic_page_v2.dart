@@ -7,6 +7,7 @@ import 'package:picakeep/comic_source/comic_source.dart';
 import 'package:picakeep/foundation/app.dart';
 import 'package:picakeep/foundation/app_page_route.dart';
 import 'package:picakeep/foundation/history.dart';
+import 'package:picakeep/foundation/download_author_resolver.dart';
 import 'package:picakeep/foundation/local_favorites.dart';
 import 'package:picakeep/foundation/online_download_manager.dart';
 import 'package:picakeep/network/eh_network/eh_main_network.dart';
@@ -130,9 +131,7 @@ class EhentaiComicPageV2 extends BaseOnlineComicPage<Gallery> {
     // 含空格的 tag value 加英文双引号；uploader namespace 特判
     final needsQuote = tag.contains(' ');
     final quotedTag = needsQuote ? '"$tag"' : tag;
-    final keyword = category.isEmpty
-        ? quotedTag
-        : '$category:$quotedTag';
+    final keyword = category.isEmpty ? quotedTag : '$category:$quotedTag';
 
     Navigator.of(context).push(
       AppPageRoute(
@@ -149,11 +148,16 @@ class EhentaiComicPageV2 extends BaseOnlineComicPage<Gallery> {
 
   @override
   Future<void> onRead(BuildContext context, Gallery data, {int ep = 1}) async {
+    final authors = resolveEhAuthorsFromFlatTags(
+      data.tags.entries.expand((entry) => entry.value.map(
+            (value) => '${entry.key}:$value',
+          )),
+    ).join(', ');
     await History.ensureForLocalRead(
       target: data.link,
       type: HistoryType.ehentai,
       title: data.title,
-      subtitle: data.uploader,
+      subtitle: authors,
       cover: extractCover(data) ?? data.coverPath,
     );
     if (!context.mounted) return;
@@ -193,11 +197,11 @@ class EhentaiComicPageV2 extends BaseOnlineComicPage<Gallery> {
           if (!context.mounted) return;
           if (res) {
             refreshFavorite(true);
-            ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('已添加到平台收藏夹')));
+            ScaffoldMessenger.of(context)
+                .showSnackBar(const SnackBar(content: Text('已添加到平台收藏夹')));
           } else {
-            ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('平台收藏失败')));
+            ScaffoldMessenger.of(context)
+                .showSnackBar(const SnackBar(content: Text('平台收藏失败')));
           }
         },
         onPlatformRemove: () async {
@@ -206,22 +210,27 @@ class EhentaiComicPageV2 extends BaseOnlineComicPage<Gallery> {
           if (!context.mounted) return;
           if (res) {
             refreshFavorite(localFav); // 本地收藏可能仍存在
-            ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('已取消平台收藏')));
+            ScaffoldMessenger.of(context)
+                .showSnackBar(const SnackBar(content: Text('已取消平台收藏')));
           } else {
-            ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('取消平台收藏失败')));
+            ScaffoldMessenger.of(context)
+                .showSnackBar(const SnackBar(content: Text('取消平台收藏失败')));
           }
         },
         onLocalAdd: () {
           Navigator.of(ctx).pop();
+          final authors = resolveEhAuthorsFromFlatTags(
+            data.tags.entries.expand((entry) => entry.value.map(
+                  (value) => '${entry.key}:$value',
+                )),
+          ).join(', ');
           LocalFavoritesManager().addComic(
             'local',
             FavoriteItem(
               target: data.link,
               name: data.title,
               coverPath: extractCover(data) ?? data.coverPath,
-              author: data.uploader,
+              author: authors,
               type: FavoriteType.ehentai,
               tags: data.tags.values.expand((l) => l).toList(),
             ),
@@ -232,8 +241,8 @@ class EhentaiComicPageV2 extends BaseOnlineComicPage<Gallery> {
         },
         onLocalRemove: () {
           Navigator.of(ctx).pop();
-          LocalFavoritesManager().deleteComicWithTarget(
-              'local', data.link, FavoriteType.ehentai);
+          LocalFavoritesManager()
+              .deleteComicWithTarget('local', data.link, FavoriteType.ehentai);
           refreshFavorite(platformFav); // 平台收藏态保持
           ScaffoldMessenger.of(context)
               .showSnackBar(const SnackBar(content: Text('已取消本地收藏')));
@@ -246,10 +255,12 @@ class EhentaiComicPageV2 extends BaseOnlineComicPage<Gallery> {
 
   @override
   void Function(BuildContext context, Gallery data)? get onComment =>
-      (context, data) => showEhComments(context, link, data.uploader, data.auth ?? {});
+      (context, data) =>
+          showEhComments(context, link, data.uploader, data.auth ?? {});
 
   @override
-  void Function(BuildContext context, Gallery data)? get onLike => null; // 星级评分在自定义区块，不占点赞槽
+  void Function(BuildContext context, Gallery data)? get onLike =>
+      null; // 星级评分在自定义区块，不占点赞槽
 
   // ── 下载入口 ────────────────────────────────────────────────────────────
 
@@ -265,14 +276,14 @@ class EhentaiComicPageV2 extends BaseOnlineComicPage<Gallery> {
     Future<void> startDownload(int type) async {
       final taskId = getGalleryId(data.link);
       if (OnlineDownloadManager.instance.isDownloading(taskId)) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('已在下载中')));
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text('已在下载中')));
         return;
       }
       await OnlineDownloadManager.instance.enqueueEhentai(data, type);
       if (!context.mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('已加入下载队列')));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('已加入下载队列')));
     }
 
     await showDialog<void>(
@@ -312,53 +323,53 @@ class EhentaiComicPageV2 extends BaseOnlineComicPage<Gallery> {
                 groupValue: current,
                 onChanged: (v) => setS(() => current = v!),
                 child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const RadioListTile<int>(
-                    value: 0,
-                    title: Text('普通下载'),
-                    subtitle: Text('逐页下载，支持断点续传'),
-                  ),
-                  if (hasArchive)
-                    ExpansionTile(
-                      title: const Text('归档下载'),
-                      children: [
-                        if (loading)
-                          const Padding(
-                            padding: EdgeInsets.all(16),
-                            child: CircularProgressIndicator(),
-                          )
-                        else if (info == null)
-                          const ListTile(
-                            title: Text('归档信息加载失败'),
-                            subtitle: Text('请重试'),
-                          )
-                        else ...[
-                          RadioListTile<int>(
-                            value: 1,
-                            title: const Text('Original'),
-                            subtitle: Text(
-                                '${info!.originCost}  ${info!.originSize}'),
-                          ),
-                          RadioListTile<int>(
-                            value: 2,
-                            title: const Text('Resample'),
-                            subtitle: Text(
-                                '${info!.resampleCost}  ${info!.resampleSize}'),
-                          ),
-                          if (info!.cancelUnlockUrl != null)
-                            ListTile(
-                              title: const Text('取消解锁'),
-                              subtitle: const Text('长按执行此操作'),
-                              onLongPress: cancelUnlockAndReload,
-                            ),
-                        ],
-                      ],
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const RadioListTile<int>(
+                      value: 0,
+                      title: Text('普通下载'),
+                      subtitle: Text('逐页下载，支持断点续传'),
                     ),
-                ],
+                    if (hasArchive)
+                      ExpansionTile(
+                        title: const Text('归档下载'),
+                        children: [
+                          if (loading)
+                            const Padding(
+                              padding: EdgeInsets.all(16),
+                              child: CircularProgressIndicator(),
+                            )
+                          else if (info == null)
+                            const ListTile(
+                              title: Text('归档信息加载失败'),
+                              subtitle: Text('请重试'),
+                            )
+                          else ...[
+                            RadioListTile<int>(
+                              value: 1,
+                              title: const Text('Original'),
+                              subtitle: Text(
+                                  '${info!.originCost}  ${info!.originSize}'),
+                            ),
+                            RadioListTile<int>(
+                              value: 2,
+                              title: const Text('Resample'),
+                              subtitle: Text(
+                                  '${info!.resampleCost}  ${info!.resampleSize}'),
+                            ),
+                            if (info!.cancelUnlockUrl != null)
+                              ListTile(
+                                title: const Text('取消解锁'),
+                                subtitle: const Text('长按执行此操作'),
+                                onLongPress: cancelUnlockAndReload,
+                              ),
+                          ],
+                        ],
+                      ),
+                  ],
+                ),
               ),
             ),
-          ),
             actions: [
               TextButton(
                 onPressed: () => Navigator.pop(ctx),

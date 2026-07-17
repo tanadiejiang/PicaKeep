@@ -8,17 +8,20 @@ import 'package:flutter/services.dart';
 import 'package:photo_view/photo_view.dart';
 import 'package:picakeep/base.dart';
 import 'package:picakeep/components/archive_password_dialog.dart';
+import 'package:picakeep/components/info_value_action.dart';
 import 'package:picakeep/components/scrollable.dart';
 import 'package:picakeep/foundation/app.dart';
 import 'package:picakeep/foundation/archive/archive_memory_cache.dart';
 import 'package:picakeep/foundation/archive/archive_password_store.dart';
 import 'package:picakeep/foundation/download.dart';
+import 'package:picakeep/foundation/download_author_resolver.dart';
 import 'package:picakeep/foundation/download_model.dart';
 import 'package:picakeep/foundation/local_library.dart';
 import 'package:picakeep/foundation/log.dart';
 import 'package:picakeep/foundation/local_library_settings.dart';
 import 'package:picakeep/foundation/remote_library_data_source.dart';
 import 'package:picakeep/foundation/trash.dart';
+import 'package:picakeep/foundation/untranslated_tags/untranslated_tag_coordinator.dart';
 import 'package:picakeep/network/eh_network/eh_models.dart';
 import 'package:picakeep/network/jm_network/jm_network.dart';
 import 'package:picakeep/network/nhentai_network/nhentai_main_network.dart';
@@ -31,6 +34,7 @@ import 'package:picakeep/pages/online_comic/picacg_comic_page_v2.dart';
 import 'package:picakeep/pages/online_comic/nhentai_comic_page_v2.dart';
 import 'package:picakeep/tools/tags_translation.dart';
 import 'package:picakeep/tools/translations.dart';
+import 'package:uuid/uuid.dart';
 
 import 'local_search_page.dart';
 
@@ -317,12 +321,24 @@ class LocalDetailInfoValue {
   const LocalDetailInfoValue({
     required this.displayText,
     this.rawTagSearchValue,
+    this.rawValue,
     this.rawNamespace = '',
   });
 
   final String displayText;
+
+  /// Legacy name retained for callers/tests that still provide the original
+  /// flat tag. New source-aware groups should pass [rawValue] instead, because
+  /// [rawNamespace] is appended by the local search keyword builder.
   final String? rawTagSearchValue;
+
+  /// Raw source value without its namespace (for example `foo bar`, not
+  /// `artist:foo bar`). This is intentionally separate from display text so a
+  /// translated label is never sent back to the source search.
+  final String? rawValue;
   final String rawNamespace;
+
+  String? get effectiveRawValue => rawValue ?? rawTagSearchValue;
 }
 
 /// One titled information group in a local comic detail page.
@@ -661,6 +677,38 @@ DownloadedItem? buildUpdatedDownloadedRecord(
   }
 }
 
+/// Builds the raw keyword used when a local-detail information value is
+/// searched. EH/NH tags keep their namespace and quote values containing
+/// whitespace, while metadata and non-EH/NH values remain plain text.
+///
+/// [rawValue] is normally the value without a namespace. The legacy flat form
+/// (`namespace:value`) is accepted defensively so old callers cannot produce a
+/// duplicated `namespace:namespace:value` query.
+String buildLocalInfoSearchKeyword({
+  required DownloadType source,
+  required String displayText,
+  String? rawValue,
+  String rawNamespace = '',
+}) {
+  var raw = (rawValue ?? displayText).trim();
+  if (raw.isEmpty) return '';
+  final namespace = rawNamespace.trim();
+  if ((source == DownloadType.ehentai || source == DownloadType.nhentai) &&
+      namespace.isNotEmpty) {
+    final prefix = '${namespace.toLowerCase()}:';
+    if (raw.toLowerCase().startsWith(prefix)) {
+      raw = raw.substring(prefix.length).trim();
+    }
+    if (raw.isEmpty) return '';
+    final alreadyQuoted =
+        raw.length >= 2 && raw.startsWith('"') && raw.endsWith('"');
+    final quoted =
+        alreadyQuoted || !RegExp(r'\s').hasMatch(raw) ? raw : '"$raw"';
+    return '$namespace:$quoted';
+  }
+  return raw;
+}
+
 class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
   final _scrollController = ScrollController();
   final _remoteDataSource = const RemoteLibraryDataSource();
@@ -696,16 +744,53 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
   String? _recCacheMode;
 
   static const _recommendationPageSize = 10;
+  late final String _untranslatedTagOperationId =
+      'local-detail-${const Uuid().v4()}';
 
   @override
   void initState() {
     super.initState();
     _comic = widget.comic;
+    unawaited(_observeUntranslatedTags(_comic));
     _scrollController.addListener(_handleScroll);
     _loadRemoteDetailIfNeeded();
     _loadLocalItems();
     _resolveCoverIfNeeded();
     unawaited(_refreshTagTranslationsWhenReady());
+  }
+
+  Future<void> _observeUntranslatedTags(DownloadedItem item) async {
+    final concrete = restoreConcreteDownloadedRecord(item) ?? item;
+    if (concrete.type != DownloadType.ehentai &&
+        concrete.type != DownloadType.nhentai) {
+      return;
+    }
+    try {
+      if (!tagTranslationsReady) {
+        try {
+          await loadTagTranslations();
+        } catch (_) {
+          // The collector keeps a bounded observation queue until retry.
+        }
+      }
+      final categorized = concrete is NhentaiDownloadedComic
+          ? concrete.categorizedTags
+          : const <String, List<String>>{};
+      final comicId =
+          concrete is NhentaiDownloadedComic ? concrete.comicID : concrete.id;
+      await UntranslatedTagCoordinator.instance.observe(
+        UntranslatedTagObservation(
+          source: concrete.type == DownloadType.ehentai ? 'ehentai' : 'nhentai',
+          comicId: comicId,
+          operationId: _untranslatedTagOperationId,
+          context: 'local-detail',
+          flat: concrete.tags,
+          categorized: categorized,
+        ),
+      );
+    } catch (_) {
+      // Tag collection must never block or break local detail loading.
+    }
   }
 
   /// 启动阶段的标签表是异步预热的。详情页可能先于它完成构建，因此在完成后
@@ -722,6 +807,7 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
     } catch (_) {
       return;
     }
+    await UntranslatedTagCoordinator.instance.flushPending();
     if (mounted) {
       setState(() {});
     }
@@ -842,7 +928,7 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
   }
 
   String _recommendationAuthor(DownloadedItem item) {
-    final direct = item.subTitle.trim();
+    final direct = resolveDownloadedAuthors(item).join(', ').trim();
     if (direct.isNotEmpty) {
       return direct;
     }
@@ -1338,6 +1424,15 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
     final restored = restoreConcreteDownloadedRecord(comic);
     final concrete =
         restored ?? (comic is LocalLibraryComicItem ? null : comic);
+    final resolvedAuthors = concrete == null
+        ? (comic is LocalLibraryComicItem
+            ? resolveDownloadedAuthorsFromRecord(
+                comic.originalId,
+                comic.sourceRowJson ?? '',
+                fallback: comic,
+              )
+            : resolveDownloadedAuthors(comic))
+        : resolveDownloadedAuthors(concrete);
 
     void addTagGroup(
       LocalDetailTagDisplayGroup tagGroup,
@@ -1356,9 +1451,10 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
             for (final value in tagGroup.values)
               LocalDetailInfoValue(
                 displayText: value.displayText,
-                // 传入完整原始 flat 标签，保留 EH 的 namespace；分类桶值仍
-                // 通过 value.rawNamespace 保持关联，不能用中文显示值替代。
-                rawTagSearchValue: value.rawText,
+                // Keep namespace and value separate. Recombining a complete
+                // `namespace:value` string with rawNamespace would produce
+                // `artist:artist:value` for EH/NH local searches.
+                rawValue: value.rawValue,
                 rawNamespace: value.rawNamespace,
               ),
           ],
@@ -1379,7 +1475,7 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
           if (!seen.add(identity)) continue;
           values.add(LocalDetailInfoValue(
             displayText: value.displayText,
-            rawTagSearchValue: value.rawText,
+            rawValue: value.rawValue,
             rawNamespace: value.rawNamespace,
           ));
         }
@@ -1398,7 +1494,8 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
 
     add('ID', [_displayIdFor(comic)], role: LocalDetailInfoRole.id);
     if (comic.type == DownloadType.jm || comic.type == DownloadType.picacg) {
-      add('作者', [comic.subTitle], role: LocalDetailInfoRole.creator);
+      add('作者', [resolvedAuthors.join(', ')],
+          role: LocalDetailInfoRole.creator);
     }
     add(
       localDetailDownloadTimeLabel,
@@ -1406,8 +1503,7 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
       role: LocalDetailInfoRole.downloadTime,
     );
     if (comic.type == DownloadType.ehentai) {
-      final uploader =
-          concrete is DownloadedGallery ? concrete.uploader : comic.subTitle;
+      final uploader = concrete is DownloadedGallery ? concrete.uploader : '';
       add('上传者', [uploader], role: LocalDetailInfoRole.uploader);
     }
 
@@ -1878,62 +1974,6 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
     );
   }
 
-  Future<void> _showTextActionsAt(
-    Offset position,
-    String text, {
-    String? searchAuthor,
-    String? searchTag,
-  }) async {
-    if (text.trim().isEmpty) return;
-    final overlay = Overlay.of(context).context.findRenderObject();
-    if (overlay is! RenderBox) {
-      return;
-    }
-    final localPosition = overlay.globalToLocal(position);
-    final size = overlay.size;
-    final dx = localPosition.dx.clamp(0.0, size.width);
-    final dy = localPosition.dy.clamp(0.0, size.height);
-    final action = await showMenu<String>(
-      context: context,
-      position: RelativeRect.fromLTRB(
-        dx,
-        dy,
-        size.width - dx,
-        size.height - dy,
-      ),
-      items: [
-        PopupMenuItem<String>(
-          value: 'copy',
-          child: Text('复制'.tl),
-        ),
-        if (searchAuthor != null && searchAuthor.trim().isNotEmpty)
-          PopupMenuItem<String>(
-            value: 'author',
-            child: Text('推荐该作者'.tl),
-          ),
-        if (searchTag != null && searchTag.trim().isNotEmpty)
-          PopupMenuItem<String>(
-            value: 'tag',
-            child: Text('推荐该标签'.tl),
-          ),
-      ],
-    );
-    if (!mounted || action == null) {
-      return;
-    }
-    switch (action) {
-      case 'copy':
-        _copyText(text);
-        break;
-      case 'author':
-        _openRecommendationSearch(searchAuthor!);
-        break;
-      case 'tag':
-        _openRecommendationSearch(searchTag!);
-        break;
-    }
-  }
-
   void _openRecommendationSearch(String keyword) {
     final normalized = keyword.trim();
     if (normalized.isEmpty) {
@@ -1946,52 +1986,73 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
     );
   }
 
+  String _localInfoSearchKeyword({
+    required String displayText,
+    String? rawSearchValue,
+    String rawNamespace = '',
+  }) {
+    return buildLocalInfoSearchKeyword(
+      source: _comic.type,
+      displayText: displayText,
+      rawValue: rawSearchValue,
+      rawNamespace: rawNamespace,
+    );
+  }
+
+  bool _isPlaceholderInfoValue(String value) {
+    final normalized = value.trim();
+    return normalized.isEmpty || normalized == '未知'.tl;
+  }
+
   Widget _infoCard(
     String text, {
     bool title = false,
-    String? searchAuthor,
-    String? rawTagSearchValue,
+    String? rawSearchValue,
+    String rawNamespace = '',
   }) {
-    if (text.trim().isEmpty) text = '未知'.tl;
+    final isPlaceholder = _isPlaceholderInfoValue(text);
+    final displayText = text.trim().isEmpty ? '未知'.tl : text;
     final colorScheme = Theme.of(context).colorScheme;
+    final card = Card(
+      margin: EdgeInsets.zero,
+      color: title
+          ? colorScheme.primaryContainer.withAlpha(160)
+          : ElevationOverlay.applySurfaceTint(
+              colorScheme.surface,
+              colorScheme.surfaceTint,
+              3,
+            ),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+      ),
+      elevation: 0,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(12, 6, 12, 6),
+        child: Text(displayText, style: const TextStyle(fontSize: 13)),
+      ),
+    );
+    if (title || isPlaceholder) {
+      return Container(
+        margin: const EdgeInsets.fromLTRB(4, 4, 4, 4),
+        child: card,
+      );
+    }
+    final keyword = _localInfoSearchKeyword(
+      displayText: displayText,
+      rawSearchValue: rawSearchValue,
+      rawNamespace: rawNamespace,
+    );
     return Container(
       margin: const EdgeInsets.fromLTRB(4, 4, 4, 4),
-      child: GestureDetector(
-        behavior: HitTestBehavior.translucent,
-        onLongPressStart: title
-            ? null
-            : (details) => _showTextActionsAt(
-                  details.globalPosition,
-                  text,
-                  searchAuthor: searchAuthor,
-                  searchTag: rawTagSearchValue,
-                ),
-        onSecondaryTapDown: title
-            ? null
-            : (details) => _showTextActionsAt(
-                  details.globalPosition,
-                  text,
-                  searchAuthor: searchAuthor,
-                  searchTag: rawTagSearchValue,
-                ),
-        child: Card(
-          margin: EdgeInsets.zero,
-          color: title
-              ? colorScheme.primaryContainer.withAlpha(160)
-              : ElevationOverlay.applySurfaceTint(
-                  colorScheme.surface,
-                  colorScheme.surfaceTint,
-                  3,
-                ),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(12),
-          ),
-          elevation: 0,
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(12, 6, 12, 6),
-            child: Text(text, style: const TextStyle(fontSize: 13)),
-          ),
+      child: InfoValueAction(
+        data: InfoValueData(
+          displayText: displayText,
+          rawSearchValue: rawSearchValue ?? displayText,
+          rawNamespace: rawNamespace,
         ),
+        onSearch:
+            keyword.isEmpty ? null : () => _openRecommendationSearch(keyword),
+        child: card,
       ),
     );
   }
@@ -2250,6 +2311,7 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
         _comic = refreshed;
       });
     }
+    unawaited(_observeUntranslatedTags(refreshed));
     App.notifyLocalDataChanged();
     return true;
   }
@@ -2500,14 +2562,12 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
                               for (final value in group.values)
                                 _infoCard(
                                   value.displayText,
-                                  searchAuthor: group.role ==
-                                              LocalDetailInfoRole.creator &&
-                                          !group.isTagGroup
-                                      ? value.displayText
+                                  rawSearchValue: group.isTagGroup
+                                      ? value.effectiveRawValue
                                       : null,
-                                  rawTagSearchValue: group.isTagGroup
-                                      ? value.rawTagSearchValue
-                                      : null,
+                                  rawNamespace: group.isTagGroup
+                                      ? value.rawNamespace
+                                      : '',
                                 ),
                             ],
                           ],
@@ -2549,9 +2609,49 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
 
   Widget _buildComicInfo(BuildContext context, dynamic history) {
     final comic = _comic;
+    final author = comic is LocalLibraryComicItem
+        ? resolveDownloadedAuthorsFromRecord(
+            comic.originalId,
+            comic.sourceRowJson ?? '',
+            fallback: comic,
+          ).join(', ')
+        : resolveDownloadedAuthors(comic).join(', ');
     final canContinue = history != null && (history.ep > 0 || history.page > 0);
     return LayoutBuilder(builder: (context, constraints) {
       final compact = constraints.maxWidth < 500;
+      Widget infoValue(
+        String displayText, {
+        String? rawSearchValue,
+        TextStyle? style,
+      }) {
+        final isPlaceholder = _isPlaceholderInfoValue(displayText);
+        final value = Align(
+          alignment: Alignment.centerLeft,
+          child: Text(
+            displayText,
+            maxLines: 3,
+            overflow: TextOverflow.ellipsis,
+            style: style,
+          ),
+        );
+        if (isPlaceholder) {
+          return value;
+        }
+        final keyword = _localInfoSearchKeyword(
+          displayText: displayText,
+          rawSearchValue: rawSearchValue,
+        );
+        return InfoValueAction(
+          data: InfoValueData(
+            displayText: displayText,
+            rawSearchValue: rawSearchValue ?? displayText,
+          ),
+          onSearch:
+              keyword.isEmpty ? null : () => _openRecommendationSearch(keyword),
+          child: value,
+        );
+      }
+
       final actions = Wrap(
         alignment: compact ? WrapAlignment.center : WrapAlignment.start,
         children: [
@@ -2593,20 +2693,29 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      SelectableText(
+                      infoValue(
                         comic.name.trim(),
                         style: const TextStyle(fontSize: 18),
                       ),
-                      if (comic.subTitle.trim().isNotEmpty) ...[
+                      if (author.trim().isNotEmpty) ...[
                         const SizedBox(height: 8),
-                        SelectableText(comic.subTitle,
-                            style: const TextStyle(fontSize: 14)),
+                        infoValue(
+                          author,
+                          style: const TextStyle(fontSize: 14),
+                        ),
                       ],
                       const SizedBox(height: 8),
-                      Text(_sourceLabel, style: const TextStyle(fontSize: 12)),
+                      infoValue(
+                        _sourceLabel,
+                        rawSearchValue: comic.sourceDisplayName,
+                        style: const TextStyle(fontSize: 12),
+                      ),
                       const SizedBox(height: 8),
-                      Text(_formatSize(comic.comicSize),
-                          style: const TextStyle(fontSize: 12)),
+                      infoValue(
+                        _formatSize(comic.comicSize),
+                        rawSearchValue: comic.comicSize?.toString(),
+                        style: const TextStyle(fontSize: 12),
+                      ),
                       if (!compact)
                         Padding(
                             padding: const EdgeInsets.only(top: 12),

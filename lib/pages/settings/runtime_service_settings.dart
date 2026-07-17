@@ -205,6 +205,7 @@ class _AppServiceSettingsSectionState extends State<AppServiceSettingsSection> {
           ),
         ),
         const ServiceDiscoveryStrategySettings(),
+        const ServiceScanPortsEditor(),
         if (currentMode == appRuntimeModeClient)
           const _RemoteServerAddressTile(),
         if (currentMode == appRuntimeModeServer) const _ServiceAdminPortTile(),
@@ -406,6 +407,346 @@ class _ServiceDiscoveryStrategySettingsState
         ),
       ],
     );
+  }
+}
+
+class ServiceScanPortsEditor extends StatefulWidget {
+  const ServiceScanPortsEditor({
+    super.key,
+    this.compact = false,
+    this.onManage,
+  });
+
+  final bool compact;
+  final VoidCallback? onManage;
+
+  @override
+  State<ServiceScanPortsEditor> createState() => _ServiceScanPortsEditorState();
+}
+
+class _ServiceScanPortsEditorState extends State<ServiceScanPortsEditor> {
+  late final TextEditingController _controller;
+  String? _errorText;
+  bool _saving = false;
+
+  List<int> get _customPorts => decodeServiceScanCustomPorts(
+        appdata.settings[serviceScanCustomPortsSettingIndex],
+      );
+
+  List<int> get _effectivePorts => effectiveServiceScanPorts(
+        appdata.settings[serviceScanCustomPortsSettingIndex],
+      );
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = TextEditingController();
+    App.serviceConfigVersion.addListener(_handleServiceConfigChanged);
+  }
+
+  @override
+  void dispose() {
+    App.serviceConfigVersion.removeListener(_handleServiceConfigChanged);
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _handleServiceConfigChanged() {
+    if (mounted) {
+      setState(() {});
+    }
+  }
+
+  Future<void> _persistCustomPorts(
+    List<int> ports, {
+    required String feedback,
+  }) async {
+    if (_saving) {
+      return;
+    }
+    setState(() {
+      _saving = true;
+    });
+    try {
+      appdata.settings[serviceScanCustomPortsSettingIndex] =
+          encodeServiceScanCustomPorts(ports);
+      await appdata.updateSettings();
+      App.notifyServiceConfigChanged();
+      if (mounted && feedback.isNotEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(feedback.tl)),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('端口设置保存失败：$e'.tl)),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _saving = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _addPort() async {
+    final current = _customPorts;
+    final validation = validateServiceScanPortInput(
+      _controller.text,
+      existing: current,
+    );
+    if (!validation.isValid) {
+      setState(() {
+        _errorText = validation.message;
+      });
+      return;
+    }
+    final port = validation.port!;
+    setState(() {
+      _errorText = null;
+    });
+    await _persistCustomPorts(
+      [...current, port],
+      feedback: '已添加端口 $port',
+    );
+    if (mounted) {
+      _controller.clear();
+    }
+  }
+
+  Future<void> _removePort(int port) async {
+    final updated = _customPorts..remove(port);
+    await _persistCustomPorts(
+      updated,
+      feedback: '已移除端口 $port',
+    );
+  }
+
+  Future<void> _restoreDefaults() async {
+    final shouldRestore = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text('恢复默认扫描端口'.tl),
+        content: Text('将清空全部自定义端口，仅保留 9527 和 8080 两个预设。'.tl),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: Text('取消'.tl),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: Text('恢复默认'.tl),
+          ),
+        ],
+      ),
+    );
+    if (!mounted || shouldRestore != true) {
+      return;
+    }
+    await _persistCustomPorts(
+      const <int>[],
+      feedback: '已恢复默认扫描端口',
+    );
+  }
+
+  Widget _buildPortChip(
+    BuildContext context,
+    int port, {
+    required bool builtIn,
+  }) {
+    final label = builtIn ? '$port · 预设'.tl : port.toString();
+    if (builtIn) {
+      return Chip(
+        avatar: const Icon(Icons.lock_outline, size: 16),
+        label: Text(label),
+      );
+    }
+    return InputChip(
+      label: Text(label),
+      onDeleted: _saving ? null : () => _removePort(port),
+      deleteIcon: const Icon(Icons.close, size: 18),
+    );
+  }
+
+  Widget _buildPortChips(BuildContext context) {
+    final customPorts = _customPorts;
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      children: [
+        for (final port in serviceScanBuiltInPorts)
+          _buildPortChip(context, port, builtIn: true),
+        for (final port in customPorts)
+          _buildPortChip(context, port, builtIn: false),
+      ],
+    );
+  }
+
+  Widget _buildCompact(BuildContext context) {
+    final customPorts = _customPorts;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Expanded(
+                child: Text(
+                  '扫描端口'.tl,
+                  style: Theme.of(context).textTheme.titleSmall,
+                ),
+              ),
+              Text(
+                '${_effectivePorts.length} 个'.tl,
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+              const SizedBox(width: 4),
+              IconButton(
+                tooltip: '添加端口'.tl,
+                onPressed:
+                    _saving || customPorts.length >= maxServiceScanCustomPorts
+                        ? null
+                        : () => _openCompactAddDialog(context),
+                icon: const Icon(Icons.add),
+              ),
+              if (widget.onManage != null)
+                TextButton(
+                  onPressed: _saving ? null : widget.onManage,
+                  child: Text('管理'.tl),
+                ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          _buildPortChips(context),
+          const SizedBox(height: 4),
+          Text(
+            '本轮发现将探测以上 ${_effectivePorts.length} 个端口。'.tl,
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _openCompactAddDialog(BuildContext context) async {
+    final controller = TextEditingController();
+    final result = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text('添加扫描端口'.tl),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          keyboardType: TextInputType.number,
+          decoration: InputDecoration(
+            labelText: '端口号'.tl,
+            hintText: '例如 3000',
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: Text('取消'.tl),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(controller.text),
+            child: Text('添加'.tl),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+    if (!mounted || result == null) {
+      return;
+    }
+    _controller.text = result;
+    await _addPort();
+  }
+
+  Widget _buildFull(BuildContext context) {
+    final customPorts = _customPorts;
+    final addButton = FilledButton.icon(
+      onPressed: _saving || customPorts.length >= maxServiceScanCustomPorts
+          ? null
+          : _addPort,
+      icon: const Icon(Icons.add),
+      label: Text('添加端口'.tl),
+    );
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final input = TextField(
+            controller: _controller,
+            enabled: !_saving,
+            keyboardType: TextInputType.number,
+            decoration: InputDecoration(
+              labelText: '自定义端口'.tl,
+              hintText: '1–65535',
+              errorText: _errorText?.tl,
+              helperText:
+                  '${customPorts.length}/$maxServiceScanCustomPorts 个自定义端口'.tl,
+            ),
+            onSubmitted: (_) => _addPort(),
+          );
+          final inputRow = constraints.maxWidth >= 420
+              ? Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(child: input),
+                    const SizedBox(width: 12),
+                    Padding(
+                      padding: const EdgeInsets.only(top: 8),
+                      child: addButton,
+                    ),
+                  ],
+                )
+              : Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [input, addButton],
+                );
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                '发现服务端口'.tl,
+                style: Theme.of(context).textTheme.titleSmall,
+              ),
+              const SizedBox(height: 4),
+              Text(
+                '网段扫描和 mDNS 无结果时的兜底扫描使用内置 9527、8080，另可添加最多 8 个单端口。服务端实际监听端口不会因此改变。'
+                    .tl,
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+              const SizedBox(height: 12),
+              _buildPortChips(context),
+              const SizedBox(height: 12),
+              inputRow,
+              const SizedBox(height: 4),
+              TextButton.icon(
+                onPressed:
+                    _saving || customPorts.isEmpty ? null : _restoreDefaults,
+                icon: const Icon(Icons.restart_alt),
+                label: Text('恢复默认'.tl),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (widget.compact) {
+      return _buildCompact(context);
+    }
+    return _buildFull(context);
   }
 }
 

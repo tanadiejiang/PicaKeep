@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:picakeep/network/eh_network/eh_main_network.dart';
 import 'package:picakeep/network/eh_network/eh_models.dart';
 import 'package:picakeep/network/eh_network/get_gallery_id.dart';
@@ -7,6 +9,8 @@ import 'package:picakeep/network/picacg_network/picacg_network.dart';
 
 import '../ai_sources.dart';
 import '../ai_tool.dart';
+import '../../download_author_resolver.dart';
+import '../../untranslated_tags/untranslated_tag_coordinator.dart';
 
 /// 四源通用的只读漫画详情查询工具。
 ///
@@ -19,8 +23,7 @@ class GetComicDetailTool extends AiTool {
   String get name => 'get_comic_detail';
 
   @override
-  String get description =>
-      '按源和漫画ID获取完整详情（封面/作者/标签/简介等），仅查看不下载，不会加入下载队列。';
+  String get description => '按源和漫画ID获取完整详情（封面/作者/标签/简介等），仅查看不下载，不会加入下载队列。';
 
   @override
   Map<String, Object?> get parametersSchema => const {
@@ -28,7 +31,12 @@ class GetComicDetailTool extends AiTool {
         'properties': {
           'source': {
             'type': 'string',
-            'enum': [aiSourcePicacg, aiSourceJm, aiSourceEhentai, aiSourceNhentai],
+            'enum': [
+              aiSourcePicacg,
+              aiSourceJm,
+              aiSourceEhentai,
+              aiSourceNhentai
+            ],
           },
           'id': {'type': 'string', 'description': '漫画/画廊ID或ehentai完整链接'},
         },
@@ -37,6 +45,18 @@ class GetComicDetailTool extends AiTool {
 
   @override
   Future<AiToolResult> execute(Map<String, dynamic> args) async {
+    return executeWithContext(
+      args,
+      AiToolExecutionContext(
+          operationId: 'ai-direct-${DateTime.now().microsecondsSinceEpoch}'),
+    );
+  }
+
+  @override
+  Future<AiToolResult> executeWithContext(
+    Map<String, dynamic> args,
+    AiToolExecutionContext context,
+  ) async {
     final source = normalizeAiSource(args['source']);
     final id = args['id']?.toString().trim() ?? '';
     if (source == null) return const AiToolResult.failure('unsupported source');
@@ -56,6 +76,13 @@ class GetComicDetailTool extends AiTool {
       case aiSourceEhentai:
         final res = await EhNetwork().getGalleryInfo(id);
         if (res.error) return AiToolResult.failure(res.errorMessageWithoutNull);
+        unawaited(_observeTags(
+          source: aiSourceEhentai,
+          comicId: getGalleryId(res.data.link),
+          flatTags: flattenEhTags(res.data.tags),
+          categorizedTags: res.data.tags,
+          operationId: context.operationId,
+        ));
         return AiToolResult.success(_ehJson(res.data));
       case aiSourceNhentai:
         final normalizedId = id
@@ -63,9 +90,40 @@ class GetComicDetailTool extends AiTool {
             .replaceFirst(RegExp(r'^nh', caseSensitive: false), '');
         final res = await NhentaiNetwork().getComicInfo(normalizedId);
         if (res.error) return AiToolResult.failure(res.errorMessageWithoutNull);
+        unawaited(_observeTags(
+          source: aiSourceNhentai,
+          comicId: res.data.id,
+          flatTags: flattenEhTags(res.data.tags),
+          categorizedTags: res.data.tags,
+          operationId: context.operationId,
+        ));
         return AiToolResult.success(_nhentaiJson(res.data));
     }
     return const AiToolResult.failure('unsupported source');
+  }
+
+  Future<void> _observeTags({
+    required String source,
+    required String comicId,
+    required Iterable<String> flatTags,
+    required Map<String, List<String>> categorizedTags,
+    required String operationId,
+  }) async {
+    if (operationId.trim().isEmpty || comicId.trim().isEmpty) return;
+    try {
+      await UntranslatedTagCoordinator.instance.observe(
+        UntranslatedTagObservation(
+          source: source,
+          comicId: comicId,
+          flat: flatTags,
+          categorized: categorizedTags,
+          operationId: operationId,
+          context: 'ai-tool-detail',
+        ),
+      );
+    } catch (_) {
+      // Tag collection is side data and must never change tool results.
+    }
   }
 
   Map<String, Object?> _picacgJson(PicacgComicItem comic) => {
@@ -100,7 +158,8 @@ class GetComicDetailTool extends AiTool {
         'source': aiSourceEhentai,
         'id': getGalleryId(gallery.link),
         'title': gallery.title,
-        'author': gallery.uploader,
+        'author': resolveEhAuthorsFromFlatTags(flattenEhTags(gallery.tags)),
+        'uploader': gallery.uploader,
         'coverUrl': gallery.coverPath,
         'tags': flattenEhTags(gallery.tags),
         'pageCount': int.tryParse(gallery.maxPage),
@@ -113,6 +172,7 @@ class GetComicDetailTool extends AiTool {
         'id': comic.id,
         'title': comic.title,
         'coverUrl': comic.cover,
+        'author': resolveNhentaiAuthors(comic.tags),
         'tags': flattenEhTags(comic.tags),
         'pageCount': comic.thumbnails.length,
       };

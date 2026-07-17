@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:picakeep/base.dart';
@@ -6,6 +8,7 @@ import 'package:picakeep/foundation/app.dart';
 import 'package:picakeep/foundation/app_runtime_mode.dart';
 import 'package:picakeep/foundation/remote_library_data_source.dart';
 import 'package:picakeep/foundation/service_data_source.dart';
+import 'package:picakeep/pages/app_capabilities_page.dart';
 import 'package:picakeep/pages/settings/runtime_service_settings.dart';
 import 'package:picakeep/server/local_server_runtime.dart';
 import 'package:picakeep/tools/android_foreground_service.dart';
@@ -13,9 +16,14 @@ import 'package:picakeep/tools/translations.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 class ServiceInfoPage extends StatefulWidget {
-  const ServiceInfoPage({super.key, this.standalone = false});
+  const ServiceInfoPage({
+    super.key,
+    this.standalone = false,
+    this.dataSource,
+  });
 
   final bool standalone;
+  final RuntimeServiceDataSource? dataSource;
 
   @override
   State<ServiceInfoPage> createState() => _ServiceInfoPageState();
@@ -40,6 +48,12 @@ class _ServiceInfoPageState extends State<ServiceInfoPage> {
   bool _refreshingServiceState = false;
   bool _refreshingStats = false;
   int _snapshotReloadGeneration = 0;
+  int _discoveryGeneration = 0;
+  DiscoverySession? _discoverySession;
+  StreamSubscription<DiscoveryProgress>? _discoveryProgressSubscription;
+  DiscoveryProgress? _discoveryProgress;
+  String? _discoveryError;
+  DateTime? _lastSnapshotRefreshAt;
 
   String get _discoveryMode => normalizeServiceDiscoveryMode(
         appdata.settings[serviceDiscoveryModeSettingIndex],
@@ -51,8 +65,15 @@ class _ServiceInfoPageState extends State<ServiceInfoPage> {
   String get _serverAddress =>
       appdata.settings[remoteServerAddressSettingIndex].trim();
 
+  RuntimeServiceDataSource get _dataSource =>
+      widget.dataSource ?? RuntimeServiceDataSourceResolver.current();
+
   String get _adminPort => normalizeServiceAdminPortValue(
         appdata.settings[serviceAdminPortSettingIndex],
+      );
+
+  List<int> get _effectiveScanPorts => effectiveServiceScanPorts(
+        appdata.settings[serviceScanCustomPortsSettingIndex],
       );
 
   @override
@@ -72,10 +93,19 @@ class _ServiceInfoPageState extends State<ServiceInfoPage> {
     App.serviceConfigVersion.removeListener(_handleServiceConfigChanged);
     App.serviceRuntimeVersion.removeListener(_handleServiceRuntimeChanged);
     App.serviceStatsVersion.removeListener(_handleServiceStatsChanged);
+    final progressSubscription = _discoveryProgressSubscription;
+    if (progressSubscription != null) {
+      unawaited(progressSubscription.cancel());
+    }
+    final discoverySession = _discoverySession;
+    if (discoverySession != null) {
+      unawaited(discoverySession.cancel());
+    }
     super.dispose();
   }
 
   void _handleServiceConfigChanged() {
+    unawaited(_cancelDiscovery());
     _reloadSnapshot();
     if (currentServerPlatformCapability().isEnhancedServerTarget) {
       _reloadAndroidSupportState();
@@ -117,14 +147,14 @@ class _ServiceInfoPageState extends State<ServiceInfoPage> {
         _loading = true;
       });
     }
-    final snapshot =
-        await RuntimeServiceDataSourceResolver.current().fetchSnapshot();
+    final snapshot = await _dataSource.fetchSnapshot();
     if (!mounted || generation != _snapshotReloadGeneration) {
       return;
     }
     setState(() {
       _snapshot = snapshot;
       _loading = false;
+      _lastSnapshotRefreshAt = DateTime.now();
     });
   }
 
@@ -135,8 +165,7 @@ class _ServiceInfoPageState extends State<ServiceInfoPage> {
     _refreshingStats = true;
     final generation = _snapshotReloadGeneration;
     try {
-      final snapshot =
-          await RuntimeServiceDataSourceResolver.current().fetchSnapshot();
+      final snapshot = await _dataSource.fetchSnapshot();
       if (!mounted || generation != _snapshotReloadGeneration || _loading) {
         return;
       }
@@ -237,33 +266,95 @@ class _ServiceInfoPageState extends State<ServiceInfoPage> {
     App.notifyServiceConfigChanged();
   }
 
+  void _openPortManagement() {
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => const AppCapabilitiesPage()),
+    );
+  }
+
+  Future<void> _cancelDiscovery() async {
+    final session = _discoverySession;
+    final progressSubscription = _discoveryProgressSubscription;
+    if (session == null && progressSubscription == null) {
+      return;
+    }
+    _discoveryGeneration++;
+    _discoverySession = null;
+    _discoveryProgressSubscription = null;
+    await progressSubscription?.cancel();
+    await session?.cancel();
+    if (mounted) {
+      setState(() {
+        _discovering = false;
+        _discoveryProgress = null;
+      });
+    }
+  }
+
+  String _discoveryStatsText(LocalNetworkServiceDiscoveryResult result) {
+    return '主机 ${result.scannedHostCount} · 端口 ${result.scannedPortCount} · '
+        '端点 ${result.scannedEndpointCount}/${result.plannedEndpointCount}';
+  }
+
   Future<void> _scanLocalNetwork() async {
     if (_discovering) {
       return;
     }
-    setState(() {
-      _discovering = true;
+    await _cancelDiscovery();
+    final generation = ++_discoveryGeneration;
+    final mode = _discoveryMode;
+    final effectivePorts = List<int>.unmodifiable(_effectiveScanPorts);
+    final fallbackToSubnetScan = isServiceDiscoveryMdnsFallbackEnabled(
+      appdata.settings[serviceDiscoveryMdnsFallbackSettingIndex],
+    );
+    final session = LocalNetworkServiceDiscovery().createSession(
+      mode: mode,
+      preferredAddress: _serverAddress,
+      effectiveScanPorts: effectivePorts,
+      fallbackToSubnetScan: fallbackToSubnetScan,
+      generation: generation,
+    );
+    _discoverySession = session;
+    _discoveryProgressSubscription = session.progress.listen((progress) {
+      if (!mounted ||
+          generation != _discoveryGeneration ||
+          !identical(_discoverySession, session)) {
+        return;
+      }
+      setState(() {
+        _discoveryProgress = progress;
+      });
     });
+    if (mounted) {
+      setState(() {
+        _discovering = true;
+        _discoveryProgress = null;
+        _discoveryError = null;
+      });
+    }
     try {
-      final mode = _discoveryMode;
-      final fallbackToSubnetScan = isServiceDiscoveryMdnsFallbackEnabled(
-        appdata.settings[serviceDiscoveryMdnsFallbackSettingIndex],
-      );
-      final result = await LocalNetworkServiceDiscovery().discover(
-        mode: mode,
-        preferredAddress: _serverAddress,
-        fallbackPort: _adminPort,
-        fallbackToSubnetScan: fallbackToSubnetScan,
-      );
-      if (!mounted) {
+      final result = await session.result;
+      if (!mounted || generation != _discoveryGeneration) {
+        return;
+      }
+      if (result.cancelled) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('已取消服务发现。'.tl)),
+        );
+        return;
+      }
+      if (result.timedOut) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('服务发现超时，请缩小网络范围后重试。'.tl)),
+        );
         return;
       }
       if (result.candidates.isEmpty) {
         final message = result.fellBackToSubnetScan
-            ? 'mDNS 未发现可用服务，已自动改用网段扫描；仍未发现可用服务，已扫描 ${result.scannedHostCount} 个地址 / ${result.scannedSubnetCount} 个网段'
+            ? 'mDNS 未发现可用服务，已自动改用网段扫描；仍未发现可用服务。${_discoveryStatsText(result)} / 网段 ${result.scannedSubnetCount}'
             : mode == serviceDiscoveryModeMdns
-                ? '未通过 mDNS 发现可用服务；请确认服务端已启动，且两端在同一局域网并允许组播。'
-                : '未发现可用服务，已扫描 ${result.scannedHostCount} 个地址 / ${result.scannedSubnetCount} 个网段';
+                ? '未通过 mDNS 发现可用服务；请确认服务端已启动，且两端在同一局域网并允许组播。${_discoveryStatsText(result)}'
+                : '未发现可用服务。${_discoveryStatsText(result)} / 网段 ${result.scannedSubnetCount}';
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text(message.tl)),
         );
@@ -285,8 +376,21 @@ class _ServiceInfoPageState extends State<ServiceInfoPage> {
         return;
       }
       await _applyDiscoveredServer(selected);
+    } catch (e) {
+      if (mounted && generation == _discoveryGeneration) {
+        _discoveryError = '服务发现失败：$e';
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(_discoveryError!.tl)),
+        );
+      }
     } finally {
-      if (mounted) {
+      if (identical(_discoverySession, session)) {
+        _discoverySession = null;
+        final progressSubscription = _discoveryProgressSubscription;
+        _discoveryProgressSubscription = null;
+        await progressSubscription?.cancel();
+      }
+      if (mounted && generation == _discoveryGeneration) {
         setState(() {
           _discovering = false;
         });
@@ -377,8 +481,31 @@ class _ServiceInfoPageState extends State<ServiceInfoPage> {
     }
   }
 
+  Future<void> _confirmDisconnectRemoteServer() async {
+    final shouldDisconnect = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text('断开当前服务'.tl),
+        content: Text('断开后将清除当前客户端服务地址，之后需要重新填写或发现服务。'.tl),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: Text('取消'.tl),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: Text('断开连接'.tl),
+          ),
+        ],
+      ),
+    );
+    if (mounted && shouldDisconnect == true) {
+      await _disconnectRemoteServer();
+    }
+  }
+
   Future<void> _disconnectRemoteServer() async {
-    if (_serverAddress.isEmpty) {
+    if (_serverAddress.trim().isEmpty) {
       return;
     }
     appdata.settings[remoteServerAddressSettingIndex] = '';
@@ -473,84 +600,34 @@ class _ServiceInfoPageState extends State<ServiceInfoPage> {
   }
 
   Widget _buildClientSection(ServiceInfoSnapshot snapshot) {
+    final statusUrl = snapshot.statusUrl?.trim() ?? '';
+    final adminUrl = snapshot.adminUrl?.trim() ?? '';
     return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         _InfoCard(
           icon: Icons.link,
           title: '客户端连接'.tl,
-          titleTrailing: Align(
-            alignment: Alignment.centerRight,
-            child: SizedBox(
-              width: 108,
-              child: FilledButton.tonal(
-                onPressed: snapshot.hasConfiguredAddress
-                    ? _disconnectRemoteServer
-                    : null,
-                style: FilledButton.styleFrom(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                  visualDensity: VisualDensity.compact,
-                ),
-                child: Text('断开连接'.tl),
-              ),
-            ),
-          ),
+          outlined: false,
+          titleTrailing: _buildDisconnectAction(snapshot),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              _InfoRow(
-                label: '生效地址'.tl,
-                value: snapshot.normalizedAddress.isEmpty
-                    ? '--'
-                    : snapshot.normalizedAddress,
+              _buildClientMetrics(snapshot),
+              const SizedBox(height: 16),
+              const Divider(height: 1),
+              const SizedBox(height: 12),
+              Text(
+                '节点信息'.tl,
+                style: Theme.of(context).textTheme.titleSmall,
               ),
               const SizedBox(height: 8),
-              _InfoRow(
-                label: '状态接口'.tl,
-                value: snapshot.statusUrl?.isNotEmpty == true
-                    ? snapshot.statusUrl!
-                    : '--',
-              ),
-              const SizedBox(height: 8),
-              _InfoRow(
-                label: '连接状态'.tl,
-                value: _loading ? '刷新中'.tl : snapshot.statusText,
-              ),
-              const SizedBox(height: 8),
-              _InfoRow(
-                label: '详细信息'.tl,
-                value: snapshot.deviceSummary,
-              ),
-              const SizedBox(height: 8),
-              _InfoRow(
-                label: '延迟 / 状态码'.tl,
-                value:
-                    '${snapshot.latencyMs?.toString() ?? '--'} ms / ${snapshot.httpStatusCode?.toString() ?? '--'}',
-              ),
-              const SizedBox(height: 8),
-              _InfoRow(
-                label: '漫画数量 / 连接数'.tl,
-                value:
-                    '${snapshot.comicCount?.toString() ?? '--'} / ${snapshot.connectionCount?.toString() ?? '--'}',
-              ),
-              const SizedBox(height: 8),
-              _InfoRow(
-                label: '资源根 / 总体积'.tl,
-                value:
-                    '${snapshot.libraryRootCount?.toString() ?? '--'} / ${_formatBytes(snapshot.resourceBytes)}',
-              ),
-              const SizedBox(height: 8),
-              _InfoRow(
-                label: '累计请求 / 启动时间'.tl,
-                value:
-                    '${snapshot.totalRequests?.toString() ?? '--'} / ${snapshot.startedAt ?? '--'}',
-              ),
-              const SizedBox(height: 8),
-              _InfoRow(
-                label: '后台地址'.tl,
-                value: snapshot.adminUrl?.isNotEmpty == true
-                    ? snapshot.adminUrl!
-                    : '--',
+              _buildNodeIdentity(snapshot),
+              const SizedBox(height: 12),
+              _buildTechnicalDetails(
+                snapshot,
+                statusUrl: statusUrl,
+                adminUrl: adminUrl,
               ),
               const SizedBox(height: 12),
               Wrap(
@@ -559,17 +636,21 @@ class _ServiceInfoPageState extends State<ServiceInfoPage> {
                 crossAxisAlignment: WrapCrossAlignment.center,
                 children: [
                   FilledButton.tonal(
-                    onPressed: _editServerAddress,
-                    child: Text('填写地址'.tl),
-                  ),
-                  FilledButton.tonal(
+                    key: const ValueKey<String>('service-discovery-action'),
                     onPressed: _discovering ? null : _scanLocalNetwork,
                     child: _ActionButtonLabel(
-                      label: _discoveryActionLabel.tl,
+                      label:
+                          '${_discoveryActionLabel.tl}（${_effectiveScanPorts.length}）',
                       loading: _discovering,
                     ),
                   ),
                   FilledButton(
+                    key: const ValueKey<String>('service-edit-address-action'),
+                    onPressed: _editServerAddress,
+                    child: Text('填写地址'.tl),
+                  ),
+                  FilledButton(
+                    key: const ValueKey<String>('service-refresh-action'),
                     onPressed: (_loading || _refreshingServiceState)
                         ? null
                         : _refreshServiceState,
@@ -584,21 +665,238 @@ class _ServiceInfoPageState extends State<ServiceInfoPage> {
             ],
           ),
         ),
-        const SizedBox(height: 12),
+        const Divider(height: 1),
         _InfoCard(
           icon: Icons.wifi_tethering,
-          title: '自动发现策略'.tl,
-          titleTrailing: SizedBox(
-            width: 124,
-            child: ServiceDiscoveryModeSelector(
-              onChanged: (_) {
-                if (mounted) {
-                  setState(() {});
-                }
-              },
-            ),
+          title: '自动发现'.tl,
+          outlined: false,
+          titleTrailing: ServiceDiscoveryModeSelector(
+            onChanged: (_) {
+              if (mounted) {
+                setState(() {});
+              }
+            },
           ),
-          child: const _ServiceDiscoveryStrategySummary(),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                serviceDiscoveryModeDescription(_discoveryMode).tl,
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+              const SizedBox(height: 4),
+              ServiceScanPortsEditor(
+                compact: true,
+                onManage: _openPortManagement,
+              ),
+              if (_discoveryError != null) ...[
+                const SizedBox(height: 4),
+                Text(
+                  _discoveryError!.tl,
+                  style: TextStyle(
+                    color: Theme.of(context).colorScheme.error,
+                  ),
+                ),
+              ],
+              if (_discovering || _discoveryProgress != null) ...[
+                const SizedBox(height: 8),
+                _DiscoveryProgressPanel(
+                  progress: _discoveryProgress,
+                  portCount: _effectiveScanPorts.length,
+                  onCancel: _discovering ? _cancelDiscovery : null,
+                ),
+              ],
+              SwitchListTile.adaptive(
+                contentPadding: EdgeInsets.zero,
+                dense: true,
+                title: Text('mDNS 兜底扫描'.tl),
+                subtitle: Text(
+                  serviceDiscoveryMdnsFallbackDescription(
+                    isServiceDiscoveryMdnsFallbackEnabled(
+                      appdata
+                          .settings[serviceDiscoveryMdnsFallbackSettingIndex],
+                    )
+                        ? '1'
+                        : '0',
+                  ).tl,
+                ),
+                value: isServiceDiscoveryMdnsFallbackEnabled(
+                  appdata.settings[serviceDiscoveryMdnsFallbackSettingIndex],
+                ),
+                onChanged: (value) async {
+                  appdata.settings[serviceDiscoveryMdnsFallbackSettingIndex] =
+                      value ? '1' : '0';
+                  await appdata.updateSettings();
+                  App.notifyServiceConfigChanged();
+                },
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildDisconnectAction(ServiceInfoSnapshot snapshot) {
+    final enabled = snapshot.addressInput.trim().isNotEmpty;
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final textScale = MediaQuery.textScalerOf(context).scale(1);
+        final compact = MediaQuery.sizeOf(context).width < 430 ||
+            textScale > 1.45 ||
+            constraints.maxWidth < 132;
+        if (compact) {
+          return IconButton(
+            key: const ValueKey<String>('service-disconnect-action'),
+            tooltip: '断开连接'.tl,
+            onPressed: enabled ? _confirmDisconnectRemoteServer : null,
+            icon: const Icon(Icons.link_off_outlined),
+            color: Theme.of(context).colorScheme.error,
+          );
+        }
+        return OutlinedButton.icon(
+          key: const ValueKey<String>('service-disconnect-action'),
+          onPressed: enabled ? _confirmDisconnectRemoteServer : null,
+          icon: const Icon(Icons.link_off_outlined),
+          label: Text('断开连接'.tl),
+          style: OutlinedButton.styleFrom(
+            foregroundColor: Theme.of(context).colorScheme.error,
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildNodeIdentity(ServiceInfoSnapshot snapshot) {
+    final system = snapshot.deviceSystem?.trim().isNotEmpty == true
+        ? snapshot.deviceSystem!.trim()
+        : '--';
+    final name = snapshot.deviceName?.trim().isNotEmpty == true
+        ? snapshot.deviceName!.trim()
+        : snapshot.deviceSummary.trim();
+    return KeyedSubtree(
+      key: const ValueKey<String>('service-device-identity-fields'),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final textScale = MediaQuery.textScalerOf(context).scale(1);
+          final stackFields = constraints.maxWidth < 280 || textScale > 1.6;
+          final fields = [
+            _InfoRow(label: '设备系统'.tl, value: system),
+            _InfoRow(label: '设备名称'.tl, value: name),
+          ];
+          if (stackFields) {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                fields[0],
+                const SizedBox(height: 8),
+                fields[1],
+              ],
+            );
+          }
+          return Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(child: fields[0]),
+              const SizedBox(width: 12),
+              Expanded(child: fields[1]),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildClientMetrics(ServiceInfoSnapshot snapshot) {
+    final metrics = [
+      _MetricValue(
+        icon: Icons.speed_outlined,
+        label: '延迟'.tl,
+        value: snapshot.latencyMs == null ? '--' : '${snapshot.latencyMs} ms',
+      ),
+      _MetricValue(
+        icon: Icons.menu_book_outlined,
+        label: '漫画'.tl,
+        value: snapshot.comicCount?.toString() ?? '--',
+      ),
+      _MetricValue(
+        icon: Icons.people_outline,
+        label: '连接'.tl,
+        value: snapshot.connectionCount?.toString() ?? '--',
+      ),
+      _MetricValue(
+        icon: Icons.storage_outlined,
+        label: '资源体积'.tl,
+        value: _formatBytes(snapshot.resourceBytes),
+      ),
+    ];
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final itemWidth = (constraints.maxWidth - 8) / 2;
+        return Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            for (final metric in metrics)
+              SizedBox(
+                width: itemWidth,
+                child: _MetricTile(metric: metric),
+              ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _buildTechnicalDetails(
+    ServiceInfoSnapshot snapshot, {
+    required String statusUrl,
+    required String adminUrl,
+  }) {
+    final expanded = MediaQuery.of(context).size.width >= 600;
+    return ExpansionTile(
+      tilePadding: EdgeInsets.zero,
+      childrenPadding: EdgeInsets.zero,
+      initiallyExpanded: expanded,
+      title: Text('技术详情'.tl),
+      subtitle: Text('地址、状态接口和服务运行信息'.tl),
+      children: [
+        _InfoRow(
+          label: '生效地址'.tl,
+          value: snapshot.normalizedAddress.isEmpty
+              ? '--'
+              : snapshot.normalizedAddress,
+          copy: snapshot.normalizedAddress.isEmpty
+              ? null
+              : () => _copyText(snapshot.normalizedAddress, '已复制服务地址'),
+        ),
+        const SizedBox(height: 8),
+        _InfoRow(
+          label: '状态接口'.tl,
+          value: statusUrl.isEmpty ? '--' : statusUrl,
+          copy:
+              statusUrl.isEmpty ? null : () => _copyText(statusUrl, '已复制状态接口'),
+        ),
+        const SizedBox(height: 8),
+        _InfoRow(
+          label: '后台地址'.tl,
+          value: adminUrl.isEmpty ? '--' : adminUrl,
+          copy: adminUrl.isEmpty ? null : () => _copyText(adminUrl, '已复制后台地址'),
+        ),
+        const SizedBox(height: 8),
+        _InfoRow(
+          label: '状态码'.tl,
+          value: snapshot.httpStatusCode?.toString() ?? '--',
+        ),
+        const SizedBox(height: 8),
+        _InfoRow(
+          label: '累计请求'.tl,
+          value: snapshot.totalRequests?.toString() ?? '--',
+        ),
+        const SizedBox(height: 8),
+        _InfoRow(
+          label: '启动时间'.tl,
+          value: snapshot.startedAt ?? '--',
         ),
       ],
     );
@@ -609,6 +907,7 @@ class _ServiceInfoPageState extends State<ServiceInfoPage> {
     return _InfoCard(
       icon: Icons.dns_outlined,
       title: '服务端状态'.tl,
+      outlined: false,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -806,7 +1105,11 @@ class _ServiceInfoPageState extends State<ServiceInfoPage> {
 
   List<Widget> _buildPageChildren(ServiceInfoSnapshot snapshot) {
     return [
-      _ModeOverviewCard(snapshot: snapshot, loading: _loading),
+      _ModeOverviewCard(
+        snapshot: snapshot,
+        loading: _loading,
+        refreshedAt: _lastSnapshotRefreshAt,
+      ),
       const SizedBox(height: 12),
       if (snapshot.isClientMode)
         _buildClientSection(snapshot)
@@ -1048,6 +1351,179 @@ class _ServerAddressEditorSheetState extends State<_ServerAddressEditorSheet> {
   }
 }
 
+class _MetricValue {
+  const _MetricValue({
+    required this.icon,
+    required this.label,
+    required this.value,
+  });
+
+  final IconData icon;
+  final String label;
+  final String value;
+}
+
+class _MetricTile extends StatelessWidget {
+  const _MetricTile({required this.metric});
+
+  final _MetricValue metric;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    return Container(
+      constraints: const BoxConstraints(minHeight: 76),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        border: Border.all(color: colors.outlineVariant),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Row(
+        children: [
+          Icon(metric.icon, color: colors.primary),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Text(
+                  metric.label,
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  metric.value,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.w700,
+                      ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _StatusBadge extends StatelessWidget {
+  const _StatusBadge({required this.icon, required this.label});
+
+  final IconData icon;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    final largeText = MediaQuery.textScalerOf(context).scale(1) > 1.6;
+    return Container(
+      width: largeText ? double.infinity : null,
+      constraints: const BoxConstraints(minHeight: 40),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: colors.secondaryContainer,
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 20, color: colors.onSecondaryContainer),
+          const SizedBox(width: 8),
+          Flexible(
+            child: Text(
+              label,
+              softWrap: true,
+              style: TextStyle(
+                color: colors.onSecondaryContainer,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _DiscoveryProgressPanel extends StatelessWidget {
+  const _DiscoveryProgressPanel({
+    required this.progress,
+    required this.portCount,
+    required this.onCancel,
+  });
+
+  final DiscoveryProgress? progress;
+  final int portCount;
+  final VoidCallback? onCancel;
+
+  @override
+  Widget build(BuildContext context) {
+    final current = progress;
+    final stage = current?.stage ?? DiscoveryProgressStage.subnetScan;
+    final stageLabel = switch (stage) {
+      DiscoveryProgressStage.mdns => '正在通过 mDNS 验证服务'.tl,
+      DiscoveryProgressStage.subnetScan => '正在进行网段兜底扫描'.tl,
+      DiscoveryProgressStage.completed => '服务发现已完成'.tl,
+      DiscoveryProgressStage.cancelled => '服务发现已取消'.tl,
+      DiscoveryProgressStage.timedOut => '服务发现已超时'.tl,
+      DiscoveryProgressStage.failed => '服务发现失败'.tl,
+    };
+    final planned = current?.plannedEndpoints ?? 0;
+    final completed = current?.completedEndpoints ?? 0;
+    final effectivePortCount = current?.portCount ?? portCount;
+    final progressValue =
+        planned == 0 ? null : (completed / planned).clamp(0.0, 1.0).toDouble();
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Text(
+                  stageLabel,
+                  style: Theme.of(context).textTheme.titleSmall,
+                ),
+              ),
+              if (onCancel != null)
+                TextButton.icon(
+                  onPressed: onCancel,
+                  icon: const Icon(Icons.stop_circle_outlined),
+                  label: Text('取消'.tl),
+                ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Text(
+            planned == 0
+                ? '已使用 SRV 宣告端口验证，端口数：$effectivePortCount'.tl
+                : '已探测 $completed / $planned 个端点 · 端口 $effectivePortCount'.tl,
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+          const SizedBox(height: 8),
+          LinearProgressIndicator(value: progressValue),
+          if (current?.currentHost?.isNotEmpty == true) ...[
+            const SizedBox(height: 6),
+            SelectableText(
+              '当前主机：${current!.currentHost}',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
 class _DiscoveryCandidateSheetHeader extends StatelessWidget {
   const _DiscoveryCandidateSheetHeader({required this.result});
 
@@ -1072,6 +1548,12 @@ class _DiscoveryCandidateSheetHeader extends StatelessWidget {
             '发现 @a 个可用服务，请选择要连接的节点。'.tlParams({
               'a': result.candidates.length.toString(),
             }),
+            style: textTheme.bodySmall,
+          ),
+          const SizedBox(height: 4),
+          Text(
+            '已验证主机 ${result.scannedHostCount} · 端口 ${result.scannedPortCount} · '
+            '端点 ${result.scannedEndpointCount}/${result.plannedEndpointCount}',
             style: textTheme.bodySmall,
           ),
           if (fallbackText != null) ...[
@@ -1121,11 +1603,14 @@ class _DiscoveryCandidateTile extends StatelessWidget {
     return ListTile(
       contentPadding: EdgeInsets.zero,
       leading: const Icon(Icons.router_outlined),
-      title: Text(showName ? candidate.displayName : addressText),
+      title: Text(
+        showName ? candidate.displayName : addressText,
+        softWrap: true,
+      ),
       subtitle: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          if (showName) Text(addressText),
+          if (showName) SelectableText(addressText),
           Text(metaText.tl),
           Text(candidate.deviceSummary),
         ],
@@ -1228,25 +1713,80 @@ class _AdminLoginPreviewPageState extends State<AdminLoginPreviewPage> {
 }
 
 class _ModeOverviewCard extends StatelessWidget {
-  const _ModeOverviewCard({required this.snapshot, required this.loading});
+  const _ModeOverviewCard({
+    required this.snapshot,
+    required this.loading,
+    this.refreshedAt,
+  });
 
   final ServiceInfoSnapshot snapshot;
   final bool loading;
+  final DateTime? refreshedAt;
+
+  IconData _statusIcon() {
+    if (loading) {
+      return Icons.sync_outlined;
+    }
+    return switch (snapshot.connectionState) {
+      ServiceConnectionState.online => Icons.check_circle_outline,
+      ServiceConnectionState.notConfigured => Icons.edit_location_alt_outlined,
+      ServiceConnectionState.invalidAddress => Icons.error_outline,
+      ServiceConnectionState.offline => Icons.cloud_off_outlined,
+      ServiceConnectionState.idle => Icons.pause_circle_outline,
+    };
+  }
 
   @override
   Widget build(BuildContext context) {
     final modeLabel = snapshot.isServerMode ? '服务端'.tl : '客户端'.tl;
+    final address = snapshot.isClientMode
+        ? snapshot.normalizedAddress
+        : snapshot.adminUrl ?? '';
+    final refreshLabel = refreshedAt == null
+        ? '最近刷新：--'.tl
+        : '最近刷新：@a'.tlParams({
+            'a': refreshedAt!.toLocal().toString().substring(0, 19),
+          });
     return _InfoCard(
-      icon: Icons.cloud_sync_outlined,
+      icon: _statusIcon(),
       title: '服务信息'.tl,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _InfoRow(label: '当前运行模式'.tl, value: modeLabel),
-          const SizedBox(height: 8),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              _StatusBadge(
+                icon: _statusIcon(),
+                label: loading ? '刷新中'.tl : snapshot.statusText,
+              ),
+              Chip(
+                avatar: Icon(
+                  snapshot.isServerMode
+                      ? Icons.dns_outlined
+                      : Icons.devices_outlined,
+                  size: 18,
+                ),
+                label: Text(modeLabel),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
           _InfoRow(
-            label: '当前状态'.tl,
-            value: loading ? '刷新中'.tl : snapshot.statusText,
+            label: snapshot.isServerMode ? '本机后台'.tl : '当前地址'.tl,
+            value: address.isEmpty ? '--' : address,
+          ),
+          const SizedBox(height: 8),
+          Text(
+            snapshot.detailText,
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+          const SizedBox(height: 8),
+          Text(
+            refreshLabel,
+            style: Theme.of(context).textTheme.bodySmall,
           ),
         ],
       ),
@@ -1260,42 +1800,54 @@ class _InfoCard extends StatelessWidget {
     required this.title,
     required this.child,
     this.titleTrailing,
+    this.outlined = true,
   });
 
   final IconData icon;
   final String title;
   final Widget child;
   final Widget? titleTrailing;
+  final bool outlined;
 
   @override
   Widget build(BuildContext context) {
+    final content = Padding(
+      padding: EdgeInsets.only(
+        top: outlined ? 16 : 8,
+        bottom: outlined ? 16 : 12,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(icon),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  title,
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
+              ),
+              if (titleTrailing != null) ...[
+                const SizedBox(width: 12),
+                Flexible(child: titleTrailing!),
+              ],
+            ],
+          ),
+          const SizedBox(height: 12),
+          child,
+        ],
+      ),
+    );
+    if (!outlined) {
+      return content;
+    }
     return Card.outlined(
       margin: EdgeInsets.zero,
       child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Icon(icon),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    title,
-                    style: Theme.of(context).textTheme.titleMedium,
-                  ),
-                ),
-                if (titleTrailing != null) ...[
-                  const SizedBox(width: 12),
-                  Flexible(child: titleTrailing!),
-                ],
-              ],
-            ),
-            const SizedBox(height: 12),
-            child,
-          ],
-        ),
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        child: content,
       ),
     );
   }
@@ -1343,26 +1895,57 @@ class _ActionButtonLabel extends StatelessWidget {
 }
 
 class _InfoRow extends StatelessWidget {
-  const _InfoRow({required this.label, required this.value});
+  const _InfoRow({required this.label, required this.value, this.copy});
 
   final String label;
   final String value;
+  final VoidCallback? copy;
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        SizedBox(
-          width: 120,
-          child: Text(
-            label,
-            style: TextStyle(color: Theme.of(context).colorScheme.primary),
-          ),
-        ),
-        const SizedBox(width: 8),
-        Expanded(child: Text(value)),
-      ],
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final narrow = constraints.maxWidth < 420 ||
+            MediaQuery.textScalerOf(context).scale(1) > 1.25;
+        final labelStyle = TextStyle(
+          color: Theme.of(context).colorScheme.primary,
+          fontWeight: FontWeight.w600,
+        );
+        final valueWidget = SelectableText(value);
+        final valueWithAction = Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(child: valueWidget),
+            if (copy != null)
+              IconButton(
+                tooltip: '复制'.tl,
+                onPressed: copy,
+                icon: const Icon(Icons.copy_outlined),
+                constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
+                padding: EdgeInsets.zero,
+              ),
+          ],
+        );
+        if (narrow) {
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(label, style: labelStyle),
+              const SizedBox(height: 4),
+              valueWithAction,
+            ],
+          );
+        }
+        final labelWidth = (constraints.maxWidth * 0.28).clamp(96.0, 160.0);
+        return Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            SizedBox(width: labelWidth, child: Text(label, style: labelStyle)),
+            const SizedBox(width: 12),
+            Expanded(child: valueWithAction),
+          ],
+        );
+      },
     );
   }
 }

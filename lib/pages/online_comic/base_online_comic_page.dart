@@ -1,7 +1,10 @@
 import 'package:flutter/material.dart';
 
+import 'package:picakeep/components/info_value_action.dart';
 import 'package:picakeep/foundation/state_controller.dart';
+import 'package:picakeep/foundation/untranslated_tags/untranslated_tag_coordinator.dart';
 import 'package:picakeep/network/res.dart';
+import 'package:picakeep/tools/tags_translation.dart';
 
 import 'online_comic_page_components.dart';
 import 'online_comic_page_logic.dart';
@@ -186,6 +189,7 @@ abstract class BaseOnlineComicPage<T> extends StatelessWidget {
           loadData: loadData,
           loadFavoriteState: loadFavoriteState,
           loadLikeState: onLike == null ? null : loadLikeState,
+          onDataLoaded: _observeUntranslatedTags,
         ),
         builder: (logic) {
           logic.startLoadingIfNeeded();
@@ -218,6 +222,39 @@ abstract class BaseOnlineComicPage<T> extends StatelessWidget {
         },
       ),
     );
+  }
+
+  Future<void> _observeUntranslatedTags(T data, String operationId) async {
+    if (sourceKey != 'ehentai' && sourceKey != 'nhentai') return;
+    try {
+      if (!tagTranslationsReady) {
+        try {
+          await loadTagTranslations();
+        } catch (_) {
+          // The collector keeps a bounded observation queue until retry.
+        }
+      }
+      // A search/local/read observation may have arrived before the shared
+      // translation table finished loading.  Flush that complete operation
+      // before adding this detail observation so readiness does not silently
+      // strand earlier tags until an unrelated future observation.
+      if (tagTranslationsReady) {
+        await UntranslatedTagCoordinator.instance.flushPending();
+      }
+      final tags = extractTags(data);
+      if (tags == null || tags.isEmpty) return;
+      await UntranslatedTagCoordinator.instance.observe(
+        UntranslatedTagObservation(
+          source: sourceKey,
+          comicId: id,
+          operationId: operationId,
+          context: 'online-detail',
+          categorized: tags,
+        ),
+      );
+    } catch (_) {
+      // Collection is diagnostic side data and must not change page behavior.
+    }
   }
 
   Widget _buildAppBar(BuildContext context, OnlineComicPageLogic<T> logic) {
@@ -302,8 +339,7 @@ abstract class BaseOnlineComicPage<T> extends StatelessWidget {
                   const SizedBox(height: 16),
                   const Divider(),
                   const SizedBox(height: 12),
-                  Text('相关推荐',
-                      style: Theme.of(context).textTheme.titleSmall),
+                  Text('相关推荐', style: Theme.of(context).textTheme.titleSmall),
                   const SizedBox(height: 8),
                   OnlineComicRecommendationGrid(
                     comics: recommendation,
@@ -328,19 +364,50 @@ abstract class BaseOnlineComicPage<T> extends StatelessWidget {
     final views = extractViews(data);
     final comments = extractComments(data);
 
-    final stats = <Widget>[];
-    void addStat(IconData icon, String text) {
-      if (stats.isNotEmpty) stats.add(const SizedBox(width: 12));
-      stats.add(Icon(icon, size: 16));
-      stats.add(const SizedBox(width: 4));
-      stats.add(Text(text,
-          style: textTheme.bodySmall
-              ?.copyWith(color: colorScheme.onSurfaceVariant)));
+    Widget valueAction({
+      required String displayText,
+      String? rawSearchValue,
+      required Widget child,
+    }) {
+      final normalized = (rawSearchValue ?? displayText).trim();
+      return InfoValueAction(
+        data: InfoValueData(
+          displayText: displayText,
+          rawSearchValue: normalized,
+        ),
+        onSearch:
+            normalized.isEmpty ? null : () => onTagTap(context, normalized, ''),
+        child: child,
+      );
     }
 
-    if (views != null) addStat(Icons.visibility_outlined, _formatNumber(views));
+    final stats = <Widget>[];
+    void addStat(IconData icon, String displayText, String rawValue) {
+      stats.add(
+        valueAction(
+          displayText: displayText,
+          rawSearchValue: rawValue,
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, size: 16),
+              const SizedBox(width: 4),
+              Text(
+                displayText,
+                style: textTheme.bodySmall
+                    ?.copyWith(color: colorScheme.onSurfaceVariant),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    if (views != null) {
+      addStat(Icons.visibility_outlined, _formatNumber(views), '$views');
+    }
     if (comments != null) {
-      addStat(Icons.comment_outlined, _formatNumber(comments));
+      addStat(Icons.comment_outlined, _formatNumber(comments), '$comments');
     }
 
     return Row(
@@ -352,42 +419,57 @@ abstract class BaseOnlineComicPage<T> extends StatelessWidget {
         ),
         const SizedBox(width: 16),
         Expanded(
-          // 信息区文字可长按选中（点空白处清除选区），对齐旧详情页的可选行为。
-          child: SelectionArea(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(title, style: textTheme.titleMedium),
-                const SizedBox(height: 8),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              valueAction(
+                displayText: title,
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(title, style: textTheme.titleMedium),
+                ),
+              ),
+              const SizedBox(height: 8),
+              Row(children: [
+                const Icon(Icons.public, size: 16),
+                const SizedBox(width: 4),
+                Expanded(
+                  child: valueAction(
+                    displayText: source,
+                    child: Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        source,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: textTheme.bodySmall
+                            ?.copyWith(color: colorScheme.onSurfaceVariant),
+                      ),
+                    ),
+                  ),
+                ),
+              ]),
+              if (pages != null) ...[
+                const SizedBox(height: 6),
                 Row(children: [
-                  const Icon(Icons.public, size: 16),
+                  const Icon(Icons.menu_book_outlined, size: 16),
                   const SizedBox(width: 4),
-                  Expanded(
+                  valueAction(
+                    displayText: '$pages 页',
+                    rawSearchValue: '$pages',
                     child: Text(
-                      source,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
+                      '$pages 页',
                       style: textTheme.bodySmall
                           ?.copyWith(color: colorScheme.onSurfaceVariant),
                     ),
                   ),
                 ]),
-                if (pages != null) ...[
-                  const SizedBox(height: 6),
-                  Row(children: [
-                    const Icon(Icons.menu_book_outlined, size: 16),
-                    const SizedBox(width: 4),
-                    Text('$pages 页',
-                        style: textTheme.bodySmall
-                            ?.copyWith(color: colorScheme.onSurfaceVariant)),
-                  ]),
-                ],
-                if (stats.isNotEmpty) ...[
-                  const SizedBox(height: 6),
-                  Row(children: stats),
-                ],
               ],
-            ),
+              if (stats.isNotEmpty) ...[
+                const SizedBox(height: 6),
+                Wrap(spacing: 12, runSpacing: 4, children: stats),
+              ],
+            ],
           ),
         ),
       ],
@@ -461,7 +543,4 @@ abstract class BaseOnlineComicPage<T> extends StatelessWidget {
       ],
     );
   }
-
-
-
 }

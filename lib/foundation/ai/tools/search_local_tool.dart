@@ -1,4 +1,5 @@
 import 'package:picakeep/foundation/download_model.dart';
+import 'package:picakeep/foundation/download_author_resolver.dart';
 import 'package:picakeep/foundation/history.dart';
 import 'package:picakeep/foundation/local_favorites.dart';
 import 'package:picakeep/foundation/local_library.dart';
@@ -22,7 +23,16 @@ class SearchLocalTool extends AiTool {
           'keyword': {'type': 'string', 'description': '搜索关键词'},
           'scope': {
             'type': 'string',
-            'enum': ['全部', '库', '收藏', '历史', 'all', 'library', 'favorites', 'history'],
+            'enum': [
+              '全部',
+              '库',
+              '收藏',
+              '历史',
+              'all',
+              'library',
+              'favorites',
+              'history'
+            ],
             'description': '搜索范围，默认全部',
           },
         },
@@ -32,7 +42,9 @@ class SearchLocalTool extends AiTool {
   @override
   Future<AiToolResult> execute(Map<String, dynamic> args) async {
     final keyword = args['keyword']?.toString().trim() ?? '';
-    if (keyword.isEmpty) return const AiToolResult.failure('keyword is required');
+    if (keyword.isEmpty) {
+      return const AiToolResult.failure('keyword is required');
+    }
     final scope = _normalizeScope(args['scope']);
     if (scope == null) return const AiToolResult.failure('unsupported scope');
 
@@ -78,7 +90,8 @@ class SearchLocalTool extends AiTool {
           if (!_matchesHistory(h, keyword)) continue;
           final id = 'history_${h.target}';
           if (!seen.add(id)) continue;
-          final localItem = localManager.findCachedByCandidates(h.candidateDownloadIds());
+          final localItem =
+              localManager.findCachedByCandidates(h.candidateDownloadIds());
           items.add({
             'id': h.target,
             'title': h.title,
@@ -96,7 +109,7 @@ class SearchLocalTool extends AiTool {
   Map<String, Object?> _downloadedItemJson(DownloadedItem item) => {
         'id': item.id,
         'title': item.name,
-        'author': item.subTitle,
+        'author': resolveDownloadedAuthors(item),
         'source': item.sourceDisplayName,
         'downloaded': true,
       };

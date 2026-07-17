@@ -228,6 +228,51 @@ void main() {
     });
   });
 
+  group('local detail search keyword contract', () {
+    test('keeps EH namespace separate and quotes whitespace values', () {
+      expect(
+        buildLocalInfoSearchKeyword(
+          source: DownloadType.ehentai,
+          displayText: '狐女',
+          rawValue: 'fox girl',
+          rawNamespace: 'artist',
+        ),
+        'artist:"fox girl"',
+      );
+    });
+
+    test('normalizes a legacy flat namespace without duplicating it', () {
+      expect(
+        buildLocalInfoSearchKeyword(
+          source: DownloadType.nhentai,
+          displayText: '狐女',
+          rawValue: 'Artists:fox girl',
+          rawNamespace: 'Artists',
+        ),
+        'Artists:"fox girl"',
+      );
+    });
+
+    test('metadata and empty values stay plain or inert', () {
+      expect(
+        buildLocalInfoSearchKeyword(
+          source: DownloadType.ehentai,
+          displayText: '123',
+        ),
+        '123',
+      );
+      expect(
+        buildLocalInfoSearchKeyword(
+          source: DownloadType.nhentai,
+          displayText: '未知',
+          rawValue: ' ',
+          rawNamespace: 'artist',
+        ),
+        isEmpty,
+      );
+    });
+  });
+
   testWidgets(
       'direct EH detail keeps summary information usable on a narrow large-text viewport',
       (tester) async {

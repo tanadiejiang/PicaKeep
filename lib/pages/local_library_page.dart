@@ -14,6 +14,7 @@ import 'package:picakeep/foundation/app.dart';
 import 'package:picakeep/foundation/app_runtime_mode.dart';
 import 'package:picakeep/foundation/archive/archive_password_store.dart';
 import 'package:picakeep/foundation/download_model.dart';
+import 'package:picakeep/foundation/download_author_resolver.dart';
 import 'package:picakeep/foundation/local_library.dart';
 import 'package:picakeep/foundation/local_library_settings.dart';
 import 'package:picakeep/foundation/remote_library_event_channel.dart';
@@ -35,6 +36,13 @@ String _formatLocalLibrarySize(double sizeMb) {
     return '${(sizeMb / 1024).toStringAsFixed(1)} GB';
   }
   return '${sizeMb.toStringAsFixed(1)} MB';
+}
+
+String _localLibraryAuthor(DownloadedItem item) {
+  if (item is LocalLibraryComicItem) {
+    return resolveDownloadedAuthors(item).join(', ');
+  }
+  return item.subTitle.trim();
 }
 
 String _localLibrarySourceLabel(LocalLibrarySource source) {
@@ -260,8 +268,9 @@ class _LocalRootCollageState extends State<_LocalRootCollage> {
         color: colorScheme.onSecondaryContainer,
       );
     }
-    final covers =
-        _providers.where((provider) => provider != null).toList(growable: false);
+    final covers = _providers
+        .where((provider) => provider != null)
+        .toList(growable: false);
     // 单项内容直接铺满整块封面区，不走 2x2 拼贴网格（避免右侧大片留白）。
     if (covers.length == 1) {
       return Image(
@@ -979,7 +988,8 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
         if (path.isEmpty) {
           return;
         }
-        await _manager.setCollectionShellEnabledForLocalComicPath(path, enabled);
+        await _manager.setCollectionShellEnabledForLocalComicPath(
+            path, enabled);
         await _load(forceLocalRefresh: true);
         App.notifyLocalDataChanged();
         return;
@@ -989,7 +999,8 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
         if (rootId.isEmpty) {
           return;
         }
-        await _remoteDataSource.setCollectionShellEnabledForRoot(rootId, enabled);
+        await _remoteDataSource.setCollectionShellEnabledForRoot(
+            rootId, enabled);
         _forceRemoteRefreshOnNextLoad = true;
         await _load();
       }
@@ -1196,7 +1207,7 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
     }
     return _items.where((item) {
       return item.name.toLowerCase().contains(keyword) ||
-          item.subTitle.toLowerCase().contains(keyword) ||
+          _localLibraryAuthor(item).toLowerCase().contains(keyword) ||
           item.sourceDisplayName.toLowerCase().contains(keyword) ||
           item.tags.any((tag) => tag.toLowerCase().contains(keyword)) ||
           (item.fileSystemPath?.toLowerCase().contains(keyword) ?? false);
@@ -1449,7 +1460,8 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
 
   Future<void> _showActions(DownloadedItem item) async {
     final path = item.fileSystemPath?.trim() ?? '';
-    final isRootItem = item is RemoteLibraryRootItem || item is _LocalLibraryRootItem;
+    final isRootItem =
+        item is RemoteLibraryRootItem || item is _LocalLibraryRootItem;
     await showModalBottomSheet<void>(
       context: context,
       builder: (sheetContext) {
@@ -1502,7 +1514,8 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
 
   void _showDesktopMenu(DownloadedItem item, TapDownDetails details) {
     final path = item.fileSystemPath?.trim() ?? '';
-    final isRootItem = item is RemoteLibraryRootItem || item is _LocalLibraryRootItem;
+    final isRootItem =
+        item is RemoteLibraryRootItem || item is _LocalLibraryRootItem;
     showMenu(
       context: context,
       position: RelativeRect.fromLTRB(
@@ -1751,7 +1764,7 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
       comicId: item.id,
       enableLongPress: true,
       name: item.name,
-      author: item.subTitle,
+      author: _localLibraryAuthor(item),
       imagePath: _coverFile(item),
       imageProvider: _coverImageProvider(item),
       optimizeCoverDecode: true,

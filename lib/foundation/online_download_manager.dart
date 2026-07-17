@@ -14,9 +14,11 @@ import 'package:sqlite3/sqlite3.dart';
 import 'package:picakeep/base.dart';
 import 'package:picakeep/foundation/app.dart';
 import 'package:picakeep/foundation/download_model.dart';
+import 'package:picakeep/foundation/download_author_resolver.dart';
 import 'package:picakeep/foundation/image_loader/jm_image_recombine.dart';
 import 'package:picakeep/foundation/local_favorites.dart';
 import 'package:picakeep/foundation/log.dart';
+import 'package:picakeep/foundation/untranslated_tags/untranslated_tag_coordinator.dart';
 import 'package:picakeep/network/app_dio.dart';
 import 'package:picakeep/network/eh_network/eh_main_network.dart';
 import 'package:picakeep/network/eh_network/eh_models.dart';
@@ -26,6 +28,8 @@ import 'package:picakeep/network/nhentai_network/nhentai_main_network.dart';
 import 'package:picakeep/network/picacg_network/picacg_network.dart';
 import 'package:picakeep/network/res.dart';
 import 'package:picakeep/pages/reader/comic_reading_page.dart';
+import 'package:picakeep/tools/tags_translation.dart';
+import 'package:uuid/uuid.dart';
 
 class OnlineDownloadTask {
   OnlineDownloadTask.jm({required JmComicInfo jmInfo})
@@ -174,6 +178,13 @@ class OnlineDownloadTask {
   }
 }
 
+String _onlineDownloadRecordSubtitle(DownloadedItem item) {
+  if (item.type == DownloadType.ehentai || item.type == DownloadType.nhentai) {
+    return resolveDownloadedAuthors(item).join(', ');
+  }
+  return item.subTitle;
+}
+
 class OnlineDownloadManager {
   OnlineDownloadManager._();
 
@@ -263,7 +274,51 @@ class OnlineDownloadManager {
         );
       }
     }
+    await _observeUntranslatedTags(items, context: 'local');
     return items;
+  }
+
+  Future<void> _observeUntranslatedTags(
+    Iterable<DownloadedItem> items, {
+    required String context,
+  }) async {
+    try {
+      if (!tagTranslationsReady) {
+        try {
+          await loadTagTranslations();
+        } catch (_) {
+          // The collector keeps a bounded observation queue until retry.
+        }
+      }
+      if (tagTranslationsReady) {
+        await UntranslatedTagCoordinator.instance.flushPending();
+      }
+      final operationId = '$context-${const Uuid().v4()}';
+      for (final item in items) {
+        final source = switch (item.type) {
+          DownloadType.ehentai => 'ehentai',
+          DownloadType.nhentai => 'nhentai',
+          _ => '',
+        };
+        if (source.isEmpty) continue;
+        final categorized = item is NhentaiDownloadedComic
+            ? item.categorizedTags
+            : const <String, List<String>>{};
+        final comicId = item is NhentaiDownloadedComic ? item.comicID : item.id;
+        await UntranslatedTagCoordinator.instance.observe(
+          UntranslatedTagObservation(
+            source: source,
+            comicId: comicId,
+            operationId: operationId,
+            context: context,
+            flat: item.tags,
+            categorized: categorized,
+          ),
+        );
+      }
+    } catch (_) {
+      // Collection must not fail a download or a list restore.
+    }
   }
 
   void cancel(String id) {
@@ -287,7 +342,9 @@ class OnlineDownloadManager {
 
   void resumeOne(String id) {
     final task = _tasks[id];
-    if (task == null || task.completed || task.cancelled || !task.paused) return;
+    if (task == null || task.completed || task.cancelled || !task.paused) {
+      return;
+    }
     task.paused = false;
     task.cancelled = false;
     task.cancelToken = null;
@@ -366,7 +423,8 @@ class OnlineDownloadManager {
   }
 
   Future<Res<bool>> enqueuePicacg(PicacgComicItem comic) async {
-    if (_tasks.containsKey('picacg${comic.id}') || _tasks.containsKey(comic.id)) {
+    if (_tasks.containsKey('picacg${comic.id}') ||
+        _tasks.containsKey(comic.id)) {
       return const Res(true);
     }
     final task = OnlineDownloadTask.picacg(comic: comic)
@@ -428,7 +486,9 @@ class OnlineDownloadManager {
   void _scheduleNext() {
     if (_running) return;
     for (final task in _tasks.values) {
-      if (!task.completed && !task.cancelled && !task.paused &&
+      if (!task.completed &&
+          !task.cancelled &&
+          !task.paused &&
           task.error == null) {
         unawaited(_runTask(task));
         return;
@@ -571,12 +631,13 @@ class OnlineDownloadManager {
     try {
       final downloadRoot = await _resolveOnlineDownloadRoot();
       final safeDirectory = _safeName(info.title);
-      final root = Directory('$downloadRoot${Platform.pathSeparator}$safeDirectory');
+      final root =
+          Directory('$downloadRoot${Platform.pathSeparator}$safeDirectory');
       await root.create(recursive: true);
       // 封面（不重组，直接存原始字节）
       if (info.coverUrl.isNotEmpty) {
-        await _downloadJmFile(task, info.coverUrl,
-            '${root.path}${Platform.pathSeparator}cover',
+        await _downloadJmFile(
+            task, info.coverUrl, '${root.path}${Platform.pathSeparator}cover',
             chapterId: info.id,
             pictureName: 'cover',
             originalExtension: _imageExtension(info.coverUrl),
@@ -589,9 +650,8 @@ class OnlineDownloadManager {
         final epKey = i + 1;
         final chapterId = sortedSeries[i].value;
         task.currentEp = epKey;
-        task.currentEpName = i < info.epNames.length
-            ? info.epNames[i]
-            : '第$epKey章';
+        task.currentEpName =
+            i < info.epNames.length ? info.epNames[i] : '第$epKey章';
         task.currentPage = 0;
         task.totalPages = 0;
         _notify();
@@ -611,8 +671,7 @@ class OnlineDownloadManager {
           final fileName = Uri.parse(url).pathSegments.last;
           final pictureName = fileName.replaceFirst(RegExp(r'\.[^.]+$'), '');
           // 基础路径（不含扩展名）；最终扩展名由重组结果决定（重组→.png，不重组→原始）
-          final basePath =
-              '${epDir.path}${Platform.pathSeparator}${pi + 1}';
+          final basePath = '${epDir.path}${Platform.pathSeparator}${pi + 1}';
           futures.add(semaphore.run(() async {
             _throwIfCancelled(task);
             try {
@@ -640,7 +699,10 @@ class OnlineDownloadManager {
           final basePath = '${epDir.path}${Platform.pathSeparator}${pi + 1}';
           bool exists = false;
           for (final ext in const ['.png', '.webp', '.jpg', '.jpeg']) {
-            if (File('$basePath$ext').existsSync()) { exists = true; break; }
+            if (File('$basePath$ext').existsSync()) {
+              exists = true;
+              break;
+            }
           }
           if (!exists) {
             _throwIfCancelled(task);
@@ -684,7 +746,8 @@ class OnlineDownloadManager {
       if (!task.paused) task.cancelled = true;
     } catch (error, stackTrace) {
       task.error = error.toString();
-      LogManager.addLog(LogLevel.error, 'OnlineDownload', '$error\n$stackTrace');
+      LogManager.addLog(
+          LogLevel.error, 'OnlineDownload', '$error\n$stackTrace');
     } finally {
       _running = false;
       task.stopSpeedTimer();
@@ -793,7 +856,8 @@ class OnlineDownloadManager {
         await Future.wait(futures);
         _throwIfCancelled(task);
         if (completedPages == 0) {
-          throw Exception(errors.isNotEmpty ? errors.first : 'No page downloaded');
+          throw Exception(
+              errors.isNotEmpty ? errors.first : 'No page downloaded');
         }
 
         final item = DownloadedGallery(
@@ -830,8 +894,8 @@ class OnlineDownloadManager {
         _notify();
 
         // 1. 取 zip 真实链接（会实际扣积分，务必在用户确认后才走到此处）
-        final linkRes =
-            await EhNetwork().getArchiveDownloadLink(archiveUrl, task.downloadType);
+        final linkRes = await EhNetwork()
+            .getArchiveDownloadLink(archiveUrl, task.downloadType);
         if (linkRes.error) {
           throw Exception('获取归档链接失败：${linkRes.errorMessageWithoutNull}');
         }
@@ -875,7 +939,9 @@ class OnlineDownloadManager {
         final bytes = await tempZip.readAsBytes();
         final archive = ZipDecoder().decodeBytes(bytes);
         final imageFiles = archive.files
-            .where((f) => f.isFile && f.name != 'cover.jpg' &&
+            .where((f) =>
+                f.isFile &&
+                f.name != 'cover.jpg' &&
                 RegExp(r'\.(jpe?g|png|webp|gif)$', caseSensitive: false)
                     .hasMatch(f.name))
             .toList()
@@ -898,8 +964,8 @@ class OnlineDownloadManager {
           final ext = entry.name.contains('.')
               ? '.${entry.name.split('.').last.toLowerCase()}'
               : '.jpg';
-          final dest = File(
-              '${root.path}${Platform.pathSeparator}${i + 1}$ext');
+          final dest =
+              File('${root.path}${Platform.pathSeparator}${i + 1}$ext');
           await dest.writeAsBytes(entry.content as List<int>);
           task.currentPage = 91 + ((i / imageFiles.length) * 8).round();
           _notify();
@@ -940,7 +1006,8 @@ class OnlineDownloadManager {
       if (!task.paused) task.cancelled = true;
     } catch (error, stackTrace) {
       task.error = error.toString();
-      LogManager.addLog(LogLevel.error, 'OnlineDownload', '$error\n$stackTrace');
+      LogManager.addLog(
+          LogLevel.error, 'OnlineDownload', '$error\n$stackTrace');
     } finally {
       _running = false;
       task.stopSpeedTimer();
@@ -1027,7 +1094,8 @@ class OnlineDownloadManager {
       await Future.wait(futures);
       _throwIfCancelled(task);
       if (completedPages == 0) {
-        throw Exception(errors.isNotEmpty ? errors.first : 'No page downloaded');
+        throw Exception(
+            errors.isNotEmpty ? errors.first : 'No page downloaded');
       }
 
       final item = NhentaiDownloadedComic(
@@ -1051,7 +1119,8 @@ class OnlineDownloadManager {
       if (!task.paused) task.cancelled = true;
     } catch (error, stackTrace) {
       task.error = error.toString();
-      LogManager.addLog(LogLevel.error, 'OnlineDownload', '$error\n$stackTrace');
+      LogManager.addLog(
+          LogLevel.error, 'OnlineDownload', '$error\n$stackTrace');
     } finally {
       _running = false;
       task.stopSpeedTimer();
@@ -1143,7 +1212,8 @@ class OnlineDownloadManager {
       _throwIfCancelled(task);
       final body = res.data;
       if (body == null) throw Exception('Empty response: $url');
-      final expectedLength = int.tryParse(res.headers.value('content-length') ?? '');
+      final expectedLength =
+          int.tryParse(res.headers.value('content-length') ?? '');
       final bytes = <int>[];
       await for (final chunk in body.stream.timeout(
         const Duration(seconds: 20),
@@ -1230,27 +1300,27 @@ class OnlineDownloadManager {
       );
       _throwIfCancelled(task);
       final body = response.data;
-    if (body == null) {
-      throw Exception('Empty image response: $url');
-    }
-    final sink = file.openWrite();
-    try {
-      // stream 模式下 receiveTimeout 对流内静默段无效，套 timeout 兜底
-      await for (final chunk in body.stream.timeout(
-        const Duration(seconds: 20),
-        onTimeout: (_) => throw TimeoutException('stream timeout'),
-      )) {
-        _throwIfCancelled(task);
-        task.onData(chunk.length);
-        sink.add(chunk);
+      if (body == null) {
+        throw Exception('Empty image response: $url');
       }
-      await sink.flush();
-    } catch (_) {
+      final sink = file.openWrite();
+      try {
+        // stream 模式下 receiveTimeout 对流内静默段无效，套 timeout 兜底
+        await for (final chunk in body.stream.timeout(
+          const Duration(seconds: 20),
+          onTimeout: (_) => throw TimeoutException('stream timeout'),
+        )) {
+          _throwIfCancelled(task);
+          task.onData(chunk.length);
+          sink.add(chunk);
+        }
+        await sink.flush();
+      } catch (_) {
+        await sink.close();
+        if (await file.exists()) await file.delete();
+        rethrow;
+      }
       await sink.close();
-      if (await file.exists()) await file.delete();
-      rethrow;
-    }
-    await sink.close();
     } finally {
       task.removeToken(cancelToken);
       EhNetwork().releaseEhgtSlot(url);
@@ -1323,38 +1393,37 @@ class OnlineDownloadManager {
       final pending = _tasks.values
           .where((t) => !t.completed && !t.cancelled && t.error == null)
           .map((t) {
-            if (t.sourceKey == 'jm') {
-              return {
-                'sourceKey': 'jm',
-                'jmJson': _jmComicInfoToQueueJson(t._jmInfo!),
-                'currentEp': t.currentEp,
-                'paused': t.paused,
-              };
-            } else if (t.sourceKey == 'ehentai') {
-              return {
-                'sourceKey': 'ehentai',
-                'galleryJson': t._gallery!.toJson(),
-                'currentPage': t.currentPage,
-                'paused': t.paused,
-                'downloadType': t.downloadType,
-              };
-            } else if (t.sourceKey == 'nhentai') {
-              return {
-                'sourceKey': 'nhentai',
-                'nhentaiJson': t._nhentaiComic!.toMap(),
-                'currentPage': t.currentPage,
-                'paused': t.paused,
-              };
-            } else {
-              return {
-                'sourceKey': 'picacg',
-                'comicJson': t._comic!.toQueueJson(),
-                'currentEp': t.currentEp,
-                'paused': t.paused,
-              };
-            }
-          })
-          .toList();
+        if (t.sourceKey == 'jm') {
+          return {
+            'sourceKey': 'jm',
+            'jmJson': _jmComicInfoToQueueJson(t._jmInfo!),
+            'currentEp': t.currentEp,
+            'paused': t.paused,
+          };
+        } else if (t.sourceKey == 'ehentai') {
+          return {
+            'sourceKey': 'ehentai',
+            'galleryJson': t._gallery!.toJson(),
+            'currentPage': t.currentPage,
+            'paused': t.paused,
+            'downloadType': t.downloadType,
+          };
+        } else if (t.sourceKey == 'nhentai') {
+          return {
+            'sourceKey': 'nhentai',
+            'nhentaiJson': t._nhentaiComic!.toMap(),
+            'currentPage': t.currentPage,
+            'paused': t.paused,
+          };
+        } else {
+          return {
+            'sourceKey': 'picacg',
+            'comicJson': t._comic!.toQueueJson(),
+            'currentEp': t.currentEp,
+            'paused': t.paused,
+          };
+        }
+      }).toList();
       final json = jsonEncode(pending);
       final path = _queueFilePath(rootPath);
       final tmp = File('$path.tmp');
@@ -1492,7 +1561,7 @@ class OnlineDownloadManager {
       ''', [
         item.id,
         item.name,
-        item.subTitle,
+        _onlineDownloadRecordSubtitle(item),
         (item.time ?? DateTime.now()).millisecondsSinceEpoch,
         directory,
         item.comicSize,
@@ -1500,7 +1569,8 @@ class OnlineDownloadManager {
       ]);
 
       // 验证记录确实写入（防止只读 db 静默失败）
-      final check = db.select('select count(*) as c from download where id = ?', [item.id]);
+      final check = db
+          .select('select count(*) as c from download where id = ?', [item.id]);
       final count = check.isNotEmpty ? (check.first['c'] as int?) ?? 0 : 0;
       if (count == 0) {
         throw Exception(
@@ -1509,6 +1579,7 @@ class OnlineDownloadManager {
           '$rootPath${Platform.pathSeparator}download.db',
         );
       }
+      await _observeUntranslatedTags([item], context: 'download');
     } finally {
       db.dispose();
     }
@@ -1594,14 +1665,16 @@ class OnlineDownloadManager {
     return JmComicInfo(
       id: json['id']?.toString() ?? '',
       title: json['title']?.toString() ?? '',
-      authors: (json['authors'] as List?)?.map((e) => e.toString()).toList() ?? [],
+      authors:
+          (json['authors'] as List?)?.map((e) => e.toString()).toList() ?? [],
       description: json['description']?.toString() ?? '',
       likes: 0,
       views: 0,
       comments: 0,
       tags: (json['tags'] as List?)?.map((e) => e.toString()).toList() ?? [],
       works: (json['works'] as List?)?.map((e) => e.toString()).toList() ?? [],
-      actors: (json['actors'] as List?)?.map((e) => e.toString()).toList() ?? [],
+      actors:
+          (json['actors'] as List?)?.map((e) => e.toString()).toList() ?? [],
       series: series,
       epNames: epNames,
       isFavourite: false,
@@ -1640,8 +1713,7 @@ class OnlineDownloadManager {
             skipped++;
             continue;
           }
-          final oldPath =
-              Directory('$root${Platform.pathSeparator}$oldDir');
+          final oldPath = Directory('$root${Platform.pathSeparator}$oldDir');
           final newPath =
               Directory('$root${Platform.pathSeparator}$expectedDir');
           if (!oldPath.existsSync()) {
@@ -1967,6 +2039,7 @@ class OnlineDownloadedGallery extends DownloadedGallery {
         rootDirectoryPath: rootDirectoryPath,
         chapters: const <String, String>{},
         isEhentai: true,
+        tagFlatTags: tagList,
       ),
       page ?? 1,
       ep ?? 1,
@@ -2041,6 +2114,8 @@ class OnlineDownloadedNhentai extends NhentaiDownloadedComic {
         rootDirectoryPath: rootDirectoryPath,
         chapters: const <String, String>{},
         isNhentai: true,
+        tagFlatTags: tagList,
+        tagCategorizedTags: categorizedTags,
       ),
       page ?? 1,
       ep ?? 1,
@@ -2058,6 +2133,8 @@ class OnlineLocalReadingData extends ReadingData {
     this.jmComicId,
     this.isEhentai = false,
     this.isNhentai = false,
+    this.tagFlatTags = const <String>[],
+    this.tagCategorizedTags = const <String, List<String>>{},
   });
 
   @override
@@ -2084,6 +2161,9 @@ class OnlineLocalReadingData extends ReadingData {
   /// 根目录平铺图，sourceKey/comicType/favoriteType 走 nhentai。
   final bool isNhentai;
 
+  final List<String> tagFlatTags;
+  final Map<String, List<String>> tagCategorizedTags;
+
   /// 缓存每个 ep 的在线章节信息，避免重复网络请求。
   /// key = ep 序号(1-based)，value = (chapterId, urls)。
   final Map<int, ({String chapterId, List<String> urls})> _jmEpCache = {};
@@ -2099,6 +2179,13 @@ class OnlineLocalReadingData extends ReadingData {
           : isNhentai
               ? 'nhentai'
               : 'picacg';
+
+  @override
+  Iterable<String> get untranslatedTagFlatTags => tagFlatTags;
+
+  @override
+  Map<String, List<String>> get untranslatedTagCategorizedTags =>
+      tagCategorizedTags;
 
   @override
   ComicType get comicType => isJm
@@ -2183,9 +2270,9 @@ class OnlineLocalReadingData extends ReadingData {
     // ep 序号：父目录名（数字）；无 ep 结构时回退为 1。
     final parentPath = f.parent.path;
     final parentName = parentPath
-        .split(RegExp(r'[\\/]'))
-        .where((s) => s.isNotEmpty)
-        .lastOrNull ??
+            .split(RegExp(r'[\\/]'))
+            .where((s) => s.isNotEmpty)
+            .lastOrNull ??
         '';
     final epNo = hasEp ? (int.tryParse(parentName) ?? 1) : 1;
 

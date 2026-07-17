@@ -1,4 +1,5 @@
 import 'package:picakeep/foundation/download_model.dart';
+import 'package:picakeep/foundation/download_author_resolver.dart';
 import 'package:picakeep/foundation/history.dart';
 import 'package:picakeep/foundation/local_favorites.dart';
 import 'package:picakeep/foundation/local_library.dart';
@@ -358,7 +359,7 @@ Map<String, Object?> _localBaseJson(
     'idQuality': originId.trim().isEmpty ? 'weak' : 'stable',
     'title': item.name,
     'aliases': item.aliases,
-    'authors': _authors(item.subTitle),
+    'authors': resolveDownloadedAuthors(item),
     'source': item.type.name,
     'sourceDisplayName': item.sourceDisplayName,
     'originId': originId,
@@ -544,12 +545,13 @@ double _confidenceForLocalItem(LocalLibraryComicItem item, String query) {
 List<String> _matchedFieldsForLocal(LocalLibraryComicItem item, String query) {
   final q = query.trim().toLowerCase();
   if (q.isEmpty) return const <String>[];
+  final authors = resolveDownloadedAuthors(item).join(', ');
   final fields = <String, String>{
     'id': item.id,
     'itemId': item.itemId,
     'originalId': item.originalId,
     'title': item.name,
-    'author': item.subTitle,
+    'author': authors,
     'source': item.sourceDisplayName,
     'fileSystemPath': item.fileSystemPath ?? '',
   };

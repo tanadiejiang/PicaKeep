@@ -20,6 +20,24 @@ extension LocalResourceScannerMetadata on LocalResourceScanner {
             .toList(growable: false) ??
         const <String>[];
     final parsedEpisodeTitles = _parsedEpisodeTitles(parsedItem);
+    final canonicalAuthors = resolveDownloadedAuthorsFromRecord(
+      id,
+      data == null ? '' : jsonEncode(data),
+    );
+    final isEhNhRecord = _looksLikeEhNhRecord(id, data);
+    final canonicalSubtitle = canonicalAuthors.isNotEmpty
+        ? canonicalAuthors.join(', ')
+        : isEhNhRecord
+            ? ''
+            : _firstNonEmptyValue([
+                parsedItem?.subtitle,
+                subtitle,
+                data?['subtitle']?.toString(),
+                data?['subTitle']?.toString(),
+                data?['author']?.toString(),
+                comicItemMap?['subTitle']?.toString(),
+                comicItemMap?['author']?.toString(),
+              ]);
     return _ServerResourceMetadata(
       title: _firstNonEmptyValue([
         parsedItem?.name,
@@ -27,15 +45,7 @@ extension LocalResourceScannerMetadata on LocalResourceScanner {
         data?['title']?.toString(),
         comicItemMap?['title']?.toString(),
       ]),
-      subtitle: _firstNonEmptyValue([
-        parsedItem?.subtitle,
-        subtitle,
-        data?['subtitle']?.toString(),
-        data?['subTitle']?.toString(),
-        data?['author']?.toString(),
-        comicItemMap?['subTitle']?.toString(),
-        comicItemMap?['author']?.toString(),
-      ]),
+      subtitle: canonicalSubtitle,
       displayId: _firstNonEmptyValue([
         data?['displayId']?.toString(),
         data?['comicId']?.toString(),
@@ -63,6 +73,21 @@ extension LocalResourceScannerMetadata on LocalResourceScanner {
           : _extractEpisodeTitles(data, comicItemMap),
       updatedAt: updatedAt,
     );
+  }
+
+  bool _looksLikeEhNhRecord(String id, Map<String, dynamic>? data) {
+    final normalized = id.trim().toLowerCase();
+    if (normalized.startsWith('nhentai') ||
+        data?.containsKey('comicID') == true) {
+      return true;
+    }
+    if (RegExp(r'^\d+-[a-z0-9]+$').hasMatch(normalized) ||
+        data?.containsKey('galleryTitle') == true ||
+        data?.containsKey('gallery') == true) {
+      return true;
+    }
+    final link = data?['link']?.toString().toLowerCase() ?? '';
+    return link.contains('e-hentai.org/g/') || link.contains('exhentai.org/g/');
   }
 
   Map<String, dynamic>? _decodeJsonMap(String? raw) {

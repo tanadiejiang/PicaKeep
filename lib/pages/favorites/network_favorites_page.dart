@@ -7,6 +7,7 @@ import 'package:picakeep/comic_source/favorite_data.dart';
 import 'package:picakeep/components/comic_tile.dart';
 import 'package:picakeep/components/layout.dart';
 import 'package:picakeep/foundation/app_page_route.dart';
+import 'package:picakeep/foundation/download_author_resolver.dart';
 import 'package:picakeep/foundation/local_favorites.dart';
 import 'package:picakeep/network/base_comic.dart';
 import 'package:picakeep/tools/translations.dart';
@@ -217,7 +218,11 @@ class _NetworkFavoriteWidgetState extends State<NetworkFavoriteWidget> {
                         target: comic.id,
                         name: comic.title,
                         coverPath: comic.cover,
-                        author: comic.subTitle,
+                        author: resolveSourceAuthors(
+                          source: widget.source.key,
+                          flatTags: comic.tags,
+                          fallbackAuthor: comic.subTitle,
+                        ).join(', '),
                         type: _favoriteTypeForSource(widget.source.key),
                         tags: comic.tags,
                       );
@@ -419,8 +424,8 @@ class _NetworkFavoriteWidgetState extends State<NetworkFavoriteWidget> {
                     return const Center(child: CircularProgressIndicator());
                   }
                   final comic = _items[index];
-                  final headers = widget.source.imageHeadersBuilder
-                      ?.call(comic) ?? {};
+                  final headers =
+                      widget.source.imageHeadersBuilder?.call(comic) ?? {};
                   final imageProvider = headers.isEmpty
                       ? NetworkImage(comic.cover)
                       : NetworkImage(comic.cover, headers: headers);
@@ -428,7 +433,11 @@ class _NetworkFavoriteWidgetState extends State<NetworkFavoriteWidget> {
                     padding: const EdgeInsets.all(2),
                     child: DownloadedComicTile(
                       name: comic.title,
-                      author: comic.subTitle,
+                      author: resolveSourceAuthors(
+                        source: widget.source.key,
+                        flatTags: comic.tags,
+                        fallbackAuthor: comic.subTitle,
+                      ).join(', '),
                       imagePath: File(''),
                       imageProvider: imageProvider,
                       type: null,
@@ -579,8 +588,8 @@ class _NetworkFavoritesPageState extends State<NetworkFavoritesPage> {
                 preferredSize: const Size.fromHeight(48),
                 child: SingleChildScrollView(
                   scrollDirection: Axis.horizontal,
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 12, vertical: 6),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                   child: Row(
                     children: [
                       for (final s in sources) ...[
@@ -599,8 +608,7 @@ class _NetworkFavoritesPageState extends State<NetworkFavoritesPage> {
       ),
       body: source == null
           ? const SizedBox.shrink()
-          : NetworkFavoriteWidget(
-              key: ValueKey(source.key), source: source),
+          : NetworkFavoriteWidget(key: ValueKey(source.key), source: source),
     );
   }
 }

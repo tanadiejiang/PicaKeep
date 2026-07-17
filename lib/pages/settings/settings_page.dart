@@ -29,6 +29,7 @@ import 'package:picakeep/foundation/ui_mode.dart';
 import 'package:picakeep/pages/app_capabilities_page.dart';
 import 'package:picakeep/pages/auth_page.dart';
 import 'package:picakeep/pages/local_library_page.dart';
+import 'package:picakeep/pages/settings/untranslated_tags_page.dart';
 import 'package:picakeep/pages/settings/settings_common_widgets.dart';
 import 'package:picakeep/server/local_server_runtime.dart';
 import 'package:picakeep/tools/app_icon_channel.dart';

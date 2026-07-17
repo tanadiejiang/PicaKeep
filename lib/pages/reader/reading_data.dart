@@ -11,6 +11,22 @@ abstract class ReadingData {
 
   String get sourceKey;
 
+  /// Source metadata used by the untranslated-tag observer. These remain
+  /// empty for sources that do not have a reliable EH/NH identity.
+  String? get untranslatedTagSource {
+    final normalized = sourceKey.trim().toLowerCase();
+    return normalized == 'ehentai' || normalized == 'nhentai'
+        ? normalized
+        : null;
+  }
+
+  String get untranslatedTagComicId => id;
+
+  Iterable<String> get untranslatedTagFlatTags => const <String>[];
+
+  Map<String, List<String>> get untranslatedTagCategorizedTags =>
+      const <String, List<String>>{};
+
   ComicType get comicType;
 
   bool get hasEp;
