@@ -961,7 +961,13 @@ class AiConversationController extends ChangeNotifier {
             effectiveAllowedSearchSources,
           );
       final result = blockedResult ??
-          await AiCapabilities.registry.dispatch(toolName, toolArgs);
+          await AiCapabilities.registry.dispatch(
+            toolName,
+            toolArgs,
+            context: AiToolExecutionContext(
+              operationId: 'ai-tool-${toolCall.id}',
+            ),
+          );
       _appendToolResult(toolCall.id, toolName, result);
     }
 

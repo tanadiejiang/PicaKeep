@@ -1,4 +1,5 @@
 import 'ai_tool.dart';
+import 'package:uuid/uuid.dart';
 
 class AiToolRegistry {
   AiToolRegistry._();
@@ -20,14 +21,23 @@ class AiToolRegistry {
   List<Map<String, Object?>> toolSchemas() =>
       _tools.values.map((tool) => tool.toSchema()).toList(growable: false);
 
-  Future<AiToolResult> dispatch(String name, Map args) async {
+  Future<AiToolResult> dispatch(
+    String name,
+    Map args, {
+    AiToolExecutionContext? context,
+  }) async {
     final tool = _tools[name];
     if (tool == null) {
       return AiToolResult.failure('Unknown AI tool: $name');
     }
     try {
-      return await tool.execute(
+      final executionContext = context ??
+          AiToolExecutionContext(
+            operationId: 'ai-direct-${const Uuid().v4()}',
+          );
+      return await tool.executeWithContext(
         args.map((key, value) => MapEntry(key.toString(), value)),
+        executionContext,
       );
     } catch (e) {
       return AiToolResult.failure('AI tool $name failed: $e');

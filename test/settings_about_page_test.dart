@@ -7,7 +7,7 @@ import 'package:picakeep/pages/settings/settings_page.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 PackageInfo _packageInfo({
-  String version = '1.9.47',
+  String version = '1.9.54',
   String buildNumber = '1',
 }) {
   return PackageInfo(
@@ -52,20 +52,20 @@ void main() {
   group('formatAboutVersionText', () {
     test('uses the installed version and non-zero build number', () {
       expect(
-        formatAboutVersionText(version: '1.9.47', buildNumber: '1'),
-        'V1.9.47 (1)',
+        formatAboutVersionText(version: '1.9.54', buildNumber: '1'),
+        'V1.9.54 (1)',
       );
     });
 
     test('omits blank and zero build numbers without a hard-coded fallback',
         () {
       expect(
-        formatAboutVersionText(version: '1.9.47', buildNumber: ''),
-        'V1.9.47',
+        formatAboutVersionText(version: '1.9.54', buildNumber: ''),
+        'V1.9.54',
       );
       expect(
-        formatAboutVersionText(version: '1.9.47', buildNumber: '0'),
-        'V1.9.47',
+        formatAboutVersionText(version: '1.9.54', buildNumber: '0'),
+        'V1.9.54',
       );
       expect(
         formatAboutVersionText(version: ' ', buildNumber: '1'),
@@ -91,7 +91,7 @@ void main() {
     await tester.pump();
 
     expect(find.text('PicaKeep'), findsOneWidget);
-    expect(find.text('V1.9.47 (1)'), findsOneWidget);
+    expect(find.text('V1.9.54 (1)'), findsOneWidget);
     expect(find.byType(Image), findsOneWidget);
     final appIcon = tester.widget<Image>(find.byType(Image));
     expect(appIcon.image, isA<AssetImage>());
@@ -149,7 +149,7 @@ void main() {
     completer.complete(_packageInfo());
     await tester.pump();
 
-    expect(find.text('V1.9.47 (1)'), findsOneWidget);
+    expect(find.text('V1.9.54 (1)'), findsOneWidget);
     expect(tester.getSize(versionFinder).height, loadingSize.height);
     expect(loadCount, 1);
 

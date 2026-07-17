@@ -6,6 +6,7 @@ import 'package:picakeep/components/comic_tile.dart';
 import 'package:picakeep/components/layout.dart';
 import 'package:picakeep/foundation/app.dart';
 import 'package:picakeep/foundation/download.dart';
+import 'package:picakeep/foundation/download_author_resolver.dart';
 import 'package:picakeep/foundation/download_model.dart';
 import 'package:picakeep/foundation/local_favorites.dart';
 import 'package:picakeep/foundation/local_library.dart';
@@ -15,6 +16,13 @@ import 'favorites/local_favorites.dart';
 import 'local_comic_detail_page.dart';
 
 enum LocalSearchType { favoritesOnly, downloadsOnly, all }
+
+String _localSearchAuthor(DownloadedItem item) {
+  if (item is LocalLibraryComicItem) {
+    return resolveDownloadedAuthors(item).join(', ');
+  }
+  return item.subTitle.trim();
+}
 
 class _SearchResult {
   final String title;
@@ -151,7 +159,7 @@ class _LocalSearchPageState extends State<LocalSearchPage> {
           results.add(
             _SearchResult(
               title: item.name,
-              author: item.subTitle,
+              author: _localSearchAuthor(item),
               sourceLabel: _downloadLabel(item),
               tags: item.tags,
               downloadItem: item,
@@ -239,7 +247,7 @@ class _LocalSearchPageState extends State<LocalSearchPage> {
         padding: const EdgeInsets.all(2),
         child: DownloadedComicTile(
           name: item.name,
-          author: item.subTitle,
+          author: _localSearchAuthor(item),
           imagePath: _coverForDownloadedItem(item),
           type: result.sourceLabel,
           tag: item.tags,

@@ -1,7 +1,10 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import 'package:picakeep/foundation/state_controller.dart';
 import 'package:picakeep/network/res.dart';
+import 'package:uuid/uuid.dart';
 
 /// 通用在线漫画详情页的状态逻辑层。
 ///
@@ -15,6 +18,7 @@ class OnlineComicPageLogic<T> extends StateController {
     required this.loadData,
     this.loadFavoriteState,
     this.loadLikeState,
+    this.onDataLoaded,
   });
 
   /// 详情数据加载入口，由子类页面提供（通常是某个 `XxxNetwork().getComicInfo(id)`）。
@@ -26,6 +30,9 @@ class OnlineComicPageLogic<T> extends StateController {
 
   /// 点赞态加载入口（可选）。数据加载成功后调用，结果写入 [liked]。
   final Future<bool> Function(T data)? loadLikeState;
+
+  /// Called once for each successful data load, outside widget build.
+  final Future<void> Function(T data, String operationId)? onDataLoaded;
 
   /// 已加载到的详情数据；为 null 表示尚未加载成功。
   T? data;
@@ -54,6 +61,8 @@ class OnlineComicPageLogic<T> extends StateController {
   /// 防止首次加载被重复触发（builder 可能多次重建）。
   bool _loadStarted = false;
 
+  int _loadGeneration = 0;
+
   /// 防止滚动监听被重复挂载。
   bool _scrollAttached = false;
 
@@ -68,12 +77,19 @@ class OnlineComicPageLogic<T> extends StateController {
   }
 
   Future<void> _load() async {
+    final generation = ++_loadGeneration;
+    final operationId = 'online-${const Uuid().v4()}';
     final res = await loadData();
+    if (generation != _loadGeneration) return;
     if (res.error) {
       error = res.errorMessageWithoutNull;
     } else {
       data = res.data;
       error = null;
+      final dataObserver = onDataLoaded;
+      if (dataObserver != null) {
+        unawaited(dataObserver(res.data, operationId));
+      }
       final loader = loadFavoriteState;
       if (loader != null) {
         try {

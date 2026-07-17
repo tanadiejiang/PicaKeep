@@ -8,10 +8,60 @@ const _pathTW = "assets/tags_tw.json";
 
 Map<String, Map<String, String>> _tagTranslations = {};
 Map<String, Map<String, String>> _tagTranslationsTW = {};
+TagTranslationLoadState _tagTranslationLoadState =
+    TagTranslationLoadState.notLoaded;
+Future<void>? _tagTranslationLoadFuture;
 
-Future<void> loadTagTranslations() async {
-  if (_tagTranslations.isNotEmpty) return;
-  _tagTranslations = await _loadTagTranslationFile(_pathCN);
+enum TagTranslationLoadState { notLoaded, loading, ready, failed }
+
+class TagTranslationLookupResult {
+  const TagTranslationLookupResult({
+    required this.displayText,
+    required this.found,
+    required this.normalizedNamespace,
+    required this.normalizedRawTag,
+    required this.matchedNamespace,
+    required this.translationReady,
+  });
+
+  final String displayText;
+  final bool found;
+  final String normalizedNamespace;
+  final String normalizedRawTag;
+  final String matchedNamespace;
+  final bool translationReady;
+
+  bool get missing => translationReady && !found;
+  bool get translated => found;
+}
+
+Future<void> loadTagTranslations() {
+  if (_tagTranslationLoadState == TagTranslationLoadState.ready) {
+    return Future<void>.value();
+  }
+  final pending = _tagTranslationLoadFuture;
+  if (pending != null) {
+    return pending;
+  }
+  final future = _loadTagTranslationsInternal();
+  _tagTranslationLoadFuture = future;
+  return future.whenComplete(() {
+    if (identical(_tagTranslationLoadFuture, future)) {
+      _tagTranslationLoadFuture = null;
+    }
+  });
+}
+
+Future<void> _loadTagTranslationsInternal() async {
+  _tagTranslationLoadState = TagTranslationLoadState.loading;
+  try {
+    _tagTranslations = await _loadTagTranslationFile(_pathCN);
+    _tagTranslationLoadState = TagTranslationLoadState.ready;
+  } catch (_) {
+    _tagTranslations = {};
+    _tagTranslationLoadState = TagTranslationLoadState.failed;
+    rethrow;
+  }
 }
 
 Future<void> loadTagTranslationsTW() async {
@@ -40,6 +90,102 @@ Map<String, Map<String, String>> get tagTranslations => _tagTranslations;
 
 Map<String, Map<String, String>> get tagTranslationsTW => _tagTranslationsTW;
 
+TagTranslationLoadState get tagTranslationLoadState => _tagTranslationLoadState;
+
+bool get tagTranslationsReady =>
+    _tagTranslationLoadState == TagTranslationLoadState.ready;
+
+String normalizeTagNamespace(String namespace) {
+  final lower = namespace.trim().toLowerCase();
+  const plural2Ns = <String, String>{
+    'parodies': 'parody',
+    'characters': 'character',
+    'artists': 'artist',
+    'groups': 'group',
+    'languages': 'language',
+    'categories': 'reclass',
+  };
+  return plural2Ns[lower] ?? (lower.isEmpty ? 'tags' : lower);
+}
+
+String normalizeTagValue(String value) => value.trim().toLowerCase();
+
+TagTranslationLookupResult lookupTagTranslation(String key, String namespace) {
+  return lookupTagTranslationInTables(
+    key,
+    namespace,
+    translations: _tagTranslations,
+    translationReady: tagTranslationsReady,
+  );
+}
+
+TagTranslationLookupResult lookupTagTranslationInTables(
+  String key,
+  String namespace, {
+  required Map<String, Map<String, String>> translations,
+  bool translationReady = true,
+}) {
+  final rawKey = key.trim();
+  final normalizedRawTag = normalizeTagValue(rawKey);
+  final normalizedNamespace = normalizeTagNamespace(namespace);
+
+  String? lookupInNamespace(String ns) {
+    for (final entry in translations.entries) {
+      if (normalizeTagNamespace(entry.key) != ns) {
+        continue;
+      }
+      final value = entry.value[normalizedRawTag];
+      if (value != null && value.trim().isNotEmpty) {
+        return value.trim();
+      }
+    }
+    return null;
+  }
+
+  String? translated = lookupInNamespace(normalizedNamespace);
+  var matchedNamespace = translated == null ? '' : normalizedNamespace;
+  if (translated == null) {
+    for (final entry in translations.entries) {
+      final value = entry.value[normalizedRawTag];
+      if (value != null && value.trim().isNotEmpty) {
+        translated = value.trim();
+        matchedNamespace = normalizeTagNamespace(entry.key);
+        break;
+      }
+    }
+  }
+  return TagTranslationLookupResult(
+    displayText: translated ?? rawKey,
+    found: translated != null,
+    normalizedNamespace: normalizedNamespace,
+    normalizedRawTag: normalizedRawTag,
+    matchedNamespace: matchedNamespace,
+    translationReady: translationReady,
+  );
+}
+
+/// Test-only injection keeps lookup tests independent from Flutter asset loading.
+void setTagTranslationsForTesting(
+  Map<String, Map<String, String>> value, {
+  bool ready = true,
+}) {
+  _tagTranslations = {
+    for (final entry in value.entries)
+      entry.key: {
+        for (final tag in entry.value.entries)
+          tag.key.trim().toLowerCase(): tag.value,
+      },
+  };
+  _tagTranslationLoadState =
+      ready ? TagTranslationLoadState.ready : TagTranslationLoadState.notLoaded;
+}
+
+void resetTagTranslationsForTesting() {
+  _tagTranslations = {};
+  _tagTranslationLoadState = TagTranslationLoadState.notLoaded;
+  _tagTranslationLoadFuture = null;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 //  翻译辅助函数
 // ─────────────────────────────────────────────────────────────────────────────
@@ -54,30 +200,7 @@ String tagTranslateCategory(String namespace) =>
 /// 例如 tagTranslateWithNs("witch", "female") → "女巫装"。
 /// 若找不到则全表兜底（nhentai "Tags" 类别无固定 namespace，需跨表查）。
 String tagTranslateWithNs(String key, String namespace) {
-  final lowerKey = key.toLowerCase();
-  final lowerNs = namespace.toLowerCase();
-
-  // 单数 namespace 映射（nhentai 返回复数，转单数再查）
-  const plural2Ns = <String, String>{
-    'parodies': 'parody',
-    'characters': 'character',
-    'artists': 'artist',
-    'groups': 'group',
-    'languages': 'language',
-    'categories': 'reclass',
-  };
-  final resolvedNs = plural2Ns[lowerNs] ?? lowerNs;
-
-  // 优先命中本 namespace
-  final cn = _tagTranslations[resolvedNs]?[lowerKey];
-  if (cn != null && cn.isNotEmpty) return cn;
-
-  // 兜底：遍历全表（nhentai "Tags" 类别内含 female/male/mixed 等多 namespace 标签）
-  for (final ns in _tagTranslations.values) {
-    final fallback = ns[lowerKey];
-    if (fallback != null && fallback.isNotEmpty) return fallback;
-  }
-  return key;
+  return lookupTagTranslation(key, namespace).displayText;
 }
 
 /// 输入中文分类名（如“作者/画师/标签/女性”）时，返回对应 namespace 列表。

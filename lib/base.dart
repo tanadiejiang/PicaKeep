@@ -170,6 +170,7 @@ class Appdata {
     '0', //137 aiPromptTemplatesInitialized
     '5', //138 aiMaxToolRounds
     '0', //139 aiCapabilityGetComicDetail
+    '[]', //140 服务发现自定义端口 JSON
   ];
 
   List<String> implicitData = [
@@ -231,9 +232,11 @@ class Appdata {
     } else {
       st = s.getStringList("settings") ?? [];
     }
+    final hadMissingSettings = st.length < settings.length;
     for (int i = 0; i < st.length && i < settings.length; i++) {
-      settings[i] = st[i];
+      settings[i] = st[i].toString();
     }
+    final loadedSettings = List<String>.from(settings);
     if (settings[26].length < 2) {
       settings[26] += "0";
     }
@@ -284,6 +287,11 @@ class Appdata {
             settings[serviceDiscoveryMdnsFallbackSettingIndex]);
     settings[serviceAdminPortSettingIndex] =
         normalizeServiceAdminPortValue(settings[serviceAdminPortSettingIndex]);
+    settings[serviceScanCustomPortsSettingIndex] = encodeServiceScanCustomPorts(
+      decodeServiceScanCustomPorts(
+        settings[serviceScanCustomPortsSettingIndex],
+      ),
+    );
     settings[androidRootModeSettingIndex] =
         normalizeAndroidRootMode(settings[androidRootModeSettingIndex]);
     settings[androidShizukuModeSettingIndex] =
@@ -297,6 +305,16 @@ class Appdata {
             settings[externalToolVisibilitySettingIndex]);
     setManagedDataSourceMode(settings[managedDataSourceModeSettingIndex]);
     _syncArchiveRuntimeSettings();
+    var settingsChanged = hadMissingSettings;
+    for (var i = 0; i < settings.length; i++) {
+      if (settings[i] != loadedSettings[i]) {
+        settingsChanged = true;
+        break;
+      }
+    }
+    if (settingsChanged) {
+      await updateSettings();
+    }
   }
 
   void _syncArchiveRuntimeSettings() {
@@ -317,6 +335,10 @@ class Appdata {
   }
 
   Future<void> updateSettings([bool syncData = true]) async {
+    settings[serviceScanCustomPortsSettingIndex] = encodeServiceScanCustomPorts(
+      decodeServiceScanCustomPorts(
+          settings[serviceScanCustomPortsSettingIndex]),
+    );
     _syncArchiveRuntimeSettings();
     var settingsFile = File("${App.dataPath}/settings");
     await settingsFile.writeAsString(jsonEncode(settings));
@@ -392,7 +414,11 @@ class Appdata {
 
   bool readDataFromJson(Map<String, dynamic> json) {
     try {
-      var newSettings = List<String>.from(json["settings"]);
+      final rawSettings = json["settings"];
+      if (rawSettings is! List) {
+        return false;
+      }
+      final newSettings = rawSettings.map((value) => value.toString()).toList();
       var downloadPath = settings[22];
       var authRequired = settings[13];
       for (var i = 0; i < settings.length && i < newSettings.length; i++) {
@@ -432,6 +458,18 @@ class Appdata {
       settings[serviceDiscoveryMdnsFallbackSettingIndex] =
           normalizeServiceDiscoveryMdnsFallback(
               settings[serviceDiscoveryMdnsFallbackSettingIndex]);
+      settings[appRuntimeModeSettingIndex] =
+          normalizeAppRuntimeMode(settings[appRuntimeModeSettingIndex]);
+      settings[remoteServerAddressSettingIndex] =
+          settings[remoteServerAddressSettingIndex].trim();
+      settings[serviceAdminPortSettingIndex] = normalizeServiceAdminPortValue(
+          settings[serviceAdminPortSettingIndex]);
+      settings[serviceScanCustomPortsSettingIndex] =
+          encodeServiceScanCustomPorts(
+        decodeServiceScanCustomPorts(
+          settings[serviceScanCustomPortsSettingIndex],
+        ),
+      );
       settings[deleteBehaviorSettingIndex] =
           normalizeDeleteBehavior(settings[deleteBehaviorSettingIndex]);
       settings[externalToolOrderSettingIndex] =

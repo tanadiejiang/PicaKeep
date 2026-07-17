@@ -1,5 +1,7 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 
 import 'package:picakeep/base.dart';
 import 'package:picakeep/foundation/log.dart';
@@ -71,7 +73,11 @@ class ServiceInfoSnapshot {
 
   bool get isClientMode => mode == appRuntimeModeClient;
   bool get isServerMode => mode == appRuntimeModeServer;
-  bool get hasConfiguredAddress => normalizedAddress.isNotEmpty;
+
+  /// A malformed but non-empty saved address must remain clearable. The
+  /// normalized value is only for connection attempts, not for destructive
+  /// configuration cleanup.
+  bool get hasConfiguredAddress => addressInput.trim().isNotEmpty;
 }
 
 abstract class RuntimeServiceDataSource {
@@ -300,22 +306,64 @@ class LocalRuntimeServiceDataSource implements RuntimeServiceDataSource {
   }
 }
 
+enum DiscoveryProgressStage {
+  mdns,
+  subnetScan,
+  completed,
+  cancelled,
+  timedOut,
+  failed,
+}
+
+class DiscoveryProgress {
+  const DiscoveryProgress({
+    required this.stage,
+    required this.plannedEndpoints,
+    required this.completedEndpoints,
+    required this.candidateCount,
+    required this.portCount,
+    this.currentHost,
+    this.error,
+  });
+
+  final DiscoveryProgressStage stage;
+  final int plannedEndpoints;
+  final int completedEndpoints;
+  final int candidateCount;
+  final int portCount;
+  final String? currentHost;
+  final Object? error;
+
+  bool get isCancelled => stage == DiscoveryProgressStage.cancelled;
+  bool get isTimedOut => stage == DiscoveryProgressStage.timedOut;
+}
+
 class LocalNetworkServiceDiscoveryResult {
   const LocalNetworkServiceDiscoveryResult({
     required this.candidates,
     required this.scannedHostCount,
     required this.scannedSubnetCount,
+    this.scannedPortCount = 0,
+    this.scannedEndpointCount = 0,
+    this.plannedEndpointCount = 0,
     this.requestedMode = serviceDiscoveryModeMdns,
     this.effectiveMode = serviceDiscoveryModeMdns,
     this.fellBackToSubnetScan = false,
+    this.cancelled = false,
+    this.timedOut = false,
   });
 
   final List<ServiceDiscoveryCandidate> candidates;
   final int scannedHostCount;
+  final int scannedPortCount;
+  final int scannedEndpointCount;
+  final int plannedEndpointCount;
   final int scannedSubnetCount;
   final String requestedMode;
   final String effectiveMode;
   final bool fellBackToSubnetScan;
+  final bool cancelled;
+  final bool timedOut;
 }
 
 class ServiceDiscoveryCandidate {
@@ -375,62 +423,336 @@ class ServiceDiscoveryCandidate {
   }
 }
 
+class ServiceDiscoveryProbeRequest {
+  const ServiceDiscoveryProbeRequest({
+    required this.host,
+    required this.port,
+    required this.sourceMode,
+    this.instanceName,
+    this.hostName,
+    this.serviceName,
+    this.appName,
+    this.deviceSystemHint,
+    this.deviceNameHint,
+  });
+
+  final String host;
+  final int port;
+  final String sourceMode;
+  final String? instanceName;
+  final String? hostName;
+  final String? serviceName;
+  final String? appName;
+  final String? deviceSystemHint;
+  final String? deviceNameHint;
+}
+
+typedef ServiceDiscoveryProbe = Future<ServiceDiscoveryCandidate?> Function(
+    ServiceDiscoveryProbeRequest);
+typedef ServiceDiscoveryMdnsFactory = PicaKeepMdnsDiscovery Function();
+typedef ServiceDiscoveryPrefixResolver = Future<List<String>> Function(
+    String? preferredAddress);
+typedef ServiceDiscoveryLocalHostResolver = Future<Set<String>> Function();
+
+class DiscoverySession {
+  DiscoverySession({
+    required Future<LocalNetworkServiceDiscoveryResult> Function(
+      DiscoverySession session,
+    ) operation,
+    this.generation = 0,
+  }) {
+    _result = _run(operation);
+  }
+
+  final int generation;
+  final DiscoveryCancellationToken cancellationToken =
+      DiscoveryCancellationToken();
+  final StreamController<DiscoveryProgress> _progressController =
+      StreamController<DiscoveryProgress>.broadcast();
+  late final Future<LocalNetworkServiceDiscoveryResult> _result;
+  HttpClient? _client;
+  PicaKeepMdnsDiscovery? _mdns;
+  bool _cancelRequested = false;
+
+  Future<LocalNetworkServiceDiscoveryResult> get result => _result;
+  Stream<DiscoveryProgress> get progress => _progressController.stream;
+  bool get isCancelled => _cancelRequested;
+
+  Future<LocalNetworkServiceDiscoveryResult> _run(
+    Future<LocalNetworkServiceDiscoveryResult> Function(
+      DiscoverySession session,
+    ) operation,
+  ) async {
+    try {
+      return await operation(this);
+    } finally {
+      await _progressController.close();
+    }
+  }
+
+  void attachClient(HttpClient client) {
+    if (_cancelRequested) {
+      client.close(force: true);
+      return;
+    }
+    _client = client;
+  }
+
+  void attachMdns(PicaKeepMdnsDiscovery mdns) {
+    if (_cancelRequested) {
+      unawaited(mdns.stop());
+      return;
+    }
+    _mdns = mdns;
+  }
+
+  void emit(DiscoveryProgress event) {
+    if (_cancelRequested || _progressController.isClosed) {
+      return;
+    }
+    _progressController.add(event);
+  }
+
+  Future<void> cancel() async {
+    if (!_cancelRequested) {
+      _cancelRequested = true;
+      cancellationToken.cancel();
+      _client?.close(force: true);
+      await _mdns?.stop();
+    }
+    try {
+      await _result;
+    } catch (_) {}
+  }
+}
+
+class _DiscoveryAccumulator {
+  final candidatesByAddress = <String, ServiceDiscoveryCandidate>{};
+  final hosts = <String>{};
+  final ports = <int>{};
+  int completedEndpoints = 0;
+
+  List<ServiceDiscoveryCandidate> get sortedCandidates =>
+      candidatesByAddress.values.toList()
+        ..sort(
+          (a, b) => (a.latencyMs ?? 1 << 30).compareTo(b.latencyMs ?? 1 << 30),
+        );
+}
+
 class LocalNetworkServiceDiscovery {
+  LocalNetworkServiceDiscovery({
+    this.probe,
+    this.mdnsFactory = PicaKeepMdnsDiscovery.new,
+    this.prefixResolver,
+    this.localHostResolver,
+    this.hostConcurrency = 12,
+    this.totalTimeout = const Duration(seconds: 15),
+  }) : assert(hostConcurrency > 0);
+
+  static const hostConcurrencyLimit = 12;
+
+  final ServiceDiscoveryProbe? probe;
+  final ServiceDiscoveryMdnsFactory mdnsFactory;
+  final ServiceDiscoveryPrefixResolver? prefixResolver;
+  final ServiceDiscoveryLocalHostResolver? localHostResolver;
+  final int hostConcurrency;
+  final Duration totalTimeout;
+
+  DiscoverySession createSession({
+    required String mode,
+    String? preferredAddress,
+    bool fallbackToSubnetScan = false,
+    List<int>? effectiveScanPorts,
+    int generation = 0,
+    Iterable<String>? candidateHosts,
+  }) {
+    return DiscoverySession(
+      generation: generation,
+      operation: (session) => discover(
+        mode: mode,
+        preferredAddress: preferredAddress,
+        fallbackToSubnetScan: fallbackToSubnetScan,
+        effectiveScanPorts: effectiveScanPorts,
+        cancellationToken: session.cancellationToken,
+        session: session,
+        candidateHosts: candidateHosts,
+      ),
+    );
+  }
+
   Future<LocalNetworkServiceDiscoveryResult> discover({
     required String mode,
     String? preferredAddress,
     String? fallbackPort,
     bool fallbackToSubnetScan = false,
+    List<int>? effectiveScanPorts,
+    DiscoveryCancellationToken? cancellationToken,
+    DiscoverySession? session,
+    Iterable<String>? candidateHosts,
+  }) {
+    final token = cancellationToken ?? DiscoveryCancellationToken();
+    final future = _discover(
+      mode: mode,
+      preferredAddress: preferredAddress,
+      fallbackToSubnetScan: fallbackToSubnetScan,
+      effectiveScanPorts: effectiveScanPorts,
+      cancellationToken: token,
+      session: session,
+      candidateHosts: candidateHosts,
+    );
+    return future.timeout(
+      totalTimeout,
+      onTimeout: () {
+        token.cancel();
+        return LocalNetworkServiceDiscoveryResult(
+          candidates: const <ServiceDiscoveryCandidate>[],
+          scannedHostCount: 0,
+          scannedPortCount: 0,
+          scannedEndpointCount: 0,
+          plannedEndpointCount: 0,
+          scannedSubnetCount: 0,
+          requestedMode: normalizeServiceDiscoveryMode(mode),
+          effectiveMode: normalizeServiceDiscoveryMode(mode),
+          cancelled: false,
+          timedOut: true,
+        );
+      },
+    );
+  }
+
+  Future<LocalNetworkServiceDiscoveryResult> _discover({
+    required String mode,
+    required String? preferredAddress,
+    required bool fallbackToSubnetScan,
+    required List<int>? effectiveScanPorts,
+    required DiscoveryCancellationToken cancellationToken,
+    required DiscoverySession? session,
+    required Iterable<String>? candidateHosts,
   }) async {
     final normalizedMode = normalizeServiceDiscoveryMode(mode);
     if (normalizedMode == serviceDiscoveryModeSubnetScan) {
       return scan(
         preferredAddress: preferredAddress,
-        fallbackPort: fallbackPort,
+        effectiveScanPorts: effectiveScanPorts,
+        cancellationToken: cancellationToken,
+        session: session,
+        candidateHosts: candidateHosts,
       );
     }
 
-    final mdnsResult = await discoverMdns();
-    if (mdnsResult.candidates.isNotEmpty || !fallbackToSubnetScan) {
+    final mdnsResult = await discoverMdns(
+      cancellationToken: cancellationToken,
+      session: session,
+    );
+    if (cancellationToken.isCancelled ||
+        mdnsResult.candidates.isNotEmpty ||
+        !fallbackToSubnetScan) {
       return mdnsResult;
     }
 
     final scanResult = await scan(
       preferredAddress: preferredAddress,
-      fallbackPort: fallbackPort,
+      effectiveScanPorts: effectiveScanPorts,
+      cancellationToken: cancellationToken,
+      session: session,
+      candidateHosts: candidateHosts,
     );
     return LocalNetworkServiceDiscoveryResult(
       candidates: scanResult.candidates,
       scannedHostCount: scanResult.scannedHostCount,
+      scannedPortCount: scanResult.scannedPortCount,
+      scannedEndpointCount: scanResult.scannedEndpointCount,
+      plannedEndpointCount: scanResult.plannedEndpointCount,
       scannedSubnetCount: scanResult.scannedSubnetCount,
       requestedMode: serviceDiscoveryModeMdns,
       effectiveMode: serviceDiscoveryModeSubnetScan,
       fellBackToSubnetScan: true,
+      cancelled: scanResult.cancelled,
+      timedOut: scanResult.timedOut,
     );
   }
 
-  Future<LocalNetworkServiceDiscoveryResult> discoverMdns() async {
-    final endpoints = await PicaKeepMdnsDiscovery().discover();
-    if (endpoints.isEmpty) {
+  Future<LocalNetworkServiceDiscoveryResult> discoverMdns({
+    DiscoveryCancellationToken? cancellationToken,
+    DiscoverySession? session,
+  }) async {
+    final token = cancellationToken ?? DiscoveryCancellationToken();
+    _emitProgress(
+      session,
+      const DiscoveryProgress(
+        stage: DiscoveryProgressStage.mdns,
+        plannedEndpoints: 0,
+        completedEndpoints: 0,
+        candidateCount: 0,
+        portCount: 0,
+      ),
+    );
+    final mdns = mdnsFactory();
+    session?.attachMdns(mdns);
+    final endpoints = await mdns.discover(cancellationToken: token);
+    if (token.isCancelled) {
+      _emitProgress(
+        session,
+        const DiscoveryProgress(
+          stage: DiscoveryProgressStage.cancelled,
+          plannedEndpoints: 0,
+          completedEndpoints: 0,
+          candidateCount: 0,
+          portCount: 0,
+        ),
+      );
       return const LocalNetworkServiceDiscoveryResult(
         candidates: <ServiceDiscoveryCandidate>[],
         scannedHostCount: 0,
+        scannedPortCount: 0,
+        scannedEndpointCount: 0,
+        plannedEndpointCount: 0,
+        scannedSubnetCount: 0,
+        cancelled: true,
+      );
+    }
+    final uniqueEndpoints = <String, PicaKeepMdnsEndpoint>{};
+    for (final endpoint in endpoints) {
+      uniqueEndpoints.putIfAbsent(
+        _endpointKey(endpoint.address.address, endpoint.port),
+        () => endpoint,
+      );
+    }
+    if (uniqueEndpoints.isEmpty) {
+      return const LocalNetworkServiceDiscoveryResult(
+        candidates: <ServiceDiscoveryCandidate>[],
+        scannedHostCount: 0,
+        scannedPortCount: 0,
+        scannedEndpointCount: 0,
+        plannedEndpointCount: 0,
         scannedSubnetCount: 0,
       );
     }
-    final client = _createRemoteServiceClient(
-      connectionTimeout: const Duration(milliseconds: 900),
-      maxConnectionsPerHost: 16,
-      forceDirect: true,
-    );
-    final candidatesByAddress = <String, ServiceDiscoveryCandidate>{};
+
+    final client = probe == null
+        ? _createRemoteServiceClient(
+            connectionTimeout: const Duration(milliseconds: 900),
+            maxConnectionsPerHost: 10,
+            forceDirect: true,
+          )
+        : null;
+    if (client != null) {
+      session?.attachClient(client);
+      unawaited(token.whenCancelled.then((_) => client.close(force: true)));
+    }
+    final accumulator = _DiscoveryAccumulator();
     try {
-      final results = await Future.wait([
-        for (final endpoint in endpoints)
-          _probeHost(
-            client,
-            endpoint.address.address,
-            endpoint.port,
+      for (final endpoint in uniqueEndpoints.values) {
+        if (token.isCancelled) {
+          break;
+        }
+        accumulator.hosts.add(endpoint.address.address);
+        accumulator.ports.add(endpoint.port);
+        final candidate = await _probeRequest(
+          client,
+          ServiceDiscoveryProbeRequest(
+            host: endpoint.address.address,
+            port: endpoint.port,
             sourceMode: serviceDiscoveryModeMdns,
             instanceName: endpoint.instanceName,
             hostName: endpoint.hostName,
@@ -439,140 +761,280 @@ class LocalNetworkServiceDiscovery {
             deviceSystemHint: endpoint.txt['deviceSystem'],
             deviceNameHint: endpoint.txt['deviceName'],
           ),
-      ]);
-      for (final candidate in results.whereType<ServiceDiscoveryCandidate>()) {
-        candidatesByAddress.putIfAbsent(candidate.address, () => candidate);
+        );
+        accumulator.completedEndpoints += 1;
+        if (candidate != null) {
+          accumulator.candidatesByAddress.putIfAbsent(
+            candidate.address,
+            () => candidate,
+          );
+        }
+        _emitProgress(
+          session,
+          DiscoveryProgress(
+            stage: DiscoveryProgressStage.mdns,
+            plannedEndpoints: uniqueEndpoints.length,
+            completedEndpoints: accumulator.completedEndpoints,
+            currentHost: endpoint.address.address,
+            candidateCount: accumulator.candidatesByAddress.length,
+            portCount: accumulator.ports.length,
+          ),
+        );
       }
     } finally {
-      client.close(force: true);
+      client?.close(force: true);
     }
-    final candidates = candidatesByAddress.values.toList()
-      ..sort(
-        (a, b) => (a.latencyMs ?? 1 << 30).compareTo(b.latencyMs ?? 1 << 30),
-      );
-    return LocalNetworkServiceDiscoveryResult(
-      candidates: candidates,
-      scannedHostCount: endpoints.length,
+    final result = LocalNetworkServiceDiscoveryResult(
+      candidates: accumulator.sortedCandidates,
+      scannedHostCount: accumulator.hosts.length,
+      scannedPortCount: accumulator.ports.length,
+      scannedEndpointCount: accumulator.completedEndpoints,
+      plannedEndpointCount: uniqueEndpoints.length,
       scannedSubnetCount: 0,
+      requestedMode: serviceDiscoveryModeMdns,
+      effectiveMode: serviceDiscoveryModeMdns,
     );
+    _emitProgress(
+      session,
+      DiscoveryProgress(
+        stage: DiscoveryProgressStage.completed,
+        plannedEndpoints: result.plannedEndpointCount,
+        completedEndpoints: result.scannedEndpointCount,
+        candidateCount: result.candidates.length,
+        portCount: result.scannedPortCount,
+      ),
+    );
+    return result;
   }
 
   Future<LocalNetworkServiceDiscoveryResult> scan({
     String? preferredAddress,
     String? fallbackPort,
+    List<int>? effectiveScanPorts,
+    DiscoveryCancellationToken? cancellationToken,
+    DiscoverySession? session,
+    Iterable<String>? candidateHosts,
   }) async {
-    final ports = _resolveCandidatePorts(preferredAddress, fallbackPort);
-    final prefixes = await _resolveCandidatePrefixes(preferredAddress);
+    final token = cancellationToken ?? DiscoveryCancellationToken();
+    final ports = _normalizeEffectivePorts(
+      effectiveScanPorts ??
+          effectiveServiceScanPorts(
+            appdata.settings[serviceScanCustomPortsSettingIndex],
+          ),
+    );
+    final injectedHosts = candidateHosts?.map((host) => host.trim()).where(
+          (host) => host.isNotEmpty,
+        );
+    final prefixes = injectedHosts == null
+        ? await (prefixResolver ?? _resolveCandidatePrefixes)(preferredAddress)
+        : const <String>[];
     final preferredHost =
         tryParseRemoteServerUri(preferredAddress ?? '')?.host ?? '';
     final explicitHosts = <String>{
       if (preferredHost.isNotEmpty && !_isLoopbackHost(preferredHost))
         preferredHost,
     };
-    if (prefixes.isEmpty && explicitHosts.isEmpty) {
-      return const LocalNetworkServiceDiscoveryResult(
-        candidates: <ServiceDiscoveryCandidate>[],
+    final targets = injectedHosts != null
+        ? _normalizeHosts(injectedHosts)
+        : await _buildScanTargets(prefixes, explicitHosts);
+    if (targets.isEmpty || ports.isEmpty) {
+      return LocalNetworkServiceDiscoveryResult(
+        candidates: const <ServiceDiscoveryCandidate>[],
         scannedHostCount: 0,
-        scannedSubnetCount: 0,
+        scannedPortCount: ports.length,
+        scannedEndpointCount: 0,
+        plannedEndpointCount: 0,
+        scannedSubnetCount: prefixes.length,
         requestedMode: serviceDiscoveryModeSubnetScan,
         effectiveMode: serviceDiscoveryModeSubnetScan,
+        cancelled: token.isCancelled,
       );
     }
-
-    final localHosts = await _resolveLocalIpv4Hosts();
-    final hosts = <String>{
-      ...explicitHosts,
-      for (final prefix in prefixes)
-        for (var i = 1; i <= 254; i++) '$prefix.$i',
-    };
-    final removableLocalHosts = Set<String>.from(localHosts)
-      ..removeAll(explicitHosts);
-    hosts.removeAll(removableLocalHosts);
-
-    final remainingHosts = Set<String>.from(hosts)..removeAll(explicitHosts);
-    final targets = <String>[
-      ...explicitHosts.where(hosts.contains),
-      ...(remainingHosts.toList()..sort()),
-    ];
-    if (targets.isEmpty) {
-      return const LocalNetworkServiceDiscoveryResult(
-        candidates: <ServiceDiscoveryCandidate>[],
-        scannedHostCount: 0,
-        scannedSubnetCount: 0,
-        requestedMode: serviceDiscoveryModeSubnetScan,
-        effectiveMode: serviceDiscoveryModeSubnetScan,
-      );
-    }
-
-    final client = _createRemoteServiceClient(
-      connectionTimeout: const Duration(milliseconds: 450),
-      maxConnectionsPerHost: 64,
-      forceDirect: true,
+    return _scanTargets(
+      targets: targets,
+      ports: ports,
+      scannedSubnetCount: prefixes.length,
+      cancellationToken: token,
+      session: session,
     );
-    final candidatesByAddress = <String, ServiceDiscoveryCandidate>{};
-    var scannedHostCount = 0;
-    try {
-      const chunkSize = 64;
-      for (var i = 0; i < targets.length; i += chunkSize) {
-        final chunk = targets.sublist(
-          i,
-          i + chunkSize > targets.length ? targets.length : i + chunkSize,
+  }
+
+  Future<LocalNetworkServiceDiscoveryResult> _scanTargets({
+    required List<String> targets,
+    required List<int> ports,
+    required int scannedSubnetCount,
+    required DiscoveryCancellationToken cancellationToken,
+    required DiscoverySession? session,
+  }) async {
+    final client = probe == null
+        ? _createRemoteServiceClient(
+            connectionTimeout: const Duration(milliseconds: 450),
+            maxConnectionsPerHost: ports.length,
+            forceDirect: true,
+          )
+        : null;
+    if (client != null) {
+      session?.attachClient(client);
+      unawaited(
+        cancellationToken.whenCancelled.then((_) => client.close(force: true)),
+      );
+    }
+    final accumulator = _DiscoveryAccumulator();
+    final plannedEndpoints = targets.length * ports.length;
+    _emitProgress(
+      session,
+      DiscoveryProgress(
+        stage: DiscoveryProgressStage.subnetScan,
+        plannedEndpoints: plannedEndpoints,
+        completedEndpoints: 0,
+        candidateCount: 0,
+        portCount: ports.length,
+      ),
+    );
+    var timedOut = false;
+
+    Future<void> probeEndpoint(String host, int port) async {
+      if (cancellationToken.isCancelled) {
+        return;
+      }
+      accumulator.hosts.add(host);
+      accumulator.ports.add(port);
+      try {
+        final candidate = await _probeRequest(
+          client,
+          ServiceDiscoveryProbeRequest(
+            host: host,
+            port: port,
+            sourceMode: serviceDiscoveryModeSubnetScan,
+          ),
         );
-        scannedHostCount += chunk.length * ports.length;
-        final results = await Future.wait(
-          [
-            for (final host in chunk)
-              for (final port in ports)
-                _probeHost(
-                  client,
-                  host,
-                  port,
-                  sourceMode: serviceDiscoveryModeSubnetScan,
-                ),
-          ],
+        if (candidate != null) {
+          accumulator.candidatesByAddress.putIfAbsent(
+            candidate.address,
+            () => candidate,
+          );
+        }
+      } catch (_) {
+        // A failed endpoint must not stop the remaining hosts.
+      } finally {
+        accumulator.completedEndpoints += 1;
+        _emitProgress(
+          session,
+          DiscoveryProgress(
+            stage: DiscoveryProgressStage.subnetScan,
+            plannedEndpoints: plannedEndpoints,
+            completedEndpoints: accumulator.completedEndpoints,
+            currentHost: host,
+            candidateCount: accumulator.candidatesByAddress.length,
+            portCount: ports.length,
+          ),
         );
-        for (final candidate
-            in results.whereType<ServiceDiscoveryCandidate>()) {
-          candidatesByAddress.putIfAbsent(candidate.address, () => candidate);
+      }
+    }
+
+    Future<void> scanHost(String host) async {
+      if (cancellationToken.isCancelled) {
+        return;
+      }
+      final probes = <Future<void>>[
+        for (final port in ports) probeEndpoint(host, port),
+      ];
+      await Future.wait(probes);
+    }
+
+    Future<void> runHostWorkers() async {
+      var nextHostIndex = 0;
+      Future<void> worker() async {
+        while (!cancellationToken.isCancelled) {
+          if (nextHostIndex >= targets.length) {
+            return;
+          }
+          final host = targets[nextHostIndex++];
+          await scanHost(host);
         }
       }
-    } finally {
-      client.close(force: true);
+
+      final workerCount = min(
+        hostConcurrencyLimit,
+        min(hostConcurrency, targets.length),
+      );
+      await Future.wait([
+        for (var i = 0; i < workerCount; i++) worker(),
+      ]);
     }
 
-    final candidates = candidatesByAddress.values.toList()
-      ..sort(
-        (a, b) => (a.latencyMs ?? 1 << 30).compareTo(b.latencyMs ?? 1 << 30),
+    final scanFuture = runHostWorkers();
+    try {
+      await scanFuture.timeout(totalTimeout);
+    } on TimeoutException {
+      timedOut = true;
+      cancellationToken.cancel();
+      client?.close(force: true);
+      await scanFuture.timeout(
+        const Duration(milliseconds: 100),
+        onTimeout: () {},
       );
-    return LocalNetworkServiceDiscoveryResult(
-      candidates: candidates,
-      scannedHostCount: scannedHostCount,
-      scannedSubnetCount: prefixes.length,
+    } finally {
+      client?.close(force: true);
+    }
+    final cancelled = cancellationToken.isCancelled && !timedOut;
+    final result = LocalNetworkServiceDiscoveryResult(
+      candidates: accumulator.sortedCandidates,
+      scannedHostCount: targets.length,
+      scannedPortCount: ports.length,
+      scannedEndpointCount: accumulator.completedEndpoints,
+      plannedEndpointCount: plannedEndpoints,
+      scannedSubnetCount: scannedSubnetCount,
       requestedMode: serviceDiscoveryModeSubnetScan,
       effectiveMode: serviceDiscoveryModeSubnetScan,
+      cancelled: cancelled,
+      timedOut: timedOut,
     );
+    _emitProgress(
+      session,
+      DiscoveryProgress(
+        stage: timedOut
+            ? DiscoveryProgressStage.timedOut
+            : cancelled
+                ? DiscoveryProgressStage.cancelled
+                : DiscoveryProgressStage.completed,
+        plannedEndpoints: result.plannedEndpointCount,
+        completedEndpoints: result.scannedEndpointCount,
+        candidateCount: result.candidates.length,
+        portCount: result.scannedPortCount,
+      ),
+    );
+    return result;
+  }
+
+  Future<ServiceDiscoveryCandidate?> _probeRequest(
+    HttpClient? client,
+    ServiceDiscoveryProbeRequest request,
+  ) {
+    final customProbe = probe;
+    if (customProbe != null) {
+      return customProbe(request);
+    }
+    return _probeHost(client!, request);
   }
 
   Future<ServiceDiscoveryCandidate?> _probeHost(
     HttpClient client,
-    String host,
-    int port, {
-    required String sourceMode,
-    String? instanceName,
-    String? hostName,
-    String? serviceName,
-    String? appName,
-    String? deviceSystemHint,
-    String? deviceNameHint,
-  }) async {
-    final uri = Uri(scheme: 'http', host: host, port: port, path: '/status');
+    ServiceDiscoveryProbeRequest request,
+  ) async {
+    final uri = Uri(
+      scheme: 'http',
+      host: request.host,
+      port: request.port,
+      path: '/status',
+    );
     final stopwatch = Stopwatch()..start();
     try {
-      final request = await client.getUrl(uri).timeout(
+      final httpRequest = await client.getUrl(uri).timeout(
             const Duration(milliseconds: 450),
           );
-      request.headers.set(HttpHeaders.acceptHeader, 'application/json');
-      final response = await request.close().timeout(
+      httpRequest.headers.set(HttpHeaders.acceptHeader, 'application/json');
+      final response = await httpRequest.close().timeout(
             const Duration(milliseconds: 700),
           );
       final body = await utf8.decoder.bind(response).join().timeout(
@@ -587,28 +1049,33 @@ class LocalNetworkServiceDiscovery {
       final detailText = payload?['message']?.toString().trim();
       final deviceSystem = _cleanDeviceText(
         payload?['deviceSystem']?.toString(),
-        fallback: deviceSystemHint,
+        fallback: request.deviceSystemHint,
       );
       final deviceName = _cleanDeviceText(
         payload?['deviceName']?.toString(),
-        fallback: deviceNameHint ?? hostName,
+        fallback: request.deviceNameHint ?? request.hostName,
       );
+      final address = Uri(
+        scheme: 'http',
+        host: request.host,
+        port: request.port,
+      ).toString();
       return ServiceDiscoveryCandidate(
-        address: 'http://$host:$port',
+        address: address,
         adminUrl: payload?['adminUrl']?.toString().trim().isNotEmpty == true
             ? payload!['adminUrl'].toString().trim()
-            : buildServiceAdminUrl(host, port: '$port'),
+            : buildServiceAdminUrl(request.host, port: '${request.port}'),
         detailText: (detailText != null && detailText.isNotEmpty)
             ? detailText
             : '发现可用服务',
-        sourceMode: sourceMode,
-        port: port,
+        sourceMode: request.sourceMode,
+        port: request.port,
         comicCount: _tryReadInt(payload?['comicCount']),
         latencyMs: stopwatch.elapsedMilliseconds,
-        instanceName: instanceName,
-        hostName: hostName,
-        serviceName: serviceName,
-        appName: appName,
+        instanceName: request.instanceName,
+        hostName: request.hostName,
+        serviceName: request.serviceName,
+        appName: request.appName,
         deviceSystem: deviceSystem,
         deviceName: deviceName,
       );
@@ -618,31 +1085,62 @@ class LocalNetworkServiceDiscovery {
     }
   }
 
-  List<int> _resolveCandidatePorts(
-      String? preferredAddress, String? fallbackPort) {
-    final ports = <int>[];
+  void _emitProgress(
+    DiscoverySession? session,
+    DiscoveryProgress progress,
+  ) {
+    session?.emit(progress);
+  }
 
-    void addPort(int? port) {
-      if (port == null || port < 1 || port > 65535 || ports.contains(port)) {
-        return;
+  List<int> _normalizeEffectivePorts(Iterable<int> ports) {
+    final normalized = <int>[];
+    for (final port in ports) {
+      if (port >= serviceScanPortMin &&
+          port <= serviceScanPortMax &&
+          !normalized.contains(port)) {
+        normalized.add(port);
+        if (normalized.length ==
+            serviceScanBuiltInPorts.length + maxServiceScanCustomPorts) {
+          break;
+        }
       }
-      ports.add(port);
     }
+    return normalized;
+  }
 
-    final preferredUri = tryParseRemoteServerUri(preferredAddress ?? '');
-    if (preferredUri != null && preferredUri.hasPort) {
-      addPort(preferredUri.port);
+  List<String> _normalizeHosts(Iterable<String> hosts) {
+    final normalized = <String>[];
+    for (final host in hosts) {
+      if (host.isEmpty || normalized.contains(host)) {
+        continue;
+      }
+      normalized.add(host);
     }
-    addPort(
-      int.tryParse(
-        normalizeServiceAdminPortValue(fallbackPort ?? defaultServiceAdminPort),
-      ),
-    );
-    addPort(int.tryParse(defaultServiceAdminPort));
-    if (ports.isEmpty) {
-      return const [9527];
+    return normalized;
+  }
+
+  Future<List<String>> _buildScanTargets(
+    List<String> prefixes,
+    Set<String> explicitHosts,
+  ) async {
+    if (prefixes.isEmpty && explicitHosts.isEmpty) {
+      return const <String>[];
     }
-    return ports;
+    final localHosts = await (localHostResolver ?? _resolveLocalIpv4Hosts)();
+    final hosts = <String>{
+      ...explicitHosts,
+      for (final prefix in prefixes)
+        for (var i = 1; i <= 254; i++) '$prefix.$i',
+    };
+    final removableLocalHosts = Set<String>.from(localHosts)
+      ..removeAll(explicitHosts);
+    hosts.removeAll(removableLocalHosts);
+
+    final remainingHosts = Set<String>.from(hosts)..removeAll(explicitHosts);
+    return <String>[
+      ...explicitHosts.where(hosts.contains),
+      ...(remainingHosts.toList()..sort()),
+    ];
   }
 
   Future<List<String>> _resolveCandidatePrefixes(
@@ -773,6 +1271,10 @@ String _cleanDiscoveryDisplayName(String? value) {
     '',
   );
   return withoutLocal.replaceAll('\\032', ' ').trim();
+}
+
+String _endpointKey(String host, int port) {
+  return Uri(scheme: 'http', host: host, port: port).toString();
 }
 
 String? _extractIpv4Prefix(String value) {

@@ -314,7 +314,9 @@ extension DownloadPageLogicLoading on DownloadPageLogic {
         case 'title':
           return a.name.compareTo(b.name);
         case 'subtitle':
-          return a.subTitle.compareTo(b.subTitle);
+          return resolveDownloadedAuthors(a)
+              .join(', ')
+              .compareTo(resolveDownloadedAuthors(b).join(', '));
         case 'size':
           return (a.comicSize ?? 0).compareTo(b.comicSize ?? 0);
         case 'time':

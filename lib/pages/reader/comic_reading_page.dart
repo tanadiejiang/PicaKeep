@@ -27,6 +27,8 @@ import 'package:picakeep/tools/keep_screen_on.dart';
 import 'package:picakeep/foundation/image_manager.dart';
 import 'package:picakeep/foundation/history.dart';
 import 'package:picakeep/foundation/local_library_settings.dart';
+import 'package:picakeep/foundation/download_model.dart';
+import 'package:picakeep/foundation/untranslated_tags/untranslated_tag_coordinator.dart';
 import 'package:picakeep/network/online_image/online_image_manager.dart';
 import 'package:picakeep/network/picacg_network/picacg_network.dart';
 import 'package:picakeep/network/jm_network/jm_network.dart';
@@ -42,6 +44,7 @@ import 'package:picakeep/foundation/ui_mode.dart';
 import 'package:picakeep/tools/key_down_event.dart';
 import 'package:picakeep/tools/translations.dart';
 import 'package:window_manager/window_manager.dart';
+import 'package:uuid/uuid.dart';
 
 part 'eps_view.dart';
 
@@ -128,6 +131,64 @@ class ComicReadingPage extends StatelessWidget {
         initialPage,
         () => _updateHistory(
             StateController.find<ComicReadingPageLogic>(), false)));
+    unawaited(_observeUntranslatedTagsForReader());
+  }
+
+  Future<void> _observeUntranslatedTagsForReader() async {
+    try {
+      var source = readingData.untranslatedTagSource;
+      var comicId = readingData.untranslatedTagComicId;
+      var flatTags = readingData.untranslatedTagFlatTags.toList();
+      var categorizedTags = readingData.untranslatedTagCategorizedTags;
+
+      // Downloaded-list/history entries may only carry a stable download id;
+      // recover the already persisted source metadata without guessing from a
+      // title, path, or display label.
+      if (source != null &&
+          (flatTags.isNotEmpty || categorizedTags.isNotEmpty)) {
+        // The reading data already contains the authoritative metadata.
+      } else {
+        final item =
+            await downloadManager.getComicOrNull(readingData.downloadId);
+        if (item != null) {
+          final itemSource = switch (item.type) {
+            DownloadType.ehentai => 'ehentai',
+            DownloadType.nhentai => 'nhentai',
+            _ => '',
+          };
+          if (itemSource.isNotEmpty) {
+            source = itemSource;
+            comicId = item is NhentaiDownloadedComic
+                ? item.comicID
+                : item is DownloadedComic
+                    ? item.comicId
+                    : item.id;
+            flatTags = item.tags.toList();
+            categorizedTags = item is NhentaiDownloadedComic
+                ? item.categorizedTags
+                : const <String, List<String>>{};
+          }
+        }
+      }
+
+      if (source == null ||
+          source.isEmpty ||
+          (flatTags.isEmpty && categorizedTags.isEmpty)) {
+        return;
+      }
+      await UntranslatedTagCoordinator.instance.observe(
+        UntranslatedTagObservation(
+          source: source,
+          comicId: comicId,
+          flat: flatTags,
+          categorized: categorizedTags,
+          context: 'reader',
+          operationId: 'reader-${const Uuid().v4()}',
+        ),
+      );
+    } catch (_) {
+      // Diagnostic metadata must never block or break reader startup.
+    }
   }
 
   _updateHistory(ComicReadingPageLogic? logic, bool updateMePage) {

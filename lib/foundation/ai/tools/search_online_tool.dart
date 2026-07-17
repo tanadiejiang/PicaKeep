@@ -1,6 +1,7 @@
 import 'package:picakeep/network/base_comic.dart';
 import 'package:picakeep/network/eh_network/eh_main_network.dart';
 import 'package:picakeep/network/eh_network/eh_models.dart';
+import 'package:picakeep/foundation/download_author_resolver.dart';
 import 'package:picakeep/network/jm_network/jm_network.dart';
 import 'package:picakeep/network/nhentai_network/nhentai_main_network.dart';
 import 'package:picakeep/network/picacg_network/picacg_network.dart';
@@ -23,7 +24,12 @@ class SearchOnlineTool extends AiTool {
         'properties': {
           'source': {
             'type': 'string',
-            'enum': [aiSourcePicacg, aiSourceJm, aiSourceEhentai, aiSourceNhentai],
+            'enum': [
+              aiSourcePicacg,
+              aiSourceJm,
+              aiSourceEhentai,
+              aiSourceNhentai
+            ],
             'description': '在线源：picacg / jm / ehentai / nhentai',
           },
           'keyword': {'type': 'string', 'description': '搜索关键词'},
@@ -38,7 +44,9 @@ class SearchOnlineTool extends AiTool {
     final keyword = args['keyword']?.toString().trim() ?? '';
     final page = _intArg(args['page']) ?? 1;
     if (source == null) return const AiToolResult.failure('unsupported source');
-    if (keyword.isEmpty) return const AiToolResult.failure('keyword is required');
+    if (keyword.isEmpty) {
+      return const AiToolResult.failure('keyword is required');
+    }
     if (page <= 0) return const AiToolResult.failure('page must be >= 1');
 
     switch (source) {
@@ -48,7 +56,9 @@ class SearchOnlineTool extends AiTool {
         return AiToolResult.success({
           'source': source,
           'page': page,
-          'items': res.data.map(_baseComicJson).toList(),
+          'items': res.data
+              .map((comic) => _baseComicJson(comic, source: source))
+              .toList(),
           'note': 'picacg 搜索结果含 pages 字段，映射为 pageCount。',
         });
       case aiSourceJm:
@@ -58,7 +68,9 @@ class SearchOnlineTool extends AiTool {
           'source': source,
           'page': page,
           'maxPage': res.subData,
-          'items': res.data.map(_baseComicJson).toList(),
+          'items': res.data
+              .map((comic) => _baseComicJson(comic, source: source))
+              .toList(),
           'note': 'jm 搜索结果不含 pageCount。',
         });
       case aiSourceEhentai:
@@ -83,17 +95,27 @@ class SearchOnlineTool extends AiTool {
           'source': source,
           'page': page,
           'maxPage': res.subData,
-          'items': res.data.map(_baseComicJson).toList(),
+          'items': res.data
+              .map((comic) => _baseComicJson(comic, source: source))
+              .toList(),
           'note': 'nhentai 搜索结果不含 pageCount/author。',
         });
     }
     return const AiToolResult.failure('unsupported source');
   }
 
-  Map<String, Object?> _baseComicJson(BaseComic comic) => {
+  Map<String, Object?> _baseComicJson(
+    BaseComic comic, {
+    required String source,
+  }) =>
+      {
         'id': comic.id,
         'title': comic.title,
-        'author': comic.subTitle,
+        'author': resolveSourceAuthors(
+          source: source,
+          flatTags: comic.tags,
+          fallbackAuthor: comic.subTitle,
+        ).join(', '),
         'coverUrl': comic.cover,
         'tags': comic.tags,
         if (comic is PicacgComicItemBrief && comic.pages != null)
@@ -103,7 +125,10 @@ class SearchOnlineTool extends AiTool {
   Map<String, Object?> _ehBriefJson(EhGalleryBrief comic) => {
         'id': comic.id,
         'title': comic.title,
-        'author': comic.subTitle,
+        'author': resolveSourceAuthors(
+          source: aiSourceEhentai,
+          flatTags: comic.tags,
+        ).join(', '),
         'coverUrl': comic.cover,
         'tags': comic.tags,
         if (comic.pages != null) 'pageCount': comic.pages,

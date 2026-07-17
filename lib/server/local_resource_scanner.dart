@@ -1,4 +1,4 @@
-﻿import 'dart:convert';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:sqlite3/sqlite3.dart';
@@ -9,6 +9,7 @@ import 'package:picakeep/foundation/archive/archive_reading_service.dart';
 import 'package:picakeep/foundation/local_library_settings.dart'
     show normalizeLocalCollectionShellPathKey;
 import 'package:picakeep/foundation/privileged_storage_access.dart';
+import 'package:picakeep/foundation/download_author_resolver.dart';
 
 part 'local_resource_scanner_managed.dart';
 part 'local_resource_scanner_custom.dart';

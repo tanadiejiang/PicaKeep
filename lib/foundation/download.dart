@@ -7,6 +7,7 @@ import 'package:sqlite3/sqlite3.dart';
 import '../base.dart';
 import '../tools/extensions.dart';
 import 'download_model.dart';
+import 'download_author_resolver.dart';
 import 'local_library_settings.dart';
 import 'local_trash_store.dart';
 
@@ -398,7 +399,7 @@ class DownloadManager with _DownloadDb {
         rowId,
         item.id,
         item.name,
-        item.subTitle,
+        _downloadRecordSubtitle(item),
         (time ?? DateTime.now()).millisecondsSinceEpoch,
         directory,
         item.comicSize,
@@ -730,6 +731,13 @@ extension on Directory {
   }
 }
 
+String _downloadRecordSubtitle(DownloadedItem item) {
+  if (item.type == DownloadType.ehentai || item.type == DownloadType.nhentai) {
+    return resolveDownloadedAuthors(item).join(', ');
+  }
+  return item.subTitle;
+}
+
 abstract mixin class _DownloadDb {
   Database? get _db;
 
@@ -759,7 +767,7 @@ abstract mixin class _DownloadDb {
     ''', [
       item.id,
       item.name,
-      item.subTitle,
+      _downloadRecordSubtitle(item),
       (time ?? DateTime.now()).millisecondsSinceEpoch,
       directory,
       item.comicSize,

@@ -1089,6 +1089,10 @@ Widget buildAppSettings(double width, BuildContext context) {
         );
       },
     ),
+    const NewPageSetting(
+      title: '待翻译标签',
+      page: UntranslatedTagsPage(),
+    ),
     SettingsTitle('存储位置'.tl),
     const _DownloadDirTile(),
     const _OriginalDownloadDirTile(),
@@ -1787,7 +1791,10 @@ class _DownloadDirTileState extends State<_DownloadDirTile> {
     return buildResponsiveSettingTile(
       leading: const Icon(Icons.folder),
       title: Text('本应用下载目录'.tl),
-      subtitle: path.isEmpty ? Text('将使用应用私有目录 (文件管理器不可见)'.tl, style: const TextStyle(fontSize: 12)) : null,
+      subtitle: path.isEmpty
+          ? Text('将使用应用私有目录 (文件管理器不可见)'.tl,
+              style: const TextStyle(fontSize: 12))
+          : null,
       trailingWidth: 220,
       onTap: _showBrowseDialog,
       trailing: _buildPathDisplay(context, display),

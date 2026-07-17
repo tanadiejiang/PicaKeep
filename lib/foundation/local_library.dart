@@ -17,6 +17,7 @@ import 'archive/archive_models.dart';
 import 'archive/archive_password_store.dart';
 import 'archive/archive_reading_service.dart';
 import 'download_model.dart';
+import 'download_author_resolver.dart';
 import 'local_data_source.dart';
 import 'local_favorites.dart';
 import 'local_library_settings.dart';
@@ -467,6 +468,9 @@ class LocalLibraryComicItem extends DownloadedItem {
       comicType: comicTypeForDownloadType(type),
       eps: epsMap,
       favoriteType: _favoriteTypeForDownloadType(type),
+      tagSource: _sourceKeyForDownloadType(type),
+      tagComicId: originalId.isEmpty ? itemId : originalId,
+      tagFlatTags: tags,
       episodeFiles: episodeFiles,
       downloadedEpisodeIndexes: downloadedEps,
       supportsImageSort: isAlbum && !isArchiveItem,
@@ -487,6 +491,10 @@ class LocalPathReadingData extends ReadingData {
     required this.comicType,
     this.eps,
     this.favoriteType = const FavoriteType(0),
+    this.tagSource,
+    this.tagComicId,
+    this.tagFlatTags = const <String>[],
+    this.tagCategorizedTags = const <String, List<String>>{},
     required Map<int, List<String>> episodeFiles,
     required Iterable<int> downloadedEpisodeIndexes,
     this.supportsImageSort = false,
@@ -544,10 +552,34 @@ class LocalPathReadingData extends ReadingData {
   final String sourceKey;
 
   @override
+  String? get untranslatedTagSource {
+    final normalized = tagSource?.trim().toLowerCase() ?? '';
+    return normalized == 'ehentai' || normalized == 'nhentai'
+        ? normalized
+        : null;
+  }
+
+  @override
+  String get untranslatedTagComicId =>
+      tagComicId?.trim().isNotEmpty == true ? tagComicId!.trim() : id;
+
+  @override
+  Iterable<String> get untranslatedTagFlatTags => tagFlatTags;
+
+  @override
+  Map<String, List<String>> get untranslatedTagCategorizedTags =>
+      tagCategorizedTags;
+
+  @override
   final bool hasEp;
 
   @override
   final Map<String, String>? eps;
+
+  final String? tagSource;
+  final String? tagComicId;
+  final List<String> tagFlatTags;
+  final Map<String, List<String>> tagCategorizedTags;
 
   @override
   final FavoriteType favoriteType;

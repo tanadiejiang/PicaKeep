@@ -7,6 +7,7 @@ import 'package:picakeep/components/layout.dart';
 import 'package:picakeep/components/scrollable.dart';
 import 'package:picakeep/foundation/app.dart';
 import 'package:picakeep/foundation/download.dart';
+import 'package:picakeep/foundation/download_author_resolver.dart';
 import 'package:picakeep/foundation/download_model.dart';
 import 'package:picakeep/foundation/history.dart';
 import 'package:picakeep/foundation/local_library.dart';
@@ -260,7 +261,7 @@ class _HistoryPageState extends State<HistoryPage> {
       setState(() {
         item.target = comic!.id;
         item.title = comic.name;
-        item.subtitle = comic.subTitle;
+        item.subtitle = resolveDownloadedAuthors(comic).join(', ');
         if (comic is RemoteLibraryComicItem && comic.isCustomLibraryRoot) {
           item.type = HistoryType.localAlbum;
         }
