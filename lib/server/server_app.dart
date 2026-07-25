@@ -141,7 +141,7 @@ class PicaKeepAdminServer {
       await _cancelLibraryWatchers();
       final closeFutures = <Future<void>>[
         for (final channel in _eventChannels.toList())
-          channel.sink.close(web_socket_status.goingAway),
+          channel.sink.close(web_socket_status.normalClosure),
       ];
       _eventChannels.clear();
       if (closeFutures.isNotEmpty) {

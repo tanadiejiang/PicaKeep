@@ -33,6 +33,12 @@ class _AiChatPageState extends State<AiChatPage>
   // 草稿不能挂在 controller 上，只能挂在 State 的类级 static 字段上。
   static final Map<String, String> _draftsByConversationId = {};
 
+  // 12号计划：按会话 id 缓存阅读位置（会话 id → offset）。
+  // 与 _draftsByConversationId 同一层级，用 static 保证跨 State 重建存活。
+  // 13号计划：语义扩展——dispose()（切 tab）也写入位置，_loadController() 也读取恢复，
+  // 切 tab 回来与页内切会话走同一条"有记忆位置就恢复，无则到底部"路径。
+  static final Map<String, double> _scrollOffsetByConversationId = {};
+
   @override
   bool get wantKeepAlive => true;
 
@@ -45,6 +51,30 @@ class _AiChatPageState extends State<AiChatPage>
   final GlobalKey _pendingTagRowKey = GlobalKey();
   OverlayEntry? _promptPanelEntry;
   bool _resetSourceRestriction = false;
+
+  // 12号计划（方案三）：ListView.builder 的 maxScrollExtent 是随 item 逐帧
+  // 构建才增长的估算值，单次 postFrame 的 jumpTo 常常落在"当时的假底部"。
+  // 用一个 pending 标志把"该滚到哪"记下来，postFrame 与 _onControllerUpdate
+  // 都去调 _applyPendingScroll()，落位成功即清标志（否则用户手动往上翻历史
+  // 会被后续 controller 更新强制弹回）。
+  bool _pendingScrollToBottom = false;
+  double? _pendingScrollOffset;
+  int _pendingScrollFrames = 0;
+  int _pendingScrollWaitFrames = 0;
+  double? _lastPendingScrollExtent;
+  // Finding 2 修复：防止 postFrame 重复注册——_onControllerUpdate 调
+  // _schedulePendingScroll 时若已有一帧在途，不再二次注册，避免同一帧内两次
+  // _applyPendingScroll 导致 _pendingScrollFrames/extentSettled 误计。
+  bool _pendingScrollScheduled = false;
+
+  /// pending 滚动最多连续重试的帧数（约 8 帧 ≈ 130ms）。有界重试保证标志不会
+  /// 无限存活——否则一旦目标 offset 永远追不上（如会话被清空），用户之后的每次
+  /// 手动滚动都会被弹回。
+  static const int _maxPendingScrollFrames = 8;
+
+  /// Finding 1 修复：_scrollOffsetByConversationId 里存此哨兵表示"离开时贴底"。
+  /// 恢复时走 _scrollToBottomAfterFrame()，跟到最新底部，不受后台新消息影响。
+  static const double _atBottomSentinel = -1.0;
 
   // 结构化选中态：面板 chip 点选后写入这些集合，不再写入 _inputController 文本。
   // 发送时与 _inputController 文本的正则识别结果合并，手动在输入框里打 #标签名 仍有效。
@@ -71,42 +101,50 @@ class _AiChatPageState extends State<AiChatPage>
     final lastId = await AiConversationStore.loadLastActiveId();
     final ctrl = await AiConversationRegistry.instance.getOrCreate(lastId);
     if (mounted) {
+      // Fix B（13号计划）：先置 pending（Opacity=0 遮住首帧），再 setState 触发渲染，
+      // 防止列表在第一帧渲染出旧位置/顶部后才 jumpTo，产生可见跳帧。
+      // Fix C（13号计划）：改为 _restoreScrollOffsetAfterFrame——有记忆位置就恢复，
+      // 无记忆（新会话/首次）则到底部。切 tab 回来也走此路径（dispose() 已保存）。
+      _restoreScrollOffsetAfterFrame(ctrl);
       setState(() => _controller = ctrl);
       _controller!.addListener(_onControllerUpdate);
       _restoreDraft(ctrl);
-      // 40号计划：不再区分"是否有记忆的滚动位置"，页面（重新）加载 controller
-      // 时统一跳到底部——这覆盖了"切走AI聊天tab再切回"这个场景（该场景下
-      // State 会被完整销毁重建，见 dispose() 注释），使其总是回到最新消息处，
-      // 而不是恢复到离开前滚动到的中间位置。
-      _scrollToBottomAfterFrame();
     }
   }
 
   Future<void> _switchConversation(AiConversationMeta meta) async {
     _clearPromptPanelState();
+    // 12号计划：必须在 await 之前读 offset——await 之后 setState 会把 ListView
+    // 换成新会话的内容，此时 _scrollController.offset 已不属于旧会话。
+    _saveScrollOffset();
     final newCtrl = await AiConversationRegistry.instance.getOrCreate(meta.id);
     if (mounted) {
       // controller 生命周期交给 AiConversationRegistry 管理，切换会话时只
       // 摘除本页面挂的监听，不再 dispose()——旧会话若仍在跑 _runLoop()，
       // dispose 会导致后续 notifyListeners 命中 ChangeNotifier 的 disposed-assert。
       _controller?.removeListener(_onControllerUpdate);
+      // Fix B（13号计划）：先置 pending（Opacity=0 遮住首帧），再 setState 触发渲染，
+      // 防止新会话内容在第一帧出现在顶部/旧位置后才 jumpTo，产生可见跳帧。
+      _restoreScrollOffsetAfterFrame(newCtrl);
       setState(() => _controller = newCtrl);
       _controller!.addListener(_onControllerUpdate);
       _restoreDraft(newCtrl);
-      _scrollToBottomAfterFrame();
       await AiConversationStore.saveLastActiveId(meta.id);
     }
   }
 
   Future<void> _newConversation() async {
     _clearPromptPanelState();
+    // 12号计划：先记下旧会话的阅读位置，之后切回它才能恢复。
+    _saveScrollOffset();
     final newCtrl = await AiConversationRegistry.instance.getOrCreate(null);
     if (mounted) {
       _controller?.removeListener(_onControllerUpdate);
+      // Fix B（13号计划）：先置 pending（Opacity=0 遮住首帧），再 setState 触发渲染。
+      _scrollToBottomAfterFrame();
       setState(() => _controller = newCtrl);
       _controller!.addListener(_onControllerUpdate);
       _restoreDraft(newCtrl);
-      _scrollToBottomAfterFrame();
       if (newCtrl.conversationId != null) {
         await AiConversationStore.saveLastActiveId(newCtrl.conversationId!);
       }
@@ -122,26 +160,158 @@ class _AiChatPageState extends State<AiChatPage>
     }
   }
 
-  /// 切到底部一次（用于 controller 重建后恢复滚动位置）。
-  /// 首帧 ListView 可能尚未完成懒加载布局（maxScrollExtent 仍为0），
-  /// 此时追加第二帧重试，避免静默跳过导致停在顶部。
+  /// 切到底部一次（用于 controller 重建/切会话后定位到最新消息）。
+  /// 12号计划：改为置 pending 标志 + 逐帧收敛，首帧 ListView 未完成懒加载布局
+  /// （maxScrollExtent 仍为 0 或仍是偏小的估算值）时不会静默跳过。
   void _scrollToBottomAfterFrame() {
+    _pendingScrollToBottom = true;
+    _pendingScrollOffset = null;
+    _resetPendingScrollCounters();
+    _schedulePendingScroll();
+  }
+
+  /// 恢复到某个具体 offset（用于页内切回曾经翻过历史的会话）。
+  void _scrollToOffsetAfterFrame(double offset) {
+    _pendingScrollToBottom = false;
+    _pendingScrollOffset = offset;
+    _resetPendingScrollCounters();
+    _schedulePendingScroll();
+  }
+
+  /// 页内切会话时：有记忆位置就恢复，没有（新会话/首次访问）就到底部。
+  ///
+  /// Finding 1 修复：saved == _atBottomSentinel 表示离开时贴底，同样走
+  /// _scrollToBottomAfterFrame()，让 pending 收敛追到"当前底部"（含后台新消息），
+  /// 而不是恢复一个已过时的绝对像素、阻断后续贴底自动跟随。
+  void _restoreScrollOffsetAfterFrame(AiConversationController ctrl) {
+    final id = ctrl.conversationId;
+    final saved = id == null ? null : _scrollOffsetByConversationId[id];
+    if (saved == null || saved == _atBottomSentinel) {
+      _scrollToBottomAfterFrame();
+    } else {
+      _scrollToOffsetAfterFrame(saved);
+    }
+  }
+
+  /// 保存当前会话的阅读位置。只在 ListView 已 attach 时写入——未 attach 时
+  /// offset 不可读，若兜底写 0 会把有效位置覆盖成"顶部"。
+  ///
+  /// Finding 1 修复：若离开时已贴底（距底 ≤ 200dp），存哨兵 _atBottomSentinel
+  /// 而非绝对像素。恢复时哨兵走 _scrollToBottomAfterFrame，保证后台继续产出的
+  /// 新消息仍能被跟随（原来存绝对像素导致 nearBottom 判定永远为假）。
+  void _saveScrollOffset() {
+    final id = _controller?.conversationId;
+    if (id == null) return;
+    if (!_scrollController.hasClients) return;
+    final pos = _scrollController.position;
+    final nearBottom = pos.maxScrollExtent - pos.pixels <= 200;
+    _scrollOffsetByConversationId[id] =
+        nearBottom ? _atBottomSentinel : pos.pixels;
+  }
+
+  bool get _hasPendingScroll =>
+      _pendingScrollToBottom || _pendingScrollOffset != null;
+
+  /// Finding 2 修复：用 _pendingScrollScheduled 去重，避免同一帧内
+  /// _onControllerUpdate 和已在途的 postFrame 链都调用 _applyPendingScroll，
+  /// 导致 _pendingScrollFrames / _lastPendingScrollExtent 在同一布局帧被
+  /// 累计两次、extentSettled 提前误判为 true 而清标志。
+  void _schedulePendingScroll() {
+    if (_pendingScrollScheduled) return;
+    _pendingScrollScheduled = true;
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      _pendingScrollScheduled = false;
       if (!mounted) return;
-      if (_scrollController.hasClients) {
-        final maxExtent = _scrollController.position.maxScrollExtent;
-        if (maxExtent > 0) {
-          _scrollController.jumpTo(maxExtent);
-        } else {
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            if (mounted && _scrollController.hasClients) {
-              _scrollController
-                  .jumpTo(_scrollController.position.maxScrollExtent);
-            }
-          });
+      _applyPendingScroll();
+    });
+  }
+
+  /// 目标还不存在（列表未 attach 或还没内容）时的等待：自排帧有上限，超限后
+  /// 标志继续保留，交给 _onControllerUpdate 在消息真正渲染进列表时补一次。
+  void _waitForPendingScrollTarget() {
+    _pendingScrollWaitFrames++;
+    if (_pendingScrollWaitFrames < _maxPendingScrollFrames) {
+      _schedulePendingScroll();
+    }
+  }
+
+  /// 执行一次 pending 滚动（仅由 postFrame 链调用）。落位成功（或重试预算耗尽）
+  /// 立即清标志，避免与 _onControllerUpdate 里"贴底自动跟随"两条路径互相干扰。
+  ///
+  /// Finding 2 修复要点：
+  /// 1. 此方法只由 _schedulePendingScroll 的 postFrame 回调调用，预算只在真实帧
+  ///    边界推进，不再被 _onControllerUpdate 直接消耗（那边改为调
+  ///    _schedulePendingScroll，已去重）。
+  /// 2. "到底部"语义要求清标志时 offset 真的贴底：仅 extentSettled 不够，因为
+  ///    content 仍在增长时 extentSettled 可能偶发为 true（两帧之间 maxExtent
+  ///    恰好相等）。加 effectivelyAtTarget 守卫（距底 ≤ 200dp）。
+  /// 3. 预算耗尽时对"到底部"做一次最终 jumpTo，确保 offset 贴底后再清标志，
+  ///    否则 offset 停在旧像素、nearBottom 判定为假、后续跟随永久失效。
+  void _applyPendingScroll() {
+    if (!_hasPendingScroll) return;
+    // ListView 还没 attach（controller 刚 setState / 空会话只显示引导页）：
+    // 标志保留，等下一帧或下一次 _onControllerUpdate 触发的 _schedulePendingScroll。
+    if (!_scrollController.hasClients) {
+      _waitForPendingScrollTarget();
+      return;
+    }
+    final pos = _scrollController.position;
+    final maxExtent = pos.maxScrollExtent;
+    final target = _pendingScrollToBottom
+        ? maxExtent
+        : _pendingScrollOffset!.clamp(0.0, maxExtent);
+    if (_scrollController.offset != target) {
+      _scrollController.jumpTo(target);
+    }
+    // maxExtent 仍为 0：列表尚未渲染出内容（消息还没进 ListView），同样等下一帧
+    // 或下一次 _onControllerUpdate，不消耗收敛预算、不判定失败。
+    if (maxExtent <= 0) {
+      _waitForPendingScrollTarget();
+      return;
+    }
+    _pendingScrollFrames++;
+    final extentSettled = _lastPendingScrollExtent == maxExtent;
+    // Finding 2 修复：到底部时还需确认 offset 真正贴底（防止 extentSettled 在
+    // content 仍增长时偶发为 true 而提前清标志）。
+    final effectivelyAtTarget = _pendingScrollToBottom
+        ? (maxExtent - _scrollController.offset <= 200)
+        : (_pendingScrollOffset! <= maxExtent);
+    final reachedTarget = _pendingScrollToBottom
+        ? (extentSettled && effectivelyAtTarget)
+        : effectivelyAtTarget;
+    _lastPendingScrollExtent = maxExtent;
+    if (reachedTarget || _pendingScrollFrames >= _maxPendingScrollFrames) {
+      // Finding 2 修复：预算耗尽时若仍未贴底（content 持续增长导致收敛追不上），
+      // 做最后一次 jumpTo 确保 offset == 当前 maxExtent，使 nearBottom=true，
+      // 让 _onControllerUpdate 的自动跟随能立即接管后续新消息。
+      if (_pendingScrollToBottom && _scrollController.hasClients) {
+        final finalMax = _scrollController.position.maxScrollExtent;
+        if (_scrollController.position.maxScrollExtent -
+                _scrollController.offset >
+            200) {
+          _scrollController.jumpTo(finalMax);
         }
       }
-    });
+      _clearPendingScroll();
+      return;
+    }
+    // maxExtent 可能随后续 item 构建继续增长，下一帧再追一次。
+    _schedulePendingScroll();
+  }
+
+  void _clearPendingScroll() {
+    _pendingScrollToBottom = false;
+    _pendingScrollOffset = null;
+    _resetPendingScrollCounters();
+    // Fix B（13号计划）：pending 清除后触发重建，使 Opacity 从 0 恢复到 1.0，
+    // 列表直接呈现在正确位置，用户不会看到任何跳帧。
+    if (mounted) setState(() {});
+  }
+
+  void _resetPendingScrollCounters() {
+    _pendingScrollFrames = 0;
+    _pendingScrollWaitFrames = 0;
+    _lastPendingScrollExtent = null;
   }
 
   /// 按会话 id 恢复输入框草稿；没有草稿则清空，避免残留上一个会话的文字。
@@ -615,15 +785,22 @@ class _AiChatPageState extends State<AiChatPage>
   }
 
   @override
+  void deactivate() {
+    // 13号计划（Fix C）：切 tab / 被其他路由覆盖时保存阅读位置。
+    // deactivate() 在 Widget 从树中移除之前调用，此时 ScrollController 仍
+    // attached（ListView 尚未 unmount），_saveScrollOffset() 能正确读到 offset。
+    // dispose() 时 ScrollController 已经 detached，读不到位置，因此挪到这里。
+    _saveScrollOffset();
+    super.deactivate();
+  }
+
+  @override
   void dispose() {
     _clearPromptPanelState();
     _promptTagSettings.removeListener(_onPromptTagSettingsUpdate);
-    // 40号计划：切标签页时整个 State 会被销毁重建（导航用 pushAndRemoveUntil
-    // 而非 IndexedStack）。此前这里会兜底保存滚动 offset 供下次恢复，但这导致
-    // "切走再切回"总是精确停在离开前的中间位置，与用户期望的"总是回到最新
-    // 消息处"相悖，因此改为不再保存——下次进入统一由 _loadController() 跳底部。
-    // 否则若该轮 _runLoop() 仍在跑，之后的 notifyListeners 会命中
-    // ChangeNotifier 的 disposed-assert，导致该轮对话被中断/丢失。
+    // 下面只摘除监听、不 dispose controller：否则若该轮 _runLoop() 仍在跑，
+    // 之后的 notifyListeners 会命中 ChangeNotifier 的 disposed-assert，
+    // 导致该轮对话被中断/丢失。
     _controller?.removeListener(_onControllerUpdate);
     _inputController.dispose();
     _scrollController.dispose();
@@ -633,9 +810,18 @@ class _AiChatPageState extends State<AiChatPage>
   void _onControllerUpdate() {
     setState(() {});
     _promptPanelEntry?.markNeedsBuild();
+    // Finding 2 修复：不再直接调 _applyPendingScroll()，改为 _schedulePendingScroll()。
+    // 去重设计保证一帧内只有一个 postFrame 在途，预算计数与 extentSettled 判定
+    // 都在真实帧边界推进，消除"同一布局帧被累计两次"的误判。
+    // 作用等同于原来的"补一次落位"：若有 pending 且 postFrame 还没排上，这里
+    // 会排一个；若已在途，dedup 直接 return。
+    if (_hasPendingScroll) _schedulePendingScroll();
     // 只有用户接近底部（距底 ≤ 200dp）时才自动跟随新消息，
     // 避免用户主动翻历史时被新消息强制拉回底部。
-    if (_scrollController.hasClients) {
+    // pending 期间定位权归 pending 路径，跳过自动跟随，避免"恢复到历史位置"
+    // 刚落位就被这条 animateTo 拉回底部（发新消息的滚底是独立路径：那时
+    // pending 已清，不受影响）。
+    if (!_hasPendingScroll && _scrollController.hasClients) {
       final pos = _scrollController.position;
       final nearBottom = pos.maxScrollExtent - pos.pixels <= 200;
       if (nearBottom) {
@@ -847,32 +1033,44 @@ class _AiChatPageState extends State<AiChatPage>
                   child: _controller!.displayMessages.isEmpty &&
                           _controller!.pendingDownload == null
                       ? _buildEmptyGuide(context)
-                      : GestureDetector(
-                          behavior: HitTestBehavior.translucent,
-                          onTap: () => FocusScope.of(context).unfocus(),
-                          child: ListView.builder(
-                            controller: _scrollController,
-                            padding: const EdgeInsets.all(8),
-                            itemCount: displayItems.length +
-                                (_controller!.pendingDownload != null ? 1 : 0),
-                            itemBuilder: (context, index) {
-                              // 如果是最后一项且有 pendingDownload，显示确认卡片
-                              if (index == displayItems.length &&
-                                  _controller!.pendingDownload != null) {
-                                return _DownloadConfirmCard(
-                                  pending: _controller!.pendingDownload!,
-                                  onConfirm: (confirmed) =>
-                                      _controller!.confirmDownload(confirmed),
-                                );
-                              }
-                              final item = displayItems[index];
-                              if (item is _SingleItem) {
-                                return _MessageBubble(message: item.message);
-                              } else if (item is _ToolGroup) {
-                                return _ToolGroupCard(group: item);
-                              }
-                              return const SizedBox.shrink();
-                            },
+                      // Fix B（13号计划）：pending 期间用 Opacity=0 遮住列表，
+                      // 消除切 tab/切会话时的首帧闪烁。IgnorePointer 同步屏蔽
+                      // 触摸命中，防止不可见时意外触发手势。
+                      : IgnorePointer(
+                          ignoring: _hasPendingScroll,
+                          child: Opacity(
+                            opacity: _hasPendingScroll ? 0.0 : 1.0,
+                            child: GestureDetector(
+                              behavior: HitTestBehavior.translucent,
+                              onTap: () => FocusScope.of(context).unfocus(),
+                              child: ListView.builder(
+                                controller: _scrollController,
+                                padding: const EdgeInsets.all(8),
+                                itemCount: displayItems.length +
+                                    (_controller!.pendingDownload != null
+                                        ? 1
+                                        : 0),
+                                itemBuilder: (context, index) {
+                                  // 如果是最后一项且有 pendingDownload，显示确认卡片
+                                  if (index == displayItems.length &&
+                                      _controller!.pendingDownload != null) {
+                                    return _DownloadConfirmCard(
+                                      pending: _controller!.pendingDownload!,
+                                      onConfirm: (confirmed) => _controller!
+                                          .confirmDownload(confirmed),
+                                    );
+                                  }
+                                  final item = displayItems[index];
+                                  if (item is _SingleItem) {
+                                    return _MessageBubble(
+                                        message: item.message);
+                                  } else if (item is _ToolGroup) {
+                                    return _ToolGroupCard(group: item);
+                                  }
+                                  return const SizedBox.shrink();
+                                },
+                              ),
+                            ),
                           ),
                         ),
                 ),

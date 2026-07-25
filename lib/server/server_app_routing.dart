@@ -222,7 +222,7 @@ extension ServerAppRouting on PicaKeepAdminServer {
       channel.sink.add(jsonEncode(payload));
     } catch (_) {
       _eventChannels.remove(channel);
-      unawaited(channel.sink.close(web_socket_status.goingAway));
+      unawaited(channel.sink.close(web_socket_status.normalClosure));
     }
   }
 }

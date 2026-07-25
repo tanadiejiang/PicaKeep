@@ -978,12 +978,24 @@ class EhNetwork {
   /// 2. 画廊级加锁取 showKey / mpvKey（普通画廊得 showKey，MPV 画廊得 mpvKey+imgKey 列表）。
   /// 3. showKey 模式 → `apiRequest('showpage')` 解析 i3(图)/i6(原图+nl)；
   ///    mpvKey 模式 → `apiRequest('imagedispatch')` 解析 i(图)/s(nl)。
-  /// 4. 对解析出的直链发试探性 GET（仅读响应头判 509/text-html），命中失败用 nl
-  ///    换 CDN 节点重试，最多 4 次；4 次仍失败抛异常。
+  /// 4. [preflightVerify] 为 true（阅读链路默认值）时，对解析出的直链发试探性 GET
+  ///    （仅读响应头判 509/text-html），命中失败用 nl 换 CDN 节点重试，最多 4 次；
+  ///    4 次仍失败抛异常。
   ///
-  /// 返回 `(已验证可用的 imageUrl, 最近一次 nl)`。
-  Future<(String imageUrl, String? nl)> getEhImageUrl(
-      Gallery gallery, int page) async {
+  /// [preflightVerify] 为 false（下载链路）时跳过第 4 步，直接返回 API 解析出的直链：
+  /// 可用性改由真实下载请求的响应头判定（`OnlineDownloadManager._downloadFileOnce`
+  /// 读状态码 + Content-Type），命中 509 后由下载侧调 [retryEhImageUrlWithNL] 换节点
+  /// 重试。这样每张图只发一次图片请求，ehgt 配额与 `[Network]` 日志条数都减半。
+  ///
+  /// **调用方契约**：[preflightVerify] 为 false 时返回的直链**未经任何校验**，可能是
+  /// 空串（showpage 回退到 html 解析、reader 页结构变化/被风控页替换时
+  /// `div#i3 > a > img` 选不到）或字面量 `"null"`（MPV 分支 `apiJson['i']` 为 null）。
+  /// 调用方必须自行判空并按「节点不可用」处理（下载侧走 nl 换节点重试），不能把它
+  /// 直接当有效 URL 发出去。
+  ///
+  /// 返回 `(imageUrl, 最近一次 nl)`。
+  Future<(String imageUrl, String? nl)> getEhImageUrl(Gallery gallery, int page,
+      {bool preflightVerify = true}) async {
     gallery.auth ??= <String, String>{};
     final galleryLink = gallery.link;
     final gid = getGalleryId(galleryLink).split('-').first;
@@ -1000,41 +1012,32 @@ class EhNetwork {
     await _acquireShowKey(gallery, readerLink);
     assert(gallery.auth!['showKey'] != null || gallery.auth!['mpvKey'] != null);
 
-    // 共享下载 dio（连接池复用）；原先挂在 BaseOptions 上的 header / 超时改为
-    // per-request 下发给 _verifyImageReachable，共享实例本身不被改写。
-    final dio = sharedDownloadDio(options: sharedDownloadBaseOptions());
-    final verifyHeaders = {'user-agent': ehUA, 'cookie': cookiesStr};
+    // 试探性 GET（仅 preflightVerify 路径走到）：共享下载 dio 复用连接池，
+    // 原先挂在 BaseOptions 上的 header / 超时改为 per-request 下发，
+    // 共享实例本身不被改写。
+    Future<void> verifyReachable(String image) => _verifyImageReachable(
+          sharedDownloadDio(options: sharedDownloadBaseOptions()),
+          image,
+          headers: {'user-agent': ehUA, 'cookie': cookiesStr},
+        );
 
     if (gallery.auth!['mpvKey'] != null) {
       // MPV 画廊：imagedispatch。
-      Future<(String image, String? nl)> getImageFromApi([String? nl]) async {
-        final apiRes = await apiRequest({
-          'gid': int.parse(gid),
-          'imgkey': gallery.auth!['imgKey']!.split(',')[page - 1],
-          'method': 'imagedispatch',
-          'page': page,
-          'mpvkey': gallery.auth!['mpvKey'],
-          if (nl != null) 'nl': nl,
-        });
-        if (apiRes.error) {
-          throw apiRes.errorMessage ?? 'Failed to make api request';
-        }
-        final apiJson = const JsonDecoder().convert(apiRes.data);
-        return (apiJson['i'].toString(), apiJson['s']?.toString());
+      var (image, nl) = await _getMpvImageFromApi(gallery, gid, page);
+      if (!preflightVerify) {
+        return (image, nl);
       }
-
-      var (image, nl) = await getImageFromApi();
       int retryTimes = 0;
       while (true) {
         try {
-          await _verifyImageReachable(dio, image, headers: verifyHeaders);
+          await verifyReachable(image);
           return (image, nl);
         } catch (e) {
           retryTimes++;
           if (retryTimes == 4) {
             throw 'Failed to load image.\nMaximum number of retries reached.';
           }
-          (image, nl) = await getImageFromApi(nl);
+          (image, nl) = await _getMpvImageFromApi(gallery, gid, page, nl);
         }
       }
     } else {
@@ -1094,10 +1097,14 @@ class EhNetwork {
         throw 'Image loading limit reached (509).';
       }
 
+      if (!preflightVerify) {
+        return (image, nl);
+      }
+
       int retryTimes = 0;
       while (true) {
         try {
-          await _verifyImageReachable(dio, image, headers: verifyHeaders);
+          await verifyReachable(image);
           return (image, nl);
         } catch (e) {
           retryTimes++;
@@ -1119,6 +1126,66 @@ class EhNetwork {
         }
       }
     }
+  }
+
+  /// MPV 画廊取第 [page] 页（1-based）直链：imagedispatch 解析 i(图)/s(nl)。
+  ///
+  /// [nl] 非空即"换 CDN 节点重取"；为空是首次取图。依赖 `gallery.auth` 里已由
+  /// [_acquireShowKey] 填好的 mpvKey / imgKey 列表。
+  Future<(String image, String? nl)> _getMpvImageFromApi(
+      Gallery gallery, String gid, int page,
+      [String? nl]) async {
+    final apiRes = await apiRequest({
+      'gid': int.parse(gid),
+      'imgkey': gallery.auth!['imgKey']!.split(',')[page - 1],
+      'method': 'imagedispatch',
+      'page': page,
+      'mpvkey': gallery.auth!['mpvKey'],
+      if (nl != null) 'nl': nl,
+    });
+    if (apiRes.error) {
+      throw apiRes.errorMessage ?? 'Failed to make api request';
+    }
+    final apiJson = const JsonDecoder().convert(apiRes.data);
+    return (apiJson['i'].toString(), apiJson['s']?.toString());
+  }
+
+  /// 用上一次的 [nl] 换 CDN 节点重取第 [page] 页（1-based）直链，不发试探性 GET。
+  ///
+  /// 供下载链路使用：`getEhImageUrl(..., preflightVerify: false)` 拿到的直链若在
+  /// 真实下载时返回 text/html（509 限流页 / 失效节点），下载侧调本方法换节点，
+  /// 等价于 [getEhImageUrl] 内部原本由 [_verifyImageReachable] 触发的那一轮重试。
+  ///
+  /// 与 [getEhImageUrl] 共用同一套 showKey/mpvKey 状态机：`gallery.auth` 已在首次
+  /// 解析时填好，这里只补 nl 参数重发解析请求，不重取 showKey/mpvKey（保持画廊级
+  /// 串行取 key 的铁律不受影响）。
+  /// - MPV 画廊 → imagedispatch 带 nl；nl 为空时也能重发，服务端会重新派发节点
+  ///   （照搬原 MPV 重试循环语义：新 nl 可能为 null，下一轮就是无 nl 重发）。
+  /// - 普通画廊 → `/s/{imgKey}/{gid}-{page}?nl=` 换节点；nl 为空则无从换节点，抛异常
+  ///   （照搬原 showpage 重试循环里 `if (nl == null) rethrow` 的语义），新 nl 为空
+  ///   时沿用旧 nl。
+  Future<(String imageUrl, String? nl)> retryEhImageUrlWithNL(
+      Gallery gallery, int page, String? nl) async {
+    gallery.auth ??= <String, String>{};
+    final gid = getGalleryId(gallery.link).split('-').first;
+
+    if (gallery.auth!['mpvKey'] != null) {
+      return _getMpvImageFromApi(gallery, gid, page, nl);
+    }
+
+    if (nl == null) {
+      throw 'Failed to load image.\nNo nl token to switch CDN node.';
+    }
+    final readerLinkRes = await getReaderLink(gallery.link, page);
+    if (readerLinkRes.error) {
+      throw readerLinkRes.errorMessage ?? 'Failed to get reader link';
+    }
+    final imgKey = readerLinkRes.data.split('/')[4];
+    final (newImage, newNl) = await getImageLinkWithNL(gid, imgKey, page, nl);
+    if (kDebugMode) {
+      print('Get new eh image: $newImage, new nl $newNl');
+    }
+    return (newImage, newNl ?? nl);
   }
 
   /// 画廊级串行获取 showKey / mpvKey。同一画廊并发调用会复用同一个 future，
@@ -1179,6 +1246,10 @@ class EhNetwork {
   ///
   /// 指向 ehgt.org 的请求受 [acquireEhgtSlot] 3 并发闸控制；校验完立即取消流，
   /// 不读完整字节（完整下载由 [OnlineImageManager] 负责）。
+  ///
+  /// 仅阅读链路（`getEhImageUrl(..., preflightVerify: true)`）走这里：阅读侧的字节
+  /// 下载在 [OnlineImageManager] 内，拿不到响应头做 509 判定，只能靠这次预检。
+  /// 下载链路已改为直接读真实下载请求的响应头，不再预检（省一次请求 + 一份日志）。
   Future<void> _verifyImageReachable(
     Dio dio,
     String image, {
@@ -1195,7 +1266,6 @@ class EhNetwork {
         options: Options(
           responseType: ResponseType.stream,
           followRedirects: true,
-          receiveTimeout: const Duration(seconds: 20),
           headers: headers,
         ),
         cancelToken: cancelToken,

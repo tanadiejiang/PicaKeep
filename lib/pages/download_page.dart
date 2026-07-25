@@ -472,6 +472,7 @@ class DownloadPageLogic extends StateController {
   bool _coverRefreshScheduled = false;
   bool _isScrollInteracting = false;
   bool _pendingCoverRefresh = false;
+  bool shizukuRestricted = false;
   Timer? _scrollIdleTimer;
   Timer? _searchDebounceTimer;
 
@@ -520,6 +521,7 @@ class DownloadPageLogic extends StateController {
     loading = true;
     update();
     unawaited(_reloadVisibleComics());
+    unawaited(_checkShizukuRestriction());
   }
 
   @override
@@ -527,6 +529,38 @@ class DownloadPageLogic extends StateController {
     _scrollIdleTimer?.cancel();
     _searchDebounceTimer?.cancel();
     super.dispose();
+  }
+
+  Future<void> _checkShizukuRestriction() async {
+    if (!App.isAndroid) return;
+    final shizukuEnabled = normalizeAndroidShizukuMode(
+          appdata.settings[androidShizukuModeSettingIndex],
+        ) ==
+        '1';
+    if (!shizukuEnabled) {
+      if (shizukuRestricted) {
+        shizukuRestricted = false;
+        update();
+      }
+      return;
+    }
+    bool hasPermission;
+    try {
+      hasPermission = await const MethodChannel(
+            'lingxue.picakeep/storage_access',
+          ).invokeMethod<bool>(
+            'hasShizukuPermission',
+            {'forceRefresh': false},
+          ) ??
+          false;
+    } catch (_) {
+      hasPermission = false;
+    }
+    final restricted = !hasPermission;
+    if (restricted != shizukuRestricted) {
+      shizukuRestricted = restricted;
+      update();
+    }
   }
 }
 
@@ -593,6 +627,7 @@ class _DownloadPageState extends State<DownloadPage>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       _refreshRemoteIfNeeded();
+      _logic?._checkShizukuRestriction();
     }
   }
 
@@ -1235,9 +1270,21 @@ class _DownloadPageState extends State<DownloadPage>
       final defaultTitle = logic.pageTitle?.trim().isNotEmpty == true
           ? logic.pageTitle!.trim()
           : "已下载".tl;
-      return logic.selecting
-          ? Text("已选择 @num 个项目".tlParams({"num": logic.selectedNum.toString()}))
-          : Text(defaultTitle);
+      if (logic.selecting) {
+        return Text(
+          "已选择 @num 个项目".tlParams({"num": logic.selectedNum.toString()}),
+        );
+      }
+      return Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(defaultTitle),
+          if (logic.shizukuRestricted) ...[
+            const SizedBox(width: 8),
+            const _PermissionRestrictedChip(),
+          ],
+        ],
+      );
     }
   }
 
@@ -2631,5 +2678,28 @@ class _DownloadedComicInfoViewState extends State<DownloadedComicInfoView> {
     comic.markArchiveLocked();
     App.notifyLocalDataChanged();
     if (mounted) Navigator.of(context).maybePop();
+  }
+}
+
+class _PermissionRestrictedChip extends StatelessWidget {
+  const _PermissionRestrictedChip();
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: cs.errorContainer,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Text(
+        '权限受限',
+        style: TextStyle(
+          fontSize: 11,
+          color: cs.onErrorContainer,
+        ),
+      ),
+    );
   }
 }

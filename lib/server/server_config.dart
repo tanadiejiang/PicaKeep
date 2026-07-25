@@ -15,6 +15,8 @@ class PicaKeepServerConfig {
     required this.managedDataRoot,
     required this.logRequests,
     required this.consolePassword,
+    this.advertiseHost = '',
+    this.advertisePort,
   });
 
   // 配置文件名用 .data 后缀（内容仍为 JSON），避免被其他程序/扫描器
@@ -30,6 +32,8 @@ class PicaKeepServerConfig {
   final String managedDataRoot;
   final bool logRequests;
   final String consolePassword;
+  final String advertiseHost;
+  final int? advertisePort;
 
   List<String> get allLibraryRoots => [
         if (currentDownloadRoot.trim().isNotEmpty) currentDownloadRoot.trim(),
@@ -48,6 +52,8 @@ class PicaKeepServerConfig {
         'managedDataRoot': managedDataRoot,
         'logRequests': logRequests,
         'consolePassword': consolePassword,
+        'advertiseHost': advertiseHost,
+        if (advertisePort != null) 'advertisePort': advertisePort,
       };
 
   PicaKeepServerConfig copyWith({
@@ -60,6 +66,8 @@ class PicaKeepServerConfig {
     String? managedDataRoot,
     bool? logRequests,
     String? consolePassword,
+    String? advertiseHost,
+    int? Function()? advertisePort,
   }) {
     return PicaKeepServerConfig(
       host: host ?? this.host,
@@ -72,6 +80,9 @@ class PicaKeepServerConfig {
       managedDataRoot: managedDataRoot ?? this.managedDataRoot,
       logRequests: logRequests ?? this.logRequests,
       consolePassword: consolePassword ?? this.consolePassword,
+      advertiseHost: advertiseHost ?? this.advertiseHost,
+      advertisePort:
+          advertisePort != null ? advertisePort() : this.advertisePort,
     );
   }
 
@@ -86,6 +97,8 @@ class PicaKeepServerConfig {
       managedDataRoot: '',
       logRequests: false,
       consolePassword: '',
+      advertiseHost: '',
+      advertisePort: null,
     );
   }
 
@@ -108,6 +121,13 @@ class PicaKeepServerConfig {
           '',
       logRequests: json['logRequests'] == true,
       consolePassword: json['consolePassword']?.toString() ?? '',
+      advertiseHost: (json['advertiseHost'] as String? ?? '').trim(),
+      advertisePort: () {
+        final v = json['advertisePort'];
+        if (v == null) return null;
+        final n = int.tryParse(v.toString());
+        return (n != null && n >= 1 && n <= 65535) ? n : null;
+      }(),
     );
   }
 
