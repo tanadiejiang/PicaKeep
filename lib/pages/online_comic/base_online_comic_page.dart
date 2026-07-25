@@ -422,12 +422,9 @@ abstract class BaseOnlineComicPage<T> extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              valueAction(
-                displayText: title,
-                child: Align(
-                  alignment: Alignment.centerLeft,
-                  child: Text(title, style: textTheme.titleMedium),
-                ),
+              SelectableText(
+                title,
+                style: textTheme.titleMedium,
               ),
               const SizedBox(height: 8),
               Row(children: [

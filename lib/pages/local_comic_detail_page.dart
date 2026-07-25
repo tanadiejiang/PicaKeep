@@ -2507,88 +2507,96 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
           notification,
           recommendations.length,
         ),
-        child: SmoothCustomScrollView(
-          controller: _scrollController,
-          slivers: [
-            SliverAppBar(
-              pinned: true,
-              title: AnimatedOpacity(
-                opacity: _showAppbarTitle ? 1 : 0,
-                duration: const Duration(milliseconds: 200),
-                child: Text(
-                  comic.name,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ),
-              actions: [
-                Builder(
-                  builder: (buttonContext) => IconButton(
-                    tooltip: '更多'.tl,
-                    icon: const Icon(Icons.more_horiz),
-                    onPressed: () {
-                      // 参考 _showTextActionsAt 的坐标定位写法：取按钮的
-                      // RenderBox 全局位置构造菜单弹出坐标（按钮左下角）。
-                      final renderBox =
-                          buttonContext.findRenderObject() as RenderBox?;
-                      if (renderBox == null) return;
-                      final position = renderBox.localToGlobal(
-                        Offset(0, renderBox.size.height),
-                      );
-                      _showTitleActionsMenu(position);
-                    },
+        // 点击空白/非文字处清除封面旁标题/作者选中态：点击时让 SelectableText 失焦，
+        // translucent 不挡子级点击/滚动/长按选中。
+        child: GestureDetector(
+          behavior: HitTestBehavior.translucent,
+          onTap: () => FocusScope.of(context).unfocus(),
+          child: SmoothCustomScrollView(
+            controller: _scrollController,
+            slivers: [
+              SliverAppBar(
+                pinned: true,
+                title: AnimatedOpacity(
+                  opacity: _showAppbarTitle ? 1 : 0,
+                  duration: const Duration(milliseconds: 200),
+                  child: Text(
+                    comic.name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                   ),
                 ),
-              ],
-            ),
-            SliverToBoxAdapter(child: _buildComicInfo(context, history)),
-            _sectionHeader('信息'),
-            SliverToBoxAdapter(
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(12, 10, 12, 8),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    for (final row in infoRows)
-                      Padding(
-                        padding: const EdgeInsets.only(bottom: 2),
-                        child: Wrap(
-                          children: [
-                            for (final group in row) ...[
-                              _infoCard(
-                                group.localizeName ? group.name.tl : group.name,
-                                title: true,
-                              ),
-                              for (final value in group.values)
+                actions: [
+                  Builder(
+                    builder: (buttonContext) => IconButton(
+                      tooltip: '更多'.tl,
+                      icon: const Icon(Icons.more_horiz),
+                      onPressed: () {
+                        // 参考 _showTextActionsAt 的坐标定位写法：取按钮的
+                        // RenderBox 全局位置构造菜单弹出坐标（按钮左下角）。
+                        final renderBox =
+                            buttonContext.findRenderObject() as RenderBox?;
+                        if (renderBox == null) return;
+                        final position = renderBox.localToGlobal(
+                          Offset(0, renderBox.size.height),
+                        );
+                        _showTitleActionsMenu(position);
+                      },
+                    ),
+                  ),
+                ],
+              ),
+              SliverToBoxAdapter(child: _buildComicInfo(context, history)),
+              _sectionHeader('信息'),
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 10, 12, 8),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      for (final row in infoRows)
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 2),
+                          child: Wrap(
+                            children: [
+                              for (final group in row) ...[
                                 _infoCard(
-                                  value.displayText,
-                                  rawSearchValue: group.isTagGroup
-                                      ? value.effectiveRawValue
-                                      : null,
-                                  rawNamespace: group.isTagGroup
-                                      ? value.rawNamespace
-                                      : '',
+                                  group.localizeName
+                                      ? group.name.tl
+                                      : group.name,
+                                  title: true,
                                 ),
+                                for (final value in group.values)
+                                  _infoCard(
+                                    value.displayText,
+                                    rawSearchValue: group.isTagGroup
+                                        ? value.effectiveRawValue
+                                        : null,
+                                    rawNamespace: group.isTagGroup
+                                        ? value.rawNamespace
+                                        : '',
+                                  ),
+                              ],
                             ],
-                          ],
+                          ),
                         ),
-                      ),
-                  ],
+                    ],
+                  ),
                 ),
               ),
-            ),
-            ..._buildEpisodes(context),
-            ..._buildIntroduction(description),
-            ..._buildRecommendationSlivers(
-              pageRecommendations,
-              recommendations.length,
-            ),
-            SliverPadding(
-              padding: EdgeInsets.only(
-                bottom: MediaQuery.of(context).padding.bottom + 24,
+              ..._buildEpisodes(context),
+              ..._buildIntroduction(description),
+              ..._buildRecommendationSlivers(
+                pageRecommendations,
+                recommendations.length,
               ),
-            ),
-          ],
+              SliverPadding(
+                padding: EdgeInsets.only(
+                  bottom: MediaQuery.of(context).padding.bottom + 24,
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -2693,13 +2701,13 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      infoValue(
+                      SelectableText(
                         comic.name.trim(),
                         style: const TextStyle(fontSize: 18),
                       ),
                       if (author.trim().isNotEmpty) ...[
                         const SizedBox(height: 8),
-                        infoValue(
+                        SelectableText(
                           author,
                           style: const TextStyle(fontSize: 14),
                         ),

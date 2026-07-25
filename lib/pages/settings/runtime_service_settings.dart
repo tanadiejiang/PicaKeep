@@ -396,7 +396,7 @@ class _ServiceDiscoveryStrategySettingsState
         _buildDiscoveryModeTile(mode),
         SwitchListTile(
           secondary: const Icon(Icons.alt_route_outlined),
-          title: Text('mDNS 兜底扫描'.tl),
+          title: Text('mDNS 并行补扫'.tl),
           subtitle: Text(
             serviceDiscoveryMdnsFallbackDescription(
               mdnsFallbackEnabled ? '1' : '0',
@@ -719,7 +719,7 @@ class _ServiceScanPortsEditorState extends State<ServiceScanPortsEditor> {
               ),
               const SizedBox(height: 4),
               Text(
-                '网段扫描和 mDNS 无结果时的兜底扫描使用内置 9527、8080，另可添加最多 8 个单端口。服务端实际监听端口不会因此改变。'
+                '网段扫描与 mDNS 并行补扫均使用内置 9527、8080，另可添加最多 8 个单端口。服务端实际监听端口不会因此改变。'
                     .tl,
                 style: Theme.of(context).textTheme.bodySmall,
               ),

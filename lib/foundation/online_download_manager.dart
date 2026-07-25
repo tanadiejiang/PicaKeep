@@ -809,9 +809,12 @@ class OnlineDownloadManager {
         task.totalPages = totalPages;
         _notify();
 
-        // ehgt.org 闸限 3 并发（对齐 eh_main_network.dart 的 acquireEhgtSlot），
-        // 页级流水线（reader页解析+解密+下载）并发度与之对齐，避免突破官方限流契约。
-        const ehConcurrency = 3;
+        // 页级流水线（reader页解析+解密+下载）并发度，与 picacg/jm/nhentai 统一读
+        // settings[79]。ehgt.org 的 3 并发官方限流契约不受影响：真实字节下载
+        // （_downloadFileOnce）与直链探测（_verifyImageReachable）都各自过
+        // acquireEhgtSlot，且共用 EhNetwork 单例的同一个 ehgtLoading 计数器，
+        // 指向 ehgt.org/s.exhentai.org 的在途请求总数仍被硬卡在 3。
+        final ehConcurrency = int.tryParse(appdata.settings[79]) ?? 6;
         final semaphore = _Semaphore(ehConcurrency);
         var completedPages = 0;
         final errors = <String>[];
@@ -1284,7 +1287,12 @@ class OnlineDownloadManager {
     // nhentai 的下载请求无影响；这里补上真实图片字节下载请求接入这个闸——
     // 此前该闸只包住了 _verifyImageReachable 探测请求，从未限制过真实下载。
     await EhNetwork().acquireEhgtSlot(url);
-    final dio = logDio();
+    // 共享下载 dio：复用底层 HttpClient 连接池 / keep-alive，避免每张图都重新
+    // TLS 握手。options 仅首次调用生效，值必须与 EhNetwork.sharedDownloadBaseOptions()
+    // 一致（同一单例，谁先初始化都得到同样配置）。CancelToken 与进度回调仍是
+    // per-request 参数，不受共享实例影响。
+    final dio =
+        sharedDownloadDio(options: EhNetwork.sharedDownloadBaseOptions());
     final cancelToken = CancelToken();
     task.addToken(cancelToken);
     try {
@@ -1347,7 +1355,12 @@ class OnlineDownloadManager {
   }
 
   String _safeName(String value) {
-    return value.replaceAll(RegExp(r'[\\/:*?"<>|]'), '_');
+    var name = value.replaceAll(RegExp(r'[\\/:*?"<>|]'), '_');
+    // 240 字节上限：留出去重后缀余量；与 download.dart _DownloadDb.sanitizeFileName 保持同一上限
+    while (utf8.encode(name).length > 240) {
+      name = name.substring(0, name.length - 1);
+    }
+    return name;
   }
 
   String _imageExtension(String url) {

@@ -324,6 +324,7 @@ class DiscoveryProgress {
     required this.portCount,
     this.currentHost,
     this.error,
+    this.candidates = const <ServiceDiscoveryCandidate>[],
   });
 
   final DiscoveryProgressStage stage;
@@ -333,6 +334,9 @@ class DiscoveryProgress {
   final int portCount;
   final String? currentHost;
   final Object? error;
+
+  /// 截至此刻已累计发现的候选快照（按延迟排序）；未命中时为空列表。
+  final List<ServiceDiscoveryCandidate> candidates;
 
   bool get isCancelled => stage == DiscoveryProgressStage.cancelled;
   bool get isTimedOut => stage == DiscoveryProgressStage.timedOut;
@@ -545,11 +549,12 @@ class LocalNetworkServiceDiscovery {
     this.mdnsFactory = PicaKeepMdnsDiscovery.new,
     this.prefixResolver,
     this.localHostResolver,
-    this.hostConcurrency = 12,
-    this.totalTimeout = const Duration(seconds: 15),
+    this.hostConcurrency = 20,
+    this.totalTimeout = const Duration(seconds: 20),
   }) : assert(hostConcurrency > 0);
 
-  static const hostConcurrencyLimit = 12;
+  /// 主机级并发上限。单网段 253 主机 × 2 端口时，20 并发 + 20s 预算可扫完本机段。
+  static const hostConcurrencyLimit = 20;
 
   final ServiceDiscoveryProbe? probe;
   final ServiceDiscoveryMdnsFactory mdnsFactory;
@@ -644,12 +649,13 @@ class LocalNetworkServiceDiscovery {
       cancellationToken: cancellationToken,
       session: session,
     );
-    if (cancellationToken.isCancelled ||
-        mdnsResult.candidates.isNotEmpty ||
-        !fallbackToSubnetScan) {
+    // 取消或关闭补扫：只返回 mDNS 结果（纯 mDNS 语义不变）。
+    if (cancellationToken.isCancelled || !fallbackToSubnetScan) {
       return mdnsResult;
     }
 
+    // 补扫开关开启时始终执行网段扫描，再与 mDNS 结果合并去重，
+    // 避免「mDNS 先发现直连机 → 非空短路 → Docker/NAS 被漏」的盲区。
     final scanResult = await scan(
       preferredAddress: preferredAddress,
       effectiveScanPorts: effectiveScanPorts,
@@ -657,18 +663,45 @@ class LocalNetworkServiceDiscovery {
       session: session,
       candidateHosts: candidateHosts,
     );
+    return _mergeDiscoveryResults(mdnsResult, scanResult);
+  }
+
+  /// 合并 mDNS 与网段补扫结果：同 [ServiceDiscoveryCandidate.address] 去重，
+  /// 优先保留 mDNS 候选（元数据更丰富），再按延迟升序排序。
+  LocalNetworkServiceDiscoveryResult _mergeDiscoveryResults(
+    LocalNetworkServiceDiscoveryResult mdnsResult,
+    LocalNetworkServiceDiscoveryResult scanResult,
+  ) {
+    final candidatesByAddress = <String, ServiceDiscoveryCandidate>{};
+    for (final candidate in mdnsResult.candidates) {
+      candidatesByAddress.putIfAbsent(candidate.address, () => candidate);
+    }
+    for (final candidate in scanResult.candidates) {
+      candidatesByAddress.putIfAbsent(candidate.address, () => candidate);
+    }
+    final candidates = candidatesByAddress.values.toList()
+      ..sort(
+        (a, b) => (a.latencyMs ?? 1 << 30).compareTo(b.latencyMs ?? 1 << 30),
+      );
+
     return LocalNetworkServiceDiscoveryResult(
-      candidates: scanResult.candidates,
-      scannedHostCount: scanResult.scannedHostCount,
-      scannedPortCount: scanResult.scannedPortCount,
-      scannedEndpointCount: scanResult.scannedEndpointCount,
-      plannedEndpointCount: scanResult.plannedEndpointCount,
-      scannedSubnetCount: scanResult.scannedSubnetCount,
+      candidates: candidates,
+      scannedHostCount:
+          mdnsResult.scannedHostCount + scanResult.scannedHostCount,
+      scannedPortCount:
+          mdnsResult.scannedPortCount + scanResult.scannedPortCount,
+      scannedEndpointCount:
+          mdnsResult.scannedEndpointCount + scanResult.scannedEndpointCount,
+      plannedEndpointCount:
+          mdnsResult.plannedEndpointCount + scanResult.plannedEndpointCount,
+      scannedSubnetCount:
+          mdnsResult.scannedSubnetCount + scanResult.scannedSubnetCount,
       requestedMode: serviceDiscoveryModeMdns,
-      effectiveMode: serviceDiscoveryModeSubnetScan,
+      // 用户选择仍是 mDNS 模式；网段补扫是该模式的内建附加行为。
+      effectiveMode: serviceDiscoveryModeMdns,
       fellBackToSubnetScan: true,
-      cancelled: scanResult.cancelled,
-      timedOut: scanResult.timedOut,
+      cancelled: mdnsResult.cancelled || scanResult.cancelled,
+      timedOut: mdnsResult.timedOut || scanResult.timedOut,
     );
   }
 
@@ -763,11 +796,16 @@ class LocalNetworkServiceDiscovery {
           ),
         );
         accumulator.completedEndpoints += 1;
+        var candidateSnapshot = const <ServiceDiscoveryCandidate>[];
         if (candidate != null) {
+          final before = accumulator.candidatesByAddress.length;
           accumulator.candidatesByAddress.putIfAbsent(
             candidate.address,
             () => candidate,
           );
+          if (accumulator.candidatesByAddress.length > before) {
+            candidateSnapshot = accumulator.sortedCandidates;
+          }
         }
         _emitProgress(
           session,
@@ -778,6 +816,7 @@ class LocalNetworkServiceDiscovery {
             currentHost: endpoint.address.address,
             candidateCount: accumulator.candidatesByAddress.length,
             portCount: accumulator.ports.length,
+            candidates: candidateSnapshot,
           ),
         );
       }
@@ -802,6 +841,7 @@ class LocalNetworkServiceDiscovery {
         completedEndpoints: result.scannedEndpointCount,
         candidateCount: result.candidates.length,
         portCount: result.scannedPortCount,
+        candidates: result.candidates,
       ),
     );
     return result;
@@ -825,15 +865,37 @@ class LocalNetworkServiceDiscovery {
     final injectedHosts = candidateHosts?.map((host) => host.trim()).where(
           (host) => host.isNotEmpty,
         );
-    final prefixes = injectedHosts == null
+    final rawPrefixes = injectedHosts == null
         ? await (prefixResolver ?? _resolveCandidatePrefixes)(preferredAddress)
+        : const <String>[];
+    // 无论来自真实网卡枚举还是注入的 prefixResolver，统一按优先级排序再截断。
+    final prefixes = injectedHosts == null
+        ? await _prioritizeCandidatePrefixes(
+            rawPrefixes,
+            preferredAddress: preferredAddress,
+          )
         : const <String>[];
     final preferredHost =
         tryParseRemoteServerUri(preferredAddress ?? '')?.host ?? '';
-    final explicitHosts = <String>{
-      if (preferredHost.isNotEmpty && !_isLoopbackHost(preferredHost))
-        preferredHost,
-    };
+    // 复用已保存的远程地址作为 last-success：每轮显式优先探测，覆盖跨段漏网。
+    final lastSuccessHost = tryParseRemoteServerUri(
+          appdata.settings[remoteServerAddressSettingIndex],
+        )?.host ??
+        '';
+    // 有序：preferred 最先，再 last-success；后续段扫描在 _buildScanTargets 中展开。
+    final explicitHosts = <String>[];
+    void addExplicit(String host, {bool requirePrivate = false}) {
+      if (host.isEmpty ||
+          _isLoopbackHost(host) ||
+          (requirePrivate && !_isPrivateIpv4(host)) ||
+          explicitHosts.contains(host)) {
+        return;
+      }
+      explicitHosts.add(host);
+    }
+
+    addExplicit(preferredHost);
+    addExplicit(lastSuccessHost, requirePrivate: true);
     final targets = injectedHosts != null
         ? _normalizeHosts(injectedHosts)
         : await _buildScanTargets(prefixes, explicitHosts);
@@ -868,7 +930,7 @@ class LocalNetworkServiceDiscovery {
   }) async {
     final client = probe == null
         ? _createRemoteServiceClient(
-            connectionTimeout: const Duration(milliseconds: 450),
+            connectionTimeout: const Duration(milliseconds: 600),
             maxConnectionsPerHost: ports.length,
             forceDirect: true,
           )
@@ -899,6 +961,7 @@ class LocalNetworkServiceDiscovery {
       }
       accumulator.hosts.add(host);
       accumulator.ports.add(port);
+      var candidateSnapshot = const <ServiceDiscoveryCandidate>[];
       try {
         final candidate = await _probeRequest(
           client,
@@ -909,10 +972,14 @@ class LocalNetworkServiceDiscovery {
           ),
         );
         if (candidate != null) {
+          final before = accumulator.candidatesByAddress.length;
           accumulator.candidatesByAddress.putIfAbsent(
             candidate.address,
             () => candidate,
           );
+          if (accumulator.candidatesByAddress.length > before) {
+            candidateSnapshot = accumulator.sortedCandidates;
+          }
         }
       } catch (_) {
         // A failed endpoint must not stop the remaining hosts.
@@ -927,6 +994,7 @@ class LocalNetworkServiceDiscovery {
             currentHost: host,
             candidateCount: accumulator.candidatesByAddress.length,
             portCount: ports.length,
+            candidates: candidateSnapshot,
           ),
         );
       }
@@ -1002,6 +1070,7 @@ class LocalNetworkServiceDiscovery {
         completedEndpoints: result.scannedEndpointCount,
         candidateCount: result.candidates.length,
         portCount: result.scannedPortCount,
+        candidates: result.candidates,
       ),
     );
     return result;
@@ -1031,11 +1100,11 @@ class LocalNetworkServiceDiscovery {
     final stopwatch = Stopwatch()..start();
     try {
       final httpRequest = await client.getUrl(uri).timeout(
-            const Duration(milliseconds: 450),
+            const Duration(milliseconds: 600),
           );
       httpRequest.headers.set(HttpHeaders.acceptHeader, 'application/json');
       final response = await httpRequest.close().timeout(
-            const Duration(milliseconds: 700),
+            const Duration(milliseconds: 900),
           );
       final body = await utf8.decoder.bind(response).join().timeout(
             const Duration(milliseconds: 500),
@@ -1119,49 +1188,116 @@ class LocalNetworkServiceDiscovery {
     return normalized;
   }
 
+  Future<List<String>> _prioritizeCandidatePrefixes(
+    List<String> rawPrefixes, {
+    String? preferredAddress,
+  }) async {
+    final preferredHost =
+        tryParseRemoteServerUri(preferredAddress ?? '')?.host ?? '';
+    final preferredPrefix = _isPrivateIpv4(preferredHost)
+        ? _extractIpv4Prefix(preferredHost)
+        : null;
+
+    final localHosts = await (localHostResolver ?? _resolveLocalIpv4Hosts)();
+    final localPrefixes = <String>{};
+    for (final host in localHosts) {
+      final prefix = _extractIpv4Prefix(host);
+      if (prefix != null) {
+        localPrefixes.add(prefix);
+      }
+    }
+
+    // 无网卡名时无法判虚拟网卡；仅依赖地址族优先级 + preferred/local。
+    final virtualPrefixes = <String>{};
+    final unique = <String>{
+      for (final prefix in rawPrefixes)
+        if (prefix.trim().isNotEmpty) prefix.trim(),
+    };
+    if (unique.isEmpty) {
+      return const <String>[];
+    }
+
+    final sorted = unique.toList()
+      ..sort(
+        (a, b) {
+          final rankA = _subnetPrefixPriorityRank(
+            a,
+            preferredPrefix: preferredPrefix,
+            localPrefixes: localPrefixes,
+            virtualPrefixes: virtualPrefixes,
+          );
+          final rankB = _subnetPrefixPriorityRank(
+            b,
+            preferredPrefix: preferredPrefix,
+            localPrefixes: localPrefixes,
+            virtualPrefixes: virtualPrefixes,
+          );
+          final byRank = rankA.compareTo(rankB);
+          if (byRank != 0) {
+            return byRank;
+          }
+          return _compareIpv4Prefix(a, b);
+        },
+      );
+
+    if (sorted.length > 2) {
+      return sorted.sublist(0, 2);
+    }
+    return sorted;
+  }
+
   Future<List<String>> _buildScanTargets(
     List<String> prefixes,
-    Set<String> explicitHosts,
+    List<String> explicitHosts,
   ) async {
     if (prefixes.isEmpty && explicitHosts.isEmpty) {
       return const <String>[];
     }
     final localHosts = await (localHostResolver ?? _resolveLocalIpv4Hosts)();
-    final hosts = <String>{
-      ...explicitHosts,
-      for (final prefix in prefixes)
-        for (var i = 1; i <= 254; i++) '$prefix.$i',
-    };
     final removableLocalHosts = Set<String>.from(localHosts)
       ..removeAll(explicitHosts);
-    hosts.removeAll(removableLocalHosts);
 
-    final remainingHosts = Set<String>.from(hosts)..removeAll(explicitHosts);
-    return <String>[
-      ...explicitHosts.where(hosts.contains),
-      ...(remainingHosts.toList()..sort()),
-    ];
+    // 按前缀顺序展开（前缀已优先级排序），段内 1..254 数字升序；
+    // explicitHosts（preferred / last-success）始终最前。
+    final ordered = <String>[];
+    final seen = <String>{};
+    for (final host in explicitHosts) {
+      if (host.isEmpty || !seen.add(host)) {
+        continue;
+      }
+      ordered.add(host);
+    }
+    for (final prefix in prefixes) {
+      for (var i = 1; i <= 254; i++) {
+        final host = '$prefix.$i';
+        if (removableLocalHosts.contains(host) || !seen.add(host)) {
+          continue;
+        }
+        ordered.add(host);
+      }
+    }
+    return ordered;
   }
 
   Future<List<String>> _resolveCandidatePrefixes(
       String? preferredAddress) async {
-    final prefixes = <String>[];
-    final seen = <String>{};
-
-    void addPrefixFromHost(String host) {
-      final prefix = _extractIpv4Prefix(host);
-      if (prefix == null || !seen.add(prefix)) {
-        return;
-      }
-      prefixes.add(prefix);
-    }
-
     final preferredHost =
         tryParseRemoteServerUri(preferredAddress ?? '')?.host ?? '';
-    if (_isPrivateIpv4(preferredHost)) {
-      addPrefixFromHost(preferredHost);
+    final preferredPrefix = _isPrivateIpv4(preferredHost)
+        ? _extractIpv4Prefix(preferredHost)
+        : null;
+
+    final localHosts = await (localHostResolver ?? _resolveLocalIpv4Hosts)();
+    final localPrefixes = <String>{};
+    for (final host in localHosts) {
+      final prefix = _extractIpv4Prefix(host);
+      if (prefix != null) {
+        localPrefixes.add(prefix);
+      }
     }
 
+    final interfaceEntries = <({String prefix, String interfaceName})>[];
+    final seenInterfacePrefix = <String>{};
     final interfaces = await NetworkInterface.list(
       type: InternetAddressType.IPv4,
       includeLoopback: false,
@@ -1170,16 +1306,63 @@ class LocalNetworkServiceDiscovery {
     for (final networkInterface in interfaces) {
       for (final address in networkInterface.addresses) {
         final host = address.address;
-        if (_isPrivateIpv4(host)) {
-          addPrefixFromHost(host);
+        if (!_isPrivateIpv4(host)) {
+          continue;
         }
+        final prefix = _extractIpv4Prefix(host);
+        if (prefix == null || !seenInterfacePrefix.add(prefix)) {
+          continue;
+        }
+        interfaceEntries.add((
+          prefix: prefix,
+          interfaceName: networkInterface.name,
+        ));
       }
     }
 
-    if (prefixes.length > 2) {
-      return prefixes.sublist(0, 2);
+    final allPrefixes = <String>{
+      if (preferredPrefix != null) preferredPrefix,
+      ...localPrefixes,
+      for (final entry in interfaceEntries) entry.prefix,
+    };
+    if (allPrefixes.isEmpty) {
+      return const <String>[];
     }
-    return prefixes;
+
+    final virtualNames = {
+      for (final entry in interfaceEntries)
+        if (_looksLikeVirtualNetworkInterface(entry.interfaceName))
+          entry.prefix,
+    };
+
+    final sorted = allPrefixes.toList()
+      ..sort(
+        (a, b) {
+          final rankA = _subnetPrefixPriorityRank(
+            a,
+            preferredPrefix: preferredPrefix,
+            localPrefixes: localPrefixes,
+            virtualPrefixes: virtualNames,
+          );
+          final rankB = _subnetPrefixPriorityRank(
+            b,
+            preferredPrefix: preferredPrefix,
+            localPrefixes: localPrefixes,
+            virtualPrefixes: virtualNames,
+          );
+          final byRank = rankA.compareTo(rankB);
+          if (byRank != 0) {
+            return byRank;
+          }
+          return _compareIpv4Prefix(a, b);
+        },
+      );
+
+    // 截断前已排序：保留最可能命中的前 2 段（本机/192 优先于 10.x）。
+    if (sorted.length > 2) {
+      return sorted.sublist(0, 2);
+    }
+    return sorted;
   }
 
   Future<Set<String>> _resolveLocalIpv4Hosts() async {
@@ -1275,6 +1458,107 @@ String _cleanDiscoveryDisplayName(String? value) {
 
 String _endpointKey(String host, int port) {
   return Uri(scheme: 'http', host: host, port: port).toString();
+}
+
+/// 网段扫描前缀优先级：数值越小越优先。
+/// preferred / 本机段 > 其他 192.168 > 172.16/12 > 10/8；疑似虚拟网卡再降一级。
+int _subnetPrefixPriorityRank(
+  String prefix, {
+  String? preferredPrefix,
+  required Set<String> localPrefixes,
+  required Set<String> virtualPrefixes,
+}) {
+  // 数值越小越优先：
+  // preferred → 本机 192.168 → 本机 172 → 本机 10 → 非本机 192.168 → 172 → 10。
+  // 同为本机时仍让 192.168 先于 10.x，避免 VPN/虚拟 10 段抢预算。
+  var rank = 100;
+  final isLocal = localPrefixes.contains(prefix);
+  if (preferredPrefix != null && prefix == preferredPrefix) {
+    rank = 0;
+  } else if (isLocal && prefix.startsWith('192.168.')) {
+    rank = 10;
+  } else if (isLocal && prefix.startsWith('172.')) {
+    rank = 12;
+  } else if (isLocal && prefix.startsWith('10.')) {
+    rank = 15;
+  } else if (prefix.startsWith('192.168.')) {
+    rank = 20;
+  } else if (prefix.startsWith('172.')) {
+    rank = 30;
+  } else if (prefix.startsWith('10.')) {
+    rank = 40;
+  }
+  if (virtualPrefixes.contains(prefix) && rank > 0) {
+    rank += 50;
+  }
+  return rank;
+}
+
+bool _looksLikeVirtualNetworkInterface(String name) {
+  final lower = name.toLowerCase();
+  const markers = <String>[
+    'vethernet',
+    'virtual',
+    'vpn',
+    'utun',
+    'tun',
+    'tap',
+    'loopback',
+    'hyper-v',
+    'wsl',
+    'docker',
+    'veth',
+    'br-',
+    'vmnet',
+    'vbox',
+  ];
+  for (final marker in markers) {
+    if (lower.contains(marker)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+int _compareIpv4Host(String a, String b) {
+  final aParts = _parseIpv4Octets(a);
+  final bParts = _parseIpv4Octets(b);
+  if (aParts == null && bParts == null) {
+    return a.compareTo(b);
+  }
+  if (aParts == null) {
+    return 1;
+  }
+  if (bParts == null) {
+    return -1;
+  }
+  for (var i = 0; i < 4; i++) {
+    final cmp = aParts[i].compareTo(bParts[i]);
+    if (cmp != 0) {
+      return cmp;
+    }
+  }
+  return 0;
+}
+
+int _compareIpv4Prefix(String a, String b) {
+  return _compareIpv4Host('$a.0', '$b.0');
+}
+
+List<int>? _parseIpv4Octets(String value) {
+  final parts = value.split('.');
+  if (parts.length != 4) {
+    return null;
+  }
+  final numbers = <int>[];
+  for (final part in parts) {
+    final number = int.tryParse(part);
+    if (number == null || number < 0 || number > 255) {
+      return null;
+    }
+    numbers.add(number);
+  }
+  return numbers;
 }
 
 String? _extractIpv4Prefix(String value) {
