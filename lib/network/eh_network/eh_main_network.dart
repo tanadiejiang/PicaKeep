@@ -36,8 +36,9 @@ class EhNetwork {
   late List<String> folderNames;
 
   /// 站点根 URL：settings[20]=='0' 普通站，否则里站（公共契约）。
-  String get ehBaseUrl =>
-      appdata.settings[20] == '0' ? 'https://e-hentai.org' : 'https://exhentai.org';
+  String get ehBaseUrl => appdata.settings[20] == '0'
+      ? 'https://e-hentai.org'
+      : 'https://exhentai.org';
 
   /// api.php 地址（随站点切换）。
   String get ehApiUrl => appdata.settings[20] == '0'
@@ -110,30 +111,94 @@ class EhNetwork {
     return cookiesStr;
   }
 
+  /// 页 HTML 内存缓存：仅供 [useCache] 显式开启的调用方使用。
+  ///
+  /// 【安全约束】只能缓存列表/画廊列表类只读页。取 showKey/imgKey/api 等鉴权
+  /// 相关请求绝不能传 useCache=true——EH 的 showKey/imgKey 有时效，缓存这类
+  /// 页面会导致复用过期 key 而下载失败。key = 请求 URL，value = 响应体 +
+  /// 写入时刻，TTL 5 分钟，容量上限 [_htmlCacheMaxSize]，超出按最旧淘汰。
+  final Map<String, ({DateTime at, String body})> _htmlCache = {};
+
+  static const Duration _htmlCacheTtl = Duration(minutes: 5);
+  static const int _htmlCacheMaxSize = 64;
+
+  void _putHtmlCache(String url, String body) {
+    if (_htmlCache.length >= _htmlCacheMaxSize &&
+        !_htmlCache.containsKey(url)) {
+      String? oldestKey;
+      DateTime? oldestAt;
+      for (final entry in _htmlCache.entries) {
+        if (oldestAt == null || entry.value.at.isBefore(oldestAt)) {
+          oldestAt = entry.value.at;
+          oldestKey = entry.key;
+        }
+      }
+      if (oldestKey != null) {
+        _htmlCache.remove(oldestKey);
+      }
+    }
+    _htmlCache[url] = (at: DateTime.now(), body: body);
+  }
+
+  /// 共享下载 dio 的首次初始化参数（[sharedDownloadDio] 的 options 仅首次生效）。
+  ///
+  /// dio 5.x 的 per-request [Options] 不含 connectTimeout，该字段只能配在
+  /// BaseOptions 上，而共享实例被「EH 页 HTML 请求」与「图片字节下载」共用，
+  /// 故取两者折中的 15s：比 EH 页原先的 8s 略宽松，但对原本完全没有连接超时
+  /// 的字节下载是收紧。online_download_manager.dart 的调用点必须传相同值，
+  /// 这样无论哪一侧先触发初始化，最终配置都一致。
+  static BaseOptions sharedDownloadBaseOptions() =>
+      BaseOptions(connectTimeout: const Duration(seconds: 15));
+
   /// 从 url 获取 HTML 文本，请求时设置 cookie。
   ///
   /// 失效判定覆盖：空数据 / bounce_login / IP ban / redirect loop。
+  ///
+  /// [useCache] 默认关闭；仅列表/画廊列表类只读页可显式传 true 走内存缓存
+  /// （见 [_htmlCache] 文档的安全约束），其余调用方（尤其取 showKey/imgKey/
+  /// api 的请求）必须保持默认值，禁止缓存鉴权相关页面。
   Future<Res<String>> request(
     String url, {
     Map<String, String>? headers,
     bool setNW = true,
+    bool useCache = false,
   }) async {
+    if (useCache) {
+      final cached = _htmlCache[url];
+      if (cached != null &&
+          DateTime.now().difference(cached.at) < _htmlCacheTtl) {
+        return Res(cached.body);
+      }
+    }
     await getCookies(setNW, url);
-    var options = BaseOptions(
-      connectTimeout: const Duration(seconds: 8),
-      sendTimeout: const Duration(seconds: 8),
-      receiveTimeout: const Duration(seconds: 8),
-      followRedirects: true,
-      responseType: ResponseType.plain,
-      headers: {
-        'user-agent': ehUA,
-        ...?headers,
-        'host': Uri.parse(url).host,
-      },
-    );
-    var dio = logDio(options)..interceptors.add(CookieManagerSql(cookieJar));
+    // 共享下载 dio：复用连接池/keep-alive，避免每页 HTML 都重新 TLS 握手。
+    // 注意不能往共享实例上 add(CookieManagerSql)——共享 dio 被多源下载复用，
+    // 挂拦截器既会随每次调用无界累积，也会把其它源响应的 set-cookie 写进 EH
+    // 库（违反「禁用共享 cookieJar」契约）。故这里把拦截器的两步（请求前注入
+    // cookie header、响应后落库 set-cookie）就地内联，语义与原先一致。
+    final dio = sharedDownloadDio(options: sharedDownloadBaseOptions());
+    final requestUri = Uri.parse(url);
+    final cookieHeader = cookieJar.loadForRequestCookieHeader(requestUri);
     try {
-      var res = await dio.get<String>(url);
+      var res = await dio.get<String>(
+        url,
+        options: Options(
+          sendTimeout: const Duration(seconds: 8),
+          receiveTimeout: const Duration(seconds: 8),
+          followRedirects: true,
+          responseType: ResponseType.plain,
+          headers: {
+            'user-agent': ehUA,
+            ...?headers,
+            'host': requestUri.host,
+            if (cookieHeader.isNotEmpty) 'cookie': cookieHeader,
+          },
+        ),
+      );
+      cookieJar.saveFromResponseCookieHeader(
+        res.requestOptions.uri,
+        res.headers['set-cookie'] ?? const <String>[],
+      );
       var data = res.data ?? '';
       if (data.isEmpty) {
         throw Exception('Empty Data. '
@@ -149,6 +214,9 @@ class EhNetwork {
       if (data.length >= 4 && data.substring(0, 4) == 'Your') {
         return const Res(null,
             errorMessage: 'Your IP address has been temporarily banned');
+      }
+      if (useCache) {
+        _putHtmlCache(url, data);
       }
       return Res(data);
     } on DioException catch (e) {
@@ -366,8 +434,8 @@ class EhNetwork {
           var time = item.children[1].children[2].children[0].text;
           var stars = getStarsFromPosition(
               item.children[1].children[2].children[1].attributes['style']!);
-          var cover =
-              item.children[1].children[1].children[0].children[0].attributes['src'];
+          var cover = item.children[1].children[1].children[0].children[0]
+              .attributes['src'];
           if (cover![0] == 'd') {
             cover = item.children[1].children[1].children[0].children[0]
                 .attributes['data-src'];
@@ -383,8 +451,7 @@ class EhNetwork {
             // 收藏夹页没有 uploader
           }
           var tags = <String>[];
-          for (var node
-              in item.children[2].children[0].children[1].children) {
+          for (var node in item.children[2].children[0].children[1].children) {
             tags.add(node.attributes['title']!);
           }
 
@@ -448,9 +515,10 @@ class EhNetwork {
           final uploader =
               item.querySelector('td.gl2e > div > div.gl3e > div > a')?.text ??
                   'Unknown';
-          final coverPath =
-              item.querySelector('td.gl1e > div > a > img')?.attributes['src'] ??
-                  '';
+          final coverPath = item
+                  .querySelector('td.gl1e > div > a > img')
+                  ?.attributes['src'] ??
+              '';
           final stars = getStarsFromPosition(item
                   .querySelector('td.gl2e > div > div.gl3e > div.ir')
                   ?.attributes['style'] ??
@@ -481,7 +549,8 @@ class EhNetwork {
         try {
           final title =
               item.querySelector('td.gl3m > a > div.glink')?.text ?? 'Unknown';
-          final type = item.querySelector('td.gl1m > div.cs')?.text ?? 'Unknown';
+          final type =
+              item.querySelector('td.gl1m > div.cs')?.text ?? 'Unknown';
           final time = item
                   .querySelectorAll('td.gl2m > div')
                   .firstWhereOrNull(
@@ -490,11 +559,14 @@ class EhNetwork {
               'Unknown';
           final uploader =
               item.querySelector('td.gl5m > div > a')?.text ?? 'Unknown';
-          var coverPath =
-              item.querySelector('td.gl2m > div > div > img')?.attributes['src'];
-          final link = item.querySelector('td.gl3m > a')?.attributes['href'] ?? '';
+          var coverPath = item
+              .querySelector('td.gl2m > div > div > img')
+              ?.attributes['src'];
+          final link =
+              item.querySelector('td.gl3m > a')?.attributes['href'] ?? '';
           final stars = getStarsFromPosition(
-              item.querySelector('td.gl4m > div.ir')?.attributes['style'] ?? '');
+              item.querySelector('td.gl4m > div.ir')?.attributes['style'] ??
+                  '');
           galleries.add(EhGalleryBrief(
               title, type, time, uploader, coverPath ?? '', stars, link, []));
         } catch (e) {
@@ -574,12 +646,16 @@ class EhNetwork {
     var content = e.getElementsByClassName('c6')[0].text;
     var score = int.parse(e.querySelector('div.c5 > span')?.text ?? '0');
     var id = e.previousElementSibling?.attributes['name']?.nums ?? '0';
-    bool voteUp =
-        e.querySelector('a#comment_vote_up_$id')?.attributes['style']?.isNotEmpty ==
-            true;
-    bool voteDown =
-        e.querySelector('a#comment_vote_down_$id')?.attributes['style']?.isNotEmpty ==
-            true;
+    bool voteUp = e
+            .querySelector('a#comment_vote_up_$id')
+            ?.attributes['style']
+            ?.isNotEmpty ==
+        true;
+    bool voteDown = e
+            .querySelector('a#comment_vote_down_$id')
+            ?.attributes['style']
+            ?.isNotEmpty ==
+        true;
     bool? vote;
     if (voteUp) {
       vote = true;
@@ -608,8 +684,9 @@ class EhNetwork {
       for (var tr in tagLists) {
         var list = <String>[];
         for (var div in tr.children[1].children) {
-          list.add(
-              div.children[0].attributes['onclick']!.split(':')[1].split("'")[0]);
+          list.add(div.children[0].attributes['onclick']!
+              .split(':')[1]
+              .split("'")[0]);
         }
         tags[tr.children[0].text.substring(0, tr.children[0].text.length - 1)] =
             list;
@@ -623,11 +700,13 @@ class EhNetwork {
       }
 
       bool favorite = true;
-      if (document.getElementById('favoritelink')?.text == ' Add to Favorites') {
+      if (document.getElementById('favoritelink')?.text ==
+          ' Add to Favorites') {
         favorite = false;
       }
-      var coverPath =
-          document.querySelector('div#gleft > div#gd1 > div')!.attributes['style']!;
+      var coverPath = document
+          .querySelector('div#gleft > div#gd1 > div')!
+          .attributes['style']!;
       coverPath =
           RegExp(r'https?://([-a-zA-Z0-9.]+(/\S*)?\.(?:jpg|jpeg|gif|png|webp))')
               .firstMatch(coverPath)![0]!;
@@ -650,8 +729,9 @@ class EhNetwork {
       // 类型
       var type = document.getElementsByClassName('cs')[0].text;
       // 时间
-      var time =
-          document.querySelector('div#gdd > table > tbody > tr > td.gdt2')!.text;
+      var time = document
+          .querySelector('div#gdd > table > tbody > tr > td.gdt2')!
+          .text;
       // 身份认证数据
       var auth = getVariablesFromJsCode(res.data);
       var thumbnailUrls = <String>[];
@@ -666,7 +746,8 @@ class EhNetwork {
       var ext = 'webp';
 
       // Small Thumbnails on Page 0 (if exist)
-      var smallThumbnails = document.querySelectorAll('div#gdt.gt100 > a > div');
+      var smallThumbnails =
+          document.querySelectorAll('div#gdt.gt100 > a > div');
       if (smallThumbnails.isNotEmpty) {
         // Merged
         var div = smallThumbnails[0].children.isEmpty
@@ -687,7 +768,8 @@ class EhNetwork {
       }
 
       // Large Thumbnails on Page 0 (if exist)
-      var largeThumbnails = document.querySelectorAll('div#gdt.gt200 > a > div');
+      var largeThumbnails =
+          document.querySelectorAll('div#gdt.gt200 > a > div');
       if (largeThumbnails.isNotEmpty) {
         pageSize = 20;
         var div = largeThumbnails[0].children.isEmpty
@@ -827,6 +909,12 @@ class EhNetwork {
   }
 
   /// page 从 1 开始。
+  ///
+  /// 同一 URL 并发调用时，仅首个真正发起网络请求并写入 [_htmlCache]；
+  /// 其余等待者被 [loadingReaderLinks] 挡住醒来后，直连缓存读取（由
+  /// `request(url, useCache: true)` 内部判定命中），不会各自重新拉整页。
+  /// 这也是本方法唯一显式传 `useCache: true` 的调用点——列表/画廊列表类
+  /// 只读页缓存安全，取 showKey/imgKey/api 的请求绝不能走此缓存。
   Future<Res<List<String>>> _getReaderLinks(String link, int page) async {
     String url = link;
     if (page != 1) {
@@ -836,7 +924,7 @@ class EhNetwork {
       await Future.delayed(const Duration(milliseconds: 200));
     }
     loadingReaderLinks.add(url);
-    var res = await request(url);
+    var res = await request(url, useCache: true);
     loadingReaderLinks.remove(url);
     if (res.error) {
       return Res(null, errorMessage: res.errorMessage);
@@ -912,12 +1000,10 @@ class EhNetwork {
     await _acquireShowKey(gallery, readerLink);
     assert(gallery.auth!['showKey'] != null || gallery.auth!['mpvKey'] != null);
 
-    final dio = logDio(BaseOptions(
-      followRedirects: true,
-      connectTimeout: const Duration(seconds: 8),
-      receiveTimeout: const Duration(seconds: 20),
-      headers: {'user-agent': ehUA, 'cookie': cookiesStr},
-    ));
+    // 共享下载 dio（连接池复用）；原先挂在 BaseOptions 上的 header / 超时改为
+    // per-request 下发给 _verifyImageReachable，共享实例本身不被改写。
+    final dio = sharedDownloadDio(options: sharedDownloadBaseOptions());
+    final verifyHeaders = {'user-agent': ehUA, 'cookie': cookiesStr};
 
     if (gallery.auth!['mpvKey'] != null) {
       // MPV 画廊：imagedispatch。
@@ -941,7 +1027,7 @@ class EhNetwork {
       int retryTimes = 0;
       while (true) {
         try {
-          await _verifyImageReachable(dio, image);
+          await _verifyImageReachable(dio, image, headers: verifyHeaders);
           return (image, nl);
         } catch (e) {
           retryTimes++;
@@ -961,7 +1047,8 @@ class EhNetwork {
           'page': page,
           'showkey': gallery.auth!['showKey'],
         });
-        if (apiRes.error && (apiRes.errorMessage?.contains('handshake') ?? false)) {
+        if (apiRes.error &&
+            (apiRes.errorMessage?.contains('handshake') ?? false)) {
           throw 'Failed to make api request.\n'
               'This may be due to too frequent requests.\n'
               'Try to wait for some time and retry.';
@@ -1010,7 +1097,7 @@ class EhNetwork {
       int retryTimes = 0;
       while (true) {
         try {
-          await _verifyImageReachable(dio, image);
+          await _verifyImageReachable(dio, image, headers: verifyHeaders);
           return (image, nl);
         } catch (e) {
           retryTimes++;
@@ -1092,7 +1179,11 @@ class EhNetwork {
   ///
   /// 指向 ehgt.org 的请求受 [acquireEhgtSlot] 3 并发闸控制；校验完立即取消流，
   /// 不读完整字节（完整下载由 [OnlineImageManager] 负责）。
-  Future<void> _verifyImageReachable(Dio dio, String image) async {
+  Future<void> _verifyImageReachable(
+    Dio dio,
+    String image, {
+    Map<String, String>? headers,
+  }) async {
     if (image.isEmpty) {
       throw 'empty url';
     }
@@ -1101,7 +1192,12 @@ class EhNetwork {
     try {
       final res = await dio.get<ResponseBody>(
         image,
-        options: Options(responseType: ResponseType.stream),
+        options: Options(
+          responseType: ResponseType.stream,
+          followRedirects: true,
+          receiveTimeout: const Duration(seconds: 20),
+          headers: headers,
+        ),
         cancelToken: cancelToken,
       );
       final contentType = res.data?.headers['Content-Type']?[0] ??
@@ -1250,8 +1346,8 @@ class EhNetwork {
 
   /// 取消收藏（收藏夹页批量路径）。
   Future<bool> unfavorite2(String gid) async {
-    var res = await post('$ehBaseUrl/favorites.php',
-        'ddact=delete&modifygids%5B%5D=$gid',
+    var res = await post(
+        '$ehBaseUrl/favorites.php', 'ddact=delete&modifygids%5B%5D=$gid',
         headers: {'Content-Type': 'application/x-www-form-urlencoded'});
     if (res.error) {
       return false;
@@ -1262,7 +1358,8 @@ class EhNetwork {
 
   /// 发表评论。
   Future<Res<bool>> comment(String content, String link) async {
-    var res = await post(link, 'commenttext_new=${Uri.encodeComponent(content)}',
+    var res = await post(
+        link, 'commenttext_new=${Uri.encodeComponent(content)}',
         headers: {'Content-Type': 'application/x-www-form-urlencoded'});
 
     if (res.error) {

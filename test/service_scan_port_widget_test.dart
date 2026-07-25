@@ -96,17 +96,23 @@ void main() {
     addTearDown(() => tester.binding.setSurfaceSize(null));
     await tester.pumpWidget(
       const MaterialApp(
-        home: ServiceInfoPage(standalone: true),
+        home: ServiceInfoPage(
+          standalone: true,
+          enableInlineAutoDiscovery: false,
+        ),
       ),
     );
     await tester.pumpAndSettle();
 
     expect(find.text('填写地址'), findsOneWidget);
     expect(find.text('自动发现'), findsOneWidget);
+    expect(find.text('局域网发现'), findsOneWidget);
+    expect(find.byKey(const ValueKey<String>('service-inline-rescan-action')),
+        findsOneWidget);
     expect(find.textContaining('9527'), findsOneWidget);
   });
 
-  testWidgets('client actions are direct, ordered, and not duplicated',
+  testWidgets('empty address shows inline discovery zone instead of info card',
       (tester) async {
     final oldMode = appdata.settings[appRuntimeModeSettingIndex];
     final oldAddress = appdata.settings[remoteServerAddressSettingIndex];
@@ -130,14 +136,78 @@ void main() {
     addTearDown(() => tester.binding.setSurfaceSize(null));
     await tester.pumpWidget(
       const MaterialApp(
-        home: ServiceInfoPage(standalone: true),
+        home: ServiceInfoPage(
+          standalone: true,
+          enableInlineAutoDiscovery: false,
+        ),
       ),
     );
     await tester.pumpAndSettle();
 
     expect(find.byType(PopupMenuButton<String>), findsNothing);
-    expect(find.byIcon(Icons.more_horiz), findsNothing);
-    expect(find.text('连接状态'), findsNothing);
+    expect(find.text('局域网发现'), findsOneWidget);
+    expect(find.byKey(const ValueKey<String>('service-inline-rescan-action')),
+        findsOneWidget);
+    expect(
+        find.byKey(const ValueKey<String>('service-inline-edit-address-action')),
+        findsOneWidget);
+    // 无地址态不展示信息卡操作与断开。
+    expect(find.byKey(const ValueKey<String>('service-discovery-action')),
+        findsNothing);
+    expect(find.byKey(const ValueKey<String>('service-refresh-action')),
+        findsNothing);
+    expect(find.byKey(const ValueKey<String>('service-disconnect-action')),
+        findsNothing);
+    expect(find.text('设备系统'), findsNothing);
+  });
+
+  testWidgets('configured address keeps info card actions ordered',
+      (tester) async {
+    const address = 'http://192.168.5.6:8080';
+    const dataSource = _StaticServiceDataSource(
+      ServiceInfoSnapshot(
+        mode: appRuntimeModeClient,
+        connectionState: ServiceConnectionState.offline,
+        discoveryMode: serviceDiscoveryModeMdns,
+        addressInput: address,
+        normalizedAddress: address,
+        statusText: '离线',
+        detailText: '无法连接',
+        deviceSystem: 'Linux',
+        deviceName: 'NAS',
+      ),
+    );
+    final oldMode = appdata.settings[appRuntimeModeSettingIndex];
+    final oldAddress = appdata.settings[remoteServerAddressSettingIndex];
+    final oldDiscoveryMode = appdata.settings[serviceDiscoveryModeSettingIndex];
+    final oldCustomPorts = appdata.settings[serviceScanCustomPortsSettingIndex];
+    appdata.settings[appRuntimeModeSettingIndex] = appRuntimeModeClient;
+    appdata.settings[remoteServerAddressSettingIndex] = address;
+    appdata.settings[serviceDiscoveryModeSettingIndex] =
+        serviceDiscoveryModeMdns;
+    appdata.settings[serviceScanCustomPortsSettingIndex] = '[]';
+    addTearDown(
+      () => _restoreClientSettings(
+        oldMode: oldMode,
+        oldAddress: oldAddress,
+        oldDiscoveryMode: oldDiscoveryMode,
+        oldCustomPorts: oldCustomPorts,
+      ),
+    );
+
+    await tester.binding.setSurfaceSize(const Size(360, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: ServiceInfoPage(
+          standalone: true,
+          dataSource: dataSource,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('局域网发现'), findsNothing);
     expect(find.text('mDNS 发现（2）'), findsOneWidget);
     expect(find.byKey(const ValueKey<String>('service-discovery-action')),
         findsOneWidget);
@@ -147,7 +217,6 @@ void main() {
         findsOneWidget);
     expect(find.byKey(const ValueKey<String>('service-disconnect-action')),
         findsOneWidget);
-    expect(find.text('断开连接'), findsOneWidget);
 
     final discoveryRect = tester.getRect(
       find.byKey(const ValueKey<String>('service-discovery-action')),
@@ -163,14 +232,7 @@ void main() {
     );
     expect(_visualOrder(discoveryRect), lessThan(_visualOrder(editRect)));
     expect(_visualOrder(editRect), lessThan(_visualOrder(refreshRect)));
-    // Disconnect is now in the client title trailing area, not in the
-    // bottom action Wrap.
     expect(disconnectRect.top, lessThan(discoveryRect.top));
-
-    final disconnectButton = tester.widget<Widget>(
-      find.byKey(const ValueKey<String>('service-disconnect-action')),
-    );
-    expect((disconnectButton as dynamic).onPressed, isNull);
 
     final systemLabel = tester.getRect(find.text('设备系统'));
     final nameLabel = tester.getRect(find.text('设备名称'));
@@ -183,7 +245,9 @@ void main() {
     final oldDiscoveryMode = appdata.settings[serviceDiscoveryModeSettingIndex];
     final oldCustomPorts = appdata.settings[serviceScanCustomPortsSettingIndex];
     appdata.settings[appRuntimeModeSettingIndex] = appRuntimeModeClient;
-    appdata.settings[remoteServerAddressSettingIndex] = '';
+    // 有地址才显示信息卡上的发现按钮（无地址为内联发现区）。
+    appdata.settings[remoteServerAddressSettingIndex] =
+        'http://192.168.5.6:8080';
     appdata.settings[serviceScanCustomPortsSettingIndex] = '[]';
     addTearDown(
       () => _restoreClientSettings(
@@ -204,6 +268,17 @@ void main() {
           home: ServiceInfoPage(
             key: ValueKey<String>(entry.key),
             standalone: true,
+            dataSource: _StaticServiceDataSource(
+              ServiceInfoSnapshot(
+                mode: appRuntimeModeClient,
+                connectionState: ServiceConnectionState.offline,
+                discoveryMode: entry.key,
+                addressInput: 'http://192.168.5.6:8080',
+                normalizedAddress: 'http://192.168.5.6:8080',
+                statusText: '离线',
+                detailText: 'test',
+              ),
+            ),
           ),
         ),
       );
@@ -356,12 +431,26 @@ void main() {
 
   testWidgets('client page remains scrollable without overflow at large text',
       (tester) async {
+    const address = 'http://192.168.5.6:8080';
+    const dataSource = _StaticServiceDataSource(
+      ServiceInfoSnapshot(
+        mode: appRuntimeModeClient,
+        connectionState: ServiceConnectionState.offline,
+        discoveryMode: serviceDiscoveryModeMdns,
+        addressInput: address,
+        normalizedAddress: address,
+        statusText: '离线',
+        detailText: 'test',
+        deviceSystem: 'Linux',
+        deviceName: 'NAS',
+      ),
+    );
     final oldMode = appdata.settings[appRuntimeModeSettingIndex];
     final oldAddress = appdata.settings[remoteServerAddressSettingIndex];
     final oldDiscoveryMode = appdata.settings[serviceDiscoveryModeSettingIndex];
     final oldCustomPorts = appdata.settings[serviceScanCustomPortsSettingIndex];
     appdata.settings[appRuntimeModeSettingIndex] = appRuntimeModeClient;
-    appdata.settings[remoteServerAddressSettingIndex] = '';
+    appdata.settings[remoteServerAddressSettingIndex] = address;
     appdata.settings[serviceDiscoveryModeSettingIndex] =
         serviceDiscoveryModeMdns;
     appdata.settings[serviceScanCustomPortsSettingIndex] = '[]';
@@ -382,7 +471,11 @@ void main() {
           textScaler: TextScaler.linear(2),
         ),
         child: MaterialApp(
-          home: ServiceInfoPage(standalone: true),
+          home: ServiceInfoPage(
+            standalone: true,
+            dataSource: dataSource,
+            enableInlineAutoDiscovery: false,
+          ),
         ),
       ),
     );

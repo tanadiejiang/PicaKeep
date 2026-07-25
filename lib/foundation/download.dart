@@ -896,6 +896,10 @@ abstract mixin class _DownloadDb {
     if (sanitized.isEmpty) {
       return 'unknown_${DateTime.now().millisecondsSinceEpoch}';
     }
+    // 240 字节上限：留出去重后缀余量；与 online_download_manager.dart _safeName 保持同一上限
+    while (utf8.encode(sanitized).length > 240) {
+      sanitized = sanitized.substring(0, sanitized.length - 1);
+    }
     return sanitized;
   }
 }

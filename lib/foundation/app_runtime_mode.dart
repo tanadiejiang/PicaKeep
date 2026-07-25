@@ -179,8 +179,8 @@ bool isServiceDiscoveryMdnsFallbackEnabled(String value) {
 
 String serviceDiscoveryMdnsFallbackDescription(String value) {
   return isServiceDiscoveryMdnsFallbackEnabled(value)
-      ? 'mDNS 无结果时，自动改用网段扫描。'
-      : '关闭时，只显示 mDNS 发现结果。';
+      ? 'mDNS 模式下同时补扫网段并合并结果（推荐，可发现 Docker/NAS 等 mDNS 不可达的服务端）。'
+      : '关闭时，只使用 mDNS 发现结果，不补扫网段。';
 }
 
 String normalizeServiceAdminPortValue(String value) {

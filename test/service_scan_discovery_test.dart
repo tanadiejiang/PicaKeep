@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:math';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:picakeep/base.dart';
 import 'package:picakeep/foundation/app_runtime_mode.dart';
 import 'package:picakeep/foundation/picakeep_mdns.dart';
 import 'package:picakeep/foundation/service_data_source.dart';
@@ -119,15 +120,15 @@ void main() {
 
       expect(startedPortsByHost['host-0'], ports.toSet());
       final result = await resultFuture;
-      expect(maxActiveHosts, lessThanOrEqualTo(12));
-      expect(maxActiveProbes, lessThanOrEqualTo(12 * ports.length));
+      expect(maxActiveHosts, lessThanOrEqualTo(20));
+      expect(maxActiveProbes, lessThanOrEqualTo(20 * ports.length));
       expect(result.scannedHostCount, hosts.length);
       expect(result.scannedPortCount, ports.length);
       expect(result.scannedEndpointCount, hosts.length * ports.length);
       expect(result.plannedEndpointCount, hosts.length * ports.length);
     });
 
-    test('never exceeds the fixed twelve host worker limit', () async {
+    test('never exceeds the fixed twenty host worker limit', () async {
       var activeHosts = 0;
       var maxActiveHosts = 0;
       final discovery = LocalNetworkServiceDiscovery(
@@ -146,7 +147,7 @@ void main() {
         effectiveScanPorts: const [3000],
       );
 
-      expect(maxActiveHosts, lessThanOrEqualTo(12));
+      expect(maxActiveHosts, lessThanOrEqualTo(20));
     });
 
     test('retains two valid services on the same IP at different ports',
@@ -192,7 +193,7 @@ void main() {
       final result = await resultFuture;
 
       expect(result.cancelled, isTrue);
-      expect(startedHosts.length, lessThanOrEqualTo(12));
+      expect(startedHosts.length, lessThanOrEqualTo(20));
       expect(result.scannedPortCount, 2);
       expect(result.plannedEndpointCount, 80);
     });
@@ -221,7 +222,7 @@ void main() {
       expect(result.plannedEndpointCount, 2);
     });
 
-    test('mDNS success probes only the SRV endpoints, not scan ports',
+    test('mDNS with complement scan off probes only the SRV endpoints',
         () async {
       final probeRequests = <ServiceDiscoveryProbeRequest>[];
       final endpoint = PicaKeepMdnsEndpoint(
@@ -240,19 +241,21 @@ void main() {
 
       final result = await discovery.discover(
         mode: serviceDiscoveryModeMdns,
-        fallbackToSubnetScan: true,
+        fallbackToSubnetScan: false,
         candidateHosts: const ['192.168.1.20'],
         effectiveScanPorts: const [9527, 8080, 4000],
       );
 
       expect(probeRequests.map((request) => request.port), [3210]);
+      expect(result.fellBackToSubnetScan, isFalse);
       expect(result.effectiveMode, serviceDiscoveryModeMdns);
       expect(result.scannedHostCount, 1);
       expect(result.scannedPortCount, 1);
       expect(result.scannedEndpointCount, 1);
     });
 
-    test('mDNS fallback uses the effective scan port snapshot', () async {
+    test('mDNS empty still complement-scans with the effective port snapshot',
+        () async {
       final probeRequests = <ServiceDiscoveryProbeRequest>[];
       final discovery = LocalNetworkServiceDiscovery(
         mdnsFactory: () => _FakeMdnsDiscovery(const []),
@@ -271,12 +274,276 @@ void main() {
 
       expect(probeRequests.map((request) => request.port), [9527, 8080, 4000]);
       expect(result.fellBackToSubnetScan, isTrue);
-      expect(result.effectiveMode, serviceDiscoveryModeSubnetScan);
+      // 用户选择仍是 mDNS；补扫是该模式的内建附加行为。
+      expect(result.effectiveMode, serviceDiscoveryModeMdns);
+      expect(result.requestedMode, serviceDiscoveryModeMdns);
       expect(result.scannedHostCount, 1);
       expect(result.scannedPortCount, 3);
       expect(result.scannedEndpointCount, 3);
     });
 
+    test('mDNS with hits still complement-scans and merges distinct addresses',
+        () async {
+      final probeRequests = <ServiceDiscoveryProbeRequest>[];
+      final endpoint = PicaKeepMdnsEndpoint(
+        instanceName: 'direct._picakeep._tcp.local',
+        hostName: 'direct.local',
+        address: InternetAddress('192.168.1.20'),
+        port: 9527,
+      );
+      final discovery = LocalNetworkServiceDiscovery(
+        mdnsFactory: () => _FakeMdnsDiscovery([endpoint]),
+        probe: (request) async {
+          probeRequests.add(request);
+          // mDNS SRV + 直连机扫描端口 + Docker 机 8080 均视为可用。
+          return _candidate(request);
+        },
+      );
+
+      final result = await discovery.discover(
+        mode: serviceDiscoveryModeMdns,
+        fallbackToSubnetScan: true,
+        candidateHosts: const ['192.168.1.20', '192.168.1.30'],
+        effectiveScanPorts: const [9527, 8080],
+      );
+
+      final probedKeys = probeRequests
+          .map((request) => '${request.host}:${request.port}')
+          .toList();
+      expect(probedKeys, contains('192.168.1.20:9527'));
+      expect(probedKeys, contains('192.168.1.20:8080'));
+      expect(probedKeys, contains('192.168.1.30:9527'));
+      expect(probedKeys, contains('192.168.1.30:8080'));
+      // mDNS 验证 SRV 端口也会探测一次。
+      expect(
+        probeRequests
+            .where(
+              (request) =>
+                  request.host == '192.168.1.20' &&
+                  request.port == 9527 &&
+                  request.sourceMode == serviceDiscoveryModeMdns,
+            )
+            .length,
+        1,
+      );
+
+      expect(result.fellBackToSubnetScan, isTrue);
+      expect(result.effectiveMode, serviceDiscoveryModeMdns);
+      // 去重后至少含 mDNS 的 20:9527 与扫描到的 30 上两端口、以及 20:8080。
+      final addresses = result.candidates.map((c) => c.address).toSet();
+      expect(addresses, contains('http://192.168.1.20:9527'));
+      expect(addresses, contains('http://192.168.1.20:8080'));
+      expect(addresses, contains('http://192.168.1.30:9527'));
+      expect(addresses, contains('http://192.168.1.30:8080'));
+      expect(result.candidates.length, 4);
+    });
+
+    test('merged candidates prefer mDNS metadata for the same address',
+        () async {
+      final endpoint = PicaKeepMdnsEndpoint(
+        instanceName: 'rich-node._picakeep._tcp.local',
+        hostName: 'rich-node.local',
+        address: InternetAddress('192.168.1.40'),
+        port: 9527,
+        txt: const {
+          'service': 'PicaKeep',
+          'app': 'PicaKeep',
+          'deviceName': 'NAS-Direct',
+        },
+      );
+      final discovery = LocalNetworkServiceDiscovery(
+        mdnsFactory: () => _FakeMdnsDiscovery([endpoint]),
+        probe: (request) async {
+          // 两种来源都返回成功；合并时应保留 mDNS 侧元数据。
+          return ServiceDiscoveryCandidate(
+            address: Uri(
+              scheme: 'http',
+              host: request.host,
+              port: request.port,
+            ).toString(),
+            adminUrl: 'http://${request.host}:${request.port}/admin-view',
+            detailText: request.sourceMode == serviceDiscoveryModeMdns
+                ? 'from-mdns'
+                : 'from-scan',
+            sourceMode: request.sourceMode,
+            port: request.port,
+            latencyMs: request.sourceMode == serviceDiscoveryModeMdns ? 5 : 1,
+            instanceName: request.instanceName,
+            hostName: request.hostName,
+            serviceName: request.serviceName,
+            appName: request.appName,
+            deviceName: request.deviceNameHint,
+          );
+        },
+      );
+
+      final result = await discovery.discover(
+        mode: serviceDiscoveryModeMdns,
+        fallbackToSubnetScan: true,
+        candidateHosts: const ['192.168.1.40'],
+        effectiveScanPorts: const [9527],
+      );
+
+      expect(result.candidates.length, 1);
+      final candidate = result.candidates.single;
+      expect(candidate.address, 'http://192.168.1.40:9527');
+      expect(candidate.sourceMode, serviceDiscoveryModeMdns);
+      expect(candidate.detailText, 'from-mdns');
+      expect(candidate.instanceName, 'rich-node._picakeep._tcp.local');
+      expect(candidate.hostName, 'rich-node.local');
+      expect(candidate.deviceName, 'NAS-Direct');
+      // 即使扫描延迟更低，同地址仍优先 mDNS 元数据。
+      expect(candidate.latencyMs, 5);
+    });
+
+    test('complement scan switch off never runs subnet scan', () async {
+      final probeRequests = <ServiceDiscoveryProbeRequest>[];
+      final discovery = LocalNetworkServiceDiscovery(
+        mdnsFactory: () => _FakeMdnsDiscovery(const []),
+        probe: (request) async {
+          probeRequests.add(request);
+          return _candidate(request);
+        },
+      );
+
+      final result = await discovery.discover(
+        mode: serviceDiscoveryModeMdns,
+        fallbackToSubnetScan: false,
+        candidateHosts: const ['host-0'],
+        effectiveScanPorts: const [9527, 8080, 4000],
+      );
+
+      expect(probeRequests, isEmpty);
+      expect(result.candidates, isEmpty);
+      expect(result.fellBackToSubnetScan, isFalse);
+      expect(result.effectiveMode, serviceDiscoveryModeMdns);
+    });
+
+    test('prefers local 192.168 prefix over 10.x when building scan targets',
+        () async {
+      final probeHosts = <String>[];
+      final discovery = LocalNetworkServiceDiscovery(
+        prefixResolver: (_) async => const ['10.8.0', '192.168.5'],
+        localHostResolver: () async => {'192.168.5.154', '10.8.0.2'},
+        totalTimeout: const Duration(seconds: 2),
+        probe: (request) async {
+          probeHosts.add(request.host);
+          // 只让 192.168.5 段里的 NAS 命中，验证它会被优先扫到。
+          if (request.host == '192.168.5.50' && request.port == 8080) {
+            return _candidate(request);
+          }
+          return null;
+        },
+      );
+
+      final result = await discovery.scan(
+        preferredAddress: 'http://192.168.5.154:8080',
+        effectiveScanPorts: const [8080],
+      );
+
+      // preferred 本机段 192.168.5 应整体排在 10.8.0 之前（除 explicit）。
+      final firstTen = probeHosts.indexWhere((h) => h.startsWith('10.8.0.'));
+      final first192 = probeHosts.indexWhere((h) => h.startsWith('192.168.5.'));
+      expect(first192, greaterThanOrEqualTo(0));
+      expect(firstTen, greaterThanOrEqualTo(0));
+      expect(first192, lessThan(firstTen));
+      expect(result.candidates.map((c) => c.address),
+          contains('http://192.168.5.50:8080'));
+    });
+
+    test('orders hosts by numeric IPv4 within a prefix', () async {
+      final probeHosts = <String>[];
+      final discovery = LocalNetworkServiceDiscovery(
+        prefixResolver: (_) async => const ['192.168.5'],
+        localHostResolver: () async => const <String>{},
+        totalTimeout: const Duration(seconds: 3),
+        probe: (request) async {
+          probeHosts.add(request.host);
+          return null;
+        },
+      );
+
+      await discovery.scan(
+        effectiveScanPorts: const [9527],
+      );
+
+      // 取段内前几个主机：.1 < .2 < ... < .10（数字序而非字符串 "10" 在 "2" 前）。
+      final sample = probeHosts.take(12).toList();
+      expect(sample, containsAllInOrder([
+        '192.168.5.1',
+        '192.168.5.2',
+        '192.168.5.3',
+      ]));
+      final index2 = sample.indexOf('192.168.5.2');
+      final index10 = probeHosts.indexOf('192.168.5.10');
+      expect(index2, greaterThanOrEqualTo(0));
+      expect(index10, greaterThan(index2));
+    });
+
+    test('hits same-subnet service before budget is spent on lower-priority 10.x',
+        () async {
+      final probeHosts = <String>[];
+      final discovery = LocalNetworkServiceDiscovery(
+        // 模拟错误枚举顺序：10.x 先返回，但本机在 192.168.5。
+        prefixResolver: (_) async => const ['10.8.0', '192.168.5'],
+        localHostResolver: () async => {'192.168.5.154'},
+        hostConcurrency: 20,
+        totalTimeout: const Duration(seconds: 8),
+        probe: (request) async {
+          probeHosts.add(request.host);
+          await Future<void>.delayed(const Duration(milliseconds: 1));
+          if (request.host == '192.168.5.80' && request.port == 8080) {
+            return _candidate(request);
+          }
+          return null;
+        },
+      );
+
+      final result = await discovery.scan(
+        preferredAddress: 'http://192.168.5.154',
+        effectiveScanPorts: const [8080],
+      );
+
+      expect(
+        result.candidates.map((c) => c.address),
+        contains('http://192.168.5.80:8080'),
+      );
+      // 命中时不应把整段 10.x 先扫完。
+      final hitIndex = probeHosts.indexOf('192.168.5.80');
+      final tenCountBeforeHit =
+          probeHosts.take(hitIndex + 1).where((h) => h.startsWith('10.')).length;
+      expect(hitIndex, greaterThanOrEqualTo(0));
+      expect(tenCountBeforeHit, 0);
+    });
+
+    test('puts preferred and last-success hosts at the front of the scan queue',
+        () async {
+      final probeHosts = <String>[];
+      // 写入 last-success 地址到 settings（index 98）。
+      final settings = appdata.settings;
+      final previous = settings[remoteServerAddressSettingIndex];
+      settings[remoteServerAddressSettingIndex] = 'http://192.168.5.200:8080';
+      addTearDown(() {
+        settings[remoteServerAddressSettingIndex] = previous;
+      });
+
+      final discovery = LocalNetworkServiceDiscovery(
+        prefixResolver: (_) async => const ['192.168.5'],
+        localHostResolver: () async => const <String>{},
+        probe: (request) async {
+          probeHosts.add(request.host);
+          return null;
+        },
+      );
+
+      await discovery.scan(
+        preferredAddress: 'http://192.168.5.10:8080',
+        effectiveScanPorts: const [8080],
+      );
+
+      expect(probeHosts.first, '192.168.5.10');
+      expect(probeHosts[1], '192.168.5.200');
+    });
     test('mDNS stop interrupts the socket wait and is idempotent', () async {
       final token = DiscoveryCancellationToken();
       final mdns = PicaKeepMdnsDiscovery();
@@ -294,6 +561,38 @@ void main() {
       await mdns.stop();
       await mdns.stop();
       expect(mdns.isRunning, isFalse);
+    });
+
+    test('progress events include candidate snapshots when a host is found',
+        () async {
+      final discovery = LocalNetworkServiceDiscovery(
+        probe: (request) async {
+          if (request.host == 'host-hit') {
+            return _candidate(request);
+          }
+          return null;
+        },
+      );
+      final session = discovery.createSession(
+        mode: serviceDiscoveryModeSubnetScan,
+        generation: 7,
+        candidateHosts: const ['host-miss', 'host-hit'],
+        effectiveScanPorts: const [3000],
+      );
+      final progress = <DiscoveryProgress>[];
+      final subscription = session.progress.listen(progress.add);
+      final result = await session.result;
+      await subscription.cancel();
+
+      expect(result.candidates, hasLength(1));
+      final withCandidates =
+          progress.where((event) => event.candidates.isNotEmpty).toList();
+      expect(withCandidates, isNotEmpty);
+      expect(
+        withCandidates.last.candidates.single.address,
+        'http://host-hit:3000',
+      );
+      expect(withCandidates.last.candidateCount, 1);
     });
 
     test('session keeps generation and emits progress for one snapshot',
