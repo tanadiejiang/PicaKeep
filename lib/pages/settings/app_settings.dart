@@ -1076,6 +1076,63 @@ class _AndroidRootModeTileState extends State<_AndroidRootModeTile>
   }
 }
 
+class _AndroidPermissionSectionTitle extends StatefulWidget {
+  const _AndroidPermissionSectionTitle();
+
+  @override
+  State<_AndroidPermissionSectionTitle> createState() =>
+      _AndroidPermissionSectionTitleState();
+}
+
+class _AndroidPermissionSectionTitleState
+    extends State<_AndroidPermissionSectionTitle> {
+  String? _warningText;
+
+  @override
+  void initState() {
+    super.initState();
+    _check();
+  }
+
+  Future<void> _check() async {
+    if (!App.isAndroid) return;
+    String? warning;
+    if (_isAndroidShizukuModeEnabled()) {
+      final ok =
+          await _AndroidStorageAccessController.instance.hasShizukuPermission();
+      if (!ok) warning = 'Shizuku 未授权';
+    }
+    if (warning == null && _isAndroidRootModeEnabled()) {
+      final ok = await _AndroidStorageAccessController.instance.hasRootAccess();
+      if (!ok) warning = 'Root 未授权';
+    }
+    if (mounted && warning != _warningText) {
+      setState(() => _warningText = warning);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return SettingsTitle(
+      '访问权限（Android）'.tl,
+      trailing: _warningText == null
+          ? null
+          : Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              decoration: BoxDecoration(
+                color: cs.errorContainer,
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Text(
+                _warningText!,
+                style: TextStyle(fontSize: 11, color: cs.onErrorContainer),
+              ),
+            ),
+    );
+  }
+}
+
 Widget buildAppSettings(double width, BuildContext context) {
   return buildTwoColumnLayout(width, [
     SettingsTitle('日志'.tl),
@@ -1111,7 +1168,7 @@ Widget buildAppSettings(double width, BuildContext context) {
       onTap: () => _rescanLocalComics(context),
     ),
     const _DeleteBehaviorTile(),
-    if (App.isAndroid) SettingsTitle('访问权限（Android）'.tl),
+    if (App.isAndroid) const _AndroidPermissionSectionTitle(),
     if (App.isAndroid) const _AndroidManageAllFilesAccessTile(),
     if (App.isAndroid) const _AndroidShizukuModeTile(),
     if (App.isAndroid) const _AndroidRootModeTile(),

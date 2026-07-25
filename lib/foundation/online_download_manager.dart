@@ -759,9 +759,10 @@ class OnlineDownloadManager {
 
   /// ehentai 专用下载执行体（单画廊多图、无章节、根目录平铺）。
   ///
-  /// 逐页 [EhNetwork.getEhImageUrl] 解密拿已验证直链（内部含 showKey/mpvKey 状态机、
-  /// nl 换节点重试、ehgt 3 并发闸），再带图片鉴权三件套 header 写盘到根目录
-  /// `1.{ext}…pageCount.{ext}`。完成后写 [DownloadedGallery]（真实页数）落库。
+  /// 逐页 [EhNetwork.getEhImageUrl]（`preflightVerify: false`，不发试探性 GET）解密拿
+  /// 直链，再带图片鉴权三件套 header 写盘到根目录 `1.{ext}…pageCount.{ext}`；直链是否
+  /// 命中 509 由下载响应头判定，命中则 [EhNetwork.retryEhImageUrlWithNL] 换 CDN 节点
+  /// 重试。完成后写 [DownloadedGallery]（真实页数）落库。
   Future<void> _runEhentaiTask(OnlineDownloadTask task) async {
     if (_running) return;
     _running = true;
@@ -811,9 +812,9 @@ class OnlineDownloadManager {
 
         // 页级流水线（reader页解析+解密+下载）并发度，与 picacg/jm/nhentai 统一读
         // settings[79]。ehgt.org 的 3 并发官方限流契约不受影响：真实字节下载
-        // （_downloadFileOnce）与直链探测（_verifyImageReachable）都各自过
-        // acquireEhgtSlot，且共用 EhNetwork 单例的同一个 ehgtLoading 计数器，
-        // 指向 ehgt.org/s.exhentai.org 的在途请求总数仍被硬卡在 3。
+        // （_downloadFileOnce）过 acquireEhgtSlot，共用 EhNetwork 单例的同一个
+        // ehgtLoading 计数器，指向 ehgt.org/s.exhentai.org 的在途请求总数仍被硬卡在 3。
+        // 下载链路已取消试探性 GET，故一张图只占一个 ehgt 配额槽（过去是两个）。
         final ehConcurrency = int.tryParse(appdata.settings[79]) ?? 6;
         final semaphore = _Semaphore(ehConcurrency);
         var completedPages = 0;
@@ -834,12 +835,40 @@ class OnlineDownloadManager {
           futures.add(semaphore.run(() async {
             _throwIfCancelled(task);
             try {
-              final (imageUrl, _) =
-                  await EhNetwork().getEhImageUrl(gallery, page);
-              final file = File(
-                '${root.path}${Platform.pathSeparator}$page${_imageExtension(imageUrl)}',
-              );
-              await _downloadFile(task, imageUrl, file, headers: headers);
+              // preflightVerify: false —— 不再发试探性 GET，直链可用性由下面这次
+              // 真实下载的响应头判定，每张图只发一次图片请求。
+              var (imageUrl, nl) = await EhNetwork()
+                  .getEhImageUrl(gallery, page, preflightVerify: false);
+              // 509/失效节点重试：命中 text/html、非 2xx 或空直链就用 nl 换 CDN
+              // 节点重取直链，最多 4 次下载尝试（与移除的 _verifyImageReachable
+              // 内部 retryTimes==4 上限对齐），4 次仍失败才记该页失败。
+              var attempts = 0;
+              while (true) {
+                final file = File(
+                  '${root.path}${Platform.pathSeparator}$page${_imageExtension(imageUrl)}',
+                );
+                try {
+                  // preflightVerify:false 时网络层不再校验直链，reader 页结构变化/
+                  // 被风控页替换会解析出空串（showpage 回退分支）或字面量 "null"
+                  // （MPV 分支 apiJson['i'] 为 null）。这类直链发出去只会拿到无意义
+                  // 的错误，等同「节点不可用」，走同一条 nl 换节点路径——旧预检链路
+                  // 由 _verifyImageReachable 的 `if (image.isEmpty) throw` 挡住并重试。
+                  if (!imageUrl.startsWith('http')) {
+                    throw _EhImageLimitReachedException(imageUrl, 'empty url');
+                  }
+                  await _downloadFile(task, imageUrl, file,
+                      headers: headers, detectEhLimitPage: true);
+                  break;
+                } on _EhImageLimitReachedException {
+                  attempts++;
+                  if (attempts >= 4) {
+                    throw Exception(
+                        'Failed to load image.\nMaximum number of retries reached.');
+                  }
+                  (imageUrl, nl) = await EhNetwork()
+                      .retryEhImageUrlWithNL(gallery, page, nl);
+                }
+              }
             } catch (e) {
               if (e is _OnlineDownloadCancelled) rethrow;
               errors.add('page $page: $e');
@@ -1236,11 +1265,15 @@ class OnlineDownloadManager {
     }
   }
 
+  /// [detectEhLimitPage] 为 true 时（仅 EH 链路传），响应头 Content-Type 为 text/html
+  /// 或状态码非 2xx（509 配额耗尽等）即抛 [_EhImageLimitReachedException]，且不进本
+  /// 函数的同 URL 重试——换节点由调用方（`_runEhentaiTask`）用 nl 处理。
   Future<void> _downloadFile(
     OnlineDownloadTask task,
     String url,
     File file, {
     Map<String, String>? headers,
+    bool detectEhLimitPage = false,
   }) async {
     _throwIfCancelled(task);
     if (await file.exists() && await file.length() > 0) {
@@ -1252,10 +1285,14 @@ class OnlineDownloadManager {
     while (true) {
       attempt++;
       try {
-        await _downloadFileOnce(task, url, file, headers: headers);
+        await _downloadFileOnce(task, url, file,
+            headers: headers, detectEhLimitPage: detectEhLimitPage);
         return;
       } catch (error) {
         _throwIfCancelled(task);
+        // 509 限流页：URL 本身已失效，重试同一 URL 只会再拿到 html，直接交给
+        // 上层换 CDN 节点。
+        if (error is _EhImageLimitReachedException) rethrow;
         if (attempt >= 3) rethrow;
         final msg = error.toString();
         final retryable = error is TimeoutException ||
@@ -1281,11 +1318,12 @@ class OnlineDownloadManager {
     String url,
     File file, {
     Map<String, String>? headers,
+    bool detectEhLimitPage = false,
   }) async {
     // ehgt.org 3 并发闸：acquireEhgtSlot/releaseEhgtSlot 内部会先判断 url 是否
     // 指向 ehgt.org/s.exhentai.org，非该域名直接空操作返回，故对 picacg/jm/
-    // nhentai 的下载请求无影响；这里补上真实图片字节下载请求接入这个闸——
-    // 此前该闸只包住了 _verifyImageReachable 探测请求，从未限制过真实下载。
+    // nhentai 的下载请求无影响；真实图片字节下载请求接入这个闸后，下载链路取消
+    // 试探性 GET，一张图只占一个配额槽。
     await EhNetwork().acquireEhgtSlot(url);
     // 共享下载 dio：复用底层 HttpClient 连接池 / keep-alive，避免每张图都重新
     // TLS 握手。options 仅首次调用生效，值必须与 EhNetwork.sharedDownloadBaseOptions()
@@ -1304,12 +1342,44 @@ class OnlineDownloadManager {
           responseType: ResponseType.stream,
           sendTimeout: const Duration(seconds: 15),
           receiveTimeout: const Duration(seconds: 30),
+          // EH 链路放开状态码校验：dio 默认只放行 2xx，509（H@H 配额耗尽）会在拿到
+          // ResponseBody 之前就抛 DioException.badResponse，下面的判定块根本执行不
+          // 到，该页会被当成不可重试错误直接失败——旧预检链路对这类响应是会换节点
+          // 的。放开后由下面统一把「非 2xx」也判成限流/失效节点，交给 nl 换节点重试。
+          // null 即沿用 BaseOptions 上的默认校验（只放行 2xx），非 EH 链路行为不变。
+          validateStatus: detectEhLimitPage ? (_) => true : null,
         ),
       );
       _throwIfCancelled(task);
       final body = response.data;
       if (body == null) {
         throw Exception('Empty image response: $url');
+      }
+      if (detectEhLimitPage) {
+        // 509 判定挪到真实下载这一次请求上：响应头就够判，不必读字节，判据与旧
+        // EhNetwork._verifyImageReachable 一致（它对任何请求异常——含非 2xx 抛出的
+        // DioException——都会换节点重试，故这里把状态码型失败也算进去）。在
+        // openWrite 之前抛出，保证 html/错误页永远不会被写成图片文件。
+        final status = response.statusCode ?? 0;
+        final contentType = body.headers['Content-Type']?[0] ??
+            body.headers['content-type']?[0];
+        final badStatus = status < 200 || status >= 300;
+        final isHtml =
+            contentType != null && contentType.startsWith('text/html');
+        if (badStatus || isHtml) {
+          // 509 页只有几百字节，读完丢弃让连接正常归还连接池。不能用
+          // CancelToken.cancel：它与 receiveTimeout 定时器竞态，会复现
+          // "Bad state: Cannot add event after closing"（见第十四轮计划 10）。
+          try {
+            await body.stream.drain<void>().timeout(const Duration(seconds: 5));
+          } catch (_) {
+            // 丢弃失败不影响判定结果。
+          }
+          throw _EhImageLimitReachedException(
+            url,
+            badStatus ? 'HTTP $status' : 'content-type $contentType',
+          );
+        }
       }
       final sink = file.openWrite();
       try {
@@ -1816,6 +1886,23 @@ String bytesPerSecToText(int bytesPerSec) {
 
 class _OnlineDownloadCancelled {
   const _OnlineDownloadCancelled();
+}
+
+/// EH 图片直链不可用：命中 509 限流页 / 失效 CDN 节点 / 非 2xx 响应 / 解析出空直链。
+///
+/// 重试同一 URL 无意义（该 URL 本身已失效），必须回到网络层用 nl 换 CDN 节点
+/// 重取直链，故 [OnlineDownloadManager._downloadFile] 的通用重试要放行此异常，
+/// 由 `_runEhentaiTask` 的 nl 重试循环接手。
+class _EhImageLimitReachedException implements Exception {
+  const _EhImageLimitReachedException(this.url, this.reason);
+
+  final String url;
+
+  /// 判定依据（如 `HTTP 509`、`content-type text/html`、`empty url`），进日志用。
+  final String reason;
+
+  @override
+  String toString() => 'EH image unavailable ($reason): $url';
 }
 
 class OnlineDownloadedComic extends DownloadedComic {

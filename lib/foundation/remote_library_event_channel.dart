@@ -220,7 +220,7 @@ class RemoteLibraryEventChannel {
 
   Future<void> _closeSocket(WebSocket socket) async {
     try {
-      await socket.close(web_socket_status.goingAway);
+      await socket.close(web_socket_status.normalClosure);
     } catch (_) {}
   }
 
@@ -352,7 +352,7 @@ class RemoteLibraryEventChannel {
     unawaited(_socketSubscription?.cancel());
     _socketSubscription = null;
     try {
-      _channel?.sink.close(web_socket_status.goingAway);
+      _channel?.sink.close(web_socket_status.normalClosure);
     } catch (_) {}
     _ownedHttpClient?.close(force: true);
     _ownedHttpClient = null;

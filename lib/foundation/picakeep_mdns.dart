@@ -208,9 +208,16 @@ class PicaKeepMdnsAdvertiser {
     required int port,
     String host = '0.0.0.0',
     String instanceLabel = 'PicaKeep',
+    String? explicitAdvertiseHost,
   }) async {
     await stop();
-    final addresses = await _resolveAdvertisedIpv4Addresses(host);
+    final List<InternetAddress> addresses;
+    if (explicitAdvertiseHost != null &&
+        explicitAdvertiseHost.trim().isNotEmpty) {
+      addresses = [InternetAddress(explicitAdvertiseHost.trim())];
+    } else {
+      addresses = await _resolveAdvertisedIpv4Addresses(host);
+    }
     if (addresses.isEmpty) {
       return;
     }

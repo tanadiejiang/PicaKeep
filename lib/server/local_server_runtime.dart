@@ -652,11 +652,19 @@ class LocalServerRuntime {
 
   Future<void> _startMdnsAdvertisement(PicaKeepServerConfig config) async {
     try {
+      final effectiveHost = config.advertiseHost.trim().isNotEmpty
+          ? config.advertiseHost.trim()
+          : config.host;
+      final effectivePort = config.advertisePort ?? config.port;
       await _mdnsAdvertiser.start(
-        host: config.host,
-        port: config.port,
+        host: effectiveHost,
+        port: effectivePort,
+        explicitAdvertiseHost: config.advertiseHost.trim().isNotEmpty
+            ? config.advertiseHost.trim()
+            : null,
       );
-      _state.addLog('mdns', '已发布 mDNS 服务 _picakeep._tcp.local:${config.port}');
+      _state.addLog('mdns',
+          '已发布 mDNS 服务 _picakeep._tcp.local:$effectiveHost:$effectivePort');
     } catch (error) {
       _state.addLog('mdns', 'mDNS 服务发布失败：$error');
     }

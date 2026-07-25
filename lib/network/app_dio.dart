@@ -31,41 +31,32 @@ class MyLogInterceptor extends Interceptor {
     options.connectTimeout ??= networkConnectTimeout;
     options.receiveTimeout ??= networkReceiveTimeout;
     options.sendTimeout ??= networkSendTimeout;
-    final headers = Map<String, dynamic>.from(options.headers);
-    headers.removeWhere((key, _) => key.toLowerCase() == 'cookie');
-    final message = '${options.method} '
-        '${NetworkLogRedactor.redactUri(options.uri)}\n'
-        'headers:${NetworkLogRedactor.redactCopy(headers)}\n'
-        'data:${NetworkLogRedactor.redactCopy(options.data)}';
-    LogManager.addLog(
-      LogLevel.info,
-      'Network',
-      NetworkLogRedactor.redactText(message),
-    );
+    // 13号计划：正常请求不产生 INFO 日志，只保留 onError 的错误日志。
     handler.next(options);
   }
 
   @override
   void onResponse(Response response, ResponseInterceptorHandler handler) {
-    final headers = response.headers.map.map(
-      (key, value) => MapEntry(
-        key.toLowerCase(),
-        value.length == 1 ? value.first : value.toString(),
-      ),
-    )..remove('cookie');
-    final redactedData = NetworkLogRedactor.redactCopy(response.data);
-    final message = 'Response '
-        '${NetworkLogRedactor.redactUri(response.realUri)} '
-        '${response.statusCode}\n'
-        'headers:${NetworkLogRedactor.redactCopy(headers)}\n'
-        '${NetworkLogRedactor.redactText(_responsePreview(redactedData))}';
-    LogManager.addLog(
-      response.statusCode != null && response.statusCode! < 400
-          ? LogLevel.info
-          : LogLevel.error,
-      'Network',
-      NetworkLogRedactor.redactText(message),
-    );
+    // 13号计划：只在 4xx/5xx 时记录 error，正常响应静默。
+    if (response.statusCode == null || response.statusCode! >= 400) {
+      final headers = response.headers.map.map(
+        (key, value) => MapEntry(
+          key.toLowerCase(),
+          value.length == 1 ? value.first : value.toString(),
+        ),
+      )..remove('cookie');
+      final redactedData = NetworkLogRedactor.redactCopy(response.data);
+      final message = 'Response '
+          '${NetworkLogRedactor.redactUri(response.realUri)} '
+          '${response.statusCode}\n'
+          'headers:${NetworkLogRedactor.redactCopy(headers)}\n'
+          '${NetworkLogRedactor.redactText(_responsePreview(redactedData))}';
+      LogManager.addLog(
+        LogLevel.error,
+        'Network',
+        NetworkLogRedactor.redactText(message),
+      );
+    }
     handler.next(response);
   }
 

@@ -56,14 +56,16 @@ Widget buildResponsiveSettingTile({
 }
 
 class SettingsTitle extends StatelessWidget {
-  const SettingsTitle(this.text, {super.key});
+  const SettingsTitle(this.text, {super.key, this.trailing});
 
   final String text;
+  final Widget? trailing;
 
   @override
   Widget build(BuildContext context) {
     return ListTile(
       title: Text(text),
+      trailing: trailing,
     );
   }
 }

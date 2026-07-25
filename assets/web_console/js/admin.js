@@ -289,6 +289,13 @@
           setError('监听 Port 必须是 1~65535 的整数。');
           return;
         }
+        const advertiseHost = (rootEl.querySelector('#cfg-advertise-host').value || '').trim();
+        const advertisePortRaw = rootEl.querySelector('#cfg-advertise-port').value;
+        const advertisePortNum = advertisePortRaw ? Number(advertisePortRaw) : null;
+        if (advertisePortNum !== null && (advertisePortNum < 1 || advertisePortNum > 65535 || !Number.isInteger(advertisePortNum))) {
+          alert('对外广播端口必须是 1-65535 之间的整数');
+          return;
+        }
         const payload = {
           host,
           port,
@@ -300,6 +307,8 @@
             .map((item) => item.trim())
             .filter(Boolean),
           logRequests: rootEl.querySelector('#cfg-log-requests').checked,
+          advertiseHost: advertiseHost,
+          ...(advertisePortNum !== null ? {advertisePort: advertisePortNum} : {}),
         };
         const passwordInput = rootEl.querySelector('#cfg-console-password');
         payload.consolePassword = passwordInput ? passwordInput.value : (state.config.consolePassword || '');
@@ -962,6 +971,14 @@
             </label>
             <label>监听 Port
               <input id="cfg-port" type="number" min="1" max="65535" value="${number(config.port)}">
+            </label>
+            <label>对外广播地址
+              <input id="cfg-advertise-host" value="${escapeAttr(config.advertiseHost || '')}" placeholder="留空=自动，host 网络模式下可填 NAS 局域网 IP">
+              <small class="form-text text-muted">仅在 Docker host 网络模式（mDNS 组播能出容器）下有意义。</small>
+            </label>
+            <label>对外广播端口
+              <input id="cfg-advertise-port" type="number" min="1" max="65535" value="${config.advertisePort ? number(config.advertisePort) : ''}">
+              <small class="form-text text-muted">仅在 Docker host 网络模式（mDNS 组播能出容器）下有意义。</small>
             </label>
             <label>本应用下载目录
               <div class="admin-path-field">
