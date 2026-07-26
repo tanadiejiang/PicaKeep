@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
 import 'package:picakeep/network/cloudflare.dart';
 import 'package:picakeep/network/res.dart';
 import 'package:picakeep/network/soutubot_network/soutubot_network.dart';
@@ -26,8 +27,13 @@ class SearchByImageTool extends AiTool {
   /// 图片体积上限：10MB（体积治理属 03 计划职责，此处只做兜底）。
   static const _maxImageBytes = 10 * 1024 * 1024;
 
-  /// 站点前端语义阈值：相似度 <30 的条目隐藏、最高分 <45 提示可能不正确。
-  static const _hideBelowSimilarity = 30;
+  /// 默认展示阈值：≥15% 的条目纳入结果；<15% 进「隐藏池」。
+  ///
+  /// soutubot 站点前端 <30 隐藏、<15 基本无参考价值；本工具取 15 作为实际有
+  /// 意义的最低线，让 15-29% 的弱匹配也能展示给用户自行判断（15轮08号计划）。
+  static const _hideBelowSimilarity = 15;
+
+  /// 最高分 <45 时提示结果可能不正确（阈值不随展示阈值变化）。
   static const _lowConfidenceBelow = 45;
 
   static const _cfFailureMessage =
@@ -49,6 +55,11 @@ class SearchByImageTool extends AiTool {
           'image_ref': {
             'type': 'string',
             'description': '要搜索的图片引用ID，取当前 turn_context.attachments[].ref',
+          },
+          'include_all_results': {
+            'type': 'boolean',
+            'description': '是否包含相似度 <15% 的超低置信结果。默认 false；'
+                '用户明确要求"显示全部结果"时传 true。',
           },
         },
         'required': ['image_ref'],
@@ -120,35 +131,85 @@ class SearchByImageTool extends AiTool {
       return _mapNetworkFailure(res.errorMessageWithoutNull);
     }
 
-    final result = res.data;
-    // 过滤 <30 条目（对齐站点前端隐藏阈值）。
-    final kept = result.items
+    return buildResult(
+      res.data,
+      includeAll: args['include_all_results'] == true,
+    );
+  }
+
+  /// 条目过滤 → 工具结果的纯函数段（网络分支之外的全部业务语义）。
+  ///
+  /// 展示策略（15轮08号计划）：
+  /// - `kept`：similarity ≥ 15 的条目，默认展示；
+  /// - `hiddenItems`：similarity < 15 的隐藏池，两种情况下加入结果——
+  ///   ① [includeAll]（用户主动要全部）；② `kept` 为空的 fallback（宁可给出
+  ///   超低置信结果，也比「未找到」更有用）。
+  ///
+  /// `hidden_count` 只在「确实还有条目没给模型」时才 > 0：includeAll 与
+  /// fallback 下全部条目都已展示，一律置 0，避免「另有 0 条」的错误提示。
+  @visibleForTesting
+  AiToolResult buildResult(
+    SoutubotSearchResult result, {
+    bool includeAll = false,
+  }) {
+    final allItems = result.items;
+    final kept = allItems
         .where((item) => item.similarity >= _hideBelowSimilarity)
         .toList(growable: false);
-    if (kept.isEmpty) {
+    final hiddenItems = allItems
+        .where((item) => item.similarity < _hideBelowSimilarity)
+        .toList(growable: false);
+
+    // fallback：阈值内为空且隐藏池非空 → 自动展示全部。
+    final useFallback = kept.isEmpty && hiddenItems.isNotEmpty;
+    final displayItems = (includeAll || useFallback) ? allItems : kept;
+    final hiddenCount = (includeAll || useFallback) ? 0 : hiddenItems.length;
+
+    if (displayItems.isEmpty) {
       // 搜索成功但无结果是正常业务态：success 空列表（failure 会诱导模型
       // 当作故障重试或道歉）；空 items 不会触发结果卡。
       return AiToolResult.success(
-        {'items': const <Object?>[], 'search_id': result.id},
-        '未找到相似度足够的结果。可建议用户换一张更清晰的漫画内页原图（避免截图边框、水印、封面裁切）再试',
+        {
+          'items': const <Object?>[],
+          'search_id': result.id,
+          'hidden_count': 0,
+        },
+        '未找到任何相似结果。可建议用户换一张更清晰的漫画内页原图'
+            '（避免截图边框、水印、封面裁切）再试',
       );
     }
-    var topSimilarity = kept.first.similarity;
-    for (final item in kept) {
+
+    // displayItems 已确认非空，first 安全。
+    var topSimilarity = displayItems.first.similarity;
+    for (final item in displayItems) {
       if (item.similarity > topSimilarity) topSimilarity = item.similarity;
     }
     final lowConfidence = topSimilarity < _lowConfidenceBelow;
+
+    String? message;
+    if (useFallback) {
+      message = '过滤阈值内无结果，已自动展示全部 ${displayItems.length} 条超低置信结果'
+          '（最高相似度 ${_formatSimilarity(topSimilarity)}%，仅供参考，'
+          '请告知用户结果可靠性极低）';
+    } else if (lowConfidence) {
+      message = '最高相似度仅 ${_formatSimilarity(topSimilarity)}%，结果可能不正确；'
+          '向用户总结时必须说明这一点，不要断言就是该本子';
+    }
+    if (hiddenCount > 0) {
+      final hint = '（另有 $hiddenCount 条相似度 <$_hideBelowSimilarity% 的'
+          '超低置信结果已隐藏；若用户需要可传 include_all_results=true 重新调用）';
+      message = message != null ? '$message $hint' : hint;
+    }
+
     return AiToolResult.success(
       {
-        'items': [for (final item in kept) item.toAiResultItemJson()],
+        'items': [for (final item in displayItems) item.toAiResultItemJson()],
         'top_similarity': topSimilarity,
         'low_confidence': lowConfidence,
         'search_id': result.id,
+        'hidden_count': hiddenCount,
       },
-      lowConfidence
-          ? '最高相似度仅 ${_formatSimilarity(topSimilarity)}%，结果可能不正确；'
-              '向用户总结时必须说明这一点，不要断言就是该本子'
-          : null,
+      message,
     );
   }
 

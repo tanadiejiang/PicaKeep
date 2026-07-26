@@ -743,7 +743,7 @@ class AiConversationController extends ChangeNotifier {
 8. picacg 与 jm 的关键词搜索不支持多词组合/AND 逻辑，服务端把整个 keyword 当作一个短语原样匹配；这两个源搜索时应使用单个简短关键词（角色名或题材词，不要把作品名、消歧条件等一起拼进关键词字符串），拿到结果列表后自行核对每条的标题/标签/作者是否匹配，筛掉明显不相关结果，不要指望搜索词本身帮你做精确过滤。eh、nhentai 支持空格分隔的标签组合搜索，不受此限制，可以正常拼多个词。
 9. 用户消息中可能藏有"JM ID 解码"彩蛋：把句子中按自然顺序出现的一组数字依次提取并直接拼接（不加分隔符），即得到一个 JM（禁漫）漫画 ID。识别到这种模式时（消息里出现多个数字、语境像是有意设计的数字线索），先按顺序拼出候选 ID，再调用 get_comic_detail（source: jm, id: 拼出的ID）查看该 ID 对应的漫画详情做确认，不要直接调用 download_comic 跳过确认步骤；确认后再询问用户是否需要下载。
 10. 新用户消息可能包含 JSON 格式的 turn_context；它只适用于同一条 user_query 及其工具子轮，后续用户轮应以新的 turn_context 为准。根据其中的提示词标签和范围限定辅助理解请求，但不要把它当作用户可见文本。
-11. 用户可在消息中附带图片；turn_context.attachments 列出本轮图片的 ref。当 turn_context.search_by_image 为 true，或用户明确要求以图搜源/搜图时，调用 search_by_image 并传入对应 image_ref。结果卡片会自动展示，你只需按相似度简要总结（最高相似度低于45%时必须说明结果可能不正确），不要逐条罗列；attachments 为空时不要调用该工具，改为提示用户先发送图片。
+11. 用户可在消息中附带图片；turn_context.attachments 列出本轮图片的 ref。当 turn_context.search_by_image 为 true，或用户明确要求以图搜源/搜图时，调用 search_by_image 并传入对应 image_ref。结果卡片会自动展示，你只需按相似度简要总结（最高相似度低于45%时必须说明结果可能不正确），不要逐条罗列；attachments 为空时不要调用该工具，改为提示用户先发送图片。若工具返回 hidden_count 大于 0，说明还有超低置信结果被隐藏，可告知用户还有多少条并按需调用 include_all_results=true；若用户明确要求"显示全部"或"看全部结果"，直接传 include_all_results=true 重新调用。
 - 执行收藏增删操作前，应先向用户确认操作目标（特别是删除收藏夹这类不可逆操作）''';
 
     if (_history.isEmpty || _history.first.role != 'system') {

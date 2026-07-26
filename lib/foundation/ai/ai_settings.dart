@@ -55,6 +55,12 @@ const aiThinkingEnabledSettingIndex = 146;
 // 147 显示思考过程：纯 UI 开关。'0' 时思考内容仍接收+存档，只是不渲染。
 const aiShowReasoningSettingIndex = 147;
 
+/// 已了解「当前会话长期状态」卡片，永久隐藏（'1'=隐藏）。
+///
+/// 15轮09号计划：提示词面板里那张说明性卡片点过「已了解」后不再渲染；
+/// 纯 UI 开关，长期状态机制（清除长期提示/恢复来源/取消仅本地）本身不受影响。
+const aiPersistentCardDismissedSettingIndex = 148;
+
 /// 返回给定能力名称对应的 settings index；找不到返回 null。
 int? aiCapabilitySettingIndex(String toolName) {
   return const {

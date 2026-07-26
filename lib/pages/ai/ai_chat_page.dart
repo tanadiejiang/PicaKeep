@@ -671,6 +671,26 @@ class _AiChatPageState extends State<AiChatPage>
     if (mounted) setState(() {});
   }
 
+  /// 15轮09号计划：「已了解」——永久隐藏「当前会话长期状态」说明卡片。
+  ///
+  /// 只写 settings[148]，不触碰长期状态本身；面板挂在 OverlayEntry 上，
+  /// 单靠 setState 不会重建它，必须同 _clearPersistentLocalOnly 一样先
+  /// markNeedsBuild 再 setState。
+  void _dismissPersistentStateCard() {
+    appdata.settings[aiPersistentCardDismissedSettingIndex] = '1';
+    appdata.updateSettings();
+    _promptPanelEntry?.markNeedsBuild();
+    if (!mounted) return;
+    setState(() {});
+    // ⚠️ 严禁 showToast（本项目是 no-op 空实现），提示一律走 SnackBar。
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('后续有问题请到设置里查看'.tl),
+        duration: const Duration(seconds: 2),
+      ),
+    );
+  }
+
   void _togglePromptPanel() {
     if (_promptPanelEntry != null) {
       _closePromptPanel();
@@ -1229,6 +1249,9 @@ class _AiChatPageState extends State<AiChatPage>
         .where((entry) => persistentSources.contains(entry.value))
         .map((entry) => '#${entry.key}')
         .join('  ');
+    // 15轮09号计划：点过「已了解」后这张说明卡片永久不再渲染（长期状态机制不变）。
+    final cardDismissed =
+        appdata.settings[aiPersistentCardDismissedSettingIndex] == '1';
 
     return SingleChildScrollView(
       padding: const EdgeInsets.all(12),
@@ -1259,9 +1282,10 @@ class _AiChatPageState extends State<AiChatPage>
                 : '新选择仅对本次完整回复和工具循环有效。',
             style: Theme.of(context).textTheme.bodySmall,
           ),
-          if (persistentTagNames.isNotEmpty ||
-              persistentSources.isNotEmpty ||
-              persistentLocalOnly) ...[
+          if (!cardDismissed &&
+              (persistentTagNames.isNotEmpty ||
+                  persistentSources.isNotEmpty ||
+                  persistentLocalOnly)) ...[
             const SizedBox(height: 10),
             Container(
               width: double.infinity,
@@ -1273,9 +1297,33 @@ class _AiChatPageState extends State<AiChatPage>
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text(
-                    '当前会话长期状态',
-                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: [
+                      const Expanded(
+                        child: Text(
+                          '当前会话长期状态',
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                      TextButton(
+                        style: TextButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 6,
+                            vertical: 0,
+                          ),
+                          minimumSize: Size.zero,
+                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                          textStyle: const TextStyle(fontSize: 11),
+                        ),
+                        onPressed: _dismissPersistentStateCard,
+                        child: const Text('已了解'),
+                      ),
+                    ],
                   ),
                   if (persistentTagNames.isNotEmpty)
                     Text(
