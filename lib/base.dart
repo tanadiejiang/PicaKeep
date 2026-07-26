@@ -178,6 +178,7 @@ class Appdata {
     '0', //145 aiCapabilitySearchByImage 以图搜源
     '1', //146 aiThinkingEnabled 开启思考（关=请求带 thinking:disabled）
     '1', //147 aiShowReasoning 会话中显示思考过程（纯 UI，不影响接收与存档）
+    '0', //148 aiPersistentCardDismissed 已了解长期状态卡片（1=永久隐藏）
   ];
 
   List<String> implicitData = [
