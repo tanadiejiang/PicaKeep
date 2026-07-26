@@ -43,6 +43,11 @@ class AiChatMessage {
   /// 发送该条用户消息时识别出的普通/来源标签名快照（不带 `#`）。
   final List<String> promptTagNames;
 
+  /// 发送该条用户消息时处于长期生效状态、但本轮未被再次识别的普通标签名快照
+  /// （不带 `#`）。长期标签只在首次发送那轮进入 [promptTagNames]，后续轮次靠
+  /// 这个字段让气泡持续回显“它仍在生效”。与 [promptTagNames] 互斥去重。
+  final List<String> activePersistentTagNames;
+
   AiChatMessage({
     required this.type,
     required this.text,
@@ -50,9 +55,15 @@ class AiChatMessage {
     this.toolArgs,
     this.toolData,
     Iterable<String> promptTagNames = const <String>[],
+    Iterable<String> activePersistentTagNames = const <String>[],
     DateTime? createdAt,
   })  : promptTagNames = List<String>.unmodifiable(
           promptTagNames
+              .map(_normalizePromptTagName)
+              .where((name) => name.isNotEmpty),
+        ),
+        activePersistentTagNames = List<String>.unmodifiable(
+          activePersistentTagNames
               .map(_normalizePromptTagName)
               .where((name) => name.isNotEmpty),
         ),
@@ -61,12 +72,18 @@ class AiChatMessage {
   AiChatMessage.user(
     this.text, {
     Iterable<String> promptTagNames = const <String>[],
+    Iterable<String> activePersistentTagNames = const <String>[],
   })  : type = AiChatMessageType.user,
         toolName = null,
         toolArgs = null,
         toolData = null,
         promptTagNames = List<String>.unmodifiable(
           promptTagNames
+              .map(_normalizePromptTagName)
+              .where((name) => name.isNotEmpty),
+        ),
+        activePersistentTagNames = List<String>.unmodifiable(
+          activePersistentTagNames
               .map(_normalizePromptTagName)
               .where((name) => name.isNotEmpty),
         ),
@@ -78,6 +95,7 @@ class AiChatMessage {
         toolArgs = null,
         toolData = null,
         promptTagNames = const <String>[],
+        activePersistentTagNames = const <String>[],
         createdAt = DateTime.now();
 
   AiChatMessage.toolCall({
@@ -87,6 +105,7 @@ class AiChatMessage {
         text = '正在调用工具：$toolName',
         toolData = null,
         promptTagNames = const <String>[],
+        activePersistentTagNames = const <String>[],
         createdAt = DateTime.now();
 
   AiChatMessage.toolResult({
@@ -99,6 +118,7 @@ class AiChatMessage {
         toolArgs = null,
         toolData = data,
         promptTagNames = const <String>[],
+        activePersistentTagNames = const <String>[],
         createdAt = DateTime.now();
 
   AiChatMessage.resultList({required List<Map<String, dynamic>> items})
@@ -108,6 +128,7 @@ class AiChatMessage {
         toolArgs = null,
         toolData = {'items': items},
         promptTagNames = const <String>[],
+        activePersistentTagNames = const <String>[],
         createdAt = DateTime.now();
 
   AiChatMessage.error(this.text)
@@ -116,6 +137,7 @@ class AiChatMessage {
         toolArgs = null,
         toolData = null,
         promptTagNames = const <String>[],
+        activePersistentTagNames = const <String>[],
         createdAt = DateTime.now();
 
   Map<String, dynamic> toJson() {
@@ -126,6 +148,8 @@ class AiChatMessage {
       if (toolArgs != null) 'toolArgs': toolArgs,
       if (toolData != null) 'toolData': toolData,
       if (promptTagNames.isNotEmpty) 'promptTagNames': promptTagNames,
+      if (activePersistentTagNames.isNotEmpty)
+        'activePersistentTagNames': activePersistentTagNames,
       'createdAt': createdAt.toIso8601String(),
     };
   }
@@ -143,6 +167,10 @@ class AiChatMessage {
       promptTagNames:
           (json['promptTagNames'] as List?)?.map((name) => name.toString()) ??
               const <String>[],
+      // 旧会话没有该字段，缺省为空列表（不升 format version）。
+      activePersistentTagNames: (json['activePersistentTagNames'] as List?)
+              ?.map((name) => name.toString()) ??
+          const <String>[],
       createdAt: DateTime.tryParse(json['createdAt']?.toString() ?? ''),
     );
   }
@@ -733,10 +761,25 @@ class AiConversationController extends ChangeNotifier {
           name,
     ];
 
+    // 长期生效但本轮没有被再次识别到的普通标签（如上一轮开启长期后输入的
+    // `#解jmID`）：本轮 mergedRecognizedNames 里没有它们，气泡就不再回显，用户会
+    // 误以为标签已失效。这里用上面已冻结的 persistentPromptTags 快照补一份名单，
+    // 与 mergedRecognizedNames 去重后交给气泡单独展示。
+    // 注意：来源标签（#搜jm 等）与 #搜本地 不走这条路——它们已由 scopeTagNames
+    // 基于 effectiveAllowedSearchSources/effectiveLocalOnly 折进
+    // mergedRecognizedNames，本来就每条都显示；从 _persistentAllowedSearchSources
+    // 再取一份反而会在“本轮临时覆盖/清除来源”时显示与实际生效范围不符的标签。
+    final recognizedNameSet = mergedRecognizedNames.toSet();
+    final activePersistentTagNames = <String>[
+      for (final tag in persistentPromptTags)
+        if (!recognizedNameSet.contains(tag.name)) tag.name,
+    ];
+
     displayMessages.add(
       AiChatMessage.user(
         parsed.displayText,
         promptTagNames: mergedRecognizedNames,
+        activePersistentTagNames: activePersistentTagNames,
       ),
     );
     _history.add(LlmMessage.user(_buildTurnUserContent(parsed.userText)));

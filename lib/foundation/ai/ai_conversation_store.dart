@@ -310,6 +310,9 @@ class AiConversationStore {
     if (msg.promptTagNames.isNotEmpty) {
       json['promptTagNames'] = msg.promptTagNames;
     }
+    if (msg.activePersistentTagNames.isNotEmpty) {
+      json['activePersistentTagNames'] = msg.activePersistentTagNames;
+    }
 
     // toolData 序列化：仅支持基本类型
     if (msg.toolData != null) {
@@ -378,6 +381,9 @@ class AiConversationStore {
       promptTagNames:
           (json['promptTagNames'] as List?)?.map((name) => name.toString()) ??
               const <String>[],
+      activePersistentTagNames: (json['activePersistentTagNames'] as List?)
+              ?.map((name) => name.toString()) ??
+          const <String>[],
       createdAt: json['createdAt'] != null
           ? DateTime.parse(json['createdAt'] as String)
           : DateTime.now(),
