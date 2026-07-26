@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:picakeep/foundation/ai/ai_attachments.dart';
 import 'package:picakeep/foundation/ai/ai_conversation.dart';
 import 'package:picakeep/foundation/ai/ai_conversation_store.dart';
 import 'package:picakeep/foundation/ai/ai_result_item.dart';
@@ -157,5 +158,66 @@ void main() {
     expect(report.items, hasLength(12));
     expect(report.items.first.availability['summary'], '7页，汉化');
     expect(restored.displayMessages.single.text, '共 12 条结果');
+  });
+
+  // ── 15轮03号计划：附件子目录随会话删除/清理同步移除 ─────────────────────
+
+  Directory attachmentsDirOf(String id) => Directory(
+      '${aiAttachmentsRoot()}${Platform.pathSeparator}$id');
+
+  test('delete() 同步删除该会话的附件子目录', () async {
+    final id = await createConversation();
+    final attachmentsDir = attachmentsDirOf(id);
+    attachmentsDir.createSync(recursive: true);
+    File('${attachmentsDir.path}${Platform.pathSeparator}x.jpg')
+        .writeAsBytesSync(const [1, 2, 3]);
+
+    await AiConversationStore.delete(id);
+
+    expect(await AiConversationStore.loadConversation(id), isNull);
+    expect(attachmentsDir.existsSync(), isFalse);
+  });
+
+  test('delete() 对没有附件目录的会话仍是安全操作', () async {
+    final id = await createConversation();
+    expect(attachmentsDirOf(id).existsSync(), isFalse);
+    await AiConversationStore.delete(id);
+    expect(await AiConversationStore.loadConversation(id), isNull);
+  });
+
+  test('清理超量会话（prune）时同步删除被清理会话的附件子目录', () async {
+    // victim：createdAt 最老（2000 年），携带附件目录。
+    const victimId = 'prune-victim';
+    await AiConversationStore.save(
+      id: victimId,
+      title: 'victim',
+      createdAt: DateTime.utc(2000),
+      displayMessages: const [],
+      history: const [],
+    );
+    final victimAttachments = attachmentsDirOf(victimId);
+    victimAttachments.createSync(recursive: true);
+    File('${victimAttachments.path}${Platform.pathSeparator}x.jpg')
+        .writeAsBytesSync(const [1, 2, 3]);
+
+    // 填充到 51 个会话：save() 内部的 _pruneIfNeeded 会删掉 createdAt 最老的
+    // victim，并应同步删除其附件子目录。
+    final baseCount = (await AiConversationStore.loadIndex()).length;
+    final toCreate = 51 - baseCount;
+    expect(toCreate, greaterThan(0),
+        reason: '前置条件：当前会话数应少于 51，测试文件内先前用例不应创建这么多会话');
+    for (var i = 0; i < toCreate; i++) {
+      await AiConversationStore.save(
+        id: 'prune-filler-$i',
+        title: 'filler',
+        createdAt: DateTime.utc(2026, 1, 1).add(Duration(minutes: i)),
+        displayMessages: const [],
+        history: const [],
+      );
+    }
+
+    expect(await AiConversationStore.loadConversation(victimId), isNull);
+    expect(victimAttachments.existsSync(), isFalse);
+    expect((await AiConversationStore.loadIndex()).length, 50);
   });
 }

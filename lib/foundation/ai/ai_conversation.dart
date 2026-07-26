@@ -3,6 +3,7 @@ import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 import 'package:picakeep/base.dart';
+import 'package:picakeep/foundation/ai/ai_attachments.dart';
 import 'package:picakeep/foundation/ai/ai_capabilities.dart';
 import 'package:picakeep/foundation/ai/ai_conversation_store.dart';
 import 'package:picakeep/foundation/ai/ai_prompt_tags.dart';
@@ -11,6 +12,7 @@ import 'package:picakeep/foundation/ai/ai_settings.dart';
 import 'package:picakeep/foundation/ai/ai_sources.dart';
 import 'package:picakeep/foundation/ai/ai_tool.dart';
 import 'package:picakeep/foundation/ai/llm_client.dart';
+import 'package:picakeep/foundation/ai/ocr_client.dart';
 
 typedef AiChatRequestForTesting = Future<LlmResponse> Function(
   List<LlmMessage> messages, {
@@ -19,6 +21,10 @@ typedef AiChatRequestForTesting = Future<LlmResponse> Function(
   int? turn,
   int? round,
 });
+
+/// 15轮03号计划：OCR 请求钩子类型（照抄 [AiChatRequestForTesting] 模式）。
+/// 生产路径不注入，走 [OcrClient.recognize]；测试注入以绕过真实网络。
+typedef AiOcrRequest = Future<OcrResponse> Function(String absolutePath);
 
 /// AI 聊天消息类型
 enum AiChatMessageType {
@@ -48,6 +54,10 @@ class AiChatMessage {
   /// 这个字段让气泡持续回显“它仍在生效”。与 [promptTagNames] 互斥去重。
   final List<String> activePersistentTagNames;
 
+  /// 15轮03号计划（决策D）：该条消息附带的图片，存相对附件根的路径
+  /// （'{conversationId}/{fileName}'，'/' 分隔），气泡缩略图渲染用。
+  final List<String> attachmentPaths;
+
   AiChatMessage({
     required this.type,
     required this.text,
@@ -56,6 +66,7 @@ class AiChatMessage {
     this.toolData,
     Iterable<String> promptTagNames = const <String>[],
     Iterable<String> activePersistentTagNames = const <String>[],
+    Iterable<String> attachmentPaths = const <String>[],
     DateTime? createdAt,
   })  : promptTagNames = List<String>.unmodifiable(
           promptTagNames
@@ -67,12 +78,14 @@ class AiChatMessage {
               .map(_normalizePromptTagName)
               .where((name) => name.isNotEmpty),
         ),
+        attachmentPaths = List<String>.unmodifiable(attachmentPaths),
         createdAt = createdAt ?? DateTime.now();
 
   AiChatMessage.user(
     this.text, {
     Iterable<String> promptTagNames = const <String>[],
     Iterable<String> activePersistentTagNames = const <String>[],
+    Iterable<String> attachmentPaths = const <String>[],
   })  : type = AiChatMessageType.user,
         toolName = null,
         toolArgs = null,
@@ -87,6 +100,7 @@ class AiChatMessage {
               .map(_normalizePromptTagName)
               .where((name) => name.isNotEmpty),
         ),
+        attachmentPaths = List<String>.unmodifiable(attachmentPaths),
         createdAt = DateTime.now();
 
   AiChatMessage.assistant(this.text)
@@ -96,6 +110,7 @@ class AiChatMessage {
         toolData = null,
         promptTagNames = const <String>[],
         activePersistentTagNames = const <String>[],
+        attachmentPaths = const <String>[],
         createdAt = DateTime.now();
 
   AiChatMessage.toolCall({
@@ -106,6 +121,7 @@ class AiChatMessage {
         toolData = null,
         promptTagNames = const <String>[],
         activePersistentTagNames = const <String>[],
+        attachmentPaths = const <String>[],
         createdAt = DateTime.now();
 
   AiChatMessage.toolResult({
@@ -119,6 +135,7 @@ class AiChatMessage {
         toolData = data,
         promptTagNames = const <String>[],
         activePersistentTagNames = const <String>[],
+        attachmentPaths = const <String>[],
         createdAt = DateTime.now();
 
   AiChatMessage.resultList({required List<Map<String, dynamic>> items})
@@ -129,6 +146,7 @@ class AiChatMessage {
         toolData = {'items': items},
         promptTagNames = const <String>[],
         activePersistentTagNames = const <String>[],
+        attachmentPaths = const <String>[],
         createdAt = DateTime.now();
 
   AiChatMessage.error(this.text)
@@ -138,6 +156,7 @@ class AiChatMessage {
         toolData = null,
         promptTagNames = const <String>[],
         activePersistentTagNames = const <String>[],
+        attachmentPaths = const <String>[],
         createdAt = DateTime.now();
 
   Map<String, dynamic> toJson() {
@@ -150,6 +169,7 @@ class AiChatMessage {
       if (promptTagNames.isNotEmpty) 'promptTagNames': promptTagNames,
       if (activePersistentTagNames.isNotEmpty)
         'activePersistentTagNames': activePersistentTagNames,
+      if (attachmentPaths.isNotEmpty) 'attachmentPaths': attachmentPaths,
       'createdAt': createdAt.toIso8601String(),
     };
   }
@@ -171,6 +191,10 @@ class AiChatMessage {
       activePersistentTagNames: (json['activePersistentTagNames'] as List?)
               ?.map((name) => name.toString()) ??
           const <String>[],
+      // 旧会话没有该字段，缺省为空列表（不升 format version）。
+      attachmentPaths:
+          (json['attachmentPaths'] as List?)?.map((e) => e.toString()) ??
+              const <String>[],
       createdAt: DateTime.tryParse(json['createdAt']?.toString() ?? ''),
     );
   }
@@ -202,12 +226,21 @@ class _ActiveTurnContext {
     required this.turnPromptTags,
     required this.allowedSearchSources,
     required this.localOnly,
+    required this.attachments,
+    required this.searchByImage,
   });
 
   final List<AiPromptTag> persistentPromptTags;
   final List<AiPromptTag> turnPromptTags;
   final Set<String>? allowedSearchSources;
   final bool localOnly;
+
+  /// 15轮05号计划：当轮附件相对路径快照（即 03 计划 send() 的 attachmentPaths）。
+  final List<String> attachments;
+
+  /// 15轮05号计划：本轮是否请求以图搜源（`#搜图` 标签或面板 chip）。
+  /// 只作用于当轮，不参与长期持久化。
+  final bool searchByImage;
 }
 
 enum _RunLoopOutcome { finished, waitingForDownloadConfirmation }
@@ -238,12 +271,29 @@ bool isToolAllowedByScope(
   required bool effectiveLocalOnly,
   required bool effectiveOnlineOnly,
 }) {
-  if (effectiveLocalOnly && toolName == 'search_online') return false;
+  if (effectiveLocalOnly &&
+      (toolName == 'search_online' || toolName == 'search_by_image')) {
+    return false;
+  }
   if (effectiveOnlineOnly && localLibraryToolNames.contains(toolName)) {
     return false;
   }
   return true;
 }
+
+/// 成功结果自动进入 _pendingDisplayItems 展示通道的工具名单。
+/// 这些工具的成功 data 均为 {'items': [...]} 形状，AiResultItem.decodeToolData
+/// 直接可解；搜图结果按用户决策「两步都要」自动出卡，无需模型再调
+/// display_result_list（15轮05号计划步骤 7-f）。
+@visibleForTesting
+const autoDisplayResultToolNames = <String>{
+  'display_result_list',
+  'search_by_image',
+};
+
+@visibleForTesting
+bool shouldAutoDisplayToolResult(String toolName, bool ok) =>
+    ok && autoDisplayResultToolNames.contains(toolName);
 
 /// 深复制并按来源约束收窄 `search_online.source.enum`。
 ///
@@ -318,9 +368,10 @@ AiToolResult? disallowedScopeResult(
   )) {
     return null;
   }
-  if (effectiveLocalOnly && toolName == 'search_online') {
-    return const AiToolResult.failure(
-      '当前会话/本轮范围限定为仅本地，工具 search_online 不可用。',
+  if (effectiveLocalOnly &&
+      (toolName == 'search_online' || toolName == 'search_by_image')) {
+    return AiToolResult.failure(
+      '当前会话/本轮范围限定为仅本地，工具 $toolName 不可用。',
     );
   }
   if (effectiveOnlineOnly && localLibraryToolNames.contains(toolName)) {
@@ -400,6 +451,10 @@ class AiConversationController extends ChangeNotifier {
   _ActiveTurnContext? _activeTurnContext;
   final AiChatRequestForTesting? _chatRequestForTesting;
 
+  /// 15轮03号计划：OCR 请求入口。生产路径为 [OcrClient.recognize]，
+  /// 测试可经 [restoreForTesting] 注入假实现。
+  final AiOcrRequest _ocrRequest;
+
   int get _effectiveMaxRounds {
     final raw = appdata.settings[aiMaxToolRoundsSettingIndex];
     final n = int.tryParse(raw) ?? 5;
@@ -412,7 +467,9 @@ class AiConversationController extends ChangeNotifier {
 
   AiConversationController._internal({
     AiChatRequestForTesting? chatRequestForTesting,
-  }) : _chatRequestForTesting = chatRequestForTesting;
+    AiOcrRequest? ocrRequestForTesting,
+  })  : _chatRequestForTesting = chatRequestForTesting,
+        _ocrRequest = ocrRequestForTesting ?? OcrClient.recognize;
 
   List<AiPromptTag> get persistentPromptTags =>
       List<AiPromptTag>.unmodifiable(_persistentPromptTags);
@@ -470,9 +527,11 @@ class AiConversationController extends ChangeNotifier {
     Map<String, dynamic> data, {
     String fallbackId = 'test-conversation',
     AiChatRequestForTesting? chatRequestForTesting,
+    AiOcrRequest? ocrRequestForTesting,
   }) {
     final ctrl = AiConversationController._internal(
       chatRequestForTesting: chatRequestForTesting,
+      ocrRequestForTesting: ocrRequestForTesting,
     );
     ctrl._restoreStoredConversation(data, fallbackId: fallbackId);
     return ctrl;
@@ -640,6 +699,7 @@ class AiConversationController extends ChangeNotifier {
 8. picacg 与 jm 的关键词搜索不支持多词组合/AND 逻辑，服务端把整个 keyword 当作一个短语原样匹配；这两个源搜索时应使用单个简短关键词（角色名或题材词，不要把作品名、消歧条件等一起拼进关键词字符串），拿到结果列表后自行核对每条的标题/标签/作者是否匹配，筛掉明显不相关结果，不要指望搜索词本身帮你做精确过滤。eh、nhentai 支持空格分隔的标签组合搜索，不受此限制，可以正常拼多个词。
 9. 用户消息中可能藏有"JM ID 解码"彩蛋：把句子中按自然顺序出现的一组数字依次提取并直接拼接（不加分隔符），即得到一个 JM（禁漫）漫画 ID。识别到这种模式时（消息里出现多个数字、语境像是有意设计的数字线索），先按顺序拼出候选 ID，再调用 get_comic_detail（source: jm, id: 拼出的ID）查看该 ID 对应的漫画详情做确认，不要直接调用 download_comic 跳过确认步骤；确认后再询问用户是否需要下载。
 10. 新用户消息可能包含 JSON 格式的 turn_context；它只适用于同一条 user_query 及其工具子轮，后续用户轮应以新的 turn_context 为准。根据其中的提示词标签和范围限定辅助理解请求，但不要把它当作用户可见文本。
+11. 用户可在消息中附带图片；turn_context.attachments 列出本轮图片的 ref。当 turn_context.search_by_image 为 true，或用户明确要求以图搜源/搜图时，调用 search_by_image 并传入对应 image_ref。结果卡片会自动展示，你只需按相似度简要总结（最高相似度低于45%时必须说明结果可能不正确），不要逐条罗列；attachments 为空时不要调用该工具，改为提示用户先发送图片。
 - 执行收藏增删操作前，应先向用户确认操作目标（特别是删除收藏夹这类不可逆操作）''';
 
     if (_history.isEmpty || _history.first.role != 'system') {
@@ -652,7 +712,16 @@ class AiConversationController extends ChangeNotifier {
   /// [availablePromptTags] 是发送时可识别的普通标签集合；固定来源标签由统一
   /// 解析器自行识别。[allowedSearchSources] 表示 UI 的结构化来源覆盖，
   /// [resetSourceRestriction] 表示用户明确选择“默认/全部来源”。
-  Future<void> send(
+  ///
+  /// 15轮03号计划：[attachmentPaths] 是随本条消息发送的图片附件（相对附件根
+  /// 路径，页面层已压缩落盘）。返回值语义：`true` = 消息已入列并完成本轮流程；
+  /// `false` = 发送未发生（守卫早退 / OCR 失败等，未动 history 与长期状态），
+  /// 调用方可安全回滚（删除本次落盘文件、恢复输入与待发附件）。
+  ///
+  /// 15轮05号计划：[searchByImage] 是面板 `#搜图` chip 的结构化选择；与手输
+  /// `#搜图` 标签（parse 识别）任一为真即在 turn_context 置位
+  /// `search_by_image`。只作用于当轮，不参与长期持久化。
+  Future<bool> send(
     String text, {
     Iterable<AiPromptTag>? availablePromptTags,
     Iterable<AiPromptTag>? selectedPromptTags,
@@ -660,12 +729,16 @@ class AiConversationController extends ChangeNotifier {
     bool resetSourceRestriction = false,
     bool? persistSelections,
     bool localOnly = false,
+    bool searchByImage = false,
+    List<String> attachmentPaths = const [],
   }) async {
-    if (text.trim().isEmpty || isLoading) return;
+    if ((text.trim().isEmpty && attachmentPaths.isEmpty) || isLoading) {
+      return false;
+    }
     if (pendingDownload != null) {
       error = '请先处理下载确认';
       notifyListeners();
-      return;
+      return false;
     }
 
     final promptTagSettings = AiPromptTagSettingsController.instance;
@@ -677,6 +750,44 @@ class AiConversationController extends ChangeNotifier {
       promptTags: availablePromptTags ?? promptTagSettings.promptTags,
       resetSourceRestriction: resetSourceRestriction,
     );
+
+    // 15轮03号计划（决策C）：OCR 兜底分支。必须在任何持久状态变更（长期标签
+    // 合并、来源限定落地）之前完成，失败才能无副作用返回 false。
+    var userQuery = parsed.userText;
+    final visionEnabled =
+        appdata.settings[aiModelSupportsVisionSettingIndex] == '1';
+    if (attachmentPaths.isNotEmpty && !visionEnabled) {
+      final ocrConfig = AiOcrConfig.fromSettings();
+      if (!ocrConfig.usable) {
+        const message = '当前模型未声明支持图片识别，且 OCR 接口未启用或未配置完整，无法发送图片。'
+            '请在设置 → AI 中开启视觉开关或配置 OCR 接口。';
+        displayMessages.add(AiChatMessage.error(message));
+        error = message;
+        notifyListeners();
+        return false;
+      }
+      isLoading = true; // OCR 是网络请求，期间锁住输入，防止二次发送
+      notifyListeners();
+      final ocrTexts = <String>[];
+      for (var i = 0; i < attachmentPaths.length; i++) {
+        final response =
+            await _ocrRequest(resolveAiAttachmentPath(attachmentPaths[i]));
+        if (response.error != null) {
+          final message = '第 ${i + 1} 张图片文字识别失败：${response.error}';
+          displayMessages.add(AiChatMessage.error(message));
+          error = message;
+          isLoading = false;
+          notifyListeners();
+          return false; // 不静默丢图（决策C）；此时未动 history/长期状态
+        }
+        final textResult = (response.text ?? '').trim();
+        ocrTexts.add(textResult.isEmpty
+            ? '[图片${i + 1} 无可识别文字]'
+            : '[图片${i + 1} 文字内容]\n$textResult');
+      }
+      userQuery = '$userQuery\n\n${ocrTexts.join('\n')}';
+    }
+
     final shouldPersistSelections =
         persistSelections ?? promptTagSettings.longTermEnabled;
     final parsedSources = _normalizeSourceSet(parsed.sourceTags);
@@ -693,6 +804,10 @@ class AiConversationController extends ChangeNotifier {
     final turnAllowedSources =
         resetRequested || selectedSources.isEmpty ? null : selectedSources;
     final localOnlyRequested = localOnly || parsed.localOnly;
+    // 15轮05号计划：`#搜图` 手输标签与面板 chip 两条路径任一触发即置位；
+    // 命令语义只作用于当轮，不进任何持久化链路（粘性状态会让后续每轮都被
+    // 暗示搜图）。
+    final searchByImageRequested = searchByImage || parsed.searchByImage;
 
     // 结构化选中的普通标签（面板 chip 点选，未必出现在手输文本里）与文本识别结果
     // 按 name 去重合并；结构化选中优先，避免同名标签内容不一致时的歧义。
@@ -737,6 +852,8 @@ class AiConversationController extends ChangeNotifier {
           ? null
           : Set<String>.unmodifiable(effectiveSources),
       localOnly: activeLocalOnly,
+      attachments: List<String>.unmodifiable(attachmentPaths),
+      searchByImage: searchByImageRequested,
     );
 
     // 本轮气泡展示的来源/本地限定标签：本轮显式选中的（临时或长期）与长期
@@ -780,9 +897,14 @@ class AiConversationController extends ChangeNotifier {
         parsed.displayText,
         promptTagNames: mergedRecognizedNames,
         activePersistentTagNames: activePersistentTagNames,
+        attachmentPaths: attachmentPaths, // 两种路径气泡都显示缩略图
       ),
     );
-    _history.add(LlmMessage.user(_buildTurnUserContent(parsed.userText)));
+    _history.add(LlmMessage.user(
+      _buildTurnUserContent(userQuery),
+      // 决策C：仅视觉开时图片进模型；OCR 路径模型只看到文字。
+      imagePaths: visionEnabled ? attachmentPaths : const [],
+    ));
 
     isLoading = true;
     error = null;
@@ -801,6 +923,7 @@ class AiConversationController extends ChangeNotifier {
       notifyListeners();
     }
     await _save();
+    return true;
   }
 
   List<AiPromptTag> _stablePromptTags(Iterable<AiPromptTag> tags) {
@@ -843,11 +966,42 @@ class AiConversationController extends ChangeNotifier {
               for (final source in _orderedAiSources)
                 if (sources.contains(source)) source
             ],
+      // 15轮05号计划：本轮附件 ref 列表与以图搜源标志（恒存在两键）。
+      // 只放 ref（附件相对路径，不含盘符/账户名等绝对信息），不放绝对路径、
+      // 不放 base64。
+      'attachments': [
+        for (final ref in active?.attachments ?? const <String>[])
+          {'ref': ref},
+      ],
+      'search_by_image': active?.searchByImage ?? false,
     };
     return jsonEncode(<String, Object?>{
       'turn_context': context,
       'user_query': userQuery,
     });
+  }
+
+  /// 15轮05号计划：附件 ref → 本地绝对路径的白名单解析。
+  ///
+  /// 先查当轮 `_activeTurnContext.attachments`（当轮优先），未命中则倒序扫
+  /// [displayMessages] 中 user 消息的 `attachmentPaths`（03 计划的持久化字段），
+  /// 支持「把刚才那张再搜一遍」跨轮引用。**只有出现在上述两处白名单中的 ref
+  /// 才解析**——模型编造的任意路径（其他会话相对路径、`..` 拼接等）一律返回
+  /// null，杜绝借工具读任意本地文件。
+  String? _resolveAttachmentPath(String ref) {
+    if (ref.isEmpty) return null;
+    final active = _activeTurnContext;
+    if (active != null && active.attachments.contains(ref)) {
+      return resolveAiAttachmentPath(ref);
+    }
+    for (var i = displayMessages.length - 1; i >= 0; i--) {
+      final message = displayMessages[i];
+      if (message.type != AiChatMessageType.user) continue;
+      if (message.attachmentPaths.contains(ref)) {
+        return resolveAiAttachmentPath(ref);
+      }
+    }
+    return null;
   }
 
   void _mergePersistentPromptTags(Iterable<AiPromptTag> tags) {
@@ -864,9 +1018,30 @@ class AiConversationController extends ChangeNotifier {
 
   /// Requests are the stable system prompt followed by the persisted history.
   /// Dynamic turn context is already encoded in the new user message.
+  ///
+  /// 15轮03号计划（决策B契约）：全量重放的 history 中，只有**最近一条带图的
+  /// user 消息**展开真图，更早的带图消息一律 stripImagesToPlaceholder()
+  /// 降级为稳定占位文本。`_history` 本身不被改写（存档保留全部 imagePaths）。
+  /// 破坏此契约的静默失效表现：每轮请求 token 线性膨胀、响应显著变慢、
+  /// 多图多轮后可能触发上游 413/上下文超限。
+  /// 同一轮工具子轮（_runLoop 每轮重建请求）中带图消息仍是“最近一条”，
+  /// 工具轮内图片持续可见，符合规则10 的 turn 语义。
   List<LlmMessage> _buildRequestMessages() {
     _initSystemPrompt();
-    return List<LlmMessage>.of(_history);
+    var lastImageIndex = -1;
+    for (var i = _history.length - 1; i >= 0; i--) {
+      if (_history[i].role == 'user' && _history[i].imagePaths.isNotEmpty) {
+        lastImageIndex = i;
+        break;
+      }
+    }
+    return [
+      for (var i = 0; i < _history.length; i++)
+        if (i != lastImageIndex)
+          _history[i].stripImagesToPlaceholder()
+        else
+          _history[i],
+    ];
   }
 
   @visibleForTesting
@@ -1009,6 +1184,7 @@ class AiConversationController extends ChangeNotifier {
             toolArgs,
             context: AiToolExecutionContext(
               operationId: 'ai-tool-${toolCall.id}',
+              resolveAttachmentPath: _resolveAttachmentPath,
             ),
           );
       _appendToolResult(toolCall.id, toolName, result);
@@ -1073,7 +1249,7 @@ class AiConversationController extends ChangeNotifier {
         message: result.message,
       ),
     );
-    if (toolName == 'display_result_list' && result.ok) {
+    if (shouldAutoDisplayToolResult(toolName, result.ok)) {
       final report = AiResultItem.decodeToolData(result.data);
       _pendingDisplayItems = report.items.isEmpty
           ? null

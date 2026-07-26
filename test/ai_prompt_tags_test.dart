@@ -272,6 +272,35 @@ void main() {
       expect(result.promptTags, isEmpty);
       expect(result.localOnly, isTrue);
     });
+
+    // 15轮05号计划步骤 18-a：固定功能标签 #搜图。
+    test('识别 #搜图 并置位 searchByImage，同时剥离出 userText', () {
+      final result = parseAiPromptTags('#搜图 这是什么本子', promptTags: ordinaryTags);
+      expect(result.searchByImage, isTrue);
+      expect(result.recognizedNames, contains('搜图'));
+      expect(result.userText, '这是什么本子');
+    });
+
+    test('未出现 #搜图 时 searchByImage 默认为 false', () {
+      final result = parseAiPromptTags('#搜pica 继续', promptTags: ordinaryTags);
+      expect(result.searchByImage, isFalse);
+    });
+
+    test('#搜图 与 #搜本地 同现时两标志各自成立', () {
+      final result = parseAiPromptTags(
+        '#搜图 #搜本地 帮我搜',
+        promptTags: ordinaryTags,
+      );
+      expect(result.searchByImage, isTrue);
+      expect(result.localOnly, isTrue);
+      expect(result.recognizedNames, <String>['搜图', '搜本地']);
+    });
+
+    test('固定功能保留名 #搜图 不能作为普通标签（错误文案含「固定」）', () {
+      expect(validateAiPromptTagName('搜图'), isNotNull);
+      expect(validateAiPromptTagName('搜图'), contains('固定'));
+      expect(validateAiPromptTagName('#搜图'), isNotNull);
+    });
   });
 
   group('共享设置控制器', () {

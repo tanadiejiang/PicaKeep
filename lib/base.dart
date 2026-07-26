@@ -173,6 +173,9 @@ class Appdata {
     '[]', //140 服务发现自定义端口 JSON
     '1', //141 aiIndexUserOnly 消息索引仅显示用户对话
     '6', //142 aiIndexBarMaxTicks 迷你索引条刻度上限，'0'=不限制
+    '0', //143 aiModelSupportsVision 当前模型支持图片识别（视觉）
+    '{}', //144 aiOcrConfig OCR 接口配置 JSON
+    '0', //145 aiCapabilitySearchByImage 以图搜源
   ];
 
   List<String> implicitData = [

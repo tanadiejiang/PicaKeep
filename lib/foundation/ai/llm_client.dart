@@ -1,8 +1,10 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:crypto/crypto.dart';
 import 'package:dio/dio.dart';
 import 'package:picakeep/base.dart';
+import 'package:picakeep/foundation/ai/ai_attachments.dart';
 import 'package:picakeep/foundation/ai/ai_settings.dart';
 import 'package:picakeep/foundation/log.dart';
 import 'package:picakeep/network/app_dio.dart';
@@ -39,21 +41,28 @@ class LlmMessage {
   final String? toolCallId; // tool role 时必填
   final String? name; // tool role 时填工具名
 
+  /// 15轮03号计划（决策A）：该消息附带的图片，存相对附件根的路径
+  /// （'{conversationId}/{fileName}'，'/' 分隔），**不存 base64**。
+  /// base64 只在发请求时由 [toRequestJson] 现场从本地文件生成，不落存档。
+  final List<String> imagePaths;
+
   const LlmMessage({
     required this.role,
     this.content,
     this.toolCalls,
     this.toolCallId,
     this.name,
+    this.imagePaths = const [],
   });
 
   LlmMessage.system(this.content)
       : role = 'system',
         toolCalls = null,
         toolCallId = null,
-        name = null;
+        name = null,
+        imagePaths = const [];
 
-  LlmMessage.user(this.content)
+  LlmMessage.user(this.content, {this.imagePaths = const []})
       : role = 'user',
         toolCalls = null,
         toolCallId = null,
@@ -62,14 +71,16 @@ class LlmMessage {
   LlmMessage.assistant({this.content, this.toolCalls})
       : role = 'assistant',
         toolCallId = null,
-        name = null;
+        name = null,
+        imagePaths = const [];
 
   LlmMessage.tool({
     required this.toolCallId,
     required this.name,
     required this.content,
   })  : role = 'tool',
-        toolCalls = null;
+        toolCalls = null,
+        imagePaths = const [];
 
   Map<String, dynamic> toJson() {
     final json = <String, dynamic>{'role': role};
@@ -79,6 +90,7 @@ class LlmMessage {
     }
     if (toolCallId != null) json['tool_call_id'] = toolCallId;
     if (name != null) json['name'] = name;
+    if (imagePaths.isNotEmpty) json['imagePaths'] = imagePaths;
     return json;
   }
 
@@ -94,6 +106,54 @@ class LlmMessage {
       toolCalls: toolCalls,
       toolCallId: json['tool_call_id']?.toString(),
       name: json['name']?.toString(),
+      // 旧存档没有该字段，缺省为空列表，天然兼容（不升 format version，
+      // 注释先例：ai_conversation.dart:170）。
+      imagePaths:
+          (json['imagePaths'] as List?)?.map((e) => e.toString()).toList() ??
+              const [],
+    );
+  }
+
+  /// 发请求用的序列化出口。与 [toJson]（存档出口）分离：
+  /// imagePaths 为空时输出与 toJson 完全一致；非空时把 content 展开成
+  /// OpenAI parts 数组，base64 现场从本地文件读取，不落存档。
+  Future<Map<String, dynamic>> toRequestJson() async {
+    if (imagePaths.isEmpty) return toJson();
+    final parts = <Map<String, dynamic>>[
+      {'type': 'text', 'text': content ?? ''},
+    ];
+    for (final relative in imagePaths) {
+      final file = File(resolveAiAttachmentPath(relative));
+      if (!await file.exists()) {
+        // 附件被清理/目录被改动时降级为占位文本，不抛异常不中断请求。
+        parts.add({'type': 'text', 'text': '[图片文件缺失，无法提供该图片数据]'});
+        continue;
+      }
+      final bytes = await file.readAsBytes();
+      final mime = detectAiImageType(bytes).mime;
+      parts.add({
+        'type': 'image_url',
+        'image_url': {'url': 'data:$mime;base64,${base64Encode(bytes)}'},
+      });
+    }
+    return <String, dynamic>{'role': role, 'content': parts};
+  }
+
+  /// 历史瘦身占位（决策B）：同样输入必须产出同样字符串（稳定性是接口契约，
+  /// 破坏会破坏 DeepSeek 前缀缓存，见计划「风险」）。
+  static String imagePlaceholder(int count) =>
+      '\n[本条消息此前附带 $count 张图片，图片数据不再重复发送，其内容已在上文对话中体现]';
+
+  /// 返回“图片降级为占位文本”的副本：content 追加占位、imagePaths 清空。
+  /// 无图消息返回自身（零开销）。
+  LlmMessage stripImagesToPlaceholder() {
+    if (imagePaths.isEmpty) return this;
+    return LlmMessage(
+      role: role,
+      content: '${content ?? ''}${imagePlaceholder(imagePaths.length)}',
+      toolCalls: toolCalls,
+      toolCallId: toolCallId,
+      name: name,
     );
   }
 }
@@ -224,10 +284,15 @@ class LlmClient {
 
     final dio = logDio();
 
-    // 构建请求体
+    // 构建请求体（15轮03号计划：改用 toRequestJson，带图消息展开为 parts；
+    // 存档路径仍走 toJson，见 ai_conversation_store.dart）
+    final requestMessages = <Map<String, dynamic>>[];
+    for (final m in messages) {
+      requestMessages.add(await m.toRequestJson());
+    }
     final requestBody = <String, dynamic>{
       'model': modelId,
-      'messages': messages.map((m) => m.toJson()).toList(),
+      'messages': requestMessages,
     };
 
     // 添加 tools

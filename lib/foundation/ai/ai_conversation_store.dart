@@ -3,6 +3,7 @@ import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:picakeep/foundation/app.dart';
+import 'ai_attachments.dart';
 import 'ai_conversation.dart';
 import 'ai_prompt_tags.dart';
 import 'ai_sources.dart';
@@ -239,6 +240,9 @@ class AiConversationStore {
         await file.delete();
       }
 
+      // 15轮03号计划（决策D）：同步删除该会话的附件子目录，避免孤儿图片泄漏。
+      await deleteAiConversationAttachments(id);
+
       // 从索引移除
       final index = await loadIndex();
       index.removeWhere((meta) => meta.id == id);
@@ -290,6 +294,8 @@ class AiConversationStore {
         if (await file.exists()) {
           await file.delete();
         }
+        // 15轮03号计划（决策D）：清理超量会话时同步删除附件子目录。
+        await deleteAiConversationAttachments(meta.id);
         index.removeWhere((m) => m.id == meta.id);
       }
     } catch (e) {
@@ -312,6 +318,12 @@ class AiConversationStore {
     }
     if (msg.activePersistentTagNames.isNotEmpty) {
       json['activePersistentTagNames'] = msg.activePersistentTagNames;
+    }
+    // 15轮03号计划：附件路径条件写入（与 AiChatMessage.toJson 同规则；
+    // 本方法与 deserializeAiChatMessage 是 store 自己的一对出入口，
+    // 两处不同步则 save→load 一轮附件就丢）。
+    if (msg.attachmentPaths.isNotEmpty) {
+      json['attachmentPaths'] = msg.attachmentPaths;
     }
 
     // toolData 序列化：仅支持基本类型
@@ -384,6 +396,10 @@ class AiConversationStore {
       activePersistentTagNames: (json['activePersistentTagNames'] as List?)
               ?.map((name) => name.toString()) ??
           const <String>[],
+      // 旧会话没有该字段，缺省为空列表（不升 format version）。
+      attachmentPaths:
+          (json['attachmentPaths'] as List?)?.map((e) => e.toString()) ??
+              const <String>[],
       createdAt: json['createdAt'] != null
           ? DateTime.parse(json['createdAt'] as String)
           : DateTime.now(),

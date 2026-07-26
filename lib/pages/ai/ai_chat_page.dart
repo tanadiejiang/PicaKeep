@@ -1,6 +1,8 @@
 import 'dart:convert';
+import 'dart:io';
 import 'dart:math' as math;
 
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
@@ -8,8 +10,10 @@ import 'package:flutter/material.dart';
 // TickerProvider/SingleTickerProviderStateMixin，不带 Ticker 类本身。
 import 'package:flutter/scheduler.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
+import 'package:photo_view/photo_view.dart';
 import 'package:picakeep/base.dart';
 import 'package:picakeep/components/scrollable_list/scrollable_positioned_list.dart';
+import 'package:picakeep/foundation/ai/ai_attachments.dart';
 import 'package:picakeep/foundation/ai/ai_conversation.dart';
 import 'package:picakeep/foundation/ai/ai_conversation_store.dart';
 import 'package:picakeep/foundation/ai/ai_download_queue.dart';
@@ -27,6 +31,25 @@ import 'package:picakeep/pages/online_comic/picacg_comic_page_v2.dart';
 import 'package:picakeep/tools/translations.dart';
 
 const _promptTagBoundaryPattern = r'''[\s#，。；、,.!?;！：:（）()\[\]{}<>《》“”"'`~～]''';
+
+/// 15轮03号计划：把新选图合并进待发附件列表（去重、上限 4 张/条，限制单请求
+/// base64 体积：4×1.5MB≈8MB）。返回 true 表示有图因超限被丢弃（调用方据此
+/// 提示）。抽成纯函数以便自动化验收（验收标准 11 的「待发行最多 4 张」）。
+@visibleForTesting
+bool mergePendingAiAttachmentSelection(
+  List<String> pending,
+  Iterable<String> picked,
+) {
+  var overflow = false;
+  for (final path in picked) {
+    if (pending.length >= 4) {
+      overflow = true;
+      break;
+    }
+    if (!pending.contains(path)) pending.add(path);
+  }
+  return overflow;
+}
 
 class AiChatPage extends StatefulWidget {
   const AiChatPage({super.key});
@@ -170,6 +193,20 @@ class _AiChatPageState extends State<AiChatPage>
   final Set<String> _selectedSourceChips =
       {}; // source 值（picacg/jm/ehentai/nhentai）
   bool _selectedLocalOnly = false;
+
+  /// 15轮05号计划：面板 `#搜图` chip 的选中态（对本次发送的图片执行以图搜源）。
+  /// 只作用于当轮，不参与长期持久化（步骤 7-b），故无对应长期区 chip。
+  bool _selectedSearchByImage = false;
+
+  /// 15轮03号计划：待发送的图片附件（用户所选源文件的**绝对路径**，未压缩未落盘；
+  /// 压缩落盘发生在 _send() 内）。附件草稿不跨会话、不跨重启（见计划「不执行的内容」）。
+  final List<String> _pendingAttachments = [];
+
+  /// 15轮03号计划：_send() 在 isLoading 置位前有一段 await 窗口（标签初始化、
+  /// 压缩落盘），期间用户可能再点发送/回车造成重复发送；该标志覆盖整个 _send()
+  /// 生命周期，发送与选图按钮据此禁用（计划「风险」项的二选一，选了禁用方案）。
+  bool _sendInFlight = false;
+
   final AiPromptTagSettingsController _promptTagSettings =
       AiPromptTagSettingsController.instance;
 
@@ -202,6 +239,8 @@ class _AiChatPageState extends State<AiChatPage>
 
   Future<void> _switchConversation(AiConversationMeta meta) async {
     _clearPromptPanelState();
+    // 15轮03号计划：附件不跨会话带草稿（见计划「不执行的内容」）。
+    _pendingAttachments.clear();
     // 15号计划：索引条目按当前会话的渲染项算，换会话后 index 全部失效，先关面板。
     _closeIndexPanel();
     // 12号计划：必须在 await 之前读位置——await 之后 setState 会把列表
@@ -225,6 +264,8 @@ class _AiChatPageState extends State<AiChatPage>
 
   Future<void> _newConversation() async {
     _clearPromptPanelState();
+    // 15轮03号计划：附件不跨会话带草稿（见计划「不执行的内容」）。
+    _pendingAttachments.clear();
     _closeIndexPanel();
     // 12号计划：先记下旧会话的阅读位置，之后切回它才能恢复。
     _saveScrollOffset();
@@ -583,6 +624,14 @@ class _AiChatPageState extends State<AiChatPage>
     _promptPanelEntry?.markNeedsBuild();
   }
 
+  /// 15轮05号计划：面板"#搜图" chip 的选中/取消（面板挂在 OverlayEntry 上，
+  /// 与 [_toggleLocalOnlyTag] 同款：State setState + markNeedsBuild 双通知）。
+  void _toggleSearchByImageTag() {
+    _selectedSearchByImage = !_selectedSearchByImage;
+    if (mounted) setState(() {});
+    _promptPanelEntry?.markNeedsBuild();
+  }
+
   void _toggleSourceTag(String name) {
     final source = _sourceByTagName[name];
     if (source == null) return;
@@ -697,6 +746,7 @@ class _AiChatPageState extends State<AiChatPage>
     _selectedTagChips.clear();
     _selectedSourceChips.clear();
     _selectedLocalOnly = false;
+    _selectedSearchByImage = false;
   }
 
   // ---------------------------------------------------------------------------
@@ -795,9 +845,15 @@ class _AiChatPageState extends State<AiChatPage>
           type != AiChatMessageType.assistant) {
         continue;
       }
+      // 15轮03号计划：带图消息在面板条目前缀显示 [图×N]。
+      // （空文本+图片经桥接语后 text 非空，「（空消息）」分支实际不会出现在
+      // 图片消息上；保留兜底不改 _indexPreviewText 本体。消息一经入列不可变，
+      // 附件数不会事后变化，无需并入 _indexEntriesVersionKey。）
+      final attachmentCount = item.message.attachmentPaths.length;
+      final base = _indexPreviewText(item.message.text);
       entries.add(_IndexEntry(
         index: i,
-        preview: _indexPreviewText(item.message.text),
+        preview: attachmentCount == 0 ? base : '[图×$attachmentCount] $base',
         type: type,
       ));
     }
@@ -1069,7 +1125,8 @@ class _AiChatPageState extends State<AiChatPage>
 
     final hasPending = _selectedTagChips.isNotEmpty ||
         pendingSourceNames.isNotEmpty ||
-        _selectedLocalOnly;
+        _selectedLocalOnly ||
+        _selectedSearchByImage;
     final hasPersistent = persistentTagNames.isNotEmpty ||
         persistentSourceNames.isNotEmpty ||
         persistentLocalOnly;
@@ -1124,6 +1181,13 @@ class _AiChatPageState extends State<AiChatPage>
                 buildChip(
                   label: '#$aiLocalOnlyScopeTagName',
                   onRemove: () => setState(() => _selectedLocalOnly = false),
+                  persistent: false,
+                ),
+              if (_selectedSearchByImage)
+                buildChip(
+                  label: '#$aiSearchByImageTagName',
+                  onRemove: () =>
+                      setState(() => _selectedSearchByImage = false),
                   persistent: false,
                 ),
               for (final name in persistentTagNames)
@@ -1272,6 +1336,12 @@ class _AiChatPageState extends State<AiChatPage>
                     '与来源选择同时选中时以本地限定为准',
                 selected: _selectedLocalOnly,
                 onSelected: (_) => _toggleLocalOnlyTag(),
+              ),
+              FilterChip(
+                label: const Text('#$aiSearchByImageTagName'),
+                tooltip: '对本次发送的图片执行以图搜源（soutubot）',
+                selected: _selectedSearchByImage,
+                onSelected: (_) => _toggleSearchByImageTag(),
               ),
               for (final name in _sourceByTagName.keys)
                 FilterChip(
@@ -1439,42 +1509,189 @@ class _AiChatPageState extends State<AiChatPage>
     );
   }
 
+  /// 15轮03号计划：唤起系统选图器，把所选图片加入待发附件（上限 4 张/条，
+  /// 限制单请求 base64 体积：4×1.5MB≈8MB）。
+  Future<void> _pickAttachments() async {
+    final result = await FilePicker.platform.pickFiles(
+      type: FileType.image,
+      allowMultiple: true,
+    );
+    if (result == null || !mounted) return;
+    final paths =
+        result.files.map((f) => f.path).whereType<String>().toList();
+    var overflow = false;
+    setState(() {
+      overflow = mergePendingAiAttachmentSelection(_pendingAttachments, paths);
+    });
+    if (overflow && mounted) {
+      // ⚠️ 严禁 showToast（本项目是 no-op 空实现），提示一律走 SnackBar
+      // （先例 lib/pages/local_library_page.dart:81）。
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('每条消息最多发送 4 张图片'.tl)),
+      );
+    }
+  }
+
+  /// 输入框上方的待发附件缩略图行；无附件时不占位（同 _buildPendingTagRow 约定）。
+  Widget _buildPendingAttachmentRow(BuildContext context) {
+    if (_pendingAttachments.isEmpty) return const SizedBox.shrink();
+    return SizedBox(
+      height: 64,
+      child: ListView.separated(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.fromLTRB(8, 4, 8, 4),
+        itemCount: _pendingAttachments.length,
+        separatorBuilder: (_, __) => const SizedBox(width: 6),
+        itemBuilder: (context, i) {
+          final path = _pendingAttachments[i];
+          return Stack(
+            children: [
+              ClipRRect(
+                borderRadius: BorderRadius.circular(8),
+                child: Image.file(
+                  File(path),
+                  width: 56,
+                  height: 56,
+                  fit: BoxFit.cover,
+                  errorBuilder: (_, __, ___) => Container(
+                    width: 56,
+                    height: 56,
+                    color:
+                        Theme.of(context).colorScheme.surfaceContainerHighest,
+                    child: const Icon(Icons.broken_image_outlined),
+                  ),
+                ),
+              ),
+              Positioned(
+                // 右上角 × 删除
+                top: 0,
+                right: 0,
+                child: GestureDetector(
+                  onTap: () =>
+                      setState(() => _pendingAttachments.removeAt(i)),
+                  child: Container(
+                    width: 16,
+                    height: 16,
+                    decoration: BoxDecoration(
+                      // surface 底色确保深浅图上都可见
+                      color: Theme.of(context).colorScheme.surface,
+                      shape: BoxShape.circle,
+                      border: Border.all(
+                        color: Theme.of(context)
+                            .colorScheme
+                            .outline
+                            .withValues(alpha: 0.4),
+                      ),
+                    ),
+                    child: const Icon(Icons.close, size: 12),
+                  ),
+                ),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
   Future<void> _send() async {
+    // 15轮03号计划：_sendInFlight 覆盖整个 _send()（含 isLoading 置位前的
+    // await 窗口），防止压缩落盘期间二次发送。
+    if (_sendInFlight) return;
     final text = _inputController.text.trim();
     final hasPendingSelection = _selectedTagChips.isNotEmpty ||
         _selectedSourceChips.isNotEmpty ||
-        _selectedLocalOnly;
-    if (text.isEmpty && !hasPendingSelection) return;
-    // initState 中的初始化是异步的；发送前等待同一个 pending future，避免用户
-    // 刚进入页面就发送时读到空标签列表或错误的长期生效开关。
-    await _promptTagSettings.initialize();
-    if (!mounted || _controller == null) return;
-    final resetSourceRestriction = _resetSourceRestriction;
-    // 结构化选中集合：面板点选的普通标签/来源/本地限定，与手输文本里的 #标签名
-    // 并行合并，由 AiConversationController.send() 内部统一去重（结构化选中 ∪ 文本识别）。
-    final structuredSources = Set<String>.from(_selectedSourceChips);
-    final localOnlyRequested = _selectedLocalOnly;
-    final availableTags = _promptTagSettings.promptTags;
-    final selectedPromptTags = availableTags
-        .where((tag) => _selectedTagChips.contains(tag.name))
-        .toList();
-    // send() 内部对空文本会直接 return；仅选中 chip、未打任何正文时用桥接语句
-    // 代替空字符串，避免"点了标签但什么都没发生"。
-    final effectiveText =
-        text.isEmpty && hasPendingSelection ? aiPromptTagOnlyUserBridge : text;
-    _clearPromptPanelState();
-    _inputController.clear();
-    _draftsByConversationId.remove(_controller?.conversationId ?? '');
-    await _controller!.send(
-      effectiveText,
-      availablePromptTags: availableTags,
-      selectedPromptTags: selectedPromptTags,
-      allowedSearchSources:
-          structuredSources.isEmpty ? null : structuredSources,
-      resetSourceRestriction: resetSourceRestriction,
-      persistSelections: _promptTagSettings.longTermEnabled,
-      localOnly: localOnlyRequested,
-    );
+        _selectedLocalOnly ||
+        _selectedSearchByImage;
+    if (text.isEmpty && !hasPendingSelection && _pendingAttachments.isEmpty) {
+      return;
+    }
+    setState(() => _sendInFlight = true);
+    try {
+      // initState 中的初始化是异步的；发送前等待同一个 pending future，避免用户
+      // 刚进入页面就发送时读到空标签列表或错误的长期生效开关。
+      await _promptTagSettings.initialize();
+      if (!mounted || _controller == null) return;
+      final resetSourceRestriction = _resetSourceRestriction;
+      // 结构化选中集合：面板点选的普通标签/来源/本地限定，与手输文本里的 #标签名
+      // 并行合并，由 AiConversationController.send() 内部统一去重（结构化选中 ∪ 文本识别）。
+      final structuredSources = Set<String>.from(_selectedSourceChips);
+      final localOnlyRequested = _selectedLocalOnly;
+      // 15轮05号计划：在 _clearPromptPanelState() 之前冻结（照上方冻结惯例）。
+      final searchByImageRequested = _selectedSearchByImage;
+      final availableTags = _promptTagSettings.promptTags;
+      final selectedPromptTags = availableTags
+          .where((tag) => _selectedTagChips.contains(tag.name))
+          .toList();
+      // send() 内部对空文本+无附件会直接 return false；三态桥接语：
+      // 图片桥接优先于标签桥接——turn_context 已承载标签语义，而图片-only
+      // 消息若放任标签桥接语进 parse，模型会收到与图片无关的导向语。
+      final effectiveText = text.isNotEmpty
+          ? text
+          : _pendingAttachments.isNotEmpty
+              ? aiImageOnlyUserBridge
+              : aiPromptTagOnlyUserBridge;
+
+      // 15轮03号计划：先压缩落盘，失败则输入与待发附件均原样保留。
+      var attachmentRelativePaths = const <String>[];
+      final pendingSnapshot = List<String>.from(_pendingAttachments);
+      if (pendingSnapshot.isNotEmpty) {
+        try {
+          attachmentRelativePaths = await persistAiAttachments(
+              _controller!.conversationId ?? '', pendingSnapshot);
+        } catch (e) {
+          if (mounted) {
+            // ⚠️ 严禁 showToast（no-op），见 _pickAttachments 处说明。
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('${'图片处理失败'.tl}：$e')),
+            );
+          }
+          return; // 输入与待发附件均原样保留
+        }
+        if (!mounted || _controller == null) {
+          await deleteAiAttachmentFiles(attachmentRelativePaths);
+          return;
+        }
+      }
+
+      _clearPromptPanelState();
+      _inputController.clear();
+      _draftsByConversationId.remove(_controller?.conversationId ?? '');
+      setState(() => _pendingAttachments.clear());
+      final sent = await _controller!.send(
+        effectiveText,
+        availablePromptTags: availableTags,
+        selectedPromptTags: selectedPromptTags,
+        allowedSearchSources:
+            structuredSources.isEmpty ? null : structuredSources,
+        resetSourceRestriction: resetSourceRestriction,
+        persistSelections: _promptTagSettings.longTermEnabled,
+        localOnly: localOnlyRequested,
+        searchByImage: searchByImageRequested,
+        attachmentPaths: attachmentRelativePaths,
+      );
+      if (!sent) {
+        // OCR 失败等未入列场景：删除本次落盘文件防重复，恢复输入与附件供重试。
+        await deleteAiAttachmentFiles(attachmentRelativePaths);
+        if (mounted) {
+          setState(() {
+            _pendingAttachments
+              ..clear()
+              ..addAll(pendingSnapshot);
+            if (_inputController.text.isEmpty && text.isNotEmpty) {
+              _inputController.text = text;
+              _saveDraft();
+            }
+          });
+        }
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _sendInFlight = false);
+      } else {
+        _sendInFlight = false;
+      }
+    }
   }
 
   List<_DisplayItem> _buildDisplayItems(List<AiChatMessage> messages) {
@@ -1846,6 +2063,8 @@ class _AiChatPageState extends State<AiChatPage>
                         key: _pendingTagRowKey,
                         child: _buildPendingTagRow(context),
                       ),
+                      // 15轮03号计划：待发附件缩略图行。
+                      _buildPendingAttachmentRow(context),
                       Row(
                         children: [
                           CompositedTransformTarget(
@@ -1864,6 +2083,22 @@ class _AiChatPageState extends State<AiChatPage>
                                     ? Theme.of(context).colorScheme.primary
                                     : null,
                               ),
+                            ),
+                          ),
+                          // 15轮03号计划：选图按钮。
+                          IconButton(
+                            onPressed: _controller!.isLoading ||
+                                    _controller!.pendingDownload != null ||
+                                    _sendInFlight
+                                ? null
+                                : _pickAttachments,
+                            tooltip: '发送图片'.tl,
+                            visualDensity: VisualDensity.compact,
+                            icon: Icon(
+                              Icons.image_outlined,
+                              color: _pendingAttachments.isNotEmpty
+                                  ? Theme.of(context).colorScheme.primary
+                                  : null,
                             ),
                           ),
                           const SizedBox(width: 4),
@@ -1892,7 +2127,8 @@ class _AiChatPageState extends State<AiChatPage>
                           const SizedBox(width: 8),
                           FilledButton(
                             onPressed: _controller!.isLoading ||
-                                    _controller!.pendingDownload != null
+                                    _controller!.pendingDownload != null ||
+                                    _sendInFlight
                                 ? null
                                 : _send,
                             child: Text('发送'.tl),
@@ -2617,6 +2853,116 @@ Widget _buildSelectableUserText(
   return SelectableText.rich(TextSpan(style: normalStyle, children: spans));
 }
 
+/// 15轮03号计划：用户气泡里的附件缩略图。文件缺失（被清理/目录改动）时
+/// 显示灰底占位；点击 push 全屏预览页（Hero 过渡）。
+class _AttachmentThumb extends StatelessWidget {
+  const _AttachmentThumb({
+    required this.relativePath,
+    required this.createdAt,
+  });
+
+  final String relativePath;
+  final DateTime createdAt;
+
+  /// 同图多次发送不撞 tag：相对路径 + 消息创建时间共同构成唯一 tag。
+  String get _heroTag =>
+      'ai_attachment_${relativePath}_${createdAt.microsecondsSinceEpoch}';
+
+  @override
+  Widget build(BuildContext context) {
+    final file = File(resolveAiAttachmentPath(relativePath));
+    return GestureDetector(
+      onTap: () {
+        Navigator.of(context).push(
+          MaterialPageRoute<void>(
+            builder: (_) => _AiAttachmentPreviewPage(
+              imageProvider: FileImage(file),
+              heroTag: _heroTag,
+            ),
+          ),
+        );
+      },
+      child: Hero(
+        tag: _heroTag,
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(8),
+          child: Image.file(
+            file,
+            width: 120,
+            height: 120,
+            fit: BoxFit.cover,
+            errorBuilder: (context, _, __) => Container(
+              width: 120,
+              height: 120,
+              color: Theme.of(context).colorScheme.surfaceContainerHighest,
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const Icon(Icons.broken_image_outlined),
+                  const SizedBox(height: 4),
+                  Text(
+                    '图片已清理'.tl,
+                    style: const TextStyle(fontSize: 11),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// 15轮03号计划：附件全屏预览页。照抄 local_comic_detail_page.dart 的
+/// _CoverPreviewPage（Scaffold + AppBar + Hero + PhotoView，minScale
+/// `contained * 0.9`，loading/error builder 同款）。
+class _AiAttachmentPreviewPage extends StatelessWidget {
+  const _AiAttachmentPreviewPage({
+    required this.imageProvider,
+    required this.heroTag,
+  });
+
+  final ImageProvider<Object> imageProvider;
+  final String heroTag;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Text('图片'.tl),
+      ),
+      body: Hero(
+        tag: heroTag,
+        child: PhotoView(
+          minScale: PhotoViewComputedScale.contained * 0.9,
+          imageProvider: imageProvider,
+          filterQuality: FilterQuality.medium,
+          loadingBuilder: (context, event) {
+            return const ColoredBox(
+              color: Colors.black,
+              child: Center(child: CircularProgressIndicator()),
+            );
+          },
+          errorBuilder: (context, error, stackTrace, retry) {
+            return ColoredBox(
+              color: Colors.black,
+              child: Center(
+                child: IconButton(
+                  tooltip: '重试'.tl,
+                  color: Colors.white,
+                  icon: const Icon(Icons.refresh),
+                  onPressed: retry,
+                ),
+              ),
+            );
+          },
+        ),
+      ),
+    );
+  }
+}
+
 /// 消息气泡
 class _MessageBubble extends StatelessWidget {
   const _MessageBubble({required this.message});
@@ -2658,6 +3004,22 @@ class _MessageBubble extends StatelessWidget {
               mainAxisSize: MainAxisSize.min,
               children: [
                 _buildSelectableUserText(message, colorScheme),
+                // 15轮03号计划（决策D 展示面）：附件缩略图，点击全屏预览。
+                if (message.attachmentPaths.isNotEmpty) ...[
+                  const SizedBox(height: 6),
+                  Wrap(
+                    alignment: WrapAlignment.end,
+                    spacing: 6,
+                    runSpacing: 6,
+                    children: [
+                      for (final relative in message.attachmentPaths)
+                        _AttachmentThumb(
+                          relativePath: relative,
+                          createdAt: message.createdAt,
+                        ),
+                    ],
+                  ),
+                ],
                 if (tagNames.isNotEmpty) ...[
                   const SizedBox(height: 6),
                   Wrap(

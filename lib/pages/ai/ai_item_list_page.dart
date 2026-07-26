@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher_string.dart';
 import '../../foundation/ai/ai_result_item.dart';
 import '../../foundation/ai/ai_sources.dart';
 import '../../foundation/ai/ai_download_queue.dart';
@@ -213,6 +214,21 @@ class _AiItemListPageState extends State<AiItemListPage> {
 
                   // availability 状态
                   _buildAvailabilityStatus(context, item.availability),
+
+                  // 15轮05号计划步骤 14：panda/降级条目（source 为空串）的唯一
+                  // 可打开出口——availability.webUrl 跳原站网页。
+                  if ((item.availability['webUrl']?.toString() ?? '')
+                      .isNotEmpty) ...[
+                    const SizedBox(height: 12),
+                    FilledButton.tonalIcon(
+                      onPressed: () => launchUrlString(
+                        item.availability['webUrl'].toString(),
+                        mode: LaunchMode.externalApplication,
+                      ),
+                      icon: const Icon(Icons.open_in_browser),
+                      label: const Text('打开原网页'),
+                    ),
+                  ],
                 ],
               ),
             ),
