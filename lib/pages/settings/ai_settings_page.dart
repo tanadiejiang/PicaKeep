@@ -112,6 +112,41 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
     );
   }
 
+  /// 17号计划步骤 10：迷你索引条刻度上限。
+  /// 结构照抄 [_buildMaxToolRoundsTile]，'0' 表示不限制（与 aiMaxToolRounds 同约定）。
+  Widget _buildIndexBarMaxTicksTile() {
+    const options = <String, String>{
+      '4': '4 条',
+      '6': '6 条（默认）',
+      '8': '8 条',
+      '12': '12 条',
+      '24': '24 条',
+      '0': '不限制',
+    };
+    final current = appdata.settings[aiIndexBarMaxTicksSettingIndex];
+    final displayValue = options.containsKey(current) ? current : '6';
+    return ListTile(
+      leading: const Icon(Icons.drag_handle),
+      title: Text('索引条刻度上限'.tl),
+      subtitle: Text('只影响聊天页右边缘迷你索引条的横线数量；索引面板内始终列出全部'.tl),
+      trailing: DropdownButton<String>(
+        value: displayValue,
+        underline: const SizedBox.shrink(),
+        items: options.entries
+            .map(
+              (e) => DropdownMenuItem<String>(
+                value: e.key,
+                child: Text(e.value),
+              ),
+            )
+            .toList(),
+        onChanged: (v) {
+          if (v != null) _setSetting(aiIndexBarMaxTicksSettingIndex, v);
+        },
+      ),
+    );
+  }
+
   Widget _buildSectionTitle(String title) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 4),
@@ -649,6 +684,16 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
       ),
       _buildMaxToolRoundsTile(),
       const Divider(),
+      // 17号计划步骤 10：消息索引相关设置。
+      _buildSectionTitle('消息索引'.tl),
+      _buildSwitch(
+        title: '消息索引仅显示用户对话'.tl,
+        subtitle: '关闭后 AI 回复也会进入索引面板'.tl,
+        settingIndex: aiIndexUserOnlySettingIndex,
+        leading: const Icon(Icons.person_outline),
+      ),
+      _buildIndexBarMaxTicksTile(),
+      const Divider(),
       _buildProviderSection(),
       const Divider(),
       _buildPromptTagSection(),
@@ -850,8 +895,7 @@ class _ModelIdFieldState extends State<_ModelIdField> {
         final isExactPreset =
             widget.presets.any((p) => p.toLowerCase() == query);
         if (query.isEmpty || isExactPreset) return widget.presets;
-        return widget.presets
-            .where((p) => p.toLowerCase().contains(query));
+        return widget.presets.where((p) => p.toLowerCase().contains(query));
       },
       onSelected: widget.onChanged,
       fieldViewBuilder: (context, controller, focusNode, onSubmitted) {

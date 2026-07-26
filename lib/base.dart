@@ -171,6 +171,8 @@ class Appdata {
     '5', //138 aiMaxToolRounds
     '0', //139 aiCapabilityGetComicDetail
     '[]', //140 服务发现自定义端口 JSON
+    '1', //141 aiIndexUserOnly 消息索引仅显示用户对话
+    '6', //142 aiIndexBarMaxTicks 迷你索引条刻度上限，'0'=不限制
   ];
 
   List<String> implicitData = [

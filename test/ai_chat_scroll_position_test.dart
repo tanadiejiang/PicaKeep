@@ -3,19 +3,26 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:picakeep/base.dart';
+import 'package:picakeep/components/scrollable_list/scrollable_positioned_list.dart';
 import 'package:picakeep/foundation/ai/ai_conversation.dart';
 import 'package:picakeep/foundation/ai/ai_conversation_store.dart';
 import 'package:picakeep/foundation/app.dart';
 import 'package:picakeep/pages/ai/ai_chat_page.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-/// 12/13号计划：AI 聊天页滚动定位语义的 widget 测试。
+/// 12/13/15号计划：AI 聊天页滚动定位语义的 widget 测试。
 ///
 /// 13号计划将"切 tab 回来到底部"改为"切 tab 也保存并恢复阅读位置"，
 /// 与"页内切会话保位置"语义完全对齐：
 /// - 首次加载（无记忆位置）→ 到底部；
 /// - 切 tab（State 销毁重建）回到 AI 页 → 恢复离开时的阅读位置；
 /// - 页内切会话再切回 → 恢复离开该会话时的阅读位置。
+///
+/// 15号计划把消息列表换成 ScrollablePositionedList，位置记忆从"像素 offset"
+/// 改为"item index"，因此断言口径同步调整：
+/// - 贴底仍然是像素语义（maxScrollExtent 才是真底部），继续用 offset 断言；
+/// - 恢复历史位置改成断言"离开时顶部那条消息又回到了顶部"（index 语义），
+///   像素值不再要求逐像素相等。
 ///
 /// 用真实 AiChatPage + 真实 AiConversationStore（数据目录指向临时目录）跑，
 /// 不打网络：只有 send() 会调 LLM，本测试全部走"预置会话文件 → 读取"路径。
@@ -42,6 +49,14 @@ void main() {
     await _seedConversation(id: _switchCaseAId, title: _switchCaseATitle);
     await _seedConversation(id: _switchCaseAId2, title: _switchCaseATitle2);
     await _seedConversation(id: _switchCaseBId, title: _switchCaseBTitle);
+    await _seedConversation(id: _anchorCaseLongId, title: _anchorCaseLongTitle);
+    await _seedConversation(id: _anchorCaseMidId, title: _anchorCaseMidTitle);
+    await _seedConversation(id: _anchorCaseMid2Id, title: _anchorCaseMid2Title);
+    await _seedConversation(
+      id: _anchorCaseShortId,
+      title: _anchorCaseShortTitle,
+      messageCount: 3,
+    );
   });
 
   tearDownAll(() {
@@ -73,9 +88,11 @@ void main() {
 
     // 手动往上翻到中间，模拟用户读历史。
     await _scrollUp(tester, 420);
-    final middle = _requireMessageController(tester).offset;
-    expect(middle, lessThan(first.position.maxScrollExtent - 100),
+    final middleOffset = _requireMessageController(tester).offset;
+    expect(middleOffset, lessThan(first.position.maxScrollExtent - 100),
         reason: '手动上翻应真正离开底部');
+    final middleTopIndex = _topVisibleIndex(tester);
+    expect(middleTopIndex, greaterThan(0), reason: '上翻后顶部不应还是第 0 条');
 
     // 切 tab：NaviPane 不用 IndexedStack，切走会完整销毁 State，
     // dispose() 在销毁前保存 offset。
@@ -87,8 +104,10 @@ void main() {
     await _pumpChatPage(tester);
 
     final back = _requireMessageController(tester);
-    expect(back.offset, closeTo(middle, 8),
-        reason: '切 tab 回来应恢复离开时的阅读位置（13号计划新语义）');
+    expect(_topVisibleIndex(tester), middleTopIndex,
+        reason: '切 tab 回来应把离开时顶部那条消息重新顶到顶部（15号计划 index 语义）');
+    expect(back.offset, lessThan(back.position.maxScrollExtent - 100),
+        reason: '恢复后不应被 pending 滚底或自动跟随拉回底部');
   });
 
   testWidgets('页内切会话再切回恢复历史阅读位置', (tester) async {
@@ -99,10 +118,10 @@ void main() {
     expect(find.textContaining('第 0 条消息'), findsNothing,
         reason: '会话甲首次进入应在底部，第一条消息不可见');
     await _scrollUp(tester, 480);
-    final savedOffset = _requireMessageController(tester).offset;
-    expect(savedOffset, greaterThan(0));
+    final savedTopIndex = _topVisibleIndex(tester);
+    expect(savedTopIndex, greaterThan(0));
     expect(
-      savedOffset,
+      _requireMessageController(tester).offset,
       lessThan(
           _requireMessageController(tester).position.maxScrollExtent - 100),
     );
@@ -116,9 +135,51 @@ void main() {
     // 再切回会话甲 → 恢复刚才翻到的位置。
     await _switchConversationViaDrawer(tester, _switchCaseATitle);
     final backOnA = _requireMessageController(tester);
-    expect(backOnA.offset, closeTo(savedOffset, 8), reason: '切回旧会话应恢复离开时的阅读位置');
+    expect(_topVisibleIndex(tester), savedTopIndex,
+        reason: '切回旧会话应把离开时顶部那条消息重新顶到顶部');
     expect(backOnA.offset, lessThan(backOnA.position.maxScrollExtent - 100),
         reason: '恢复后不应被 pending 滚底或自动跟随拉回底部');
+  });
+
+  testWidgets('内容不足一屏的短会话必须真正显示出来', (tester) async {
+    // 15号计划回归用例：UnboundedCustomScrollView 的 maxScrollExtent 允许为负
+    // （内容不足一屏时 min == max < 0）。pending 落位若用 maxExtent <= 0 判断
+    // "列表还没渲染"，短会话会把重试预算耗尽而永不清 pending，Opacity 卡在 0，
+    // 整页消息不可见（find 仍能找到，所以必须显式断言 opacity）。
+    await AiConversationStore.saveLastActiveId(_anchorCaseShortId);
+    await _pumpChatPage(tester);
+
+    expect(_messageListOpacity(tester), 1.0,
+        reason: 'pending 应已清除，消息列表不能停留在 Opacity(0)');
+    expect(find.textContaining('第 0 条消息'), findsOneWidget,
+        reason: '短会话的首条消息应可见');
+  });
+
+  testWidgets('锚点停在历史位置时切到贴底会话仍落在真底部', (tester) async {
+    // 15号计划专项用例：切会话不会重建 ScrollablePositionedList 的 State，
+    // 锚点 positionedIndex 会带着上一个会话的历史 index 进入新会话。
+    // 断言此时"跳到 maxScrollExtent"依然等于跳到真实内容底部。
+    await AiConversationStore.saveLastActiveId(_anchorCaseLongId);
+    await _pumpChatPage(tester);
+
+    // 手动上翻只改像素、不改锚点；必须"切走再切回"走一次 index 恢复，
+    // 才能让列表锚点真正落在历史 index 上。
+    await _scrollUp(tester, 480);
+    final savedTopIndex = _topVisibleIndex(tester);
+    expect(savedTopIndex, greaterThan(2), reason: '需要一个足够深的历史锚点');
+    await _switchConversationViaDrawer(tester, _anchorCaseMidTitle);
+    await _switchConversationViaDrawer(tester, _anchorCaseLongTitle);
+    expect(_topVisibleIndex(tester), savedTopIndex,
+        reason: '切回长会话应按 index 恢复，此时锚点 != 0');
+
+    // 页内切到另一个首次访问的长会话（无记忆位置 → 贴底路径）。
+    await _switchConversationViaDrawer(tester, _anchorCaseMid2Title);
+    final onMid2 = _requireMessageController(tester);
+    expect(onMid2.offset, closeTo(onMid2.position.maxScrollExtent, 1),
+        reason: '锚点非 0 时贴底仍应收敛到 maxScrollExtent');
+    expect(find.textContaining('第 29 条消息'), findsOneWidget,
+        reason: '真底部意味着最后一条消息可见');
+    expect(_messageListOpacity(tester), 1.0, reason: 'pending 应已清除');
   });
 
   testWidgets('切 tab 与切会话位置记忆互不污染', (tester) async {
@@ -135,8 +196,9 @@ void main() {
 
     // 翻到中间。
     await _scrollUp(tester, 480);
-    final savedOffset = _requireMessageController(tester).offset;
-    expect(savedOffset, lessThan(first.position.maxScrollExtent - 100));
+    final savedTopIndex = _topVisibleIndex(tester);
+    expect(_requireMessageController(tester).offset,
+        lessThan(first.position.maxScrollExtent - 100));
 
     // 切 tab 离开（保存位置）然后切回（恢复位置）。
     await tester.pumpWidget(
@@ -145,8 +207,7 @@ void main() {
     await _settle(tester, frames: 4);
     await _pumpChatPage(tester);
 
-    final back = _requireMessageController(tester);
-    expect(back.offset, closeTo(savedOffset, 8),
+    expect(_topVisibleIndex(tester), savedTopIndex,
         reason: '切 tab 回来恢复位置，与页内切会话语义一致');
   });
 }
@@ -161,6 +222,14 @@ const _switchCaseAId2 = 'scroll-case-a2';
 const _switchCaseATitle2 = '滚动用例-会话甲2';
 const _switchCaseBId = 'scroll-case-b';
 const _switchCaseBTitle = '滚动用例-会话乙';
+const _anchorCaseLongId = 'scroll-case-anchor-long';
+const _anchorCaseLongTitle = '滚动用例-锚点长会话';
+const _anchorCaseMidId = 'scroll-case-anchor-mid';
+const _anchorCaseMidTitle = '滚动用例-锚点中转会话';
+const _anchorCaseMid2Id = 'scroll-case-anchor-mid2';
+const _anchorCaseMid2Title = '滚动用例-锚点中转会话2';
+const _anchorCaseShortId = 'scroll-case-anchor-short';
+const _anchorCaseShortTitle = '滚动用例-锚点短会话';
 
 Future<void> _seedConversation({
   required String id,
@@ -197,7 +266,8 @@ Future<void> _settle(WidgetTester tester, {int frames = 8}) async {
 }
 
 Future<void> _scrollUp(WidgetTester tester, double distance) async {
-  await tester.drag(find.byType(ListView).first, Offset(0, distance));
+  await tester.drag(
+      find.byType(ScrollablePositionedList).first, Offset(0, distance));
   await _settle(tester, frames: 6);
 }
 
@@ -211,18 +281,45 @@ Future<void> _switchConversationViaDrawer(
   await _settle(tester, frames: 14);
 }
 
-/// 消息列表的 ScrollController：页面里只有消息 ListView 显式挂了 controller
-/// （侧栏 ListView 没有），据此区分。
-ScrollController? _messageScrollController(WidgetTester tester) {
-  for (final listView in tester.widgetList<ListView>(find.byType(ListView))) {
-    final controller = listView.controller;
-    if (controller != null && controller.hasClients) return controller;
-  }
-  return null;
+/// 15号计划：消息列表是页面里唯一的 ScrollablePositionedList（侧栏仍是 ListView）。
+ScrollablePositionedList? _messageList(WidgetTester tester) {
+  final found = tester.widgetList<ScrollablePositionedList>(
+      find.byType(ScrollablePositionedList));
+  if (found.isEmpty) return null;
+  final list = found.first;
+  return list.scrollController.hasClients ? list : null;
 }
+
+/// 消息列表的 ScrollController：贴底类断言仍走像素语义。
+ScrollController? _messageScrollController(WidgetTester tester) =>
+    _messageList(tester)?.scrollController;
 
 ScrollController _requireMessageController(WidgetTester tester) {
   final controller = _messageScrollController(tester);
   expect(controller, isNotNull, reason: '未找到消息列表的 ScrollController');
   return controller!;
+}
+
+/// 消息列表外层 Opacity 的当前值：13号计划用 Opacity(0) 遮住 pending 期间的
+/// 首帧，pending 若永不清除会表现为整页不可见，必须能被断言到。
+double _messageListOpacity(WidgetTester tester) {
+  final opacity = tester.widget<Opacity>(
+    find
+        .ancestor(
+          of: find.byType(ScrollablePositionedList),
+          matching: find.byType(Opacity),
+        )
+        .first,
+  );
+  return opacity.opacity;
+}
+
+/// 当前可见的最小 index（= 视口顶部那条）。itemPositions 不按 index 排序，
+/// 必须自己取 min。
+int _topVisibleIndex(WidgetTester tester) {
+  final list = _messageList(tester);
+  expect(list, isNotNull, reason: '未找到消息列表');
+  final positions = list!.itemPositionsNotifier!.itemPositions.value;
+  expect(positions, isNotEmpty, reason: 'itemPositions 应已上报可见项');
+  return positions.map((p) => p.index).reduce((a, b) => a < b ? a : b);
 }

@@ -29,6 +29,13 @@ const aiPromptTemplatesInitializedSettingIndex = 137;
 const aiMaxToolRoundsSettingIndex = 138;
 const aiCapabilityGetComicDetailSettingIndex = 139;
 
+// 消息索引（17号计划步骤 10）
+// '1' = 索引面板只列用户消息；'0' = user + assistant 都列。
+const aiIndexUserOnlySettingIndex = 141;
+// 右边缘迷你索引条的横线数上限；'0' 表示不限制。
+// 只截断迷你索引条，面板内条目始终与消息 1:1（保证松手跳转精确）。
+const aiIndexBarMaxTicksSettingIndex = 142;
+
 /// 返回给定能力名称对应的 settings index；找不到返回 null。
 int? aiCapabilitySettingIndex(String toolName) {
   return const {
