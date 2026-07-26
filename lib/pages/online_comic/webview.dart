@@ -53,6 +53,16 @@ extension WebviewExtension on InAppWebViewController {
   }
 }
 
+/// 把 webview 当前 URL 转成完整字符串；null / 空串视为不可用（返回 null）。
+///
+/// 修复点：WebUri.path 只返回 URI 的路径分量（https://soutubot.moe/ 的
+/// path 是 "/"），拿去打开浏览器或复制都是错的；必须用 toString() 取完整 URL。
+String? webviewFullUrl(WebUri? url) {
+  final s = url?.toString().trim();
+  if (s == null || s.isEmpty) return null;
+  return s;
+}
+
 class AppWebview extends StatefulWidget {
   const AppWebview(
       {required this.initialUrl,
@@ -93,6 +103,13 @@ class _AppWebviewState extends State<AppWebview> {
     return proxy;
   }
 
+  void _showMessage(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message)),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     bool useCustomAppBar = !UiMode.m1(context) && !widget.singlePage;
@@ -113,17 +130,47 @@ class _AppWebviewState extends State<AppWebview> {
                 items: [
                   PopupMenuItem(
                     child: Text('在浏览器中打开'.tl),
-                    onTap: () async =>
-                        launchUrlString((await controller?.getUrl())!.path),
+                    onTap: () async {
+                      final url = webviewFullUrl(await controller?.getUrl());
+                      if (url == null) {
+                        _showMessage('页面尚未加载完成，无法获取链接'.tl);
+                        return;
+                      }
+                      try {
+                        final ok = await launchUrlString(
+                          url,
+                          mode: LaunchMode.externalApplication,
+                        );
+                        if (!ok) {
+                          _showMessage('打开浏览器失败'.tl);
+                        }
+                      } catch (e) {
+                        Log.error('AppWebview', '在浏览器中打开失败: $e');
+                        _showMessage('打开浏览器失败'.tl);
+                      }
+                    },
                   ),
                   PopupMenuItem(
                     child: Text('复制链接'.tl),
-                    onTap: () async => Clipboard.setData(ClipboardData(
-                        text: (await controller?.getUrl())!.path)),
+                    onTap: () async {
+                      final url = webviewFullUrl(await controller?.getUrl());
+                      if (url == null) {
+                        _showMessage('页面尚未加载完成，无法获取链接'.tl);
+                        return;
+                      }
+                      await Clipboard.setData(ClipboardData(text: url));
+                      _showMessage('已复制链接'.tl);
+                    },
                   ),
                   PopupMenuItem(
                     child: Text('重新加载'.tl),
-                    onTap: () => controller?.reload(),
+                    onTap: () {
+                      if (controller == null) {
+                        _showMessage('Webview 尚未初始化，无法重新加载'.tl);
+                        return;
+                      }
+                      controller!.reload();
+                    },
                   ),
                 ]);
           },

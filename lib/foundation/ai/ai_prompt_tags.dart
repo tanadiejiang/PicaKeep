@@ -8,6 +8,13 @@ const _promptTagsLongTermSettingIndex = 136;
 const _promptTemplatesInitializedSettingIndex = 137;
 
 const aiPromptTagOnlyUserBridge = '请结合当前对话上下文，并按本轮提示词标签继续处理。';
+
+/// 15轮03号计划：空文本+仅图片发送时的桥接语（先例 :10 的标签桥接语）。
+/// 若放任空文本进 parseAiPromptTags，剥离后为空的 userText 会被自动替换成
+/// [aiPromptTagOnlyUserBridge]（标签导向语），模型会收到与图片无关的语义；
+/// 页面层必须抢先用本常量占位。
+const aiImageOnlyUserBridge = '请查看并结合我发送的图片回答。';
+
 const aiResetSourceRestrictionTagName = '不限来源';
 
 /// 固定、只读的可见来源标签名到 `search_online.source` 的协议映射。
@@ -22,6 +29,10 @@ const aiPromptSourceTagToSource = <String, String>{
 /// 与来源标签同属固定协议标签，不进入普通标签列表。
 /// 对应可见标签为 `#搜本地`（与 `搜pica`/`搜jm` 等来源标签命名风格一致）。
 const aiLocalOnlyScopeTagName = '搜本地';
+
+/// 固定协议标签：对本轮附带的图片执行以图搜源（触发 search_by_image 工具），
+/// 不进入普通标签列表。只作用于当轮，不参与长期持久化（15轮05号计划）。
+const aiSearchByImageTagName = '搜图';
 
 const aiDefaultPromptTags = <AiPromptTag>[
   AiPromptTag(
@@ -101,6 +112,7 @@ class AiPromptTagParseResult {
     required this.resetSourceRestriction,
     required Iterable<String> recognizedNames,
     this.localOnly = false,
+    this.searchByImage = false,
   })  : promptTags = List<AiPromptTag>.unmodifiable(promptTags),
         sourceTags = Set<String>.unmodifiable(sourceTags),
         recognizedNames = List<String>.unmodifiable(recognizedNames);
@@ -120,6 +132,10 @@ class AiPromptTagParseResult {
   /// 与 [sourceTags] 可同时为真：本地限定优先，来源集合本身不清空，
   /// 由下游控制器在计算"有效范围"时以本地限定为准。
   final bool localOnly;
+
+  /// 是否识别到固定功能标签 `#搜图`（对本轮附带图片执行以图搜源）。
+  /// 只作用于当轮，不参与长期持久化（15轮05号计划）。
+  final bool searchByImage;
 }
 
 @immutable
@@ -168,6 +184,9 @@ String? validateAiPromptTagName(
   }
   if (name == aiLocalOnlyScopeTagName) {
     return '#$name 是固定范围标签，不能作为普通标签使用';
+  }
+  if (name == aiSearchByImageTagName) {
+    return '#$name 是固定功能标签，不能作为普通标签使用';
   }
 
   final ignoredName =
@@ -299,6 +318,7 @@ AiPromptTagParseResult parseAiPromptTags(
     ...ordinaryByName.keys,
     ...aiPromptSourceTagToSource.keys,
     aiLocalOnlyScopeTagName,
+    aiSearchByImageTagName,
   }.toList()
     ..sort((a, b) {
       final lengthOrder = b.length.compareTo(a.length);
@@ -338,6 +358,7 @@ AiPromptTagParseResult parseAiPromptTags(
   final selectedSources = <String>{};
   var shouldResetSources = resetSourceRestriction;
   var localOnly = false;
+  var searchByImage = false;
 
   for (final match in matches) {
     if (recognizedNameSet.add(match.name)) recognizedNames.add(match.name);
@@ -352,6 +373,9 @@ AiPromptTagParseResult parseAiPromptTags(
     }
     if (match.name == aiLocalOnlyScopeTagName) {
       localOnly = true;
+    }
+    if (match.name == aiSearchByImageTagName) {
+      searchByImage = true;
     }
   }
 
@@ -374,6 +398,7 @@ AiPromptTagParseResult parseAiPromptTags(
     resetSourceRestriction: shouldResetSources,
     recognizedNames: recognizedNames,
     localOnly: localOnly,
+    searchByImage: searchByImage,
   );
 }
 

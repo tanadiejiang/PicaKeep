@@ -36,6 +36,17 @@ const aiIndexUserOnlySettingIndex = 141;
 // 只截断迷你索引条，面板内条目始终与消息 1:1（保证松手跳转精确）。
 const aiIndexBarMaxTicksSettingIndex = 142;
 
+// 15轮03号计划：当前主模型是否支持图片识别（视觉）。用户手动声明，不做自动探测。
+const aiModelSupportsVisionSettingIndex = 143;
+// 15轮03号计划：OCR 接口配置，单个 JSON 字符串（参考 131 aiModelParams 的先例）。
+// 键：enabled(bool)/type('vision'|'generic')/template(''|'umi'|'paddle_hub'|'paddlex')/
+//     baseUrl/apiKey/modelId/authHeader/imageField/imageEncoding('b64'|'b64_array'|'data_uri')/
+//     extraBody(Map)/resultPath(String)
+const aiOcrConfigSettingIndex = 144;
+
+// 15轮05号计划：以图搜源 soutubot（search_by_image 能力开关）。
+const aiCapabilitySearchByImageSettingIndex = 145;
+
 /// 返回给定能力名称对应的 settings index；找不到返回 null。
 int? aiCapabilitySettingIndex(String toolName) {
   return const {
@@ -49,6 +60,7 @@ int? aiCapabilitySettingIndex(String toolName) {
     'display_result_list': aiCapabilityDisplayResultListSettingIndex,
     'manage_favorites': aiCapabilityManageFavoritesSettingIndex,
     'get_comic_detail': aiCapabilityGetComicDetailSettingIndex,
+    'search_by_image': aiCapabilitySearchByImageSettingIndex,
   }[toolName];
 }
 

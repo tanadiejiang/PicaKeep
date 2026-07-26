@@ -9,6 +9,7 @@ import 'tools/query_remote_library_tool.dart';
 import 'tools/search_online_tool.dart';
 import 'tools/display_result_list_tool.dart';
 import 'tools/manage_favorites_tool.dart';
+import 'tools/search_by_image_tool.dart';
 
 class AiCapabilities {
   AiCapabilities._();
@@ -33,6 +34,7 @@ class AiCapabilities {
       DisplayResultListTool(),
       ManageFavoritesTool(),
       GetComicDetailTool(),
+      SearchByImageTool(),
     ]);
     _registered = true;
   }

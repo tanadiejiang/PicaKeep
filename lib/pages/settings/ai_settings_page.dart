@@ -13,6 +13,10 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
   bool _providerExpanded = false;
   bool _showApiKey = false;
 
+  // 15轮03号计划：OCR 配置区折叠态与 API Key 遮蔽态。
+  bool _ocrExpanded = false;
+  bool _showOcrApiKey = false;
+
   static const _templateBaseUrls = <String, String>{
     'openai_compat': 'http://localhost:11434/v1',
     'ollama': 'http://localhost:11434',
@@ -48,6 +52,7 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
       aiCapabilityGetDownloadStatusSettingIndex,
       aiCapabilityQueryRemoteLibrarySettingIndex,
       aiCapabilityGetComicDetailSettingIndex,
+      aiCapabilitySearchByImageSettingIndex,
     ].any((idx) => appdata.settings[idx] == '1');
   }
 
@@ -268,6 +273,13 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
               },
             ),
           ),
+          // 15轮03号计划：视觉开关（属主模型属性，放 Provider 配置区内）。
+          _buildSwitch(
+            title: '当前模型支持图片识别（视觉）'.tl,
+            subtitle: '开启后图片直接发给模型；关闭后先经 OCR 转文字'.tl,
+            settingIndex: aiModelSupportsVisionSettingIndex,
+            leading: const Icon(Icons.remove_red_eye_outlined),
+          ),
           const SizedBox(height: 12),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -292,6 +304,287 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
 
   final AiPromptTagSettingsController _promptTagSettings =
       AiPromptTagSettingsController.instance;
+
+  // ── 15轮03号计划：OCR 接口配置区 ──────────────────────────────────────────
+
+  /// 三个预设模板（决策F，写死为 const）。端点/字段名/取值路径取自各项目公开
+  /// 文档（Umi-OCR HTTP API、PaddleOCR hubserving、PaddleX 服务化部署），
+  /// 未对真实服务实测，属待验证假设；实测有误时另开计划改表即可。
+  static const _ocrTemplatePresets = <String, Map<String, Object?>>{
+    'umi': {
+      'baseUrl': 'http://127.0.0.1:1224/api/ocr',
+      'imageField': 'base64',
+      'imageEncoding': 'b64',
+      'extraBody': {
+        'options': {'data.format': 'text'},
+      },
+      'resultPath': 'data',
+    },
+    'paddle_hub': {
+      'baseUrl': 'http://127.0.0.1:8866/predict/ocr_system',
+      'imageField': 'images',
+      'imageEncoding': 'b64_array',
+      'extraBody': <String, Object?>{},
+      'resultPath': 'results[0][*].text',
+    },
+    'paddlex': {
+      'baseUrl': 'http://127.0.0.1:8080/ocr',
+      'imageField': 'file',
+      'imageEncoding': 'b64',
+      'extraBody': {'fileType': 1},
+      'resultPath': 'result.ocrResults[0].prunedResult.rec_texts[*]',
+    },
+  };
+
+  /// 读 144 号槽位的 OCR 配置 JSON；坏 JSON/非 Map 一律回退空表（防御式）。
+  Map<String, dynamic> _readOcrConfig() {
+    try {
+      final decoded = jsonDecode(appdata.settings[aiOcrConfigSettingIndex]);
+      if (decoded is Map<String, dynamic>) return Map.of(decoded);
+    } catch (_) {}
+    return <String, dynamic>{};
+  }
+
+  /// 所有 OCR 字段读写都走 144 这一个 JSON（合并写回）。
+  void _updateOcrConfig(String key, Object? value) {
+    final config = _readOcrConfig();
+    config[key] = value;
+    _setSetting(aiOcrConfigSettingIndex, jsonEncode(config));
+  }
+
+  /// 选中预设模板：一次性回填 template/imageField/imageEncoding/extraBody/
+  /// resultPath，并在端点为空时填默认端点（思路同 Provider 模板回填）。
+  void _applyOcrTemplate(String template) {
+    final config = _readOcrConfig();
+    config['template'] = template;
+    final preset = _ocrTemplatePresets[template];
+    if (preset != null) {
+      config['imageField'] = preset['imageField'];
+      config['imageEncoding'] = preset['imageEncoding'];
+      config['extraBody'] = preset['extraBody'];
+      config['resultPath'] = preset['resultPath'];
+      final currentUrl = config['baseUrl'];
+      if (currentUrl is! String || currentUrl.trim().isEmpty) {
+        config['baseUrl'] = preset['baseUrl'];
+      }
+    }
+    _setSetting(aiOcrConfigSettingIndex, jsonEncode(config));
+  }
+
+  Widget _buildOcrSection() {
+    final config = _readOcrConfig();
+    final type = config['type'] == 'generic' ? 'generic' : 'vision';
+    final template = _ocrTemplatePresets.containsKey(config['template'])
+        ? config['template'] as String
+        : '';
+    final extraBody = config['extraBody'];
+    final extraBodyText = extraBody is Map
+        ? jsonEncode(extraBody)
+        : (extraBody?.toString() ?? '{}');
+    String stringOf(String key) {
+      final value = config[key];
+      return value is String ? value : '';
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        ListTile(
+          title: Text('OCR 接口（图片转文字兜底）'.tl),
+          subtitle: _anyCapabilityEnabled
+              ? null
+              : Text('请先开启至少一项能力'.tl,
+                  style: TextStyle(
+                    color: Theme.of(context).colorScheme.error,
+                    fontSize: 12,
+                  )),
+          trailing: _anyCapabilityEnabled
+              ? Icon(_ocrExpanded ? Icons.expand_less : Icons.expand_more)
+              : null,
+          onTap: _anyCapabilityEnabled
+              ? () => setState(() {
+                    _ocrExpanded = !_ocrExpanded;
+                  })
+              : null,
+        ),
+        if (_anyCapabilityEnabled && _ocrExpanded) ...[
+          SwitchListTile(
+            secondary: const Icon(Icons.document_scanner_outlined),
+            title: Text('启用 OCR 兜底'.tl),
+            subtitle: Text('模型未声明支持视觉时，先把图片经 OCR 转成文字随消息发送'.tl),
+            value: config['enabled'] == true,
+            onChanged: (v) => _updateOcrConfig('enabled', v),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: DropdownButtonFormField<String>(
+              decoration: InputDecoration(
+                labelText: '接口类型'.tl,
+                border: const OutlineInputBorder(),
+                contentPadding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              ),
+              initialValue: type,
+              items: const [
+                DropdownMenuItem(
+                    value: 'vision', child: Text('OpenAI 兼容视觉模型')),
+                DropdownMenuItem(
+                    value: 'generic', child: Text('通用 OCR HTTP 服务')),
+              ],
+              onChanged: (v) {
+                if (v != null) _updateOcrConfig('type', v);
+              },
+            ),
+          ),
+          const SizedBox(height: 12),
+          if (type == 'vision') ...[
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: _OcrTextField(
+                label: 'Base URL'.tl,
+                value: stringOf('baseUrl'),
+                hint: 'http://localhost:11434/v1',
+                onChanged: (v) => _updateOcrConfig('baseUrl', v),
+              ),
+            ),
+            const SizedBox(height: 12),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: _OcrTextField(
+                label: 'API Key'.tl,
+                value: stringOf('apiKey'),
+                obscure: !_showOcrApiKey,
+                onToggleObscure: () =>
+                    setState(() => _showOcrApiKey = !_showOcrApiKey),
+                onChanged: (v) => _updateOcrConfig('apiKey', v),
+              ),
+            ),
+            const SizedBox(height: 12),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: _OcrTextField(
+                label: '模型名'.tl,
+                value: stringOf('modelId'),
+                hint: 'qwen-vl-max / llava 等',
+                onChanged: (v) => _updateOcrConfig('modelId', v),
+              ),
+            ),
+          ] else ...[
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: DropdownButtonFormField<String>(
+                decoration: InputDecoration(
+                  labelText: '服务模板'.tl,
+                  border: const OutlineInputBorder(),
+                  contentPadding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                ),
+                initialValue: template,
+                items: const [
+                  DropdownMenuItem(value: '', child: Text('自定义')),
+                  DropdownMenuItem(value: 'umi', child: Text('Umi-OCR')),
+                  DropdownMenuItem(
+                      value: 'paddle_hub', child: Text('PaddleOCR hub serving')),
+                  DropdownMenuItem(value: 'paddlex', child: Text('PaddleX')),
+                ],
+                onChanged: (v) {
+                  if (v != null) _applyOcrTemplate(v);
+                },
+              ),
+            ),
+            const SizedBox(height: 12),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: _OcrTextField(
+                label: '端点 URL（完整，不拼接）'.tl,
+                value: stringOf('baseUrl'),
+                hint: 'http://127.0.0.1:1224/api/ocr',
+                onChanged: (v) => _updateOcrConfig('baseUrl', v),
+              ),
+            ),
+            const SizedBox(height: 12),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: _OcrTextField(
+                label: '鉴权头（Header名:值，可空）'.tl,
+                value: stringOf('authHeader'),
+                hint: 'Authorization:Bearer xxx',
+                onChanged: (v) => _updateOcrConfig('authHeader', v),
+              ),
+            ),
+            const SizedBox(height: 12),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: _OcrTextField(
+                label: '图片字段名'.tl,
+                value: stringOf('imageField'),
+                hint: 'base64',
+                onChanged: (v) => _updateOcrConfig('imageField', v),
+              ),
+            ),
+            const SizedBox(height: 12),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: DropdownButtonFormField<String>(
+                decoration: InputDecoration(
+                  labelText: '编码形态'.tl,
+                  border: const OutlineInputBorder(),
+                  contentPadding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                ),
+                initialValue: const {'b64', 'b64_array', 'data_uri'}
+                        .contains(config['imageEncoding'])
+                    ? config['imageEncoding'] as String
+                    : 'b64',
+                items: const [
+                  DropdownMenuItem(value: 'b64', child: Text('纯 base64')),
+                  DropdownMenuItem(
+                      value: 'b64_array', child: Text('base64 包数组')),
+                  DropdownMenuItem(
+                      value: 'data_uri', child: Text('data URI 带前缀')),
+                ],
+                onChanged: (v) {
+                  if (v != null) _updateOcrConfig('imageEncoding', v);
+                },
+              ),
+            ),
+            const SizedBox(height: 12),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: _OcrTextField(
+                label: '额外请求体 JSON'.tl,
+                value: extraBodyText,
+                hint: '{"options":{"data.format":"text"}}',
+                maxLines: 3,
+                // 合法 JSON 对象存 Map；中间态/非法 JSON 原样存字符串保住用户
+                // 输入（AiOcrConfig.fromSettings 对非 Map 防御式回退空表）。
+                onChanged: (v) {
+                  Object? parsed;
+                  try {
+                    parsed = jsonDecode(v);
+                  } catch (_) {
+                    parsed = null;
+                  }
+                  _updateOcrConfig('extraBody', parsed is Map ? parsed : v);
+                },
+              ),
+            ),
+            const SizedBox(height: 12),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: _OcrTextField(
+                label: '结果取值路径'.tl,
+                value: stringOf('resultPath'),
+                hint: 'data 或 results[0][*].text',
+                onChanged: (v) => _updateOcrConfig('resultPath', v),
+              ),
+            ),
+          ],
+          const SizedBox(height: 12),
+        ],
+      ],
+    );
+  }
 
   @override
   void initState() {
@@ -682,6 +975,13 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
         settingIndex: aiCapabilityManageFavoritesSettingIndex,
         leading: const Icon(Icons.bookmark_add_outlined),
       ),
+      _buildSwitch(
+        title: '以图搜源'.tl,
+        subtitle:
+            'search_by_image：对聊天中发送的图片在 soutubot.moe 反向搜索（需通过 Cloudflare 验证）'.tl,
+        settingIndex: aiCapabilitySearchByImageSettingIndex,
+        leading: const Icon(Icons.image_search_outlined),
+      ),
       _buildMaxToolRoundsTile(),
       const Divider(),
       // 17号计划步骤 10：消息索引相关设置。
@@ -695,6 +995,9 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
       _buildIndexBarMaxTicksTile(),
       const Divider(),
       _buildProviderSection(),
+      const Divider(),
+      // 15轮03号计划：OCR 接口配置区。
+      _buildOcrSection(),
       const Divider(),
       _buildPromptTagSection(),
       const Divider(),
@@ -938,6 +1241,83 @@ class _ModelIdFieldState extends State<_ModelIdField> {
           ),
         );
       },
+    );
+  }
+}
+
+/// 15轮03号计划：OCR 配置 JSON 子字段的文本框。
+/// 既有 [_EditableSettingField]/[_ObscurableSettingField] 绑定整个 settingIndex
+/// 槽位，不能复用于 JSON 子字段；本组件把 `settingIndex` 换成 `value` 初值 +
+/// `onChanged` 回调，并加可选 `obscure`/`onToggleObscure` 覆盖 API Key 场景。
+/// 模板回填等外部改值经 [didUpdateWidget] 同步显示；用户自己键入时
+/// `value == _ctrl.text`，不会重置光标。
+class _OcrTextField extends StatefulWidget {
+  const _OcrTextField({
+    required this.label,
+    required this.value,
+    this.hint = '',
+    this.maxLines = 1,
+    this.obscure = false,
+    this.onToggleObscure,
+    required this.onChanged,
+  });
+
+  final String label;
+  final String value;
+  final String hint;
+  final int maxLines;
+  final bool obscure;
+  final VoidCallback? onToggleObscure;
+  final ValueChanged<String> onChanged;
+
+  @override
+  State<_OcrTextField> createState() => _OcrTextFieldState();
+}
+
+class _OcrTextFieldState extends State<_OcrTextField> {
+  late final TextEditingController _ctrl;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = TextEditingController(text: widget.value);
+  }
+
+  @override
+  void didUpdateWidget(_OcrTextField oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.value != oldWidget.value && widget.value != _ctrl.text) {
+      _ctrl.text = widget.value;
+    }
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return TextField(
+      controller: _ctrl,
+      maxLines: widget.obscure ? 1 : widget.maxLines,
+      obscureText: widget.obscure,
+      decoration: InputDecoration(
+        labelText: widget.label,
+        hintText: widget.hint,
+        border: const OutlineInputBorder(),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        suffixIcon: widget.onToggleObscure == null
+            ? null
+            : IconButton(
+                icon: Icon(
+                  widget.obscure ? Icons.visibility_off : Icons.visibility,
+                ),
+                onPressed: widget.onToggleObscure,
+              ),
+      ),
+      onChanged: widget.onChanged,
     );
   }
 }
