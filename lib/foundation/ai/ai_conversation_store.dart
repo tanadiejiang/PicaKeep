@@ -325,6 +325,11 @@ class AiConversationStore {
     if (msg.attachmentPaths.isNotEmpty) {
       json['attachmentPaths'] = msg.attachmentPaths;
     }
+    // 15轮06号计划：思考过程条件写入（同上，与 deserializeAiChatMessage 成对；
+    // 漏写则重启后旧消息的思考块永久消失）。
+    if (msg.reasoningText != null && msg.reasoningText!.isNotEmpty) {
+      json['reasoningText'] = msg.reasoningText;
+    }
 
     // toolData 序列化：仅支持基本类型
     if (msg.toolData != null) {
@@ -390,6 +395,8 @@ class AiConversationStore {
       toolName: json['toolName'] as String?,
       toolArgs: json['toolArgs'] as Map<String, dynamic>?,
       toolData: json['toolData'],
+      // 15轮06号计划：旧会话无该字段 → null（不升 format version）。
+      reasoningText: json['reasoningText']?.toString(),
       promptTagNames:
           (json['promptTagNames'] as List?)?.map((name) => name.toString()) ??
               const <String>[],

@@ -15,6 +15,7 @@ import 'package:picakeep/base.dart';
 import 'package:picakeep/components/scrollable_list/scrollable_positioned_list.dart';
 import 'package:picakeep/foundation/ai/ai_attachments.dart';
 import 'package:picakeep/foundation/ai/ai_conversation.dart';
+import 'package:picakeep/foundation/ai/balance_client.dart';
 import 'package:picakeep/foundation/ai/ai_conversation_store.dart';
 import 'package:picakeep/foundation/ai/ai_download_queue.dart';
 import 'package:picakeep/foundation/ai/ai_prompt_tags.dart';
@@ -1517,8 +1518,7 @@ class _AiChatPageState extends State<AiChatPage>
       allowMultiple: true,
     );
     if (result == null || !mounted) return;
-    final paths =
-        result.files.map((f) => f.path).whereType<String>().toList();
+    final paths = result.files.map((f) => f.path).whereType<String>().toList();
     var overflow = false;
     setState(() {
       overflow = mergePendingAiAttachmentSelection(_pendingAttachments, paths);
@@ -1567,8 +1567,7 @@ class _AiChatPageState extends State<AiChatPage>
                 top: 0,
                 right: 0,
                 child: GestureDetector(
-                  onTap: () =>
-                      setState(() => _pendingAttachments.removeAt(i)),
+                  onTap: () => setState(() => _pendingAttachments.removeAt(i)),
                   child: Container(
                     width: 16,
                     height: 16,
@@ -1626,9 +1625,10 @@ class _AiChatPageState extends State<AiChatPage>
       // send() 内部对空文本+无附件会直接 return false；三态桥接语：
       // 图片桥接优先于标签桥接——turn_context 已承载标签语义，而图片-only
       // 消息若放任标签桥接语进 parse，模型会收到与图片无关的导向语。
+      // 搜图路径图片给工具用，不用"请查看并结合我发送的图片回答"引导模型。
       final effectiveText = text.isNotEmpty
           ? text
-          : _pendingAttachments.isNotEmpty
+          : (_pendingAttachments.isNotEmpty && !searchByImageRequested)
               ? aiImageOnlyUserBridge
               : aiPromptTagOnlyUserBridge;
 
@@ -1847,7 +1847,10 @@ class _AiChatPageState extends State<AiChatPage>
                                       final item = items[index];
                                       if (item is _SingleItem) {
                                         return _MessageBubble(
-                                            message: item.message);
+                                          message: item.message,
+                                          streaming: identical(item.message,
+                                              _controller!.streamingMessage),
+                                        );
                                       } else if (item is _ToolGroup) {
                                         return _ToolGroupCard(group: item);
                                       }
@@ -2125,14 +2128,23 @@ class _AiChatPageState extends State<AiChatPage>
                             ),
                           ),
                           const SizedBox(width: 8),
-                          FilledButton(
-                            onPressed: _controller!.isLoading ||
-                                    _controller!.pendingDownload != null ||
-                                    _sendInFlight
-                                ? null
-                                : _send,
-                            child: Text('发送'.tl),
-                          ),
+                          // 15轮07号计划：AI 回复进行中换为「停止」按钮；
+                          // _sendInFlight（压缩落盘期）不显示停止（本地操作，极短）。
+                          if (_controller!.isLoading && !_sendInFlight)
+                            IconButton.filled(
+                              icon: const Icon(Icons.stop_rounded),
+                              tooltip: '停止生成',
+                              onPressed: () => _controller?.stopGeneration(),
+                            )
+                          else
+                            FilledButton(
+                              onPressed: _controller!.isLoading ||
+                                      _controller!.pendingDownload != null ||
+                                      _sendInFlight
+                                  ? null
+                                  : _send,
+                              child: Text('发送'.tl),
+                            ),
                         ],
                       ),
                     ],
@@ -2965,9 +2977,12 @@ class _AiAttachmentPreviewPage extends StatelessWidget {
 
 /// 消息气泡
 class _MessageBubble extends StatelessWidget {
-  const _MessageBubble({required this.message});
+  const _MessageBubble({required this.message, this.streaming = false});
 
   final AiChatMessage message;
+
+  /// 15轮06号计划：该条是否为“流式进行中”的那条消息（决定思考块自动展开）。
+  final bool streaming;
 
   @override
   Widget build(BuildContext context) {
@@ -3059,56 +3074,72 @@ class _MessageBubble extends StatelessWidget {
               color: colorScheme.secondaryContainer,
               borderRadius: BorderRadius.circular(12),
             ),
-            child: SelectionArea(
-              child: MarkdownBody(
-                data: message.text,
-                styleSheet:
-                    MarkdownStyleSheet.fromTheme(Theme.of(context)).copyWith(
-                  p: TextStyle(
-                    color: colorScheme.onSecondaryContainer,
-                    fontSize: 14,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // 15轮06号计划：思考块。渲染与否由设置147控制（关掉只是不渲染，
+                // 内容照常接收+存档）。
+                if (message.reasoningText != null &&
+                    message.reasoningText!.isNotEmpty &&
+                    appdata.settings[aiShowReasoningSettingIndex] == '1')
+                  AiReasoningSection(
+                    reasoningText: message.reasoningText!,
+                    streaming: streaming,
+                    hasContent: message.text.trim().isNotEmpty,
                   ),
-                  strong: TextStyle(
-                    color: colorScheme.onSecondaryContainer,
-                    fontWeight: FontWeight.bold,
-                    fontSize: 14,
-                  ),
-                  em: TextStyle(
-                    color: colorScheme.onSecondaryContainer,
-                    fontStyle: FontStyle.italic,
-                    fontSize: 14,
-                  ),
-                  code: TextStyle(
-                    color: colorScheme.onSecondaryContainer,
-                    backgroundColor: colorScheme.surfaceContainerHighest,
-                    fontFamily: 'monospace',
-                    fontSize: 13,
-                  ),
-                  codeblockDecoration: BoxDecoration(
-                    color: colorScheme.surfaceContainerHighest,
-                    borderRadius: BorderRadius.circular(4),
-                  ),
-                  tableBody: TextStyle(
-                    color: colorScheme.onSecondaryContainer,
-                    fontSize: 13,
-                  ),
-                  tableHead: TextStyle(
-                    color: colorScheme.onSecondaryContainer,
-                    fontWeight: FontWeight.bold,
-                    fontSize: 13,
-                  ),
-                  tableBorder: TableBorder.all(
-                    color: colorScheme.outline.withValues(alpha: 0.4),
-                    width: 0.5,
-                  ),
-                  listBullet: TextStyle(
-                    color: colorScheme.onSecondaryContainer,
-                    fontSize: 14,
+                SelectionArea(
+                  child: MarkdownBody(
+                    data: message.text,
+                    styleSheet: MarkdownStyleSheet.fromTheme(Theme.of(context))
+                        .copyWith(
+                      p: TextStyle(
+                        color: colorScheme.onSecondaryContainer,
+                        fontSize: 14,
+                      ),
+                      strong: TextStyle(
+                        color: colorScheme.onSecondaryContainer,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 14,
+                      ),
+                      em: TextStyle(
+                        color: colorScheme.onSecondaryContainer,
+                        fontStyle: FontStyle.italic,
+                        fontSize: 14,
+                      ),
+                      code: TextStyle(
+                        color: colorScheme.onSecondaryContainer,
+                        backgroundColor: colorScheme.surfaceContainerHighest,
+                        fontFamily: 'monospace',
+                        fontSize: 13,
+                      ),
+                      codeblockDecoration: BoxDecoration(
+                        color: colorScheme.surfaceContainerHighest,
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                      tableBody: TextStyle(
+                        color: colorScheme.onSecondaryContainer,
+                        fontSize: 13,
+                      ),
+                      tableHead: TextStyle(
+                        color: colorScheme.onSecondaryContainer,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 13,
+                      ),
+                      tableBorder: TableBorder.all(
+                        color: colorScheme.outline.withValues(alpha: 0.4),
+                        width: 0.5,
+                      ),
+                      listBullet: TextStyle(
+                        color: colorScheme.onSecondaryContainer,
+                        fontSize: 14,
+                      ),
+                    ),
+                    selectable: false,
+                    softLineBreak: true,
                   ),
                 ),
-                selectable: false,
-                softLineBreak: true,
-              ),
+              ],
             ),
           ),
         );
@@ -3156,6 +3187,103 @@ class _MessageBubble extends StatelessWidget {
       default:
         return const SizedBox.shrink();
     }
+  }
+}
+
+/// 15轮06号计划：assistant 气泡内的思考过程折叠块。
+///
+/// 折叠状态机（_userChoice == null 时全自动）：
+/// - 自动值 = streaming && !hasContent：流式思考期展开；正文首字到达那一帧
+///   hasContent 翻 true → 自动值变 false，即“思考完自动折叠”——不需要显式
+///   翻转状态，也不在流式期间反复切换（性能护栏：折叠只在 content 首字
+///   到达的同一帧发生一次，此时正文尚短，高度突变被贴底跟随的 200dp 容差
+///   + 该次 notify 触发的 animateTo 吸收）。
+/// - 用户点击后 _userChoice 接管，自动逻辑不再覆盖（流式中手动展开/收起
+///   都被尊重）。
+/// - 列表 item 滚远回收后 State 重建，_userChoice 归 null（历史消息
+///   streaming=false → 默认折叠），与 _ToolGroupCardState._expanded 现状一致。
+///
+/// 公开类而非私有：本文件其余折叠卡（AiToolResultCard）同为公开，且
+/// widget 测试需直接泵该 widget（见 test/ai_reasoning_section_test.dart）。
+class AiReasoningSection extends StatefulWidget {
+  const AiReasoningSection({
+    super.key,
+    required this.reasoningText,
+    required this.streaming,
+    required this.hasContent,
+  });
+
+  final String reasoningText;
+  final bool streaming;
+  final bool hasContent;
+
+  @override
+  State<AiReasoningSection> createState() => _AiReasoningSectionState();
+}
+
+class _AiReasoningSectionState extends State<AiReasoningSection> {
+  bool? _userChoice;
+
+  bool get _expanded => _userChoice ?? (widget.streaming && !widget.hasContent);
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final dimColor = colorScheme.onSecondaryContainer.withValues(alpha: 0.6);
+    final thinkingLive = widget.streaming && !widget.hasContent;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        // 紧凑标题行：16px chevron（用户要求“展开按钮不用很大”）+ 小字文案，
+        // 整行可点切换。
+        InkWell(
+          onTap: () => setState(() => _userChoice = !_expanded),
+          borderRadius: BorderRadius.circular(4),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 2),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  _expanded ? Icons.expand_less : Icons.chevron_right,
+                  size: 16,
+                  color: dimColor,
+                ),
+                const SizedBox(width: 2),
+                Text(
+                  thinkingLive ? '思考中…' : '思考过程',
+                  style: TextStyle(fontSize: 11, color: dimColor),
+                ),
+                if (thinkingLive) ...[
+                  const SizedBox(width: 6),
+                  SizedBox(
+                    width: 10,
+                    height: 10,
+                    child: CircularProgressIndicator(
+                        strokeWidth: 1.5, color: dimColor),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ),
+        if (_expanded)
+          Padding(
+            padding: const EdgeInsets.only(left: 18, top: 2, bottom: 6),
+            // 点击折叠 + 长按自由选择共存方案：SelectableText.onTap 只在
+            // “无拖动的单击抬起”时触发（→ 收起）；长按走其自带的选词 +
+            // 选择柄拖拽（与用户消息 _buildSelectableUserText 的
+            // SelectableText 同款自由选择体验）；桌面端鼠标按下+拖动是
+            // 拖选（不触发 onTap），单击收起。
+            child: SelectableText(
+              widget.reasoningText,
+              onTap: () => setState(() => _userChoice = false),
+              style: TextStyle(fontSize: 12, height: 1.4, color: dimColor),
+            ),
+          ),
+      ],
+    );
   }
 }
 
@@ -3663,10 +3791,16 @@ class _ConversationDrawer extends StatefulWidget {
 class _ConversationDrawerState extends State<_ConversationDrawer> {
   Future<List<AiConversationMeta>>? _indexFuture;
 
+  /// 15轮06号计划：当前 provider 的余额。Scaffold 的 drawer 子树只在打开时
+  /// inflate、关闭即 dispose，所以放 initState 天然满足“每次打开抽屉自动
+  /// 刷新”，不需要 Scaffold.onDrawerChanged。
+  Future<AiBalanceResult>? _balanceFuture;
+
   @override
   void initState() {
     super.initState();
     _indexFuture = AiConversationStore.loadIndex();
+    _balanceFuture = AiBalanceClient.fetch();
     // 41号计划：订阅注册表的 loading 广播，使某会话进入/退出后台 AI 处理时，
     // 侧栏对应行的 trailing 能够重新渲染，而不需要等待下一次手动 _refresh()。
     AiConversationRegistry.instance.addListener(_onRegistryChanged);
@@ -3707,6 +3841,41 @@ class _ConversationDrawerState extends State<_ConversationDrawer> {
           ListTile(
             leading: const Icon(Icons.add),
             title: const Text('新建会话'),
+            // 15轮06号计划：当前 provider 余额。不支持余额查询的服务商整个
+            // 不显示（不占位、不报错）；只有 key 错/网络失败才用红字提示。
+            trailing: FutureBuilder<AiBalanceResult>(
+              future: _balanceFuture,
+              builder: (context, snapshot) {
+                final theme = Theme.of(context);
+                final colorScheme = theme.colorScheme;
+                // 字号 = 标题（bodyLarge，默认 16sp）的 2/3 ≈ 10.7sp。按主题
+                // 基准算而非写死，避免用户调系统字号后比例失衡。
+                final baseSize = theme.textTheme.bodyLarge?.fontSize ?? 16;
+                final style = theme.textTheme.bodyLarge?.copyWith(
+                  fontSize: baseSize * 2 / 3,
+                  color: colorScheme.onSurfaceVariant,
+                );
+                if (snapshot.connectionState != ConnectionState.done) {
+                  return SizedBox(
+                    width: baseSize * 2 / 3,
+                    height: baseSize * 2 / 3,
+                    child: const CircularProgressIndicator(strokeWidth: 1.5),
+                  );
+                }
+                final result = snapshot.data;
+                if (result == null ||
+                    result.status == AiBalanceStatus.unsupported) {
+                  return const SizedBox.shrink();
+                }
+                if (result.status == AiBalanceStatus.error) {
+                  return Text(
+                    result.message ?? '余额获取失败',
+                    style: style?.copyWith(color: colorScheme.error),
+                  );
+                }
+                return Text(result.display, style: style);
+              },
+            ),
             onTap: () {
               Navigator.pop(context);
               widget.onNewConversation();

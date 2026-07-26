@@ -176,6 +176,8 @@ class Appdata {
     '0', //143 aiModelSupportsVision 当前模型支持图片识别（视觉）
     '{}', //144 aiOcrConfig OCR 接口配置 JSON
     '0', //145 aiCapabilitySearchByImage 以图搜源
+    '1', //146 aiThinkingEnabled 开启思考（关=请求带 thinking:disabled）
+    '1', //147 aiShowReasoning 会话中显示思考过程（纯 UI，不影响接收与存档）
   ];
 
   List<String> implicitData = [

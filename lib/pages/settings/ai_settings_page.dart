@@ -280,6 +280,21 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
             settingIndex: aiModelSupportsVisionSettingIndex,
             leading: const Icon(Icons.remove_red_eye_outlined),
           ),
+          // 15轮06号计划：思考两个独立开关（请求侧 / 展示侧）。
+          _buildSwitch(
+            title: '开启思考'.tl,
+            subtitle:
+                '关闭时请求带 thinking:disabled；仅 DeepSeek 等支持该字段的服务生效，其他服务如报错请保持开启'
+                    .tl,
+            settingIndex: aiThinkingEnabledSettingIndex,
+            leading: const Icon(Icons.psychology_outlined),
+          ),
+          _buildSwitch(
+            title: '显示思考过程'.tl,
+            subtitle: '在会话中流式展示并可展开思考；关闭后仍会接收并保存思考内容'.tl,
+            settingIndex: aiShowReasoningSettingIndex,
+            leading: const Icon(Icons.visibility_outlined),
+          ),
           const SizedBox(height: 12),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -426,8 +441,7 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
               ),
               initialValue: type,
               items: const [
-                DropdownMenuItem(
-                    value: 'vision', child: Text('OpenAI 兼容视觉模型')),
+                DropdownMenuItem(value: 'vision', child: Text('OpenAI 兼容视觉模型')),
                 DropdownMenuItem(
                     value: 'generic', child: Text('通用 OCR HTTP 服务')),
               ],
@@ -484,7 +498,8 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
                   DropdownMenuItem(value: '', child: Text('自定义')),
                   DropdownMenuItem(value: 'umi', child: Text('Umi-OCR')),
                   DropdownMenuItem(
-                      value: 'paddle_hub', child: Text('PaddleOCR hub serving')),
+                      value: 'paddle_hub',
+                      child: Text('PaddleOCR hub serving')),
                   DropdownMenuItem(value: 'paddlex', child: Text('PaddleX')),
                 ],
                 onChanged: (v) {
@@ -978,7 +993,8 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
       _buildSwitch(
         title: '以图搜源'.tl,
         subtitle:
-            'search_by_image：对聊天中发送的图片在 soutubot.moe 反向搜索（需通过 Cloudflare 验证）'.tl,
+            'search_by_image：对聊天中发送的图片在 soutubot.moe 反向搜索（需通过 Cloudflare 验证）'
+                .tl,
         settingIndex: aiCapabilitySearchByImageSettingIndex,
         leading: const Icon(Icons.image_search_outlined),
       ),
@@ -1148,11 +1164,18 @@ class _ModelIdFieldState extends State<_ModelIdField> {
   late TextEditingController _ctrl;
   late FocusNode _focusNode;
 
+  // 15轮06号计划：模型列表拉取态。拉到了就只显示拉取结果（决策5），
+  // 失败退回预置/手输并在 helperText 提示。
+  List<String>? _fetchedModels;
+  bool _loading = false;
+  String? _fetchError;
+
   @override
   void initState() {
     super.initState();
     _ctrl = TextEditingController(text: appdata.settings[widget.settingIndex]);
     _focusNode = FocusNode();
+    _focusNode.addListener(_onFocusChanged);
   }
 
   @override
@@ -1162,43 +1185,89 @@ class _ModelIdFieldState extends State<_ModelIdField> {
     if (_ctrl.text != current) {
       _ctrl.text = current;
     }
+    // 切模板（presets 变化）时作废上一模板的拉取结果。
+    // 本文件是 settings_page.dart 的 part，不能自带 import；material 的
+    // re-export 不含 foundation 的 listEquals，故手写等价比较。
+    if (!_sameStringList(widget.presets, oldWidget.presets)) {
+      _fetchedModels = null;
+      _fetchError = null;
+    }
   }
 
   @override
   void dispose() {
+    _focusNode.removeListener(_onFocusChanged);
     _ctrl.dispose();
     _focusNode.dispose();
     super.dispose();
   }
 
+  void _onFocusChanged() {
+    // “展开就自动获取”：下拉靠聚焦触发，聚焦瞬间即拉取。缓存 + in-flight
+    // 去重保证反复聚焦不重复请求（成功 10 分钟 / 失败 30 秒内直接命中）。
+    if (_focusNode.hasFocus) _triggerFetch();
+  }
+
+  Future<void> _triggerFetch() async {
+    setState(() {
+      _loading = true;
+      _fetchError = null;
+    });
+    final result = await ModelListClient.fetch();
+    if (!mounted) return;
+    setState(() {
+      _loading = false;
+      if (result.ok) {
+        _fetchedModels = result.models; // 决策5：成功后只显示拉取到的
+        _fetchError = null;
+      } else {
+        _fetchedModels = null; // 失败退回预置/手输
+        _fetchError = result.error;
+      }
+    });
+    _refreshOptionsView();
+  }
+
+  /// 拉取结果就绪后强制 RawAutocomplete 重跑 optionsBuilder：
+  /// RawAutocomplete 只监听 controller/focus 变化，外部 setState 不会刷新
+  /// 已弹出的候选层。用 composing 微扰（同文本、不同 composing）触发两次
+  /// value 变更再复原，文本与光标不动。
+  void _refreshOptionsView() {
+    if (!_focusNode.hasFocus) return;
+    final value = _ctrl.value;
+    _ctrl.value = value.copyWith(composing: const TextRange(start: 0, end: 0));
+    _ctrl.value = value;
+  }
+
+  List<String> get _effectivePresets =>
+      (_fetchedModels != null && _fetchedModels!.isNotEmpty)
+          ? _fetchedModels!
+          : widget.presets;
+
+  static bool _sameStringList(List<String> a, List<String> b) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i] != b[i]) return false;
+    }
+    return true;
+  }
+
   @override
   Widget build(BuildContext context) {
-    if (widget.presets.isEmpty) {
-      return TextField(
-        controller: _ctrl,
-        decoration: InputDecoration(
-          labelText: 'Model ID'.tl,
-          hintText: widget.hint,
-          border: const OutlineInputBorder(),
-          contentPadding:
-              const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        ),
-        onChanged: widget.onChanged,
-      );
-    }
-
+    // 15轮06号计划：所有模板都可能拉到列表，统一走 RawAutocomplete
+    // （options 为空时候选层本来就不显示，行为等同普通输入框）。
     return RawAutocomplete<String>(
       textEditingController: _ctrl,
       focusNode: _focusNode,
       optionsBuilder: (textEditingValue) {
+        final presets = _effectivePresets;
         final query = textEditingValue.text.trim().toLowerCase();
         // 文本为空，或当前文本本身就是某个预设的完整值（意味着用户是刚选中/
         // 尚未主动做过筛选输入），都展示全部预设，而不是按 contains 收窄成
         // 只剩自己一项——否则点开下拉会看不到另一个预设选项。
-        final isExactPreset =
-            widget.presets.any((p) => p.toLowerCase() == query);
-        if (query.isEmpty || isExactPreset) return widget.presets;
-        return widget.presets.where((p) => p.toLowerCase().contains(query));
+        final isExactPreset = presets.any((p) => p.toLowerCase() == query);
+        if (query.isEmpty || isExactPreset) return presets;
+        return presets.where((p) => p.toLowerCase().contains(query));
       },
       onSelected: widget.onChanged,
       fieldViewBuilder: (context, controller, focusNode, onSubmitted) {
@@ -1211,7 +1280,28 @@ class _ModelIdFieldState extends State<_ModelIdField> {
             border: const OutlineInputBorder(),
             contentPadding:
                 const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-            suffixIcon: const Icon(Icons.arrow_drop_down),
+            helperText:
+                _fetchError == null ? null : '模型列表获取失败：$_fetchError（可手动输入）',
+            helperMaxLines: 2,
+            helperStyle: TextStyle(
+                color: Theme.of(context).colorScheme.error, fontSize: 11),
+            suffixIcon: _loading
+                ? const Padding(
+                    padding: EdgeInsets.all(12),
+                    child: SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    ),
+                  )
+                // 点箭头 = 聚焦（弹下拉）+ 触发拉取，与聚焦路径共用缓存去重。
+                : IconButton(
+                    icon: const Icon(Icons.arrow_drop_down),
+                    onPressed: () {
+                      _focusNode.requestFocus();
+                      _triggerFetch();
+                    },
+                  ),
           ),
           onChanged: widget.onChanged,
         );

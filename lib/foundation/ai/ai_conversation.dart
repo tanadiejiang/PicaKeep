@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:math';
 
+import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:picakeep/base.dart';
 import 'package:picakeep/foundation/ai/ai_attachments.dart';
@@ -58,12 +59,17 @@ class AiChatMessage {
   /// （'{conversationId}/{fileName}'，'/' 分隔），气泡缩略图渲染用。
   final List<String> attachmentPaths;
 
+  /// 15轮06号计划：assistant 消息的思考过程（reasoning），持久化落盘；
+  /// 是否渲染由设置 147（aiShowReasoning）控制，与是否接收/存档无关。
+  final String? reasoningText;
+
   AiChatMessage({
     required this.type,
     required this.text,
     this.toolName,
     this.toolArgs,
     this.toolData,
+    this.reasoningText,
     Iterable<String> promptTagNames = const <String>[],
     Iterable<String> activePersistentTagNames = const <String>[],
     Iterable<String> attachmentPaths = const <String>[],
@@ -90,6 +96,7 @@ class AiChatMessage {
         toolName = null,
         toolArgs = null,
         toolData = null,
+        reasoningText = null,
         promptTagNames = List<String>.unmodifiable(
           promptTagNames
               .map(_normalizePromptTagName)
@@ -103,7 +110,7 @@ class AiChatMessage {
         attachmentPaths = List<String>.unmodifiable(attachmentPaths),
         createdAt = DateTime.now();
 
-  AiChatMessage.assistant(this.text)
+  AiChatMessage.assistant(this.text, {this.reasoningText})
       : type = AiChatMessageType.assistant,
         toolName = null,
         toolArgs = null,
@@ -119,6 +126,7 @@ class AiChatMessage {
   })  : type = AiChatMessageType.toolCall,
         text = '正在调用工具：$toolName',
         toolData = null,
+        reasoningText = null,
         promptTagNames = const <String>[],
         activePersistentTagNames = const <String>[],
         attachmentPaths = const <String>[],
@@ -133,6 +141,7 @@ class AiChatMessage {
         text = ok ? (message ?? '工具执行成功') : (message ?? '工具执行失败'),
         toolArgs = null,
         toolData = data,
+        reasoningText = null,
         promptTagNames = const <String>[],
         activePersistentTagNames = const <String>[],
         attachmentPaths = const <String>[],
@@ -144,6 +153,7 @@ class AiChatMessage {
         toolName = null,
         toolArgs = null,
         toolData = {'items': items},
+        reasoningText = null,
         promptTagNames = const <String>[],
         activePersistentTagNames = const <String>[],
         attachmentPaths = const <String>[],
@@ -154,6 +164,7 @@ class AiChatMessage {
         toolName = null,
         toolArgs = null,
         toolData = null,
+        reasoningText = null,
         promptTagNames = const <String>[],
         activePersistentTagNames = const <String>[],
         attachmentPaths = const <String>[],
@@ -166,6 +177,9 @@ class AiChatMessage {
       if (toolName != null) 'toolName': toolName,
       if (toolArgs != null) 'toolArgs': toolArgs,
       if (toolData != null) 'toolData': toolData,
+      // 15轮06号计划：思考过程随会话存档落盘（不升 format version）。
+      if (reasoningText != null && reasoningText!.isNotEmpty)
+        'reasoningText': reasoningText,
       if (promptTagNames.isNotEmpty) 'promptTagNames': promptTagNames,
       if (activePersistentTagNames.isNotEmpty)
         'activePersistentTagNames': activePersistentTagNames,
@@ -184,6 +198,8 @@ class AiChatMessage {
       toolName: json['toolName']?.toString(),
       toolArgs: (json['toolArgs'] as Map?)?.cast<String, dynamic>(),
       toolData: json['toolData'],
+      // 旧会话没有该字段 → null（不升 format version）。
+      reasoningText: json['reasoningText']?.toString(),
       promptTagNames:
           (json['promptTagNames'] as List?)?.map((name) => name.toString()) ??
               const <String>[],
@@ -450,6 +466,34 @@ class AiConversationController extends ChangeNotifier {
   bool? _persistentLocalOnly;
   _ActiveTurnContext? _activeTurnContext;
   final AiChatRequestForTesting? _chatRequestForTesting;
+
+  // ── 15轮06号计划：流式进行中 assistant 气泡 ──────────────────────────────
+  // AiChatMessage.text 是 final：流式采用“末元素整体替换为新实例”更新，
+  // notify 节流 ≥80ms（性能护栏，见 ai_chat_page.dart 的贴底跟随注释），
+  // 收口必 flush。
+  int? _streamingMessageIndex;
+  final StringBuffer _streamReasoning = StringBuffer();
+  final StringBuffer _streamContent = StringBuffer();
+  DateTime _lastStreamNotify = DateTime.fromMillisecondsSinceEpoch(0);
+  static const _streamNotifyInterval = Duration(milliseconds: 80);
+
+  // ── 15轮07号计划：用户主动停止 ───────────────────────────────────────────
+  /// 当前进行中的 LLM 请求的取消令牌；null 表示当前无进行中请求。
+  /// 每次 _runLoop 开始前新建，请求完成（无论成功/失败/取消）后置 null。
+  CancelToken? _llmCancelToken;
+
+  /// 取消当前进行中的 LLM 流式请求。幂等：未在进行中时无副作用。
+  /// 取消后 _runLoop 会收到 LlmResponse(error: null)，走空响应路径正常收尾，
+  /// isLoading 归零，聊天流不留"进行中"残影。
+  void stopGeneration() {
+    _llmCancelToken?.cancel('用户主动停止');
+    _llmCancelToken = null;
+  }
+
+  /// 供 UI 判断某条消息是否是流式进行中的那条（identical 比对实例）。
+  AiChatMessage? get streamingMessage => _streamingMessageIndex == null
+      ? null
+      : displayMessages[_streamingMessageIndex!];
 
   /// 15轮03号计划：OCR 请求入口。生产路径为 [OcrClient.recognize]，
   /// 测试可经 [restoreForTesting] 注入假实现。
@@ -756,13 +800,16 @@ class AiConversationController extends ChangeNotifier {
     var userQuery = parsed.userText;
     final visionEnabled =
         appdata.settings[aiModelSupportsVisionSettingIndex] == '1';
-    if (attachmentPaths.isNotEmpty && !visionEnabled) {
+    // 15轮05号计划（提前到 OCR 检查前）：`#搜图` 手输标签与面板 chip 两条路径
+    // 任一触发即置位；搜图路径图片只给工具用，完全绕开 OCR/视觉通道。
+    // 命令语义只作用于当轮，不进任何持久化链路。
+    final searchByImageRequested = searchByImage || parsed.searchByImage;
+    if (attachmentPaths.isNotEmpty && !visionEnabled && !searchByImageRequested) {
       final ocrConfig = AiOcrConfig.fromSettings();
       if (!ocrConfig.usable) {
         const message = '当前模型未声明支持图片识别，且 OCR 接口未启用或未配置完整，无法发送图片。'
             '请在设置 → AI 中开启视觉开关或配置 OCR 接口。';
         displayMessages.add(AiChatMessage.error(message));
-        error = message;
         notifyListeners();
         return false;
       }
@@ -775,7 +822,6 @@ class AiConversationController extends ChangeNotifier {
         if (response.error != null) {
           final message = '第 ${i + 1} 张图片文字识别失败：${response.error}';
           displayMessages.add(AiChatMessage.error(message));
-          error = message;
           isLoading = false;
           notifyListeners();
           return false; // 不静默丢图（决策C）；此时未动 history/长期状态
@@ -805,10 +851,6 @@ class AiConversationController extends ChangeNotifier {
         resetRequested || selectedSources.isEmpty ? null : selectedSources;
     final localOnlyRequested = localOnly || parsed.localOnly;
     // 15轮05号计划：`#搜图` 手输标签与面板 chip 两条路径任一触发即置位；
-    // 命令语义只作用于当轮，不进任何持久化链路（粘性状态会让后续每轮都被
-    // 暗示搜图）。
-    final searchByImageRequested = searchByImage || parsed.searchByImage;
-
     // 结构化选中的普通标签（面板 chip 点选，未必出现在手输文本里）与文本识别结果
     // 按 name 去重合并；结构化选中优先，避免同名标签内容不一致时的歧义。
     final mergedPromptTagsByName = <String, AiPromptTag>{
@@ -902,8 +944,9 @@ class AiConversationController extends ChangeNotifier {
     );
     _history.add(LlmMessage.user(
       _buildTurnUserContent(userQuery),
-      // 决策C：仅视觉开时图片进模型；OCR 路径模型只看到文字。
-      imagePaths: visionEnabled ? attachmentPaths : const [],
+      // 决策C：仅视觉开且非搜图时图片进模型；OCR 路径模型只看到文字；
+      // 搜图路径图片只流向工具层，不注入模型（Bug 2 修复）。
+      imagePaths: (visionEnabled && !searchByImageRequested) ? attachmentPaths : const [],
     ));
 
     isLoading = true;
@@ -916,8 +959,9 @@ class AiConversationController extends ChangeNotifier {
       await _runLoop();
     } catch (exception) {
       final message = 'AI 对话执行失败：$exception';
+      // 15轮06号计划：异常路径也要收口，防残留”进行中”空气泡。
+      _sealStreamingMessage();
       displayMessages.add(AiChatMessage.error(message));
-      error = message;
       isLoading = false;
       _activeTurnContext = null;
       notifyListeners();
@@ -970,8 +1014,7 @@ class AiConversationController extends ChangeNotifier {
       // 只放 ref（附件相对路径，不含盘符/账户名等绝对信息），不放绝对路径、
       // 不放 base64。
       'attachments': [
-        for (final ref in active?.attachments ?? const <String>[])
-          {'ref': ref},
+        for (final ref in active?.attachments ?? const <String>[]) {'ref': ref},
       ],
       'search_by_image': active?.searchByImage ?? false,
     };
@@ -1035,17 +1078,80 @@ class AiConversationController extends ChangeNotifier {
         break;
       }
     }
+    // 15轮06号计划（决策B契约）：存=_history/存档永远保留 reasoningContent；
+    // 发=本方法是唯一剥离点。DeepSeek 官方规则：无工具调用的 assistant 轮
+    // 不回传 reasoning_content，带 tool_calls 的 assistant 轮保留（thinking+
+    // tools 多子轮需要）。剥离规则稳定（同输入同输出），不破坏前缀缓存。
+    // 破坏契约的静默失效表现：漏剥离 → 每轮请求 token 随思考长度线性膨胀、
+    // 变慢甚至上下文超限；错剥工具轮 → DeepSeek 工具子轮上下文缺失，模型
+    // 重复思考/行为退化，且不报错。
     return [
       for (var i = 0; i < _history.length; i++)
-        if (i != lastImageIndex)
-          _history[i].stripImagesToPlaceholder()
-        else
-          _history[i],
+        _applyReasoningRule(
+          i == lastImageIndex
+              ? _history[i]
+              : _history[i].stripImagesToPlaceholder(),
+        ),
     ];
+  }
+
+  LlmMessage _applyReasoningRule(LlmMessage message) {
+    if (message.role != 'assistant') return message;
+    if (message.toolCalls != null && message.toolCalls!.isNotEmpty) {
+      return message; // 工具轮保留
+    }
+    return message.stripReasoning(); // 纯文本轮剥离
   }
 
   @visibleForTesting
   List<LlmMessage> buildRequestMessagesForTesting() => _buildRequestMessages();
+
+  /// 15轮06号计划：收到一段流式增量。首次调用时插入“进行中”assistant 气泡，
+  /// 之后整体替换该位置的实例（AiChatMessage 全字段 final）。
+  void _onStreamDelta({String? reasoning, String? content}) {
+    if (_streamingMessageIndex == null) {
+      _streamReasoning.clear();
+      _streamContent.clear();
+      displayMessages.add(AiChatMessage.assistant(''));
+      _streamingMessageIndex = displayMessages.length - 1;
+    }
+    if (reasoning != null) _streamReasoning.write(reasoning);
+    if (content != null) _streamContent.write(content);
+    displayMessages[_streamingMessageIndex!] = AiChatMessage.assistant(
+      _streamContent.toString(),
+      reasoningText:
+          _streamReasoning.isEmpty ? null : _streamReasoning.toString(),
+    );
+    final now = DateTime.now();
+    if (now.difference(_lastStreamNotify) >= _streamNotifyInterval) {
+      _lastStreamNotify = now;
+      notifyListeners();
+    }
+  }
+
+  /// 收口流式进行中气泡；返回是否保留了气泡。
+  /// - 传入终值（或缓冲区）非空 → 气泡定格为终值；全空 → 移除空气泡。
+  /// - 收口必 notifyListeners()：把节流窗口内攒着的最后一段 delta 刷出。
+  bool _sealStreamingMessage({String? finalText, String? finalReasoning}) {
+    final index = _streamingMessageIndex;
+    _streamingMessageIndex = null;
+    final text = finalText ?? _streamContent.toString();
+    final reasoning = finalReasoning ?? _streamReasoning.toString();
+    _streamReasoning.clear();
+    _streamContent.clear();
+    if (index == null) return false; // 本轮没有任何 delta（测试注入路径等）
+    if (text.trim().isEmpty && reasoning.trim().isEmpty) {
+      displayMessages.removeAt(index);
+      notifyListeners();
+      return false;
+    }
+    displayMessages[index] = AiChatMessage.assistant(
+      text,
+      reasoningText: reasoning.isEmpty ? null : reasoning,
+    );
+    notifyListeners();
+    return true;
+  }
 
   /// 工具调用循环
   Future<_RunLoopOutcome> _runLoop() async {
@@ -1060,6 +1166,9 @@ class AiConversationController extends ChangeNotifier {
 
     final tools = _getEnabledToolSchemas();
     final requestMessages = _buildRequestMessages();
+    // 15轮07号计划：每轮新建令牌，工具子轮复用（同一个 token 取消后后续子轮
+    // dio 立即抛 cancel，整轮统一停止）。
+    _llmCancelToken ??= CancelToken();
     final response = _chatRequestForTesting == null
         ? await LlmClient.chat(
             requestMessages,
@@ -1067,6 +1176,11 @@ class AiConversationController extends ChangeNotifier {
             conversationHash: aiDiagnosticSha256(conversationId ?? ''),
             turn: _currentTurnNumber,
             round: _currentRound + 1,
+            // 15轮06号计划（决策A）：传回调即走流式；测试注入路径不涉流式。
+            onReasoningDelta: (delta) => _onStreamDelta(reasoning: delta),
+            onContentDelta: (delta) => _onStreamDelta(content: delta),
+            // 15轮07号计划：注入取消令牌，支持用户主动停止。
+            cancelToken: _llmCancelToken,
           )
         : await _chatRequestForTesting(
             requestMessages,
@@ -1076,20 +1190,39 @@ class AiConversationController extends ChangeNotifier {
             round: _currentRound + 1,
           );
 
+    _llmCancelToken = null; // 请求完成（无论成功/失败/取消），清理令牌。
+
     if (response.hasError) {
+      // 流式中断契约：已流出的半截文本/思考只定格展示（display-only），
+      // 不入 _history——下一轮请求不携带半截内容；空气泡直接移除。
+      _sealStreamingMessage();
       displayMessages.add(AiChatMessage.error(response.error!));
-      error = response.error;
       _finishActiveTurn();
       return _RunLoopOutcome.finished;
     }
 
     if (!response.hasToolCalls) {
-      _handleFinalTextResponse(response.content);
+      _handleFinalTextResponse(response.content,
+          reasoningText: response.reasoningContent);
       return _RunLoopOutcome.finished;
     }
 
     _currentRound++;
-    _history.add(LlmMessage.assistant(toolCalls: response.toolCalls));
+    // 决策B：工具轮的 content/reasoning 都保留入档（DeepSeek thinking+tools
+    // 多子轮要求原样传回；_buildRequestMessages 对带 toolCalls 的消息不剥离）。
+    _history.add(LlmMessage.assistant(
+      content: (response.content?.trim().isNotEmpty ?? false)
+          ? response.content
+          : null,
+      toolCalls: response.toolCalls,
+      reasoningContent: response.reasoningContent,
+    ));
+    // 工具轮收口进行中气泡：有思考/半截文本则定格保留（思考块出现在随后的
+    // 工具卡之前），纯空则移除。
+    _sealStreamingMessage(
+      finalText: response.content,
+      finalReasoning: response.reasoningContent,
+    );
 
     return _processToolCalls(response.toolCalls!);
   }
@@ -1100,15 +1233,28 @@ class AiConversationController extends ChangeNotifier {
   ///   若此时也没有待展示的工具结果（清单卡等），改为展示一条轻量提示气泡，
   ///   让用户感知"AI本轮没有回复内容"而不是完全静默；该提示气泡只展示给
   ///   用户，不写入 `_history`，避免污染后续请求的历史上下文。
-  void _handleFinalTextResponse(String? rawText) {
+  void _handleFinalTextResponse(String? rawText, {String? reasoningText}) {
     final trimmedText = rawText?.trim() ?? '';
     if (trimmedText.isNotEmpty) {
       // 保留原始文本（未 trim）写入气泡与历史，与修复前的展示行为保持一致，
       // 只用 trim 后的结果判断“是否算有内容”。
-      displayMessages.add(AiChatMessage.assistant(rawText!));
-      _history.add(LlmMessage.assistant(content: rawText));
-    } else if (_pendingDisplayItems == null || _pendingDisplayItems!.isEmpty) {
-      displayMessages.add(AiChatMessage.assistant('（AI本轮未返回有效内容）'));
+      if (_streamingMessageIndex != null) {
+        _sealStreamingMessage(
+            finalText: rawText, finalReasoning: reasoningText);
+      } else {
+        displayMessages.add(
+            AiChatMessage.assistant(rawText!, reasoningText: reasoningText));
+      }
+      _history.add(LlmMessage.assistant(
+          content: rawText, reasoningContent: reasoningText));
+    } else {
+      // 只有思考没有正文：保留思考气泡（display-only，不入 _history）；
+      // 什么都没有且无待展示清单时保持原有提示气泡行为。
+      final kept = _sealStreamingMessage(finalReasoning: reasoningText);
+      if (!kept &&
+          (_pendingDisplayItems == null || _pendingDisplayItems!.isEmpty)) {
+        displayMessages.add(AiChatMessage.assistant('（AI本轮未返回有效内容）'));
+      }
     }
     _flushPendingDisplayItems();
     _finishActiveTurn();
@@ -1317,8 +1463,9 @@ class AiConversationController extends ChangeNotifier {
       await _runLoop();
     } catch (exception) {
       final message = 'AI 对话执行失败：$exception';
+      // 15轮06号计划：异常路径也要收口，防残留”进行中”空气泡。
+      _sealStreamingMessage();
       displayMessages.add(AiChatMessage.error(message));
-      error = message;
       isLoading = false;
       _activeTurnContext = null;
       notifyListeners();

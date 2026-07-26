@@ -39,6 +39,7 @@ import 'package:picakeep/tools/night_mode_channel.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:picakeep/foundation/ai/ai_prompt_tags.dart';
 import 'package:picakeep/foundation/ai/ai_settings.dart';
+import 'package:picakeep/foundation/ai/model_list_client.dart';
 import 'package:picakeep/pages/ai/ai_page.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
