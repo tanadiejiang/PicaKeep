@@ -47,6 +47,14 @@ const aiOcrConfigSettingIndex = 144;
 // 15轮05号计划：以图搜源 soutubot（search_by_image 能力开关）。
 const aiCapabilitySearchByImageSettingIndex = 145;
 
+// 15轮06号计划：思考（reasoning）两个独立开关。
+// 146 开启思考：'1'=不发 thinking 字段（服务端默认，DeepSeek 默认 enabled）；
+// '0'=请求体带 thinking:{"type":"disabled"}（仅 DeepSeek 等认识该字段的服务
+// 生效；OpenAI 官方对未知顶层字段报 400，故“开”绝不发显式字段）。
+const aiThinkingEnabledSettingIndex = 146;
+// 147 显示思考过程：纯 UI 开关。'0' 时思考内容仍接收+存档，只是不渲染。
+const aiShowReasoningSettingIndex = 147;
+
 /// 返回给定能力名称对应的 settings index；找不到返回 null。
 int? aiCapabilitySettingIndex(String toolName) {
   return const {

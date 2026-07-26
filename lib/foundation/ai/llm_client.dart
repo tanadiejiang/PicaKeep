@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -6,6 +7,7 @@ import 'package:dio/dio.dart';
 import 'package:picakeep/base.dart';
 import 'package:picakeep/foundation/ai/ai_attachments.dart';
 import 'package:picakeep/foundation/ai/ai_settings.dart';
+import 'package:picakeep/foundation/ai/sse_chat_parser.dart';
 import 'package:picakeep/foundation/log.dart';
 import 'package:picakeep/network/app_dio.dart';
 
@@ -46,6 +48,11 @@ class LlmMessage {
   /// base64 只在发请求时由 [toRequestJson] 现场从本地文件生成，不落存档。
   final List<String> imagePaths;
 
+  /// 15轮06号计划：思考链（DeepSeek reasoning_content）。存档永远保留；
+  /// 是否随请求回传由 _buildRequestMessages() 的剥离规则决定（决策B），
+  /// 本类的 toJson/toRequestJson 只负责“有就序列化”。
+  final String? reasoningContent;
+
   const LlmMessage({
     required this.role,
     this.content,
@@ -53,6 +60,7 @@ class LlmMessage {
     this.toolCallId,
     this.name,
     this.imagePaths = const [],
+    this.reasoningContent,
   });
 
   LlmMessage.system(this.content)
@@ -60,15 +68,17 @@ class LlmMessage {
         toolCalls = null,
         toolCallId = null,
         name = null,
-        imagePaths = const [];
+        imagePaths = const [],
+        reasoningContent = null;
 
   LlmMessage.user(this.content, {this.imagePaths = const []})
       : role = 'user',
         toolCalls = null,
         toolCallId = null,
-        name = null;
+        name = null,
+        reasoningContent = null;
 
-  LlmMessage.assistant({this.content, this.toolCalls})
+  LlmMessage.assistant({this.content, this.toolCalls, this.reasoningContent})
       : role = 'assistant',
         toolCallId = null,
         name = null,
@@ -80,7 +90,8 @@ class LlmMessage {
     required this.content,
   })  : role = 'tool',
         toolCalls = null,
-        imagePaths = const [];
+        imagePaths = const [],
+        reasoningContent = null;
 
   Map<String, dynamic> toJson() {
     final json = <String, dynamic>{'role': role};
@@ -90,6 +101,9 @@ class LlmMessage {
     }
     if (toolCallId != null) json['tool_call_id'] = toolCallId;
     if (name != null) json['name'] = name;
+    if (reasoningContent != null && reasoningContent!.isNotEmpty) {
+      json['reasoning_content'] = reasoningContent;
+    }
     if (imagePaths.isNotEmpty) json['imagePaths'] = imagePaths;
     return json;
   }
@@ -111,6 +125,8 @@ class LlmMessage {
       imagePaths:
           (json['imagePaths'] as List?)?.map((e) => e.toString()).toList() ??
               const [],
+      // 15轮06号计划：旧存档无该字段 → null，缺省兼容不升 version。
+      reasoningContent: json['reasoning_content']?.toString(),
     );
   }
 
@@ -154,6 +170,22 @@ class LlmMessage {
       toolCalls: toolCalls,
       toolCallId: toolCallId,
       name: name,
+      // 15轮06号计划：带图轮的历史瘦身不得顺带丢 reasoning。
+      reasoningContent: reasoningContent,
+    );
+  }
+
+  /// 返回“剥掉思考链”的副本；本来就没有时返回自身（零开销）。
+  /// 只允许 _buildRequestMessages() 调用（决策B：发送侧唯一剥离点）。
+  LlmMessage stripReasoning() {
+    if (reasoningContent == null || reasoningContent!.isEmpty) return this;
+    return LlmMessage(
+      role: role,
+      content: content,
+      toolCalls: toolCalls,
+      toolCallId: toolCallId,
+      name: name,
+      imagePaths: imagePaths,
     );
   }
 }
@@ -239,11 +271,20 @@ class LlmUsage {
 /// LLM 响应
 class LlmResponse {
   final String? content;
+
+  /// 15轮06号计划：本轮思考链聚合终值。
+  final String? reasoningContent;
   final List<LlmToolCall>? toolCalls;
   final String? error;
   final LlmUsage? usage;
 
-  const LlmResponse({this.content, this.toolCalls, this.error, this.usage});
+  const LlmResponse({
+    this.content,
+    this.reasoningContent,
+    this.toolCalls,
+    this.error,
+    this.usage,
+  });
 
   bool get hasToolCalls => toolCalls != null && toolCalls!.isNotEmpty;
   bool get hasError => error != null;
@@ -263,6 +304,9 @@ class LlmClient {
     String? conversationHash,
     int? turn,
     int? round,
+    void Function(String delta)? onReasoningDelta,
+    void Function(String delta)? onContentDelta,
+    CancelToken? cancelToken,
   }) async {
     final template = appdata.settings[aiProviderTemplateSettingIndex];
     var baseUrl = appdata.settings[aiBaseUrlSettingIndex].trim();
@@ -324,12 +368,43 @@ class LlmClient {
       }
     }
 
+    // 15轮06号计划：思考开关（设置146）。开 = 不发任何 thinking 字段（服务端
+    // 默认；OpenAI 官方对未知顶层字段报 400，绝不多发）；关 = 显式 disabled。
+    if (appdata.settings[aiThinkingEnabledSettingIndex] != '1') {
+      requestBody['thinking'] = {'type': 'disabled'};
+    }
+    final wantStream = onReasoningDelta != null || onContentDelta != null;
+    if (wantStream) {
+      requestBody['stream'] = true;
+      // 只有 stream=true 时可设；[DONE] 前多发一个带 usage 的空 choices 块。
+      requestBody['stream_options'] = {'include_usage': true};
+    }
+
+    // endpoint 推导是纯字符串拼接，无异常风险，出 try 供流式分支复用。
+    final endpoint = baseUrl.endsWith('/chat/completions')
+        ? baseUrl
+        : '${baseUrl.replaceAll(RegExp(r'/+$'), '')}/chat/completions';
+
+    if (wantStream) {
+      return _chatStreaming(
+        dio,
+        endpoint,
+        requestBody,
+        apiKey,
+        modelId: modelId,
+        messages: messages,
+        tools: tools,
+        conversationHash: conversationHash,
+        turn: turn,
+        round: round,
+        onReasoningDelta: onReasoningDelta,
+        onContentDelta: onContentDelta,
+        cancelToken: cancelToken,
+      );
+    }
+
     // 发送请求
     try {
-      final endpoint = baseUrl.endsWith('/chat/completions')
-          ? baseUrl
-          : '${baseUrl.replaceAll(RegExp(r'/+$'), '')}/chat/completions';
-
       final response = await dio.post<Map<String, dynamic>>(
         endpoint,
         data: requestBody,
@@ -364,6 +439,9 @@ class LlmClient {
 
       // 解析 content 或 tool_calls
       final content = message['content']?.toString();
+      // 15轮06号计划：reasoning_content 主 + reasoning 兜底。
+      final reasoningContent =
+          (message['reasoning_content'] ?? message['reasoning'])?.toString();
       final toolCallsJson = message['tool_calls'] as List<dynamic>?;
 
       final usageJson = data['usage'] as Map<String, dynamic>?;
@@ -385,14 +463,161 @@ class LlmClient {
             .whereType<Map<String, dynamic>>()
             .map((tc) => LlmToolCall.fromJson(tc))
             .toList();
-        return LlmResponse(toolCalls: toolCalls, usage: usage);
+        // 决策B：工具轮的 content/reasoning 都要保留。
+        return LlmResponse(
+          content: content,
+          reasoningContent: reasoningContent,
+          toolCalls: toolCalls,
+          usage: usage,
+        );
       }
 
-      return LlmResponse(content: content ?? '', usage: usage);
+      return LlmResponse(
+        content: content ?? '',
+        reasoningContent: reasoningContent,
+        usage: usage,
+      );
     } on DioException catch (e) {
       return LlmResponse(error: e.message ?? 'Network error: $e');
     } catch (e) {
       return LlmResponse(error: '未知错误: $e');
+    }
+  }
+
+  /// 15轮06号计划：SSE 流式聊天请求。错误一律折叠成 [LlmResponse.error]
+  /// 不抛异常——与非流式路径的契约一致。
+  static Future<LlmResponse> _chatStreaming(
+    Dio dio,
+    String endpoint,
+    Map<String, dynamic> requestBody,
+    String apiKey, {
+    required String modelId,
+    required List<LlmMessage> messages,
+    List<Map<String, Object?>>? tools,
+    String? conversationHash,
+    int? turn,
+    int? round,
+    void Function(String delta)? onReasoningDelta,
+    void Function(String delta)? onContentDelta,
+    CancelToken? cancelToken,
+  }) async {
+    try {
+      final response = await dio.post<ResponseBody>(
+        endpoint,
+        data: requestBody,
+        cancelToken: cancelToken,
+        options: Options(
+          responseType: ResponseType.stream,
+          headers: {
+            'Authorization': 'Bearer $apiKey',
+            'Content-Type': 'application/json',
+            'Accept': 'text/event-stream',
+          },
+          // 坑①：MyLogInterceptor.onRequest 会把 null receiveTimeout 补成
+          // 30s（app_dio.dart:32）。流式下它只约束首包/头部到达，思考期可能
+          // 长静默，显式给大值。
+          receiveTimeout: const Duration(seconds: 120),
+          // 坑②：RetryHttpClientAdapter 非 4xx 失败自动重试会重复发整个
+          // POST（app_dio.dart:176-206），流式请求必须逃生。
+          extra: {'noRetry': true},
+          // 坑④前置：非 200 时 dio 默认抛异常且 body 是 ResponseBody 对象
+          // 取不到 provider 报错文本，全部放行自己处理。
+          validateStatus: (_) => true,
+        ),
+      );
+      final body = response.data;
+      if (body == null) return const LlmResponse(error: '响应为空');
+      if (response.statusCode != 200) {
+        // 坑④：4xx/5xx 的 Content-Type 是 application/json，自己 drain
+        // 错误流解出报错文本（错误码语义以 HTTP 状态码为准，body 仅展示）。
+        final detail = await _drainErrorBody(body);
+        return LlmResponse(error: 'HTTP ${response.statusCode}: $detail');
+      }
+      final parser = SseChatParser(
+        onReasoningDelta: onReasoningDelta,
+        onContentDelta: onContentDelta,
+      );
+      // 字节流 → streaming utf8.decoder（防多字节字符跨包被拆）→ LineSplitter
+      // 逐行缓冲（跨包残片自动留存、兼容 \r\n）。绝不按”一次 onData = 一个
+      // 事件”解析。
+      // 坑③：CancelToken 只挂在 POST 请求上，不挂在 stream.timeout 的 onTimeout
+      // 回调里——不触发”与 receiveTimeout 定时器竞态导致 Bad state”的场景
+      // （第十四轮计划10 实测的竞态是把 cancel 混入 timeout sink 操作序列造成的，
+      // 本实现两者路径独立）。用户主动取消会让 dio 抛 DioExceptionType.cancel，
+      // 在 catch 里折叠为 error:null；流内静默段 receiveTimeout 无效，stream.timeout 兜底。
+      final lines = utf8.decoder
+          .bind(body.stream)
+          .transform(const LineSplitter())
+          .timeout(
+        const Duration(seconds: 120),
+        onTimeout: (sink) {
+          sink.addError(TimeoutException('SSE 流 120 秒无数据'));
+          sink.close();
+        },
+      );
+      await for (final line in lines) {
+        if (cancelToken?.isCancelled ?? false) break; // 用户主动停止
+        parser.addLine(line);
+        if (parser.isDone) break; // [DONE] 后正常收口；break 会取消订阅
+      }
+      final result = parser.finish();
+      if (result.usage != null) {
+        _logUsage(
+          modelId,
+          result.usage!,
+          messages,
+          tools: tools,
+          conversationHash: conversationHash,
+          turn: turn,
+          round: round,
+        );
+      }
+      if (result.hasToolCalls) {
+        return LlmResponse(
+          content: result.content.isEmpty ? null : result.content,
+          reasoningContent: result.reasoning.isEmpty ? null : result.reasoning,
+          toolCalls: result.toolCalls,
+          usage: result.usage,
+        );
+      }
+      return LlmResponse(
+        content: result.content,
+        reasoningContent: result.reasoning.isEmpty ? null : result.reasoning,
+        usage: result.usage,
+      );
+    } on DioException catch (e) {
+      // 用户主动取消：视为正常收口，不向上报错（_runLoop 会走空响应路径收尾）。
+      if (e.type == DioExceptionType.cancel) {
+        return const LlmResponse();
+      }
+      return LlmResponse(error: e.message ?? 'Network error: $e');
+    } on TimeoutException catch (e) {
+      return LlmResponse(error: '流式响应超时：${e.message}');
+    } catch (e) {
+      return LlmResponse(error: '未知错误: $e');
+    }
+  }
+
+  /// 读完非 200 的错误响应体并尽量解出 provider 的 error.message。
+  static Future<String> _drainErrorBody(ResponseBody body) async {
+    try {
+      final bytes = <int>[];
+      await body.stream
+          .timeout(const Duration(seconds: 5),
+              onTimeout: (sink) => sink.close())
+          .forEach(bytes.addAll);
+      var text = utf8.decode(bytes, allowMalformed: true).trim();
+      try {
+        final decoded = jsonDecode(text);
+        if (decoded is Map && decoded['error'] is Map) {
+          final message = (decoded['error'] as Map)['message']?.toString();
+          if (message != null && message.isNotEmpty) text = message;
+        }
+      } catch (_) {/* body 不是 JSON 时保留原文 */}
+      if (text.length > 300) text = '${text.substring(0, 300)}…';
+      return text.isEmpty ? '(无响应体)' : text;
+    } catch (_) {
+      return '(读取错误响应失败)';
     }
   }
 
