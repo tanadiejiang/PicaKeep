@@ -481,13 +481,22 @@ class AiConversationController extends ChangeNotifier {
   /// 当前进行中的 LLM 请求的取消令牌；null 表示当前无进行中请求。
   /// 每次 _runLoop 开始前新建，请求完成（无论成功/失败/取消）后置 null。
   CancelToken? _llmCancelToken;
+  /// OCR 进行中用户主动停止的意图标志。
+  /// send() 入口每次清零；stopGeneration() 在 OCR 阶段（_llmCancelToken == null）置 true；
+  /// OCR 循环每次 await 返回后检查，命中则中止本轮并复位 isLoading。
+  bool _stopRequestedDuringOcr = false;
 
-  /// 取消当前进行中的 LLM 流式请求。幂等：未在进行中时无副作用。
-  /// 取消后 _runLoop 会收到 LlmResponse(error: null)，走空响应路径正常收尾，
-  /// isLoading 归零，聊天流不留"进行中"残影。
+  /// 取消当前进行中的 LLM 流式请求，或在 OCR 阶段记录停止意图。
+  /// 幂等：未在进行中时无副作用。
   void stopGeneration() {
-    _llmCancelToken?.cancel('用户主动停止');
-    _llmCancelToken = null;
+    if (_llmCancelToken != null) {
+      // LLM 流式阶段：直接 cancel token
+      _llmCancelToken!.cancel('用户主动停止');
+      _llmCancelToken = null;
+    } else {
+      // OCR 阶段：token 尚未创建，记录意图；循环检查点读取后中止
+      _stopRequestedDuringOcr = true;
+    }
   }
 
   /// 供 UI 判断某条消息是否是流式进行中的那条（identical 比对实例）。
@@ -779,6 +788,7 @@ class AiConversationController extends ChangeNotifier {
     if ((text.trim().isEmpty && attachmentPaths.isEmpty) || isLoading) {
       return false;
     }
+    _stopRequestedDuringOcr = false; // 每次 send 清零，防止上一轮残留标志干扰本轮
     if (pendingDownload != null) {
       error = '请先处理下载确认';
       notifyListeners();
@@ -819,6 +829,13 @@ class AiConversationController extends ChangeNotifier {
       for (var i = 0; i < attachmentPaths.length; i++) {
         final response =
             await _ocrRequest(resolveAiAttachmentPath(attachmentPaths[i]));
+        // 用户在 OCR 等待期间点击停止：中止本轮，不展示错误提示，静默恢复发送状态
+        if (_stopRequestedDuringOcr) {
+          _stopRequestedDuringOcr = false;
+          isLoading = false;
+          notifyListeners();
+          return false;
+        }
         if (response.error != null) {
           final message = '第 ${i + 1} 张图片文字识别失败：${response.error}';
           displayMessages.add(AiChatMessage.error(message));

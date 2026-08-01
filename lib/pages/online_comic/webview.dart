@@ -183,9 +183,8 @@ class _AppWebviewState extends State<AppWebview> {
       // URL 在 onWebViewCreated 里先设代理再 loadUrl。
       initialSettings: InAppWebViewSettings(
         // 显式设现代 Chrome UA，避免系统 WebView 默认 UA 被 CF 识别为可疑客户端。
-        userAgent:
-            'Mozilla/5.0 (Linux; Android 10; Mobile) AppleWebKit/537.36'
-            ' (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36',
+        userAgent: 'Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36'
+            ' (KHTML, like Gecko) Chrome/149.0.7827.201 Mobile Safari/537.36',
         javaScriptEnabled: true,
         domStorageEnabled: true,
         thirdPartyCookiesEnabled: true,
@@ -269,7 +268,8 @@ class _AppWebviewState extends State<AppWebview> {
       children: [
         Positioned.fill(child: body),
         if (_progress < 1.0)
-          const Positioned.fill(child: Center(child: CircularProgressIndicator()))
+          const Positioned.fill(
+              child: Center(child: CircularProgressIndicator()))
       ],
     );
 
