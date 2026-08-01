@@ -2176,9 +2176,9 @@ class _AiChatPageState extends State<AiChatPage>
                             ),
                           ),
                           const SizedBox(width: 8),
-                          // 15轮07号计划：AI 回复进行中换为「停止」按钮；
-                          // _sendInFlight（压缩落盘期）不显示停止（本地操作，极短）。
-                          if (_controller!.isLoading && !_sendInFlight)
+                          // 15轮07号计划：AI 回复进行中换为「停止」按钮（isLoading == true）；
+                          // 压缩落盘期（_sendInFlight=true, isLoading=false）仍显示禁用「发送」。
+                          if (_controller!.isLoading)
                             IconButton.filled(
                               icon: const Icon(Icons.stop_rounded),
                               tooltip: '停止生成',

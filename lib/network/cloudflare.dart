@@ -123,6 +123,18 @@ void passCloudflare(CloudflareException e, void Function() onFinished) async {
   }
 
   if (App.isDesktop && (await DesktopWebview.isAvailable())) {
+    // 基线快照：App cookie jar 里当前在用的 cf_clearance（很可能正是已失效的那份）。
+    // 桌面 WebView2 用独立磁盘 profile（App.dataPath\webview）且从不清理，
+    // getCookies 读的是整个 profile 而非当前页，旧 cf_clearance 一直可读；
+    // 故判据必须是「拿到一份不同于基线的 clearance」，而非「存在 clearance」。
+    final baseClearance = SingleInstanceCookieJar.instance!
+        .loadForRequest(uri)
+        .where((c) => c.name == 'cf_clearance')
+        .firstOrNull
+        ?.value;
+    // 可重入守卫：桌面端 onTitleChange 是 2 秒 Timer.periodic 轮询、
+    // fire-and-forget 调用（webview.dart:346-371），多次 tick 的 async 回调可能重叠。
+    bool closed = false;
     var webview = DesktopWebview(
       initialUrl: url,
       onTitleChange: (title, controller) async {
@@ -135,50 +147,80 @@ void passCloudflare(CloudflareException e, void Function() onFinished) async {
             appdata.writeImplicitData();
           }
           var cookiesMap = await controller.getCookies(url);
-          if (cookiesMap['cf_clearance'] == null) {
+          // 真正的判据：cf_clearance 必须存在且不同于基线快照，
+          // 否则说明读到的是 webview profile 里的残留旧值（尚未过盾），继续等待。
+          final clearance = cookiesMap['cf_clearance'];
+          if (clearance == null || clearance == baseClearance) {
             return;
           }
+          if (closed) return;
+          closed = true;
           saveCookies(cookiesMap);
           controller.close();
           onFinished();
         }
       },
+      // 用户手动点窗口 X 关闭（未过盾）时的降级路径：给出完成信号，
+      // 让调用方立即返回 CF 失败消息，而非空等 180 秒超时。
+      // 过盾成功路径已在 onTitleChange 里调过一次 onFinished，
+      // 故它可能被调用两次，调用方必须幂等（search_by_image_tool.dart
+      // 用 Completer + `if (!completer.isCompleted)` 防护）。
+      onClose: () => onFinished(),
     );
     webview.open();
   } else if (App.isMobile) {
+    // 进入 Webview 时的 cf_clearance 快照（onStarted 中只读取、不落盘）。
+    // 关窗判据以「cf_clearance 相对快照发生变化」为准，与质询页标题的
+    // 语言/平台差异解耦：系统 WebView 里残留的旧 cf_clearance 不会触发关窗。
+    String? baseClearance;
+    // 可重入守卫：onTitleChange 内有多个 await（getUA / getCookies），相邻两次
+    // 标题变化可能双双穿过判据；而 App.globalBack 只看 Navigator.canPop、不校验
+    // 路由身份，第二次 pop 会把 webview 下层的页面（如 AI 会话页）一起弹掉。
+    bool closed = false;
     await App.globalTo(
       () => AppWebview(
         initialUrl: url,
         singlePage: true,
         onTitleChange: (title, controller) async {
-          var res = await controller.evaluateJavascript(
-              source:
-                  "document.head.innerHTML.includes('#challenge-success-text')");
-          if (res == false) {
-            var ua = await controller.getUA();
-            if (ua != null) {
-              appdata.implicitData[3] = ua;
-              appdata.writeImplicitData();
-            }
-            var cookiesMap = await controller.getCookies(url) ?? {};
-            if (cookiesMap['cf_clearance'] == null) {
-              return;
-            }
-            saveCookies(cookiesMap);
-            App.globalBack();
-          }
-        },
-        onStarted: (controller) async {
+          // CF 质询页标题固定为 "Just a moment..."；
+          // 标题变为其他值说明质询已通过、页面已跳转。
+          if (title == 'Just a moment...' || title.trim().isEmpty) return;
           var ua = await controller.getUA();
           if (ua != null) {
             appdata.implicitData[3] = ua;
             appdata.writeImplicitData();
           }
           var cookiesMap = await controller.getCookies(url) ?? {};
+          // 真正的判据：cf_clearance 必须存在且不同于进入时的快照，
+          // 否则说明读到的是残留旧值（尚未过盾），继续等待。
+          final clearance = cookiesMap['cf_clearance'];
+          if (clearance == null || clearance == baseClearance) return;
+          if (closed) return;
+          closed = true;
           saveCookies(cookiesMap);
+          App.globalBack();
+          onFinished();
+        },
+        onStarted: (controller) async {
+          // 只更新 UA；不在 URL 加载前提前读取 cookies，
+          // 防止 WebView 持久化的旧 cf_clearance 写入 App cookie jar。
+          var ua = await controller.getUA();
+          if (ua != null) {
+            appdata.implicitData[3] = ua;
+            appdata.writeImplicitData();
+          }
+          // 只读快照，不调 saveCookies：记录进入时已存在的旧 cf_clearance。
+          baseClearance =
+              (await controller.getCookies(url) ?? {})['cf_clearance'];
         },
       ),
     );
+    // App.globalTo 是 Navigator.push，返回的 Future 在路由 pop 之后才完成，
+    // 所以这里执行时 webview 已关闭。此处的 onFinished 覆盖「用户手动按返回
+    // 退出、未过盾」的降级路径：不给完成信号，调用方只能空等 180 秒超时。
+    // 过盾成功路径已在 onTitleChange 里调过一次，故 onFinished 可能被调用两次，
+    // 调用方必须幂等（现有唯一调用方 search_by_image_tool.dart 用
+    // Completer + `if (!completer.isCompleted)` 防护）。
     onFinished();
   } else {
     showToast(message: "当前设备不支持".tl);
