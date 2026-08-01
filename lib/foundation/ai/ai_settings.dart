@@ -61,6 +61,11 @@ const aiShowReasoningSettingIndex = 147;
 /// 纯 UI 开关，长期状态机制（清除长期提示/恢复来源/取消仅本地）本身不受影响。
 const aiPersistentCardDismissedSettingIndex = 148;
 
+/// 16轮05号计划：AI 自动下载子开关。
+/// '0'（默认）= download_comic 不暴露给 AI；'1' = 允许 AI 自行入队。
+/// 必须与 aiCapabilityDownloadComicSettingIndex(122)='1' 同时满足才生效。
+const aiAutoDownloadEnabledSettingIndex = 149;
+
 /// 返回给定能力名称对应的 settings index；找不到返回 null。
 int? aiCapabilitySettingIndex(String toolName) {
   return const {

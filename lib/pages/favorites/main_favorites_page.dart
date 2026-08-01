@@ -81,6 +81,12 @@ class _MainFavoritesPageState extends State<MainFavoritesPage> {
   String? _loadIssue;
   DateTime? _lastManualRemoteRefreshAt;
 
+  // 后台静默刷新进行中的计数。localDataVersion 等触发 _loadFolders(quiet: true)
+  // 期间，LocalFavoritesManager.init() 会无条件经 allFoldersStream 发出旁路通知
+  // （_handleFoldersChanged），该路径同样必须以 quiet 语义处理，否则本地视图浏览
+  // 网络收藏（currentFolder==null）时抽屉仍会被强制展开遮盖内容。
+  int _silentRefreshDepth = 0;
+
   bool get _isRemoteView => _view == FavoritesView.remote;
 
   @override
@@ -106,7 +112,12 @@ class _MainFavoritesPageState extends State<MainFavoritesPage> {
   }
 
   void _handleLocalDataRefresh() {
-    _loadFolders();
+    _silentRefreshDepth++;
+    unawaited(
+      _loadFolders(quiet: true).whenComplete(() {
+        _silentRefreshDepth--;
+      }),
+    );
   }
 
   void _handleFoldersChanged(List<FavGroup> groups) {
@@ -118,7 +129,9 @@ class _MainFavoritesPageState extends State<MainFavoritesPage> {
       _loading = false;
       _loadIssue = null;
       _cacheFolderCounts(folders);
-      _applyFolders(folders);
+      // 后台静默刷新期间（如下载完成触发 localDataVersion 变化）经
+      // allFoldersStream 发出的旁路通知同样不重置抽屉展开状态。
+      _applyFolders(folders, quiet: _silentRefreshDepth > 0);
     });
   }
 
@@ -136,12 +149,14 @@ class _MainFavoritesPageState extends State<MainFavoritesPage> {
     String? preferredFolder,
     bool collapseDrawer = false,
     bool forceRemoteRefresh = false,
+    bool quiet = false, // 静默刷新时跳过展开状态重置
   }) async {
     if (_isRemoteView) {
       await _loadRemoteFolders(
         preferredFolder: preferredFolder,
         collapseDrawer: collapseDrawer,
         forceRemoteRefresh: forceRemoteRefresh,
+        quiet: quiet,
       );
       return;
     }
@@ -161,6 +176,7 @@ class _MainFavoritesPageState extends State<MainFavoritesPage> {
         folders,
         preferredFolder: preferredFolder,
         collapseDrawer: collapseDrawer,
+        quiet: quiet,
       );
     });
   }
@@ -169,6 +185,7 @@ class _MainFavoritesPageState extends State<MainFavoritesPage> {
     String? preferredFolder,
     bool collapseDrawer = false,
     bool forceRemoteRefresh = false,
+    bool quiet = false, // 静默刷新时跳过展开状态重置
   }) async {
     final remoteAvailable = await _checkRemoteAvailability();
     if (!remoteAvailable) {
@@ -222,6 +239,7 @@ class _MainFavoritesPageState extends State<MainFavoritesPage> {
           folders.map((folder) => folder.name).toList(growable: false),
           preferredFolder: preferredFolder,
           collapseDrawer: collapseDrawer,
+          quiet: quiet,
         );
       });
     } on RemoteLibraryRequestException catch (e) {
@@ -291,6 +309,7 @@ class _MainFavoritesPageState extends State<MainFavoritesPage> {
     List<String> folders, {
     String? preferredFolder,
     bool collapseDrawer = false,
+    bool quiet = false, // 静默刷新时跳过展开状态重置
   }) {
     _folders = folders;
 
@@ -302,12 +321,15 @@ class _MainFavoritesPageState extends State<MainFavoritesPage> {
       _currentFolder = null;
     }
 
-    if (_currentFolder == null) {
-      _foldersExpanded = true;
-    } else if (collapseDrawer || preferredFolder != null) {
-      _foldersExpanded = false;
-    } else {
-      _foldersExpanded = _FavoritesPageSession.foldersExpanded;
+    // quiet=true 时（后台静默刷新）：完全保留当前展开状态，不重置。
+    if (!quiet) {
+      if (_currentFolder == null) {
+        _foldersExpanded = true;
+      } else if (collapseDrawer || preferredFolder != null) {
+        _foldersExpanded = false;
+      } else {
+        _foldersExpanded = _FavoritesPageSession.foldersExpanded;
+      }
     }
 
     _FavoritesPageSession.currentFolder = _currentFolder;

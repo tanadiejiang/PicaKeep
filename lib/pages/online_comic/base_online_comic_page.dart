@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
+import 'package:photo_view/photo_view.dart';
 
 import 'package:picakeep/components/info_value_action.dart';
 import 'package:picakeep/foundation/state_controller.dart';
 import 'package:picakeep/foundation/untranslated_tags/untranslated_tag_coordinator.dart';
 import 'package:picakeep/network/res.dart';
 import 'package:picakeep/tools/tags_translation.dart';
+import 'package:picakeep/tools/translations.dart';
 
 import 'online_comic_page_components.dart';
 import 'online_comic_page_logic.dart';
@@ -125,6 +127,14 @@ abstract class BaseOnlineComicPage<T> extends StatelessWidget {
   /// 章节长按回调（如 JM 强制在线阅读）。
   void Function(BuildContext context, T data, int ep)? get onEpisodeLongPress =>
       null;
+
+  /// 收藏到本地。返回 null 则不显示「本地收藏」按钮。
+  /// 各子类可重写此方法构建对应源的 FavoriteItem 并调用 LocalFavoritesManager。
+  void Function(BuildContext context, T data)? get onLocalFavorite => null;
+
+  /// 返回当前漫画的候选下载 ID 列表，用于已下载状态检测。
+  /// 返回 null 则跳过检测，按钮始终显示「下载」。
+  List<String>? downloadCandidateIds(T data) => null;
 
   /// 推荐项点击回调。默认无操作。
   void onRecommendationTap(BuildContext context, T data, int index) {}
@@ -275,6 +285,10 @@ abstract class BaseOnlineComicPage<T> extends StatelessWidget {
     // 数据态首次构建时挂载滚动监听（attachScrollListener 内部去重）。
     WidgetsBinding.instance.addPostFrameCallback((_) {
       logic.attachScrollListener();
+      final candidates = downloadCandidateIds(data);
+      if (candidates != null && !logic.downloaded) {
+        logic.checkDownloadedState(candidates);
+      }
     });
 
     final custom = buildCustomSection(context, data);
@@ -416,6 +430,18 @@ abstract class BaseOnlineComicPage<T> extends StatelessWidget {
         OnlineComicCover(
           url: extractCover(data) ?? '',
           headers: imageHeaders,
+          onTap: (extractCover(data) ?? '').isEmpty
+              ? null
+              : () {
+                  final heroTag = 'online-cover-${sourceKey}_$id';
+                  Navigator.of(context).push(MaterialPageRoute(
+                    builder: (_) => _OnlineCoverPreviewPage(
+                      url: extractCover(data)!,
+                      headers: imageHeaders,
+                      heroTag: heroTag,
+                    ),
+                  ));
+                },
         ),
         const SizedBox(width: 16),
         Expanded(
@@ -509,6 +535,12 @@ abstract class BaseOnlineComicPage<T> extends StatelessWidget {
           label: '评论',
           onTap: () => onComment!(context, data),
         ),
+      if (onLocalFavorite != null)
+        OnlineComicIconAction(
+          icon: Icons.bookmark_add_outlined,
+          label: '本地收藏',
+          onTap: () => onLocalFavorite!(context, data),
+        ),
     ];
 
     return Column(
@@ -523,8 +555,10 @@ abstract class BaseOnlineComicPage<T> extends StatelessWidget {
           children: [
             Expanded(
               child: OnlineComicPillButton(
-                label: '下载',
-                onTap: () => onDownload(context, data),
+                label: logic.downloaded ? '已下载' : '下载',
+                onTap: logic.downloaded
+                    ? null
+                    : () => onDownload(context, data),
               ),
             ),
             const SizedBox(width: 12),
@@ -538,6 +572,58 @@ abstract class BaseOnlineComicPage<T> extends StatelessWidget {
           ],
         ),
       ],
+    );
+  }
+}
+
+/// 封面全屏预览页（与 picacg 详情页 `_CoverPreviewPage` 同构）。
+///
+/// 供 [BaseOnlineComicPage] 各源子类（jm/nhentai/eh）的封面点击预览使用；
+/// [headers] 透传给 [NetworkImage]（JM 封面需要 `getJmImgHeaders()`）。
+class _OnlineCoverPreviewPage extends StatelessWidget {
+  const _OnlineCoverPreviewPage({
+    required this.url,
+    required this.headers,
+    required this.heroTag,
+  });
+
+  final String url;
+  final Map<String, String>? headers;
+  final String heroTag;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Text('图片'.tl),
+      ),
+      body: Hero(
+        tag: heroTag,
+        child: PhotoView(
+          minScale: PhotoViewComputedScale.contained * 0.9,
+          imageProvider: NetworkImage(url, headers: headers),
+          filterQuality: FilterQuality.medium,
+          loadingBuilder: (context, event) {
+            return const ColoredBox(
+              color: Colors.black,
+              child: Center(child: CircularProgressIndicator()),
+            );
+          },
+          errorBuilder: (context, error, stackTrace, retry) {
+            return ColoredBox(
+              color: Colors.black,
+              child: Center(
+                child: IconButton(
+                  tooltip: '重试'.tl,
+                  color: Colors.white,
+                  icon: const Icon(Icons.refresh),
+                  onPressed: retry,
+                ),
+              ),
+            );
+          },
+        ),
+      ),
     );
   }
 }

@@ -947,10 +947,21 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
       ),
       _buildSwitch(
         title: '下载漫画'.tl,
-        subtitle: '每次下载均需二次确认'.tl,
+        subtitle: '开启「允许AI自动下载」后 AI 可自行入队，否则工具对 AI 不可见'.tl,
         settingIndex: aiCapabilityDownloadComicSettingIndex,
         leading: const Icon(Icons.download_outlined),
       ),
+      // 16轮05：仅当下载能力主开关开启时显示子toggle
+      if (appdata.settings[aiCapabilityDownloadComicSettingIndex] == '1')
+        Padding(
+          padding: const EdgeInsetsDirectional.only(start: 32),
+          child: _buildSwitch(
+            title: '允许AI自动下载'.tl,
+            subtitle: '关闭时 download_comic 工具对 AI 不可见，AI 无法自行发起下载'.tl,
+            settingIndex: aiAutoDownloadEnabledSettingIndex,
+            leading: const Icon(Icons.bolt_outlined),
+          ),
+        ),
       _buildSwitch(
         title: '本地库问答'.tl,
         settingIndex: aiCapabilityQueryLocalLibrarySettingIndex,
@@ -1294,12 +1305,16 @@ class _ModelIdFieldState extends State<_ModelIdField> {
                       child: CircularProgressIndicator(strokeWidth: 2),
                     ),
                   )
-                // 点箭头 = 聚焦（弹下拉）+ 触发拉取，与聚焦路径共用缓存去重。
+                // 点箭头：已展开则折叠（unfocus），未展开则聚焦+拉取。
                 : IconButton(
                     icon: const Icon(Icons.arrow_drop_down),
                     onPressed: () {
-                      _focusNode.requestFocus();
-                      _triggerFetch();
+                      if (_focusNode.hasFocus) {
+                        _focusNode.unfocus();
+                      } else {
+                        _focusNode.requestFocus();
+                        _triggerFetch();
+                      }
                     },
                   ),
           ),
