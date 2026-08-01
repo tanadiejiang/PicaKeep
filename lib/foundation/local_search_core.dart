@@ -63,7 +63,8 @@ Iterable<String> localDownloadedItemSearchTerms(DownloadedItem item) sync* {
   }
 }
 
-bool matchesLocalDownloadedItem(DownloadedItem item, String keyword) {
+bool matchesLocalDownloadedItem(DownloadedItem item, String keyword,
+    {List<String> aliases = const []}) {
   final words = keyword
       .trim()
       .toLowerCase()
@@ -75,5 +76,17 @@ bool matchesLocalDownloadedItem(DownloadedItem item, String keyword) {
   }
   final terms =
       localDownloadedItemSearchTerms(item).where((e) => e.isNotEmpty).toList();
-  return words.every((word) => terms.any((term) => term.contains(word)));
+  bool matchWords(List<String> ws) =>
+      ws.isNotEmpty && ws.every((w) => terms.any((t) => t.contains(w)));
+  if (matchWords(words)) return true;
+  for (final a in aliases) {
+    final aw = a
+        .trim()
+        .toLowerCase()
+        .split(RegExp(r'\s+'))
+        .where((e) => e.isNotEmpty)
+        .toList();
+    if (matchWords(aw)) return true;
+  }
+  return false;
 }

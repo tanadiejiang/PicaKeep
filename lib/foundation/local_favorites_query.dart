@@ -221,15 +221,19 @@ extension LocalFavoritesManagerQuery on LocalFavoritesManager {
     return [for (final key in keys) merged[key]!];
   }
 
-  List<FavoriteItemWithFolderInfo> search(String keyword) {
+  List<FavoriteItemWithFolderInfo> search(String keyword,
+      {List<String> aliases = const []}) {
     final keywordList = keyword.split(" ").where((e) => e.isNotEmpty).toList();
     if (keywordList.isEmpty) {
       return allComics();
     }
+    bool matchAny(FavoriteItem comic, String kw) =>
+        _matchesFavoriteKeyword(comic, kw) ||
+        aliases.any((a) => _matchesFavoriteKeyword(comic, a));
     final comics = <FavoriteItemWithFolderInfo>[];
     for (final table in _getFolderNameStrings()) {
       for (final comic in getAllComics(table)) {
-        if (_matchesFavoriteKeyword(comic, keywordList.first)) {
+        if (matchAny(comic, keywordList.first)) {
           comics.add(FavoriteItemWithFolderInfo(comic, table));
           if (comics.length > 200) {
             break;
@@ -241,12 +245,8 @@ extension LocalFavoritesManagerQuery on LocalFavoritesManager {
       }
     }
 
-    bool test(FavoriteItemWithFolderInfo comic, String kw) {
-      return _matchesFavoriteKeyword(comic.comic, kw);
-    }
-
     for (var i = 1; i < keywordList.length; i++) {
-      comics.removeWhere((element) => !test(element, keywordList[i]));
+      comics.removeWhere((element) => !matchAny(element.comic, keywordList[i]));
     }
 
     return comics;

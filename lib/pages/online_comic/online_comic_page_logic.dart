@@ -2,6 +2,8 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import 'package:picakeep/foundation/download.dart';
+import 'package:picakeep/foundation/local_library.dart';
 import 'package:picakeep/foundation/state_controller.dart';
 import 'package:picakeep/network/res.dart';
 import 'package:uuid/uuid.dart';
@@ -48,6 +50,9 @@ class OnlineComicPageLogic<T> extends StateController {
 
   /// 点赞态。子类可在 `onLike` 完成后通过 [setLiked] 同步。
   bool liked = false;
+
+  /// 已下载状态。由 [checkDownloadedState] 异步设置。
+  bool downloaded = false;
 
   /// 详情页滚动控制器，用于驱动 AppBar 标题随滚动渐显。
   final ScrollController scrollController = ScrollController();
@@ -132,6 +137,18 @@ class OnlineComicPageLogic<T> extends StateController {
     if (liked == value) return;
     liked = value;
     update();
+  }
+
+  /// 检测当前漫画是否已下载（本地库 + 下载数据库双通道）。
+  Future<void> checkDownloadedState(List<String> candidates) async {
+    try {
+      final localItem =
+          LocalLibraryManager().findCachedByCandidates(candidates);
+      final result = localItem != null ||
+          DownloadManager().resolveExistingId(candidates) != null;
+      downloaded = result;
+      update();
+    } catch (_) {}
   }
 
   /// 在数据态首次构建时挂载滚动监听（只挂一次）。

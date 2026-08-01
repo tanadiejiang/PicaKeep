@@ -44,6 +44,7 @@ class OnlineComicCover extends StatelessWidget {
     this.width = 120,
     this.height = 168,
     this.radius = 8,
+    this.onTap,
   });
 
   final String url;
@@ -51,6 +52,7 @@ class OnlineComicCover extends StatelessWidget {
   final double width;
   final double height;
   final double radius;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
@@ -61,18 +63,21 @@ class OnlineComicCover extends StatelessWidget {
           color: colorScheme.surfaceContainerHighest,
           child: const Icon(Icons.broken_image_outlined),
         );
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(radius),
-      child: url.isEmpty
-          ? placeholder()
-          : Image.network(
-              url,
-              width: width,
-              height: height,
-              fit: BoxFit.cover,
-              headers: headers,
-              errorBuilder: (_, __, ___) => placeholder(),
-            ),
+    return GestureDetector(
+      onTap: onTap,
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(radius),
+        child: url.isEmpty
+            ? placeholder()
+            : Image.network(
+                url,
+                width: width,
+                height: height,
+                fit: BoxFit.cover,
+                headers: headers,
+                errorBuilder: (_, __, ___) => placeholder(),
+              ),
+      ),
     );
   }
 }
@@ -399,7 +404,7 @@ class OnlineComicPillButton extends StatelessWidget {
   });
 
   final String label;
-  final VoidCallback onTap;
+  final VoidCallback? onTap;
   final bool busy;
   final bool filled;
 
@@ -422,12 +427,12 @@ class OnlineComicPillButton extends StatelessWidget {
     );
     return filled
         ? FilledButton(
-            onPressed: busy ? null : onTap,
+            onPressed: busy || onTap == null ? null : onTap,
             style: style,
             child: child,
           )
         : FilledButton.tonal(
-            onPressed: busy ? null : onTap,
+            onPressed: busy || onTap == null ? null : onTap,
             style: style,
             child: child,
           );

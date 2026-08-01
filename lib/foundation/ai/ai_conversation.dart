@@ -1414,9 +1414,11 @@ class AiConversationController extends ChangeNotifier {
     );
     if (shouldAutoDisplayToolResult(toolName, result.ok)) {
       final report = AiResultItem.decodeToolData(result.data);
-      _pendingDisplayItems = report.items.isEmpty
-          ? null
-          : report.items.map((item) => item.toJson()).toList(growable: false);
+      if (report.items.isNotEmpty) {
+        _pendingDisplayItems =
+            report.items.map((item) => item.toJson()).toList(growable: false);
+        _flushPendingDisplayItems(); // 立即生成卡片，不等轮次结束
+      }
     }
     notifyListeners();
   }
@@ -1532,6 +1534,11 @@ class AiConversationController extends ChangeNotifier {
         AiCapabilities.registry.toolSchemas().where((schema) {
       final toolName = schema['name']?.toString() ?? '';
       if (!isAiCapabilityEnabled(toolName)) return false;
+      // 16轮05：download_comic 额外要求自动下载子开关开启
+      if (toolName == 'download_comic' &&
+          appdata.settings[aiAutoDownloadEnabledSettingIndex] != '1') {
+        return false;
+      }
       return isToolAllowedByScope(
         toolName,
         effectiveLocalOnly: localOnly,

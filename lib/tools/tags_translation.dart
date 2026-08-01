@@ -254,3 +254,27 @@ const _tagCategoryZh = <String, String>{
   'author': '作者',
   'uploader': '上传者',
 };
+
+/// 本地 tag 的跨语言别名集合（不含自身；冒号前缀先剥离）。
+/// 正向：英文 key → 中文译名；反向：中文译名 → 英文 key。
+/// eh 的 "namespace:tag" 会额外产出纯 tag 别名。
+List<String> tagAliasesForTag(String tag) {
+  final t = tag.trim().toLowerCase();
+  if (t.isEmpty) return const [];
+  final postColon = t.contains(':') ? t.split(':').last.trim() : '';
+  final aliases = <String>{};
+  if (postColon.isNotEmpty && postColon != t) aliases.add(postColon);
+  for (final table in _tagTranslations.entries) {
+    for (final entry in table.value.entries) {
+      if (entry.key == t || (postColon.isNotEmpty && entry.key == postColon)) {
+        aliases.add(entry.value.trim());
+      } else {
+        final v = entry.value.toLowerCase();
+        if (v.contains(t) || (postColon.isNotEmpty && v.contains(postColon))) {
+          aliases.add(entry.key);
+        }
+      }
+    }
+  }
+  return aliases.toList(growable: false);
+}
