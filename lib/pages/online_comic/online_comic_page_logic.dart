@@ -151,6 +151,7 @@ class OnlineComicPageLogic<T> extends StateController {
           LocalLibraryManager().findCachedByCandidates(candidates);
       final result = localItem != null ||
           DownloadManager().resolveExistingId(candidates) != null;
+      if (downloaded == result) return;
       downloaded = result;
       update();
     } catch (_) {}
