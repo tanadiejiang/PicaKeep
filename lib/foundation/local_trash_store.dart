@@ -285,9 +285,9 @@ class LocalTrashStore {
       '''
       select item_id, original_path, source_db_path, source_db_id, source_directory
       from local_trash
-      where state in (?, ?)
+      where state = ?
       ''',
-      [localTrashStateTrashed, localTrashStatePurged],
+      [localTrashStateTrashed],
     );
     final itemIds = <String>{};
     final originalPaths = <String>{};
