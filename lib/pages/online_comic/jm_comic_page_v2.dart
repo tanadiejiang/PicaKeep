@@ -113,7 +113,8 @@ class JmComicPageV2 extends BaseOnlineComicPage<JmComicInfo> {
   }
 
   @override
-  Future<void> onRead(BuildContext context, JmComicInfo data, {int ep = 1}) async {
+  Future<void> onRead(BuildContext context, JmComicInfo data,
+      {int ep = 1}) async {
     await History.ensureForLocalRead(
       target: data.id,
       type: HistoryType.jmComic,
@@ -258,7 +259,9 @@ class JmComicPageV2 extends BaseOnlineComicPage<JmComicInfo> {
 
   @override
   void onRecommendationTap(BuildContext context, JmComicInfo data, int index) {
-    if (data.relatedComics.isEmpty || index >= data.relatedComics.length) return;
+    if (data.relatedComics.isEmpty || index >= data.relatedComics.length) {
+      return;
+    }
 
     final item = data.relatedComics[index];
     Navigator.of(context).push(
@@ -267,6 +270,31 @@ class JmComicPageV2 extends BaseOnlineComicPage<JmComicInfo> {
       ),
     );
   }
+
+  // ── 相似搜索（jm 无 subTitle，始终用 title）────────────────────────────
+
+  @override
+  void Function(BuildContext context, JmComicInfo data)? get onSearchSimilar =>
+      (context, data) {
+        final source = ComicSource.find(sourceKey);
+        if (source == null) return;
+        final keyword =
+            '"${data.title.replaceAll(RegExp(r'\[.*?\]'), '').replaceAll(RegExp(r'\(.*?\)'), '').trim()}"';
+        Navigator.of(context).push(
+          AppPageRoute(
+            builder: (_) => OnlineSearchResultPage(
+              source: source,
+              keyword: keyword,
+              option: '',
+            ),
+          ),
+        );
+      };
+
+  // ── 已下载检测（与下载队列 taskId / 本地库 ID 一致）─────────────────────
+
+  @override
+  List<String>? downloadCandidateIds(JmComicInfo data) => ['jm${data.id}'];
 }
 
 /// JM 网络收藏夹选择弹窗。返回选中的收藏夹 id（'' = 默认夹），取消返回 null。

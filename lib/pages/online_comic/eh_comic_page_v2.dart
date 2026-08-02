@@ -398,6 +398,33 @@ class EhentaiComicPageV2 extends BaseOnlineComicPage<Gallery> {
       auth: data.auth ?? {},
     );
   }
+
+  // ── 相似搜索（优先 subTitle，否则 title）────────────────────────────────
+
+  @override
+  void Function(BuildContext context, Gallery data)? get onSearchSimilar =>
+      (context, data) {
+        final source = ComicSource.find(sourceKey);
+        if (source == null) return;
+        final raw =
+            data.subTitle?.isNotEmpty == true ? data.subTitle! : data.title;
+        final keyword =
+            '"${raw.replaceAll(RegExp(r'\[.*?\]'), '').replaceAll(RegExp(r'\(.*?\)'), '').trim()}"';
+        Navigator.of(context).push(
+          AppPageRoute(
+            builder: (_) => OnlineSearchResultPage(
+              source: source,
+              keyword: keyword,
+              option: source.searchPageData?.defaultOption ?? '',
+            ),
+          ),
+        );
+      };
+
+  // ── 已下载检测（与下载队列 taskId / 本地库 ID 一致）─────────────────────
+
+  @override
+  List<String>? downloadCandidateIds(Gallery data) => [getGalleryId(data.link)];
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

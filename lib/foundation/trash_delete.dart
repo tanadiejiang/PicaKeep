@@ -21,6 +21,15 @@ extension TrashManagerDelete on TrashManager {
     return _moveLocalItemToTrash(item);
   }
 
+  /// 强制永久删除，不走回收站（无论设置如何）。
+  Future<DeleteItemResult> forceDeletePermanently(DownloadedItem item) async {
+    final error = await _deleteLocalItemPermanently(item);
+    if (error != null) {
+      return DeleteItemResult.failure(error);
+    }
+    return DeleteItemResult.success();
+  }
+
   Future<DeleteItemResult> _moveLocalItemToTrash(DownloadedItem item) async {
     final target = await _resolveLocalDeleteTarget(item);
     if (target == null) {

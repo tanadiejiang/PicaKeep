@@ -348,6 +348,33 @@ class NhentaiComicPageV2 extends BaseOnlineComicPage<NhentaiComic> {
     ScaffoldMessenger.of(context)
         .showSnackBar(const SnackBar(content: Text('已加入下载队列')));
   }
+
+  // ── 相似搜索（用标题做精确关键词搜索）──────────────────────────────────
+
+  @override
+  void Function(BuildContext context, NhentaiComic data)? get onSearchSimilar =>
+      (context, data) {
+        final source = ComicSource.find(sourceKey);
+        if (source == null) return;
+        final raw = data.subTitle.isEmpty ? data.title : data.subTitle;
+        final keyword =
+            '"${raw.replaceAll(RegExp(r'\[.*?\]'), '').replaceAll(RegExp(r'\(.*?\)'), '').trim()}"';
+        Navigator.of(context).push(
+          AppPageRoute(
+            builder: (_) => OnlineSearchResultPage(
+              source: source,
+              keyword: keyword,
+              option: source.searchPageData?.defaultOption ?? '',
+            ),
+          ),
+        );
+      };
+
+  // ── 已下载检测（与下载队列 taskId / 本地库 ID 一致）─────────────────────
+
+  @override
+  List<String>? downloadCandidateIds(NhentaiComic data) =>
+      ['nhentai${data.id}'];
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
