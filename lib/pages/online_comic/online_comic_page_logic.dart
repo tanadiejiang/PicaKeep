@@ -55,6 +55,9 @@ class OnlineComicPageLogic<T> extends StateController {
   /// 已下载状态。由 [checkDownloadedState] 异步设置。
   bool downloaded = false;
 
+  /// 删除操作进行中（防止弹窗/删除被重复触发）。
+  bool isDeleting = false;
+
   /// 详情页滚动控制器，用于驱动 AppBar 标题随滚动渐显。
   final ScrollController scrollController = ScrollController();
 
@@ -142,6 +145,7 @@ class OnlineComicPageLogic<T> extends StateController {
 
   /// 检测当前漫画是否已下载（本地库 + 下载数据库双通道）。
   Future<void> checkDownloadedState(List<String> candidates) async {
+    if (isDeleting) return;
     try {
       final localItem =
           LocalLibraryManager().findCachedByCandidates(candidates);
@@ -166,6 +170,7 @@ class OnlineComicPageLogic<T> extends StateController {
         }
       }
     } catch (_) {}
+    LocalLibraryManager().evictCachedCandidates(candidates);
     downloaded = false;
     update();
   }
@@ -183,6 +188,7 @@ class OnlineComicPageLogic<T> extends StateController {
         }
       }
     } catch (_) {}
+    LocalLibraryManager().evictCachedCandidates(candidates);
     downloaded = false;
     update();
   }

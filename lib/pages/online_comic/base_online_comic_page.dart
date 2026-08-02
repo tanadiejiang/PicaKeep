@@ -608,39 +608,55 @@ abstract class BaseOnlineComicPage<T> extends StatelessWidget {
                       downloadCandidateIds(data) != null) ...[
                     const SizedBox(width: 4),
                     _DeleteDownloadAction(
-                      onTap: () async {
-                        final candidates = downloadCandidateIds(data);
-                        if (candidates == null) return;
-                        final action = await showDialog<String>(
-                          context: context,
-                          builder: (ctx) => AlertDialog(
-                            title: const Text('删除下载'),
-                            content: const Text('确定要删除本地已下载文件吗？'),
-                            actions: [
-                              TextButton(
-                                onPressed: () => Navigator.of(ctx).pop(null),
-                                child: const Text('取消'),
-                              ),
-                              TextButton(
-                                onPressed: () =>
-                                    Navigator.of(ctx).pop('permanent'),
-                                child: const Text('直接删除'),
-                              ),
-                              TextButton(
-                                onPressed: () =>
-                                    Navigator.of(ctx).pop('trash'),
-                                child: const Text('移入回收站'),
-                              ),
-                            ],
-                          ),
-                        );
-                        if (!context.mounted || action == null) return;
-                        if (action == 'permanent') {
-                          await logic.deleteDownloadPermanently(candidates);
-                        } else {
-                          await logic.deleteDownload(candidates);
-                        }
-                      },
+                      onTap: logic.isDeleting
+                          ? null
+                          : () async {
+                              final candidates = downloadCandidateIds(data);
+                              if (candidates == null) return;
+                              logic.isDeleting = true;
+                              logic.update();
+                              try {
+                                final action = await showDialog<String>(
+                                  context: context,
+                                  builder: (ctx) => AlertDialog(
+                                    title: const Text('删除下载'),
+                                    content: const Text('确定要删除本地已下载文件吗？'),
+                                    actions: [
+                                      TextButton(
+                                        onPressed: () =>
+                                            Navigator.of(ctx).pop(null),
+                                        child: const Text('取消'),
+                                      ),
+                                      TextButton(
+                                        onPressed: () =>
+                                            Navigator.of(ctx).pop('permanent'),
+                                        child: const Text('直接删除'),
+                                      ),
+                                      TextButton(
+                                        onPressed: () =>
+                                            Navigator.of(ctx).pop('trash'),
+                                        child: const Text('移入回收站'),
+                                      ),
+                                    ],
+                                  ),
+                                );
+                                if (!context.mounted || action == null) {
+                                  return;
+                                }
+                                if (action == 'permanent') {
+                                  await logic.deleteDownloadPermanently(
+                                    candidates,
+                                  );
+                                } else {
+                                  await logic.deleteDownload(candidates);
+                                }
+                              } finally {
+                                if (context.mounted) {
+                                  logic.isDeleting = false;
+                                  logic.update();
+                                }
+                              }
+                            },
                     ),
                   ],
                 ],
@@ -667,7 +683,7 @@ abstract class BaseOnlineComicPage<T> extends StatelessWidget {
 class _DeleteDownloadAction extends StatelessWidget {
   const _DeleteDownloadAction({required this.onTap});
 
-  final VoidCallback onTap;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {

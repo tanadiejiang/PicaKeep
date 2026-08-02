@@ -90,6 +90,27 @@ extension LocalLibraryQuery on LocalLibraryManager {
     return null;
   }
 
+  /// 立即从内存缓存中驱逐与 [candidates] 匹配的条目。
+  ///
+  /// 用于删除操作完成后立即使旧缓存失效，避免 [checkDownloadedState]
+  /// 在 [LocalLibraryManager.refresh] 完成前读到旧数据。
+  /// 下一次 [refresh] 或 [ensureLoaded] 后缓存会被完整重建，无需额外处理。
+  void evictCachedCandidates(Iterable<String> candidates) {
+    LocalLibraryComicItem? found;
+    for (final candidate in candidates) {
+      final normalized = candidate.trim();
+      if (normalized.isEmpty) continue;
+      found = _idIndex[normalized] ?? _aliasIndex[normalized];
+      if (found != null) break;
+    }
+    if (found == null) return;
+    _items.remove(found);
+    _idIndex.remove(found.id);
+    for (final alias in found.aliases) {
+      _aliasIndex.remove(alias);
+    }
+  }
+
   Future<LocalLibraryComicItem?> findById(String id) async {
     await ensureLoaded();
     return findCachedById(id);
