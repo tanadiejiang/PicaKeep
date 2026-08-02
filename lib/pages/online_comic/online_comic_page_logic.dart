@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:picakeep/foundation/download.dart';
 import 'package:picakeep/foundation/local_library.dart';
 import 'package:picakeep/foundation/state_controller.dart';
+import 'package:picakeep/foundation/trash.dart';
 import 'package:picakeep/network/res.dart';
 import 'package:uuid/uuid.dart';
 
@@ -149,6 +150,41 @@ class OnlineComicPageLogic<T> extends StateController {
       downloaded = result;
       update();
     } catch (_) {}
+  }
+
+  /// 删除本地已下载内容并重置状态。
+  /// 优先走 TrashManager（与本地详情页行为一致，支持回收站）。
+  Future<void> deleteDownload(List<String> candidates) async {
+    try {
+      final item = LocalLibraryManager().findCachedByCandidates(candidates);
+      if (item != null) {
+        await TrashManager.instance.deleteItem(item);
+      } else {
+        final id = DownloadManager().resolveExistingId(candidates);
+        if (id != null) {
+          await DownloadManager().delete([id]);
+        }
+      }
+    } catch (_) {}
+    downloaded = false;
+    update();
+  }
+
+  /// 直接永久删除（不走回收站）。
+  Future<void> deleteDownloadPermanently(List<String> candidates) async {
+    try {
+      final item = LocalLibraryManager().findCachedByCandidates(candidates);
+      if (item != null) {
+        await TrashManager.instance.forceDeletePermanently(item);
+      } else {
+        final id = DownloadManager().resolveExistingId(candidates);
+        if (id != null) {
+          await DownloadManager().delete([id]);
+        }
+      }
+    } catch (_) {}
+    downloaded = false;
+    update();
   }
 
   /// 在数据态首次构建时挂载滚动监听（只挂一次）。

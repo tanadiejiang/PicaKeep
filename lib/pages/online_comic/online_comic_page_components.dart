@@ -317,7 +317,7 @@ class OnlineComicActionButton extends StatelessWidget {
 // 信息 chip
 // ============================================================
 
-/// 详情页顶部图标动作（无底描边圆形图标 + 下方标签）。
+/// 详情页顶部图标动作（无圆框图标 + 下方标签）。
 ///
 /// 对齐上游 PicaComic：从头开始 / 分享 / 收藏 / 赞 / 评论。
 /// [label] 可传数字（如赞数），[active] 用于收藏/已赞高亮。
@@ -340,40 +340,27 @@ class OnlineComicIconAction extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    // 图标统一跟随主题色；active（如已收藏）用更实的描边/底色区分。
-    final color = cs.primary;
+    // 无圆框：active（如已收藏）用更实的主题色，非 active 用略淡的 onSurface。
+    final color = active ? cs.primary : cs.onSurface.withValues(alpha: 0.7);
     return InkWell(
       onTap: busy ? null : onTap,
       borderRadius: BorderRadius.circular(40),
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Container(
-              width: 44,
-              height: 44,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                // 圆底始终无色（透明）；图标恒为主题色。
-                // active（已收藏/已赞）只把描边加实区分，不填充底色。
-                border: Border.all(
-                  color: cs.primary.withValues(alpha: active ? 1.0 : 0.5),
-                ),
-              ),
-              alignment: Alignment.center,
-              child: busy
-                  ? const SizedBox(
-                      width: 20,
-                      height: 20,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : Icon(
-                      icon,
-                      size: 22,
-                      color: color,
-                    ),
-            ),
+            busy
+                ? const SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : Icon(
+                    icon,
+                    size: 24,
+                    color: color,
+                  ),
             const SizedBox(height: 4),
             Text(
               label,

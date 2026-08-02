@@ -132,6 +132,10 @@ abstract class BaseOnlineComicPage<T> extends StatelessWidget {
   /// 各子类可重写此方法构建对应源的 FavoriteItem 并调用 LocalFavoritesManager。
   void Function(BuildContext context, T data)? get onLocalFavorite => null;
 
+  /// 相似搜索回调，返回 null 则不显示「相似」按钮。
+  /// 子类实现时构建搜索关键词并跳转到 OnlineSearchResultPage。
+  void Function(BuildContext context, T data)? get onSearchSimilar => null;
+
   /// 返回当前漫画的候选下载 ID 列表，用于已下载状态检测。
   /// 返回 null 则跳过检测，按钮始终显示「下载」。
   List<String>? downloadCandidateIds(T data) => null;
@@ -535,6 +539,12 @@ abstract class BaseOnlineComicPage<T> extends StatelessWidget {
           label: '评论',
           onTap: () => onComment!(context, data),
         ),
+      if (onSearchSimilar != null)
+        OnlineComicIconAction(
+          icon: Icons.search_outlined,
+          label: '相似',
+          onTap: () => onSearchSimilar!(context, data),
+        ),
       if (onLocalFavorite != null)
         OnlineComicIconAction(
           icon: Icons.bookmark_add_outlined,
@@ -554,11 +564,86 @@ abstract class BaseOnlineComicPage<T> extends StatelessWidget {
         Row(
           children: [
             Expanded(
-              child: OnlineComicPillButton(
-                label: logic.downloaded ? '已下载' : '下载',
-                onTap: logic.downloaded
-                    ? null
-                    : () => onDownload(context, data),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: OnlineComicPillButton(
+                      label: '下载',
+                      onTap: !logic.downloaded
+                          ? () => onDownload(context, data)
+                          : () async {
+                              final confirm = await showDialog<bool>(
+                                context: context,
+                                builder: (ctx) => AlertDialog(
+                                  title: const Text('重新下载'),
+                                  content: const Text('已有本地文件，是否删除后重新下载？'),
+                                  actions: [
+                                    TextButton(
+                                      onPressed: () =>
+                                          Navigator.of(ctx).pop(false),
+                                      child: const Text('取消'),
+                                    ),
+                                    TextButton(
+                                      onPressed: () =>
+                                          Navigator.of(ctx).pop(true),
+                                      child: const Text('删除并下载'),
+                                    ),
+                                  ],
+                                ),
+                              );
+                              if (confirm == true && context.mounted) {
+                                final candidates =
+                                    downloadCandidateIds(data);
+                                if (candidates != null) {
+                                  await logic.deleteDownload(candidates);
+                                }
+                                if (context.mounted) {
+                                  onDownload(context, data);
+                                }
+                              }
+                            },
+                    ),
+                  ),
+                  if (logic.downloaded &&
+                      downloadCandidateIds(data) != null) ...[
+                    const SizedBox(width: 4),
+                    _DeleteDownloadAction(
+                      onTap: () async {
+                        final candidates = downloadCandidateIds(data);
+                        if (candidates == null) return;
+                        final action = await showDialog<String>(
+                          context: context,
+                          builder: (ctx) => AlertDialog(
+                            title: const Text('删除下载'),
+                            content: const Text('确定要删除本地已下载文件吗？'),
+                            actions: [
+                              TextButton(
+                                onPressed: () => Navigator.of(ctx).pop(null),
+                                child: const Text('取消'),
+                              ),
+                              TextButton(
+                                onPressed: () =>
+                                    Navigator.of(ctx).pop('permanent'),
+                                child: const Text('直接删除'),
+                              ),
+                              TextButton(
+                                onPressed: () =>
+                                    Navigator.of(ctx).pop('trash'),
+                                child: const Text('移入回收站'),
+                              ),
+                            ],
+                          ),
+                        );
+                        if (!context.mounted || action == null) return;
+                        if (action == 'permanent') {
+                          await logic.deleteDownloadPermanently(candidates);
+                        } else {
+                          await logic.deleteDownload(candidates);
+                        }
+                      },
+                    ),
+                  ],
+                ],
               ),
             ),
             const SizedBox(width: 12),
@@ -572,6 +657,39 @@ abstract class BaseOnlineComicPage<T> extends StatelessWidget {
           ],
         ),
       ],
+    );
+  }
+}
+
+/// 已下载时显示在下载按钮右侧的「删除下载」入口。
+///
+/// 样式对齐原项目图标行动作：delete_outline 图标（主题色）+ 12px 文字。
+class _DeleteDownloadAction extends StatelessWidget {
+  const _DeleteDownloadAction({required this.onTap});
+
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(8),
+      child: SizedBox(
+        height: 72,
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            Icon(
+              Icons.delete_outline,
+              size: 24,
+              color: Theme.of(context).colorScheme.primary,
+            ),
+            const SizedBox(height: 4),
+            const Text('删除下载', style: TextStyle(fontSize: 12)),
+          ],
+        ),
+      ),
     );
   }
 }
