@@ -480,12 +480,14 @@ Future<double> _computeDirectorySizeMbForPath(String path) async {
   return bytes / 1024 / 1024;
 }
 
-String _resolveDownloadItemDirectoryFromMetadata(
+Future<String> _resolveDownloadItemDirectoryFromMetadata(
   String rootPath,
   String rawId,
   String rawDirectory,
   DownloadedItem item,
-) {
+  Set<String> sourceDirectoryNames, {
+  bool trustStorageFromDatabase = false,
+}) async {
   final candidates = <String>[
     if (rawDirectory.trim().isNotEmpty) rawDirectory.trim(),
     if (item.directory?.trim().isNotEmpty == true) item.directory!.trim(),
@@ -495,37 +497,59 @@ String _resolveDownloadItemDirectoryFromMetadata(
     _sanitizeFileName(item.name),
   ];
 
-  String? candidate;
+  String? firstCandidate;
+  final seenPaths = <String>{};
   for (final value in candidates) {
     final normalized = value.trim();
-    if (normalized.isNotEmpty) {
-      candidate = normalized;
-      break;
+    if (normalized.isEmpty) continue;
+    final candidate = p.normalize(
+      p.isAbsolute(normalized) ? normalized : p.join(rootPath, normalized),
+    );
+    firstCandidate ??= candidate;
+    if (!seenPaths.add(candidate)) continue;
+    // 优先复用已经列出的真实目录；显式字段失效后才尝试 ID/清理后的名称。
+    final indexed = _indexedManagedDownloadDirectory(
+      rootPath,
+      candidate,
+      sourceDirectoryNames,
+    );
+    if (indexed != null) return indexed;
+    if (!trustStorageFromDatabase && await _directoryExists(candidate)) {
+      return candidate;
     }
   }
-  if (candidate == null) {
-    return rootPath;
+  // 没有真实目录时保留原路径，交由“显示全部数据库记录”决定是否展示占位。
+  return firstCandidate ?? rootPath;
+}
+
+String? _indexedManagedDownloadDirectory(
+  String rootPath,
+  String itemDirectory,
+  Set<String> sourceDirectoryNames,
+) {
+  final normalizedRoot = p.normalize(rootPath);
+  final normalizedItem = p.normalize(itemDirectory);
+  // 索引仅列出根目录的直接子项，不能用父目录或同名目录证明其他路径存在。
+  if (!p.equals(p.dirname(normalizedItem), normalizedRoot)) return null;
+  final candidateName = p.basename(normalizedItem);
+  final key = Platform.isWindows ? candidateName.toLowerCase() : candidateName;
+  if (sourceDirectoryNames.contains(key)) {
+    return p.join(normalizedRoot, candidateName);
   }
-  return candidate.startsWith('/') ? candidate : _joinPath(rootPath, candidate);
+  return null;
 }
 
 bool _managedDownloadDirectoryExistsInIndex(
   String rootPath,
   String itemDirectory,
   Set<String> sourceDirectoryNames,
-) {
-  if (sourceDirectoryNames.isEmpty) {
-    return false;
-  }
-  final normalizedRoot =
-      rootPath.replaceAll('\\', '/').replaceFirst(RegExp(r'/+$'), '');
-  final normalizedItem =
-      itemDirectory.replaceAll('\\', '/').replaceFirst(RegExp(r'/+$'), '');
-  final candidateName = normalizedItem.startsWith('$normalizedRoot/')
-      ? normalizedItem.substring(normalizedRoot.length + 1).split('/').first
-      : _basename(normalizedItem);
-  return sourceDirectoryNames.contains(candidateName.toLowerCase());
-}
+) =>
+    _indexedManagedDownloadDirectory(
+      rootPath,
+      itemDirectory,
+      sourceDirectoryNames,
+    ) !=
+    null;
 
 Future<bool> _managedDownloadDirectoryExists(
   String rootPath,

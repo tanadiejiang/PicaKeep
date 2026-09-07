@@ -174,7 +174,7 @@ extension LocalLibraryScan on LocalLibraryManager {
     final sourceDirectoryNames = (await _listDirectoryEntries(source.path))
         .where((entry) => entry.isDirectory)
         .where((entry) => entry.name != _localTrashDirectoryName)
-        .map((entry) => entry.name.toLowerCase())
+        .map((entry) => Platform.isWindows ? entry.name.toLowerCase() : entry.name)
         .toSet();
     final openDbPath = (await _writeDatabaseSnapshot(source, dbBytes)).path;
 
@@ -224,11 +224,13 @@ extension LocalLibraryScan on LocalLibraryManager {
               continue;
             }
 
-            final itemDirectory = _resolveDownloadItemDirectoryFromMetadata(
+            final itemDirectory = await _resolveDownloadItemDirectoryFromMetadata(
               source.path,
               rawId,
               rawDirectory,
               baseItem,
+              sourceDirectoryNames,
+              trustStorageFromDatabase: trustStorageFromDatabase,
             );
             final localItemId = 'local_download::${source.id}::$rawId';
             if (hiddenIndex.matchesManagedDownload(
@@ -393,7 +395,7 @@ extension LocalLibraryScan on LocalLibraryManager {
     final sourceDirectoryNames = (await _listDirectoryEntries(source.path))
         .where((entry) => entry.isDirectory)
         .where((entry) => entry.name != _localTrashDirectoryName)
-        .map((entry) => entry.name.toLowerCase())
+        .map((entry) => Platform.isWindows ? entry.name.toLowerCase() : entry.name)
         .toSet();
     final openDbPath = (await _writeDatabaseSnapshot(source, dbBytes)).path;
 
@@ -442,11 +444,13 @@ extension LocalLibraryScan on LocalLibraryManager {
           continue;
         }
 
-        final itemDirectory = _resolveDownloadItemDirectoryFromMetadata(
+        final itemDirectory = await _resolveDownloadItemDirectoryFromMetadata(
           source.path,
           rawId,
           rawDirectory,
           baseItem,
+          sourceDirectoryNames,
+          trustStorageFromDatabase: trustStorageFromDatabase,
         );
         final localItemId = 'local_download::${source.id}::$rawId';
         if (hiddenIndex.matchesManagedDownload(
