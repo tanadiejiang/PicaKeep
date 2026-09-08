@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'local_favorite_actions.dart';
 import 'package:picakeep/comic_source/comic_source.dart';
 import 'package:picakeep/foundation/app_page_route.dart';
 import 'package:picakeep/components/info_value_action.dart';
@@ -98,7 +99,7 @@ class NhentaiComicPageV2 extends BaseOnlineComicPage<NhentaiComic> {
   @override
   Future<bool> loadFavoriteState(NhentaiComic data) async {
     if (data.favorite) return true;
-    return LocalFavoritesManager().isExist(data.id);
+    return isLocalFavoriteTarget(data.id, FavoriteType.nhentai);
   }
 
   // ── 标签点击：跳搜索 ─────────────────────────────────────────────────────
@@ -276,7 +277,13 @@ class NhentaiComicPageV2 extends BaseOnlineComicPage<NhentaiComic> {
 
   @override
   Future<void> onFavorite(BuildContext context, NhentaiComic data) async {
-    final localFav = LocalFavoritesManager().isExist(data.id);
+    final localItem = FavoriteItem(
+      target: data.id, name: data.title, coverPath: data.cover,
+      author: resolveNhentaiAuthors(data.tags).join(', '),
+      type: FavoriteType.nhentai,
+      tags: data.tags.values.expand((tags) => tags).toList(),
+    );
+    final localFav = isLocallyFavorited(localItem);
     await showModalBottomSheet<void>(
       context: context,
       builder: (ctx) => _NhentaiFavoritePanel(
@@ -300,31 +307,11 @@ class NhentaiComicPageV2 extends BaseOnlineComicPage<NhentaiComic> {
                 SnackBar(content: Text('操作失败：${res.errorMessageWithoutNull}')));
           }
         },
-        onLocalAdd: () {
+        onManageLocal: () async {
           Navigator.of(ctx).pop();
-          final authors = resolveNhentaiAuthors(data.tags).join(', ');
-          LocalFavoritesManager().addComic(
-            'local',
-            FavoriteItem(
-              target: data.id,
-              name: data.title,
-              coverPath: data.cover,
-              author: authors,
-              type: FavoriteType.nhentai,
-              tags: data.tags.values.expand((l) => l).toList(),
-            ),
-          );
-          refreshFavorite(true);
-          ScaffoldMessenger.of(context)
-              .showSnackBar(const SnackBar(content: Text('已添加到本地收藏')));
-        },
-        onLocalRemove: () {
-          Navigator.of(ctx).pop();
-          LocalFavoritesManager()
-              .deleteComicWithTarget('local', data.id, FavoriteType.nhentai);
-          refreshFavorite(data.favorite);
-          ScaffoldMessenger.of(context)
-              .showSnackBar(const SnackBar(content: Text('已取消本地收藏')));
+          await showLocalFavoriteFolders(context, localItem);
+          if (!context.mounted) return;
+          refreshFavorite(data.favorite || isLocallyFavorited(localItem));
         },
       ),
     );
@@ -387,16 +374,14 @@ class _NhentaiFavoritePanel extends StatelessWidget {
     required this.localFavorite,
     required this.loggedIn,
     required this.onPlatformToggle,
-    required this.onLocalAdd,
-    required this.onLocalRemove,
+    required this.onManageLocal,
   });
 
   final bool platformFavorite;
   final bool localFavorite;
   final bool loggedIn;
   final VoidCallback onPlatformToggle;
-  final VoidCallback onLocalAdd;
-  final VoidCallback onLocalRemove;
+  final VoidCallback onManageLocal;
 
   @override
   Widget build(BuildContext context) {
@@ -423,8 +408,8 @@ class _NhentaiFavoritePanel extends StatelessWidget {
               color:
                   localFavorite ? Theme.of(context).colorScheme.primary : null,
             ),
-            title: Text(localFavorite ? '已本地收藏（点击取消）' : '添加到本地收藏'),
-            onTap: localFavorite ? onLocalRemove : onLocalAdd,
+            title: Text(localFavorite ? '管理本地收藏夹（已收藏）' : '添加到本地收藏'),
+            onTap: onManageLocal,
           ),
           // 平台收藏（需登录）
           if (loggedIn)

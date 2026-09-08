@@ -2,6 +2,7 @@
 // loadData() 内使用 App.globalContext 弹 Content Warning 对话框，
 // 这是全局引用（不依赖 widget 生命周期），suppression 是合理的。
 import 'package:flutter/material.dart';
+import 'local_favorite_actions.dart';
 import 'package:picakeep/base.dart';
 import 'package:picakeep/comic_source/comic_source.dart';
 import 'package:picakeep/foundation/app.dart';
@@ -114,7 +115,7 @@ class EhentaiComicPageV2 extends BaseOnlineComicPage<Gallery> {
   Future<bool> loadFavoriteState(Gallery data) async {
     if (data.favorite) return true;
     // 检查本地收藏
-    return LocalFavoritesManager().isExist(data.link);
+    return isLocalFavoriteTarget(data.link, FavoriteType.ehentai);
   }
 
   // ── 标签点击：还原 namespace 并跳搜索 ─────────────────────────────────────
@@ -181,7 +182,16 @@ class EhentaiComicPageV2 extends BaseOnlineComicPage<Gallery> {
     final token = auth['token'] ?? '';
 
     final platformFav = data.favorite;
-    final localFav = LocalFavoritesManager().isExist(data.link);
+    final localItem = FavoriteItem(
+      target: data.link, name: data.title,
+      coverPath: extractCover(data) ?? data.coverPath,
+      author: resolveEhAuthorsFromFlatTags(data.tags.entries.expand(
+        (entry) => entry.value.map((value) => '${entry.key}:$value'),
+      )).join(', '),
+      type: FavoriteType.ehentai,
+      tags: data.tags.values.expand((tags) => tags).toList(),
+    );
+    final localFav = isLocallyFavorited(localItem);
 
     if (!context.mounted) return;
     await showModalBottomSheet<void>(
@@ -217,35 +227,11 @@ class EhentaiComicPageV2 extends BaseOnlineComicPage<Gallery> {
                 .showSnackBar(const SnackBar(content: Text('取消平台收藏失败')));
           }
         },
-        onLocalAdd: () {
+        onManageLocal: () async {
           Navigator.of(ctx).pop();
-          final authors = resolveEhAuthorsFromFlatTags(
-            data.tags.entries.expand((entry) => entry.value.map(
-                  (value) => '${entry.key}:$value',
-                )),
-          ).join(', ');
-          LocalFavoritesManager().addComic(
-            'local',
-            FavoriteItem(
-              target: data.link,
-              name: data.title,
-              coverPath: extractCover(data) ?? data.coverPath,
-              author: authors,
-              type: FavoriteType.ehentai,
-              tags: data.tags.values.expand((l) => l).toList(),
-            ),
-          );
-          refreshFavorite(true);
-          ScaffoldMessenger.of(context)
-              .showSnackBar(const SnackBar(content: Text('已添加到本地收藏')));
-        },
-        onLocalRemove: () {
-          Navigator.of(ctx).pop();
-          LocalFavoritesManager()
-              .deleteComicWithTarget('local', data.link, FavoriteType.ehentai);
-          refreshFavorite(platformFav); // 平台收藏态保持
-          ScaffoldMessenger.of(context)
-              .showSnackBar(const SnackBar(content: Text('已取消本地收藏')));
+          await showLocalFavoriteFolders(context, localItem);
+          if (!context.mounted) return;
+          refreshFavorite(platformFav || isLocallyFavorited(localItem));
         },
       ),
     );
@@ -522,8 +508,7 @@ class _EhFavoritePanel extends StatelessWidget {
     required this.folderNames,
     required this.onPlatformAdd,
     required this.onPlatformRemove,
-    required this.onLocalAdd,
-    required this.onLocalRemove,
+    required this.onManageLocal,
   });
 
   final bool platformFavorite;
@@ -531,8 +516,7 @@ class _EhFavoritePanel extends StatelessWidget {
   final List<String> folderNames;
   final void Function(int folderIndex) onPlatformAdd;
   final VoidCallback onPlatformRemove;
-  final VoidCallback onLocalAdd;
-  final VoidCallback onLocalRemove;
+  final VoidCallback onManageLocal;
 
   @override
   Widget build(BuildContext context) {
@@ -568,8 +552,8 @@ class _EhFavoritePanel extends StatelessWidget {
                         ? Theme.of(context).colorScheme.primary
                         : null,
                   ),
-                  title: Text(localFavorite ? '已本地收藏（点击取消）' : '添加到本地收藏'),
-                  onTap: localFavorite ? onLocalRemove : onLocalAdd,
+                  title: Text(localFavorite ? '管理本地收藏夹（已收藏）' : '添加到本地收藏'),
+                  onTap: onManageLocal,
                 ),
                 const Divider(),
                 // 平台收藏夹
