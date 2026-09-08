@@ -102,11 +102,7 @@ class EhentaiComicPageV2 extends BaseOnlineComicPage<Gallery> {
   // ── 图片鉴权三件套（封面/缩略图必须带，否则裂图）────────────────────────────
 
   @override
-  Map<String, String>? get imageHeaders => {
-        'Cookie': EhNetwork().cookiesStr,
-        'User-Agent': EhNetwork.ehUA,
-        'Referer': EhNetwork().ehBaseUrl,
-      };
+  Map<String, String>? get imageHeaders => EhNetwork().galleryHeaders(link);
 
   // ── 收藏状态初始化（平台 OR 本地）────────────────────────────────────────
 
@@ -192,8 +188,8 @@ class EhentaiComicPageV2 extends BaseOnlineComicPage<Gallery> {
         folderNames: EhNetwork().folderNames,
         onPlatformAdd: (folderIndex) async {
           Navigator.of(ctx).pop();
-          final res = await EhNetwork()
-              .favorite(gid, token, id: folderIndex.toString());
+          final res = await EhNetwork().favorite(gid, token,
+              id: folderIndex.toString(), galleryLink: data.link);
           if (!context.mounted) return;
           if (res) {
             refreshFavorite(true);
@@ -206,7 +202,8 @@ class EhentaiComicPageV2 extends BaseOnlineComicPage<Gallery> {
         },
         onPlatformRemove: () async {
           Navigator.of(ctx).pop();
-          final res = await EhNetwork().unfavorite(gid, token);
+          final res =
+              await EhNetwork().unfavorite(gid, token, galleryLink: data.link);
           if (!context.mounted) return;
           if (res) {
             refreshFavorite(localFav); // 本地收藏可能仍存在

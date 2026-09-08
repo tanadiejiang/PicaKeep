@@ -12,6 +12,7 @@ import 'package:picakeep/foundation/log.dart';
 import 'package:picakeep/network/app_dio.dart';
 import 'package:picakeep/network/cookie_jar.dart';
 import 'package:picakeep/network/eh_network/eh_models.dart';
+import 'package:picakeep/network/eh_network/eh_site.dart';
 import 'package:picakeep/network/eh_network/get_gallery_id.dart';
 import 'package:picakeep/network/eh_network/js.dart';
 import 'package:picakeep/network/res.dart';
@@ -62,6 +63,17 @@ class EhNetwork {
 
   /// 给图片加载 / api.php 手动塞 Header 用的 Cookie 字符串。
   String cookiesStr = '';
+
+  /// Snapshot authentication for this gallery, including mixed-site queues.
+  Map<String, String> galleryHeaders(String link) {
+    final origin = ehSiteOrigin(link, fallback: ehBaseUrl);
+    final cookies = cookieJar.loadForRequest(Uri.parse(origin));
+    return {
+      'Cookie': cookies.map((c) => '${c.name}=${c.value}').join('; '),
+      'User-Agent': ehUA,
+      'Referer': origin,
+    };
+  }
 
   // 账号详情页面显示用（04 登录后回填）。
   String id = '';
@@ -246,18 +258,20 @@ class EhNetwork {
   Future<Res<String>> apiRequest(
     Map<String, dynamic> data, {
     Map<String, String>? headers,
+    String? galleryLink,
   }) async {
-    await getCookies(false, ehApiUrl);
+    final apiUrl = ehSiteApi(galleryLink, fallback: ehBaseUrl);
+    final cookies = await getCookies(false, apiUrl);
     var dio = logDio(BaseOptions());
     try {
       var res = await dio.post<String>(
-        ehApiUrl,
+        apiUrl,
         data: data,
         options: Options(headers: {
           'user-agent': ehUA,
           ...?headers,
-          'host': Uri.parse(ehBaseUrl).host,
-          'Cookie': cookiesStr,
+          'host': Uri.parse(apiUrl).host,
+          'Cookie': cookies,
         }),
       );
       return Res(res.data);
@@ -734,6 +748,7 @@ class EhNetwork {
           .text;
       // 身份认证数据
       var auth = getVariablesFromJsCode(res.data);
+      auth['galleryLink'] = link;
       var thumbnailUrls = <String>[];
       var title = document.querySelector('h1#gn')!.text;
       var subTitle = document.querySelector('h1#gj')?.text;
@@ -945,8 +960,10 @@ class EhNetwork {
 
   /// 带 nl 参数换 CDN 节点重试取图片直链（供 05 图片解密状态机使用）。
   Future<(String image, String? nl)> getImageLinkWithNL(
-      String gid, String imgKey, int p, String nl) async {
-    var res = await request('$ehBaseUrl/s/$imgKey/$gid-$p?nl=$nl');
+      String gid, String imgKey, int p, String nl,
+      {String? galleryLink}) async {
+    final origin = ehSiteOrigin(galleryLink, fallback: ehBaseUrl);
+    var res = await request('$origin/s/$imgKey/$gid-$p?nl=$nl');
     if (res.error) {
       throw res.errorMessage ?? 'error';
     } else {
@@ -1018,7 +1035,7 @@ class EhNetwork {
     Future<void> verifyReachable(String image) => _verifyImageReachable(
           sharedDownloadDio(options: sharedDownloadBaseOptions()),
           image,
-          headers: {'user-agent': ehUA, 'cookie': cookiesStr},
+          headers: galleryHeaders(gallery.link),
         );
 
     if (gallery.auth!['mpvKey'] != null) {
@@ -1049,7 +1066,7 @@ class EhNetwork {
           'method': 'showpage',
           'page': page,
           'showkey': gallery.auth!['showKey'],
-        });
+        }, galleryLink: galleryLink);
         if (apiRes.error &&
             (apiRes.errorMessage?.contains('handshake') ?? false)) {
           throw 'Failed to make api request.\n'
@@ -1114,8 +1131,9 @@ class EhNetwork {
           if (nl == null) {
             rethrow;
           }
-          final (newImage, newNl) =
-              await getImageLinkWithNL(gid, imgKey, page, nl);
+          final (newImage, newNl) = await getImageLinkWithNL(
+              gid, imgKey, page, nl,
+              galleryLink: gallery.link);
           image = newImage;
           if (kDebugMode) {
             print('Get new eh image: $image, new nl $newNl');
@@ -1142,7 +1160,7 @@ class EhNetwork {
       'page': page,
       'mpvkey': gallery.auth!['mpvKey'],
       if (nl != null) 'nl': nl,
-    });
+    }, galleryLink: gallery.link);
     if (apiRes.error) {
       throw apiRes.errorMessage ?? 'Failed to make api request';
     }
@@ -1181,7 +1199,8 @@ class EhNetwork {
       throw readerLinkRes.errorMessage ?? 'Failed to get reader link';
     }
     final imgKey = readerLinkRes.data.split('/')[4];
-    final (newImage, newNl) = await getImageLinkWithNL(gid, imgKey, page, nl);
+    final (newImage, newNl) = await getImageLinkWithNL(gid, imgKey, page, nl,
+        galleryLink: gallery.link);
     if (kDebugMode) {
       print('Get new eh image: $newImage, new nl $newNl');
     }
@@ -1381,14 +1400,16 @@ class EhNetwork {
       'gid': auth['gid'],
       'token': auth['token'],
       'rating': rating,
-    });
+    }, galleryLink: auth['galleryLink']);
     return !res.error;
   }
 
   /// 收藏。
-  Future<bool> favorite(String gid, String token, {String id = '0'}) async {
+  Future<bool> favorite(String gid, String token,
+      {String id = '0', String? galleryLink}) async {
+    final origin = ehSiteOrigin(galleryLink, fallback: ehBaseUrl);
     var res = await post(
-        '$ehBaseUrl/gallerypopups.php?gid=$gid&t=$token&act=addfav',
+        '$origin/gallerypopups.php?gid=$gid&t=$token&act=addfav',
         'favcat=$id&favnote=&apply=Add+to+Favorites&update=1',
         headers: {'Content-Type': 'application/x-www-form-urlencoded'});
     if (res.error) {
@@ -1402,9 +1423,11 @@ class EhNetwork {
   }
 
   /// 取消收藏（画廊弹窗路径）。
-  Future<bool> unfavorite(String gid, String token) async {
+  Future<bool> unfavorite(String gid, String token,
+      {String? galleryLink}) async {
+    final origin = ehSiteOrigin(galleryLink, fallback: ehBaseUrl);
     var res = await post(
-        '$ehBaseUrl/gallerypopups.php?gid=$gid&t=$token&act=addfav',
+        '$origin/gallerypopups.php?gid=$gid&t=$token&act=addfav',
         'favcat=favdel&favnote=&apply=Apply+Changes&update=1',
         headers: {'Content-Type': 'application/x-www-form-urlencoded'});
     if (res.error || res.data.isEmpty || res.data[0] != '<') {
@@ -1453,7 +1476,7 @@ class EhNetwork {
       'gid': auth['gid'],
       'token': auth['token'],
       'comment_vote': isUp ? '1' : '-1',
-    });
+    }, galleryLink: auth['galleryLink']);
     if (res.error) {
       return Res.fromErrorRes(res);
     }

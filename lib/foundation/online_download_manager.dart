@@ -777,11 +777,7 @@ class OnlineDownloadManager {
 
       if (task.downloadType == 0) {
         // ── 逐页模式 ────────────────────────────────────────────────────────
-        final headers = {
-          'Cookie': EhNetwork().cookiesStr,
-          'User-Agent': EhNetwork.ehUA,
-          'Referer': EhNetwork().ehBaseUrl,
-        };
+        final headers = EhNetwork().galleryHeaders(gallery.link);
 
         if (gallery.coverPath.isNotEmpty) {
           final coverUrl =
@@ -945,11 +941,7 @@ class OnlineDownloadManager {
             zipUrl,
             tempZip.path,
             cancelToken: cancelToken,
-            options: Options(headers: {
-              'Cookie': EhNetwork().cookiesStr,
-              'User-Agent': EhNetwork.ehUA,
-              'Referer': EhNetwork().ehBaseUrl,
-            }),
+            options: Options(headers: EhNetwork().galleryHeaders(gallery.link)),
             onReceiveProgress: (rcv, ttl) {
               received = rcv;
               total = ttl > 0 ? ttl : null;

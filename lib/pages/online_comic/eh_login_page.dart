@@ -206,6 +206,36 @@ class _EhLoginPageState extends State<EhLoginPage> {
               crossAxisAlignment: CrossAxisAlignment.stretch,
               mainAxisSize: MainAxisSize.min,
               children: [
+                DropdownButtonFormField<String>(
+                  key: ValueKey(appdata.settings[20]),
+                  initialValue: appdata.settings[20] == '0' ? '0' : '1',
+                  decoration: const InputDecoration(labelText: '搜索站点'),
+                  items: const [
+                    DropdownMenuItem(value: '0', child: Text('E-Hentai（表站）')),
+                    DropdownMenuItem(value: '1', child: Text('ExHentai（里站）')),
+                  ],
+                  onChanged: _logging
+                      ? null
+                      : (value) async {
+                          if (value == null) return;
+                          final previous = appdata.settings[20];
+                          setState(() => _logging = true);
+                          appdata.settings[20] = value;
+                          try {
+                            await appdata.updateSettings(false);
+                          } catch (_) {
+                            appdata.settings[20] = previous;
+                            if (mounted) _showMessage('站点设置保存失败，请重试');
+                          } finally {
+                            if (mounted) setState(() => _logging = false);
+                          }
+                        },
+                ),
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 12),
+                  child:
+                      Text('里站需要账号具备访问权限及有效 Cookie。直接打开画廊链接时，阅读和下载跟随链接所属站点。'),
+                ),
                 const Text('Cookies', style: TextStyle(fontSize: 18)),
                 const SizedBox(height: 12),
                 _field(_idController, 'ipb_member_id'),

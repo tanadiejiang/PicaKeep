@@ -71,11 +71,7 @@ class EhReadingData extends ReadingData {
     final (imageUrl, _) = await EhNetwork().getEhImageUrl(gallery, page + 1);
     final result = await OnlineImageManager.instance.getImage(
       imageUrl,
-      headers: {
-        'Cookie': EhNetwork().cookiesStr,
-        'User-Agent': EhNetwork.ehUA,
-        'Referer': EhNetwork().ehBaseUrl,
-      },
+      headers: EhNetwork().galleryHeaders(gallery.link),
     );
     yield* result.stream;
   }
