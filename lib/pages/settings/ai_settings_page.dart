@@ -957,7 +957,7 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
           padding: const EdgeInsetsDirectional.only(start: 32),
           child: _buildSwitch(
             title: '允许AI自动下载'.tl,
-            subtitle: '开启后无需逐项确认；关闭后 AI 无法自行发起下载'.tl,
+            subtitle: '开启后直接加入下载队列；关闭后需你确认才下载'.tl,
             settingIndex: aiAutoDownloadEnabledSettingIndex,
             leading: const Icon(Icons.bolt_outlined),
           ),

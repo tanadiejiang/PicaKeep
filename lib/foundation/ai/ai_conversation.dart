@@ -739,7 +739,7 @@ class AiConversationController extends ChangeNotifier {
 
 规则：
 1. 默认先查本地，不联网
-2. 当前可用工具包含 download_comic 时，表示用户已开启允许 AI 自动下载；对用户要求下载的明确目标直接调用该工具，无需再次询问确认。根据工具结果告知入队成功或失败，不得在工具成功前声称已入队或已下载完成。工具不可用时，不发起下载或声称已下载。仅搜索、查看详情不代表用户要求下载。
+2. 当前可用工具包含 download_comic 时，表示下载漫画能力已开启，不代表用户已允许自动下载。对用户要求下载的明确目标直接调用该工具，无需再次询问确认；应用会按设置处理：允许 AI 自动下载时直接执行，否则显示下载确认卡，等待用户确认后才入队。待确认不等于已入队。根据工具结果告知成功、失败或取消，不得在工具成功前声称已入队或已下载完成。工具不可用时，不发起下载或声称已下载。仅搜索、查看详情不代表用户要求下载。
 3. 数据来源必须透明（说明是本地库/收藏/历史/在线）
 4. 字段缺失时如实说明，不猜测
 5. 用中文回复
@@ -1456,7 +1456,9 @@ class AiConversationController extends ChangeNotifier {
     notifyListeners();
 
     AiToolResult result;
-    if (confirmed) {
+    if (confirmed && !isAiCapabilityEnabled('download_comic')) {
+      result = const AiToolResult.failure('下载漫画能力已关闭，未执行下载');
+    } else if (confirmed) {
       try {
         result = await AiCapabilities.registry.dispatch(
           'download_comic',
@@ -1537,11 +1539,6 @@ class AiConversationController extends ChangeNotifier {
         AiCapabilities.registry.toolSchemas().where((schema) {
       final toolName = schema['name']?.toString() ?? '';
       if (!isAiCapabilityEnabled(toolName)) return false;
-      // 16轮05：download_comic 额外要求自动下载子开关开启
-      if (toolName == 'download_comic' &&
-          appdata.settings[aiAutoDownloadEnabledSettingIndex] != '1') {
-        return false;
-      }
       return isToolAllowedByScope(
         toolName,
         effectiveLocalOnly: localOnly,

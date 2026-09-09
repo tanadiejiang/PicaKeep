@@ -62,7 +62,7 @@ const aiShowReasoningSettingIndex = 147;
 const aiPersistentCardDismissedSettingIndex = 148;
 
 /// 16轮05号计划：AI 自动下载子开关。
-/// '0'（默认）= download_comic 不暴露给 AI；'1' = 无需确认，直接加入下载队列。
+/// '0'（默认）= 下载前由用户确认；'1' = 无需确认，直接加入下载队列。
 /// 必须与 aiCapabilityDownloadComicSettingIndex(122)='1' 同时满足才生效。
 const aiAutoDownloadEnabledSettingIndex = 149;
 

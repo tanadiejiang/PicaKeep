@@ -1,7 +1,9 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:picakeep/base.dart';
+import 'package:picakeep/foundation/app.dart';
 import 'package:picakeep/foundation/ai/ai_capabilities.dart';
 import 'package:picakeep/foundation/ai/ai_conversation.dart';
 import 'package:picakeep/foundation/ai/ai_settings.dart';
@@ -42,6 +44,12 @@ const _displayList = LlmToolCall(
 );
 
 void main() {
+  late Directory dataDir;
+  setUpAll(() {
+    dataDir = Directory.systemTemp.createTempSync('ai_confirmation_test_');
+    App.dataPath = dataDir.path;
+  });
+  tearDownAll(() => dataDir.deleteSync(recursive: true));
   late List<String> savedSettings;
   late _RecordingDownloadTool downloader;
 
@@ -151,13 +159,13 @@ void main() {
     aiCapabilityDownloadComicSettingIndex,
     aiAutoDownloadEnabledSettingIndex,
   ]) {
-    test('开关 $setting 关闭：工具隐藏，迟到下载调用保留确认且不自动执行', () async {
+    test('开关 $setting 关闭：总开关控制可见性，下载进入确认队列', () async {
       appdata.settings[setting] = '0';
       final ctrl = controller(
         chat: (messages, {tools, conversationHash, turn, round}) async {
           expect(
             tools!.any((tool) => tool['name'] == 'download_comic'),
-            isFalse,
+            setting == aiAutoDownloadEnabledSettingIndex,
           );
           return const LlmResponse(toolCalls: [_firstDownload]);
         },
@@ -170,6 +178,51 @@ void main() {
       expect(ctrl.historyForTesting().where((m) => m.role == 'tool'), isEmpty);
     });
   }
+
+  for (final confirmed in [true, false]) {
+    test('自动下载关闭：工具可见，用户${confirmed ? '确认后下载' : '取消不下载'}', () async {
+      appdata.settings[aiAutoDownloadEnabledSettingIndex] = '0';
+      var rounds = 0;
+      final ctrl = controller(
+          chat: (messages, {tools, conversationHash, turn, round}) async {
+        rounds++;
+        expect(tools!.any((tool) => tool['name'] == 'download_comic'), isTrue);
+        expect(messages.firstWhere((m) => m.role == 'system').content,
+            contains('不代表用户已允许自动下载'));
+        if (rounds == 1) return const LlmResponse(toolCalls: [_firstDownload]);
+        return const LlmResponse(content: '处理完成');
+      });
+      await ctrl.runLlmLoopForTesting();
+      expect(rounds, 1);
+      expect(downloader.calls, isEmpty);
+      expect(ctrl.pendingDownload?.toolCallId, 'download-1');
+      await ctrl.confirmDownload(confirmed);
+      expect(downloader.calls, hasLength(confirmed ? 1 : 0));
+      expect(ctrl.pendingDownload, isNull);
+      expect(rounds, 2);
+      expectPairedResults(ctrl, ['download-1']);
+      final result =
+          ctrl.historyForTesting().singleWhere((m) => m.role == 'tool');
+      expect(jsonDecode(result.content!)['ok'], confirmed);
+    });
+  }
+
+  test('等待确认期间关闭下载总开关，确认也不能执行', () async {
+    appdata.settings[aiAutoDownloadEnabledSettingIndex] = '0';
+    final ctrl = controller(
+        chat: (messages, {tools, conversationHash, turn, round}) async =>
+            const LlmResponse(content: '已停止'));
+    await ctrl.simulateToolCallRoundForTesting([_firstDownload],
+        continueWithLlm: false);
+    appdata.settings[aiCapabilityDownloadComicSettingIndex] = '0';
+    await ctrl.confirmDownload(true);
+    expect(downloader.calls, isEmpty);
+    expect(ctrl.pendingDownload, isNull);
+    expectPairedResults(ctrl, ['download-1']);
+    final result =
+        ctrl.historyForTesting().singleWhere((m) => m.role == 'tool');
+    expect(jsonDecode(result.content!)['ok'], isFalse);
+  });
 
   test('首本入队时关闭自动下载，剩余任务转入确认队列', () async {
     downloader.onExecute = (_) {
