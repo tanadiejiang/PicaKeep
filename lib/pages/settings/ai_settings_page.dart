@@ -947,7 +947,7 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
       ),
       _buildSwitch(
         title: '下载漫画'.tl,
-        subtitle: '开启「允许AI自动下载」后 AI 可自行入队，否则工具对 AI 不可见'.tl,
+        subtitle: '开启「允许AI自动下载」后无需确认，直接加入下载队列'.tl,
         settingIndex: aiCapabilityDownloadComicSettingIndex,
         leading: const Icon(Icons.download_outlined),
       ),
@@ -957,7 +957,7 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
           padding: const EdgeInsetsDirectional.only(start: 32),
           child: _buildSwitch(
             title: '允许AI自动下载'.tl,
-            subtitle: '关闭时 download_comic 工具对 AI 不可见，AI 无法自行发起下载'.tl,
+            subtitle: '开启后直接加入下载队列；关闭后需你确认才下载'.tl,
             settingIndex: aiAutoDownloadEnabledSettingIndex,
             leading: const Icon(Icons.bolt_outlined),
           ),

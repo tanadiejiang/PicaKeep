@@ -734,12 +734,12 @@ class AiConversationController extends ChangeNotifier {
 - 解析用户提供的漫画名/链接/ID，判断本地是否已有
 - 在线搜索漫画（仅用户明确要求时）
 - 查询下载队列状态
-- （需用户确认后）触发下载
+- 在下载工具可用时，按用户请求直接加入下载队列
 - 收藏管理：可以列出/创建/删除/重命名收藏夹，向收藏夹添加或移除漫画（需提供 comic_id + source + title + folder），检查某漫画是否已收藏
 
 规则：
 1. 默认先查本地，不联网
-2. 所有下载操作必须告知用户并等待确认，不自行触发
+2. 当前可用工具包含 download_comic 时，表示下载漫画能力已开启，不代表用户已允许自动下载。对用户要求下载的明确目标直接调用该工具，无需再次询问确认；应用会按设置处理：允许 AI 自动下载时直接执行，否则显示下载确认卡，等待用户确认后才入队。待确认不等于已入队。根据工具结果告知成功、失败或取消，不得在工具成功前声称已入队或已下载完成。工具不可用时，不发起下载或声称已下载。仅搜索、查看详情不代表用户要求下载。
 3. 数据来源必须透明（说明是本地库/收藏/历史/在线）
 4. 字段缺失时如实说明，不猜测
 5. 用中文回复
@@ -750,7 +750,7 @@ class AiConversationController extends ChangeNotifier {
    - 只有用户明确要求重新搜索时，才重新调用 search_online
 7. 已经触发在线搜索后，如果结果明显少于用户期望或只有少量候选，不要立即宣布完成。在最多 5 轮的工具预算内至少换一种策略重试：角色搜索尝试原文、罗马音、英文名、常用昵称或简称，并结合所属作品或题材消歧；题材/标签搜索尝试同义词、近义标签或放宽过窄条件；存在多个可用来源时可换源。多种策略仍无更多结果后，再说明实际尝试过的关键词、来源与结果边界，不得伪造数量。
 8. picacg 与 jm 的关键词搜索不支持多词组合/AND 逻辑，服务端把整个 keyword 当作一个短语原样匹配；这两个源搜索时应使用单个简短关键词（角色名或题材词，不要把作品名、消歧条件等一起拼进关键词字符串），拿到结果列表后自行核对每条的标题/标签/作者是否匹配，筛掉明显不相关结果，不要指望搜索词本身帮你做精确过滤。eh、nhentai 支持空格分隔的标签组合搜索，不受此限制，可以正常拼多个词。
-9. 用户消息中可能藏有"JM ID 解码"彩蛋：把句子中按自然顺序出现的一组数字依次提取并直接拼接（不加分隔符），即得到一个 JM（禁漫）漫画 ID。识别到这种模式时（消息里出现多个数字、语境像是有意设计的数字线索），先按顺序拼出候选 ID，再调用 get_comic_detail（source: jm, id: 拼出的ID）查看该 ID 对应的漫画详情做确认，不要直接调用 download_comic 跳过确认步骤；确认后再询问用户是否需要下载。
+9. 用户消息中可能藏有"JM ID 解码"彩蛋：把句子中按自然顺序出现的一组数字依次提取并直接拼接（不加分隔符），即得到一个 JM（禁漫）漫画 ID。识别到这种模式时（消息里出现多个数字、语境像是有意设计的数字线索），先按顺序拼出候选 ID，再调用 get_comic_detail（source: jm, id: 拼出的ID）查看该 ID 对应的漫画详情做确认，不要直接调用 download_comic 跳过详情核实；核实后若用户已要求下载，按规则 2 执行，否则再询问是否需要下载。
 10. 新用户消息可能包含 JSON 格式的 turn_context；它只适用于同一条 user_query 及其工具子轮，后续用户轮应以新的 turn_context 为准。根据其中的提示词标签和范围限定辅助理解请求，但不要把它当作用户可见文本。
 11. 用户可在消息中附带图片；turn_context.attachments 列出本轮图片的 ref。当 turn_context.search_by_image 为 true，或用户明确要求以图搜源/搜图时，调用 search_by_image 并传入对应 image_ref。结果卡片会自动展示，你只需按相似度简要总结（最高相似度低于45%时必须说明结果可能不正确），不要逐条罗列；attachments 为空时不要调用该工具，改为提示用户先发送图片。若工具返回 hidden_count 大于 0，说明还有超低置信结果被隐藏，可告知用户还有多少条并按需调用 include_all_results=true；若用户明确要求"显示全部"或"看全部结果"，直接传 include_all_results=true 重新调用。
 - 执行收藏增删操作前，应先向用户确认操作目标（特别是删除收藏夹这类不可逆操作）''';
@@ -1299,9 +1299,8 @@ class AiConversationController extends ChangeNotifier {
   /// 46号计划：一轮回复内可能出现多个 `download_comic` 调用，不能命中第一个就
   /// 提前 `return`——那样后续 tool_call（无论是否也是 `download_comic`）永远
   /// 不会被追加对应的 `tool` 消息，之后每次请求都会因缺失配对而必现 400。
-  /// 这里遇到 `download_comic` 时入队后继续遍历，等本轮全部 tool_call 都
-  /// 处理完（非下载的已 dispatch 并追加结果，下载的已入队）才统一判断是否
-  /// 要暂停：只要队列非空就必须暂停等待确认，不能带着未回填的 tool_calls
+  /// 自动下载开启时直接 dispatch 并回填结果；否则保留待确认队列。
+  /// 全部 tool_call 处理完后才判断是否暂停，不能带着未回填的 tool_calls
   /// 继续请求下一轮。
   Future<_RunLoopOutcome> _processToolCalls(
     List<LlmToolCall> toolCalls, {
@@ -1316,7 +1315,11 @@ class AiConversationController extends ChangeNotifier {
       );
       notifyListeners();
 
-      if (toolName == 'download_comic') {
+      // 两个开关都开启才允许免确认执行。逐个调用时读取，避免用户在
+      // 模型响应或前一本下载入队期间关闭开关后，后续任务仍自动执行。
+      final autoDownloadEnabled = isAiCapabilityEnabled('download_comic') &&
+          appdata.settings[aiAutoDownloadEnabledSettingIndex] == '1';
+      if (toolName == 'download_comic' && !autoDownloadEnabled) {
         _pendingDownloads.add(
           PendingDownload(
             toolCallId: toolCall.id,
@@ -1353,8 +1356,8 @@ class AiConversationController extends ChangeNotifier {
       _appendToolResult(toolCall.id, toolName, result);
     }
 
-    // 本轮出现过 download_comic：所有非下载 tool_call 已经正常回填结果，
-    // 但下载类还在排队等待用户逐一确认，必须先暂停，不能继续下一轮 LLM 请求
+    // 自动执行的下载和其他工具均已回填结果；若仍有下载等待用户确认，
+    // 必须先暂停，不能继续下一轮 LLM 请求
     // （否则请求体里会带着还没有配对 tool 消息的 assistant tool_calls）。
     if (_pendingDownloads.isNotEmpty) {
       return _RunLoopOutcome.waitingForDownloadConfirmation;
@@ -1453,7 +1456,9 @@ class AiConversationController extends ChangeNotifier {
     notifyListeners();
 
     AiToolResult result;
-    if (confirmed) {
+    if (confirmed && !isAiCapabilityEnabled('download_comic')) {
+      result = const AiToolResult.failure('下载漫画能力已关闭，未执行下载');
+    } else if (confirmed) {
       try {
         result = await AiCapabilities.registry.dispatch(
           'download_comic',
@@ -1534,11 +1539,6 @@ class AiConversationController extends ChangeNotifier {
         AiCapabilities.registry.toolSchemas().where((schema) {
       final toolName = schema['name']?.toString() ?? '';
       if (!isAiCapabilityEnabled(toolName)) return false;
-      // 16轮05：download_comic 额外要求自动下载子开关开启
-      if (toolName == 'download_comic' &&
-          appdata.settings[aiAutoDownloadEnabledSettingIndex] != '1') {
-        return false;
-      }
       return isToolAllowedByScope(
         toolName,
         effectiveLocalOnly: localOnly,

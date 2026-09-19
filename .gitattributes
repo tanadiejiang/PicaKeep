@@ -1,2 +1,9 @@
 # SQLite amalgamation — not our code
 linux/sqlite3/* linguist-vendored
+
+# Flutter 生成的插件注册文件：固定 LF 换行。
+# flutter pub get 重写这些文件时使用 LF，而 core.autocrlf=true 下 git 期望
+# 工作区为 CRLF，导致 7 个内容零差异的文件被误报为已修改。
+android/app/src/main/java/io/flutter/plugins/GeneratedPluginRegistrant.java text eol=lf
+linux/flutter/generated_* text eol=lf
+windows/flutter/generated_* text eol=lf
