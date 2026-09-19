@@ -253,6 +253,7 @@ class DownloadManager with _DownloadDb {
   }
 
   String _resolveDirectoryForId(String id, String rawFromDb) {
+    if (rawFromDb.isNotEmpty && _dirExists(rawFromDb)) return rawFromDb;
     if (path == null || _db == null) {
       return _DownloadDb.sanitizeFileName(
           rawFromDb.trim().isNotEmpty ? rawFromDb : id);
@@ -576,7 +577,8 @@ class DownloadManager with _DownloadDb {
     final hiddenIndex = LocalTrashStore.instance.hiddenIndexSync();
     for (final entry in entries) {
       if (entry is! Directory) continue;
-      final dirName = entry.uri.pathSegments.last;
+      final dirName = entry.uri.pathSegments
+          .lastWhere((s) => s.isNotEmpty, orElse: () => '');
       if (dirName.isEmpty ||
           dirName == 'download.db' ||
           dirName == '.picakeep_trash' ||
@@ -606,7 +608,8 @@ class DownloadManager with _DownloadDb {
       else if (hasSubdirImages) {
         for (final subEntry in subEntries) {
           if (subEntry is Directory && _hasImageFiles(subEntry)) {
-            final chName = subEntry.uri.pathSegments.last;
+            final chName = subEntry.uri.pathSegments
+                .lastWhere((s) => s.isNotEmpty, orElse: () => '');
             chapters.add(chName);
             downloadedChapters.add(chapters.length - 1);
           }
@@ -671,7 +674,7 @@ class DownloadManager with _DownloadDb {
     final dbPath = _dbFilePath ?? '$path/download.db';
     for (var e in result) {
       final rawId = (e['id'] as String? ?? '').trim();
-      final rawDirectory = (e['directory'] as String? ?? '').trim();
+      final rawDirectory = e['directory'] as String? ?? '';
       final item = _getComicFromJson(
         e['id'],
         e['json'],
@@ -787,15 +790,14 @@ abstract mixin class _DownloadDb {
   }
 
   bool _hasDirectoryRecord(String directory) {
-    final normalized = directory.trim();
-    if (normalized.isEmpty) {
+    if (directory.isEmpty) {
       return false;
     }
     final result = _db!.select('''
       select 1 from download
       where directory = ?
       limit 1
-    ''', [normalized]);
+    ''', [directory]);
     return result.isNotEmpty;
   }
 

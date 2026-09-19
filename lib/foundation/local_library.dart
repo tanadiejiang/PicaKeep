@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart' hide Row;
+import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:sqlite3/sqlite3.dart';
 import 'package:picakeep/foundation/image_loader/stream_image_provider.dart';
@@ -174,6 +175,9 @@ class _LocalLibraryCachedItem {
 class _LocalLibrarySourceCache {
   _LocalLibrarySourceCache(this.file, this.items);
 
+  // v1 trimmed directory identities and may contain another directory's files.
+  static const version = 2;
+
   final File file;
   final Map<String, _LocalLibraryCachedItem> items;
 
@@ -215,7 +219,7 @@ class _LocalLibrarySourceCache {
       await file.parent.create(recursive: true);
       await file.writeAsString(
         jsonEncode({
-          'version': 1,
+          'version': version,
           'items': {
             for (final entry in items.entries) entry.key: entry.value.toJson(),
           },
@@ -227,7 +231,7 @@ class _LocalLibrarySourceCache {
 
   static String _cacheItemKey(String rawId, String directoryPath) {
     final id = rawId.trim();
-    final path = directoryPath.trim();
+    final path = directoryPath;
     if (id.isNotEmpty && path.isNotEmpty) {
       return 'id::$id::path::$path';
     }
@@ -860,6 +864,10 @@ class LocalLibraryManager {
     try {
       final data =
           jsonDecode(await file.readAsString()) as Map<String, dynamic>;
+      if (data['version'] != _LocalLibrarySourceCache.version) {
+        return _LocalLibrarySourceCache(
+            file, <String, _LocalLibraryCachedItem>{});
+      }
       final rawItems = data['items'];
       final items = <String, _LocalLibraryCachedItem>{};
       if (rawItems is Map) {
@@ -935,7 +943,7 @@ class LocalLibraryManager {
   }) async {
     final normalizedDbPath = sourceDbPath.trim();
     final normalizedId = sourceDbId.trim();
-    final normalizedDirectory = itemDirectory.trim();
+    final normalizedDirectory = itemDirectory;
     if (normalizedDbPath.isEmpty ||
         normalizedId.isEmpty ||
         normalizedDirectory.isEmpty) {
@@ -1050,7 +1058,7 @@ class LocalLibraryManager {
             : LocalLibrarySourceKind.currentDownload,
       ),
     );
-    final dirPath = item.fileSystemPath?.trim() ?? '';
+    final dirPath = item.fileSystemPath ?? '';
     if (dirPath.isEmpty) {
       return;
     }
@@ -1083,7 +1091,7 @@ class LocalLibraryManager {
   Future<String?> _resolveManagedDownloadSourceCoverPath(
     LocalLibraryComicItem item,
   ) async {
-    final dirPath = item.fileSystemPath?.trim() ?? '';
+    final dirPath = item.fileSystemPath ?? '';
     if (dirPath.isEmpty || !item.localStorageExists) {
       return null;
     }
@@ -1113,7 +1121,7 @@ class LocalLibraryManager {
     final root = await _localCacheRoot();
     final coverDir = Directory(_joinPath(root.path, 'managed_download_covers'));
     final extension = _coverCacheExtensionForPath(sourcePath);
-    final dirPath = item.fileSystemPath?.trim() ?? '';
+    final dirPath = item.fileSystemPath ?? '';
     final key = _managedDownloadCoverCacheKey(item.originalId, dirPath);
     return File(_joinPath(coverDir.path, '$key$extension'));
   }
@@ -1121,7 +1129,7 @@ class LocalLibraryManager {
   String _managedDownloadCoverCacheKey(String rawId, String directoryPath) {
     final composite =
         _LocalLibrarySourceCache._cacheItemKey(rawId, directoryPath);
-    return _stableHash(composite);
+    return _stableHash('v${_LocalLibrarySourceCache.version}::$composite');
   }
 
   String _stableHash(String input) {
@@ -1225,7 +1233,7 @@ class LocalLibraryManager {
     } else if (cached != null && cached.isNotEmpty) {
       return cached;
     }
-    final dirPath = item.fileSystemPath?.trim();
+    final dirPath = item.fileSystemPath;
     if (dirPath == null || dirPath.isEmpty) {
       return null;
     }

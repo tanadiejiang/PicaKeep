@@ -1,7 +1,7 @@
 name: picakeep
 description: "PicaKeep - 本地漫画阅读器 / 收藏管理器"
 publish_to: 'none'
-version: 1.9.66+1
+version: 1.9.67+1
 
 environment:
   sdk: '>=3.3.0'
@@ -18,6 +18,7 @@ dependencies:
       ref: a1255d1
   url_launcher: ^6.1.8
   path_provider: ^2.0.12
+  path: ^1.9.1
   shimmer_animation: ^2.1.0
   flutter_localizations:
     sdk: flutter
