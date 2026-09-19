@@ -77,6 +77,17 @@ extension DownloadPageLogicCover on DownloadPageLogic {
 
   Future<Map<String, bool>> _buildFavoriteById(
       List<DownloadedItem> items) async {
+    if (!items.any((item) =>
+        item is! RemoteLibraryRootItem &&
+        item is! RemoteLibraryComicItem &&
+        item.id.trim().isNotEmpty)) {
+      return const <String, bool>{};
+    }
+    await LocalFavoritesManager().init();
+    return _queryFavoriteById(items);
+  }
+
+  Map<String, bool> _queryFavoriteById(List<DownloadedItem> items) {
     final ids = items
         .where((item) =>
             item is! RemoteLibraryRootItem && item is! RemoteLibraryComicItem)
@@ -86,9 +97,50 @@ extension DownloadPageLogicCover on DownloadPageLogic {
     if (ids.isEmpty) {
       return const <String, bool>{};
     }
-    final manager = LocalFavoritesManager();
-    await manager.init();
-    return manager.existsMany(ids);
+    return LocalFavoritesManager().existsMany(ids);
+  }
+
+  void _scheduleFavoriteRefresh() {
+    if (_favoriteSubscription == null ||
+        !_favoriteRefreshPending ||
+        _favoriteLoadsInProgress != 0 ||
+        _favoriteRefreshTimer != null) {
+      return;
+    }
+    final generation = _favoriteBindingGeneration;
+    _favoriteRefreshTimer = Timer(const Duration(milliseconds: 16), () {
+      _favoriteRefreshTimer = null;
+      if (generation != _favoriteBindingGeneration ||
+          _favoriteSubscription == null) {
+        return;
+      }
+      if (_favoriteLoadsInProgress != 0) return;
+      _favoriteRefreshPending = false;
+      if (!_showFavoriteBadge ||
+          _view == _DownloadedLibraryView.remote ||
+          _isRemoteRootPage) {
+        return;
+      }
+      final watch = Stopwatch()..start();
+      try {
+        final favorites = _queryFavoriteById(baseComics);
+        var changed = false;
+        for (final entry in favorites.entries) {
+          final model = _tileViewModels[entry.key];
+          if (model != null && model.isFavoriteOverride != entry.value) {
+            _tileViewModels[entry.key] = model.withFavorite(entry.value);
+            changed = true;
+          }
+        }
+        if (changed) update();
+        Log.info('DownloadPage',
+            'favorites.refresh items=${favorites.length} changed=$changed elapsedUs=${watch.elapsedMicroseconds}');
+      } catch (e) {
+        // A store may be disposed during navigation; its next init emits again.
+        Log.warning('DownloadPage', 'favorites.refresh failed: $e');
+      }
+      _scheduleFavoriteRefresh();
+    });
   }
 
   _DownloadedTileViewModel _viewModelFor(DownloadedItem item) {

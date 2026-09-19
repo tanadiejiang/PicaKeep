@@ -39,6 +39,7 @@ import 'package:picakeep/components/window_frame.dart';
 import 'package:picakeep/tools/read_history_helper.dart';
 import 'package:picakeep/tools/tags_translation.dart';
 import 'local_comic_detail_page.dart';
+import 'online_comic/local_favorite_actions.dart';
 
 part 'download_page_logic_loading.dart';
 part 'download_page_logic_cover.dart';
@@ -346,6 +347,15 @@ class _DownloadedTileViewModel {
   final String size;
   final History? readingHistoryOverride;
   final bool? isFavoriteOverride;
+
+  _DownloadedTileViewModel withFavorite(bool value) => _DownloadedTileViewModel(
+        author: author,
+        type: type,
+        tags: tags,
+        size: size,
+        readingHistoryOverride: readingHistoryOverride,
+        isFavoriteOverride: value,
+      );
 }
 
 enum _DownloadedLibraryView {
@@ -488,6 +498,11 @@ class DownloadPageLogic extends StateController {
   String keyword_ = "";
   VoidCallback? _localDataListener;
   VoidCallback? _serviceStateListener;
+  StreamSubscription<List<FavGroup>>? _favoriteSubscription;
+  Timer? _favoriteRefreshTimer;
+  bool _favoriteRefreshPending = false;
+  int _favoriteBindingGeneration = 0;
+  int _favoriteLoadsInProgress = 0;
   bool _isRefreshingFromLocalData = false;
   bool _isDeletingItems = false;
   int _deleteProgressCurrent = 0;
@@ -526,6 +541,7 @@ class DownloadPageLogic extends StateController {
 
   @override
   void dispose() {
+    unbindLocalDataRefresh();
     _scrollIdleTimer?.cancel();
     _searchDebounceTimer?.cancel();
     super.dispose();
@@ -1521,7 +1537,10 @@ class _DownloadPageState extends State<DownloadPage>
                     child: Text("添加至本地收藏".tl),
                     onTap: () => Future.delayed(
                       const Duration(milliseconds: 200),
-                      () => _addToLocalFavoriteFolder(logic),
+                      () {
+                        if (!context.mounted) return;
+                        _addToLocalFavoriteFolder(context, logic);
+                      },
                     ),
                   ),
                 ],
@@ -1582,58 +1601,56 @@ class _DownloadPageState extends State<DownloadPage>
     );
   }
 
-  void _addToLocalFavoriteFolder(DownloadPageLogic logic) {
-    String? folder;
-    showDialog(
-      context: App.globalContext!,
-      builder: (context) => SimpleDialog(
-        title: const Text("复制到..."),
-        children: [
-          SizedBox(
-            width: 400,
-            height: 132,
-            child: Column(
-              children: [
-                ListTile(
-                  title: Text("收藏夹".tl),
-                  trailing: DropdownButton<String>(
-                    hint: Text("选择收藏夹".tl),
-                    items: LocalFavoritesManager()
-                        .folderNames
-                        .map((f) => DropdownMenuItem(value: f, child: Text(f)))
-                        .toList(),
-                    onChanged: (v) => folder = v,
-                  ),
-                ),
-                const Spacer(),
-                Center(
-                  child: FilledButton(
-                    child: Text("确认".tl),
-                    onPressed: () {
-                      if (folder == null) return;
-                      for (int i = 0; i < logic.selected.length; i++) {
-                        if (logic.selected[i]) {
-                          var comic = logic.comics[i];
-                          LocalFavoritesManager().addComic(
-                            folder!,
-                            FavoriteItem.fromDownloadedItem(
-                              comic,
-                              coverPath: logic.coverFor(comic).path,
-                            ),
-                          );
-                        }
-                      }
-                      App.globalBack();
-                    },
-                  ),
-                ),
-                const SizedBox(height: 16),
-              ],
-            ),
-          )
-        ],
-      ),
-    );
+  Future<void> _addToLocalFavoriteFolder(
+      BuildContext pageContext, DownloadPageLogic logic) async {
+    if (!mounted ||
+        !pageContext.mounted ||
+        !identical(_logic, logic) ||
+        !logic.selecting) {
+      return;
+    }
+    final messenger = ScaffoldMessenger.of(pageContext);
+    final selection = logic.selected;
+    final selectionSnapshot = List<bool>.of(selection);
+    final items = <FavoriteItem>[];
+    try {
+      for (var i = 0; i < selection.length; i++) {
+        if (!selection[i]) continue;
+        final comic = logic.comics[i];
+        final item = FavoriteItem.fromDownloadedItem(comic,
+            coverPath: logic.coverFor(comic).path);
+        item.tags = List.unmodifiable(item.tags);
+        if (item.target.isEmpty) throw StateError('漫画没有可用的收藏标识');
+        items.add(item);
+      }
+      if (items.isEmpty) throw StateError('请先选择漫画');
+    } catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text('无法添加到收藏：$e')));
+      return;
+    }
+    final result = await showAddToLocalFavoriteFolders(
+        pageContext, List.unmodifiable(items));
+    if (!mounted ||
+        !pageContext.mounted ||
+        !identical(_logic, logic) ||
+        !identical(selection, logic.selected) ||
+        !logic.selecting ||
+        selection.length != selectionSnapshot.length ||
+        Iterable<int>.generate(selection.length)
+            .any((i) => selection[i] != selectionSnapshot[i])) {
+      return;
+    }
+    if (result == null) return;
+    if (result.allCompleted) {
+      logic.selecting = false;
+      logic.selectedNum = 0;
+      for (var i = 0; i < logic.selected.length; i++) {
+        logic.selected[i] = false;
+      }
+      logic.update();
+    }
+    messenger.showSnackBar(
+        SnackBar(content: Text(localFavoriteBatchMessage(result))));
   }
 
   Widget _buildEmptyState(BuildContext context, DownloadPageLogic logic) {

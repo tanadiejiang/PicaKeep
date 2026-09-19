@@ -2,14 +2,28 @@ part of 'download_page.dart';
 
 extension DownloadPageLogicView on DownloadPageLogic {
   void bindLocalDataRefresh() {
+    if (_localDataListener != null) return;
     _localDataListener ??= _refreshFromNotifier;
     _serviceStateListener ??= _refreshFromNotifier;
     App.localDataVersion.addListener(_localDataListener!);
     App.serviceConfigVersion.addListener(_serviceStateListener!);
     App.serviceRuntimeVersion.addListener(_serviceStateListener!);
+    final generation = ++_favoriteBindingGeneration;
+    _favoriteSubscription =
+        LocalFavoritesManager().allFoldersStream.listen((_) {
+      if (generation != _favoriteBindingGeneration) return;
+      _favoriteRefreshPending = true;
+      _scheduleFavoriteRefresh();
+    });
   }
 
   void unbindLocalDataRefresh() {
+    _favoriteBindingGeneration++;
+    _favoriteSubscription?.cancel();
+    _favoriteSubscription = null;
+    _favoriteRefreshTimer?.cancel();
+    _favoriteRefreshTimer = null;
+    _favoriteRefreshPending = false;
     final localListener = _localDataListener;
     if (localListener != null) {
       App.localDataVersion.removeListener(localListener);

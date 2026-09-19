@@ -31,6 +31,16 @@ extension DownloadPageLogicLoading on DownloadPageLogic {
   }
 
   Future<void> reload() async {
+    _favoriteLoadsInProgress++;
+    try {
+      await _reloadContent();
+    } finally {
+      _favoriteLoadsInProgress--;
+      _scheduleFavoriteRefresh();
+    }
+  }
+
+  Future<void> _reloadContent() async {
     // ignore: avoid_print
     print(
       '[PicaKeep][DownloadPage] reload.start view=$_view remoteRootId=$remoteRootId',

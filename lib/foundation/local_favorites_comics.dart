@@ -71,16 +71,81 @@ extension LocalFavoritesManagerComics on LocalFavoritesManager {
   }
 
   void addComic(String folder, FavoriteItem comic, [int? order]) {
+    addComicWithResult(folder, comic, order);
+  }
+
+  LocalFavoriteAddStatus addComicWithResult(String folder, FavoriteItem comic,
+      [int? order]) {
+    final result = _addComicWithoutNotification(folder, comic, order);
+    if (result == LocalFavoriteAddStatus.added) _emitFolders();
+    return result;
+  }
+
+  LocalFavoriteAddStatus _addComicWithoutNotification(
+      String folder, FavoriteItem comic,
+      [int? order]) {
     if (!_getFolderNameStrings().contains(folder)) {
       throw Exception("Folder does not exists");
     }
     final db = _dbForFolderWrite(folder);
     final typeKeys = _equivalentTypeList(comic.type.key);
     if (_hasComicInDb(db, folder, comic.target, typeKeys)) {
-      return;
+      return LocalFavoriteAddStatus.alreadyPresent;
     }
     _insertComic(db, folder, comic, order ?? (_maxValueInDb(db, folder) + 1));
-    _emitFolders();
+    return LocalFavoriteAddStatus.added;
+  }
+
+  /// Each relation commits independently. Yielding never changes its target store.
+  Future<LocalFavoriteBatchResult> addComicsToFolders(
+    Iterable<String> folders,
+    Iterable<FavoriteItem> comics, {
+    Iterable<String> createdFolders = const [],
+    Map<String, String> folderCreationFailures = const {},
+    void Function(int completed, int total)? onProgress,
+  }) async {
+    final targets = folders.toSet();
+    final unique = <(String, String), FavoriteItem>{};
+    for (final item in comics) {
+      unique.putIfAbsent(
+          (item.target, _canonicalFavoriteTypeIdentity(item.type.key)),
+          () => item);
+    }
+    final generation = _storageGeneration;
+    final mode = managedDataSourceMode;
+    final results = <LocalFavoriteRelationResult>[];
+    final total = targets.length * unique.length;
+    var storageChanged = !_storageReady;
+    for (final folder in targets) {
+      for (final item in unique.values) {
+        storageChanged |= generation != _storageGeneration ||
+            mode != managedDataSourceMode ||
+            !_storageReady;
+        var status = LocalFavoriteAddStatus.failed;
+        String? error =
+            storageChanged ? '收藏数据源已变化，请重试' : folderCreationFailures[folder];
+        if (error == null) {
+          try {
+            status = _addComicWithoutNotification(folder, item);
+          } catch (e) {
+            error = e.toString();
+          }
+        }
+        results.add(LocalFavoriteRelationResult(
+            folder, item.target, item.type, status,
+            error: error));
+        if (results.length % 32 == 0 && results.length < total) {
+          onProgress?.call(results.length, total);
+          await Future<void>.delayed(const Duration(milliseconds: 1));
+        }
+      }
+    }
+    final result = LocalFavoriteBatchResult(results,
+        createdFolders: createdFolders,
+        folderCreationFailures: folderCreationFailures);
+    if (result.addedRelations > 0 && _storageReady) _emitFolders();
+    onProgress?.call(total, total);
+    return result;
   }
 
   void deleteComic(String folder, FavoriteItem comic) {
@@ -93,10 +158,14 @@ extension LocalFavoritesManagerComics on LocalFavoritesManager {
 
   void deleteComicWithTarget(String folder, String target, FavoriteType type) {
     final typeKeys = _equivalentTypeList(type.key);
-    for (final db in _dbsForFolder(folder)) {
-      _deleteComicInDb(db, folder, target, typeKeys);
+    try {
+      for (final db in _dbsForFolder(folder)) {
+        _deleteComicInDb(db, folder, target, typeKeys);
+      }
+    } finally {
+      // A later store may fail after an earlier deletion already committed.
+      _emitFolders();
     }
-    _emitFolders();
   }
 
   void editTags(String target, String folder, List<String> tags) {

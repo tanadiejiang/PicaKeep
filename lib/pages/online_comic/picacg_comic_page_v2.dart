@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:picakeep/foundation/local_favorites.dart';
+import 'local_favorite_actions.dart';
 import 'package:picakeep/comic_source/comic_source.dart';
 import 'package:picakeep/foundation/app_page_route.dart';
 import 'package:picakeep/foundation/history.dart';
@@ -194,6 +196,12 @@ class PicacgComicPageV2 extends BaseOnlineComicPage<PicacgComicItem> {
 
   @override
   Future<void> onFavorite(BuildContext context, PicacgComicItem data) async {
+    if (!await choosePlatformFavorite(context, FavoriteItem(
+      target: data.id, name: data.title, coverPath: data.cover,
+      author: data.author, type: FavoriteType.picacg, tags: data.tags,
+    ))) {
+      return;
+    }
     // 基于当前真实收藏态 toggle（picacg 收藏接口本身就是 toggle）。
     final adding = !currentFavorite;
     final res = await PicacgNetwork().favouriteOrUnfavouriteComic(data.id);

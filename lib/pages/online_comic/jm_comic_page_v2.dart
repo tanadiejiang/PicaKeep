@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:picakeep/foundation/local_favorites.dart';
+import 'local_favorite_actions.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:picakeep/comic_source/comic_source.dart';
 import 'package:picakeep/foundation/app_page_route.dart';
@@ -148,6 +150,12 @@ class JmComicPageV2 extends BaseOnlineComicPage<JmComicInfo> {
 
   @override
   Future<void> onFavorite(BuildContext context, JmComicInfo data) async {
+    if (!await choosePlatformFavorite(context, FavoriteItem(
+      target: data.id, name: data.title, coverPath: data.coverUrl,
+      author: data.author, type: FavoriteType.jm, tags: data.tags,
+    ))) {
+      return;
+    }
     // 基于当前真实收藏态 toggle（data.isFavourite 是加载时的不可变快照）。
     final adding = !currentFavorite;
 

@@ -436,6 +436,60 @@ enum FavoriteFolderCreateTarget {
   original,
 }
 
+enum LocalFavoriteAddStatus { added, alreadyPresent, failed }
+
+class LocalFavoriteRelationResult {
+  const LocalFavoriteRelationResult(
+      this.folder, this.target, this.type, this.status,
+      {this.error});
+  final String folder;
+  final String target;
+  final FavoriteType type;
+  final LocalFavoriteAddStatus status;
+  final String? error;
+  (String, String) get comicIdentity =>
+      (target, _canonicalFavoriteTypeIdentity(type.key));
+}
+
+class LocalFavoriteBatchResult {
+  LocalFavoriteBatchResult(
+    Iterable<LocalFavoriteRelationResult> relations, {
+    Iterable<String> createdFolders = const [],
+    Map<String, String> folderCreationFailures = const {},
+  })  : relations = List.unmodifiable(relations),
+        createdFolders = List.unmodifiable(createdFolders),
+        folderCreationFailures = Map.unmodifiable(folderCreationFailures);
+
+  final List<LocalFavoriteRelationResult> relations;
+  final List<String> createdFolders;
+  final Map<String, String> folderCreationFailures;
+  int _count(LocalFavoriteAddStatus status) =>
+      relations.where((r) => r.status == status).length;
+  int get addedRelations => _count(LocalFavoriteAddStatus.added);
+  int get alreadyPresentRelations =>
+      _count(LocalFavoriteAddStatus.alreadyPresent);
+  int get failedRelations => _count(LocalFavoriteAddStatus.failed);
+  int get addedComics => relations
+      .where((r) => r.status == LocalFavoriteAddStatus.added)
+      .map((r) => r.comicIdentity)
+      .toSet()
+      .length;
+  int get totalComics => relations.map((r) => r.comicIdentity).toSet().length;
+  int get completedComics {
+    final failed = relations
+        .where((r) => r.status == LocalFavoriteAddStatus.failed)
+        .map((r) => r.comicIdentity)
+        .toSet();
+    return totalComics - failed.length;
+  }
+
+  int get folderCount => relations.map((r) => r.folder).toSet().length;
+  bool get allCompleted =>
+      relations.isNotEmpty &&
+      failedRelations == 0 &&
+      folderCreationFailures.isEmpty;
+}
+
 class LocalFavoritesManager {
   factory LocalFavoritesManager() =>
       cache ?? (cache = LocalFavoritesManager._create());
@@ -451,9 +505,14 @@ class LocalFavoritesManager {
   final _foldersController = StreamController<List<FavGroup>>.broadcast();
   final _cachedFavoritedTargets = <String, bool>{};
   bool _favoritedTargetsDirty = true;
+  int _storageGeneration = 0;
+  bool _storageReady = false;
 
-  Future<void> init() async {
-    final roots = await getManagedDataRoots();
+  /// [dataRoots] allows isolated stores in tests; normal callers use configured roots.
+  Future<void> init({List<String>? dataRoots}) async {
+    _storageGeneration++;
+    _storageReady = false;
+    final roots = dataRoots ?? await getManagedDataRoots();
     final primaryPath = managedDataFilePath(roots.first, 'local_favorite.db');
     File(primaryPath).parent.createSync(recursive: true);
 
@@ -482,6 +541,7 @@ class LocalFavoritesManager {
       }
     }
     _secondaryDb = nextSecondaryDb;
+    _storageReady = true;
     _emitFolders();
 
     if (!identical(previousDb, nextDb)) {
@@ -497,6 +557,8 @@ class LocalFavoritesManager {
   }
 
   void dispose() {
+    _storageGeneration++;
+    _storageReady = false;
     try {
       _db.dispose();
     } catch (_) {}
