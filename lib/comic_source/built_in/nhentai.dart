@@ -1,6 +1,11 @@
+import 'package:flutter/foundation.dart' show visibleForTesting;
+
 import 'package:picakeep/comic_source/comic_source.dart';
 import 'package:picakeep/comic_source/favorite_data.dart';
 import 'package:picakeep/foundation/app.dart';
+import 'package:picakeep/foundation/download_author_resolver.dart';
+import 'package:picakeep/foundation/favorite_source_id.dart'
+    as source_id_rules;
 import 'package:picakeep/network/base_comic.dart';
 import 'package:picakeep/network/nhentai_network/nhentai_main_network.dart';
 import 'package:picakeep/network/res.dart';
@@ -22,6 +27,28 @@ Res<List<BaseComic>> _toBaseRes(Res<List<NhentaiComicBrief>> res) {
     List<BaseComic>.from(res.data),
     subData: res.subData,
   );
+}
+
+/// nhentai 的"语言"标签：详情分桶里 Languages 桶的值。
+///
+/// 列表卡上的 `lang`（界面显示"中文 / English / 日本語"）与它是同一份信息，
+/// 因此这是详情能**忠实还原**列表口径的唯一一项标签。返回 null 表示本次没拿到，
+/// 调用方据此保留原值。
+///
+/// 不返回其它桶：列表卡的标签来自 `tag_ids → 英文名`，详情分桶标签不带 id、
+/// 数量与顺序都对不上，映射过去等于换口径。
+@visibleForTesting
+List<String>? nhentaiLanguageTag(Map<String, List<String>> categorizedTags) {
+  final result = <String>[];
+  for (final entry in categorizedTags.entries) {
+    if (entry.key.trim().toLowerCase() != 'languages') continue;
+    for (final value in entry.value) {
+      final tag = value.trim();
+      if (tag.isEmpty || result.contains(tag)) continue;
+      result.add(tag);
+    }
+  }
+  return result.isEmpty ? null : result;
 }
 
 final ComicSource nhentai = ComicSource.named(
@@ -86,6 +113,30 @@ final ComicSource nhentai = ComicSource.named(
     loadComic: (page, [folder]) async {
       final res = await NhentaiNetwork().getFavorites(page);
       return _toBaseRes(res);
+    },
+    loadComicInfo: (target) async {
+      final numericId = source_id_rules.extractNhentaiNumericId(target);
+      if (numericId == null) {
+        return const Res.error('缺少有效的在线 ID');
+      }
+      final res = await NhentaiNetwork().getComicInfo(numericId);
+      if (res.error) return Res.fromErrorRes(res);
+      final data = res.data;
+      final authors = resolveNhentaiAuthors(data.tags).join(', ').trim();
+      return Res(FavoriteInfoPatch(
+        name: data.title,
+        // 作者只认 Artists 桶（复用既有口径，不拿 uploader 冒充）。
+        author: authors.isEmpty ? null : authors,
+        // 标签只写**语言**一项。
+        //
+        // nhentai 列表卡的标签是 `tag_ids → 英文名`（可达二十多条），而详情只有
+        // 分桶标签、**不带 tag id**：两者在数量与顺序上都不是同一份数据，硬映射
+        // 等于把列表口径换成全量口径（卡片会被填满、搜索命中被稀释）。
+        // 语言是详情能忠实还原的那一项（列表卡上就是 `lang`），因此只更新它；
+        // 其余标签保留原值。
+        tags: nhentaiLanguageTag(data.tags),
+        coverPath: data.cover,
+      ));
     },
   ),
 

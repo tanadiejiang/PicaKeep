@@ -14,6 +14,12 @@ extension LocalFavoritesManagerQuery on LocalFavoritesManager {
     _foldersController.add(names.map((e) => FavGroup(e, order: 0)).toList());
   }
 
+  /// 让收藏页重新读取列表。
+  ///
+  /// [_emitFolders] 是本 part 的私有实现；批量更新（`local_favorites_update.dart`
+  /// 是独立库）改完库后需要通知界面，这里给一个公开入口，避免把它改成公共 API。
+  void notifyFoldersChanged() => _emitFolders();
+
   Future<void> readData() async {
     final file = File("$_dbPath.localFavorite");
     if (file.existsSync()) {

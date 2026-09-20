@@ -2,6 +2,8 @@ import 'package:flutter/foundation.dart';
 
 import 'package:picakeep/comic_source/comic_source.dart';
 import 'package:picakeep/comic_source/favorite_data.dart';
+import 'package:picakeep/foundation/favorite_source_id.dart'
+    as source_id_rules;
 import 'package:picakeep/network/base_comic.dart';
 import 'package:picakeep/network/jm_network/jm_network.dart';
 import 'package:picakeep/network/res.dart';
@@ -82,6 +84,27 @@ final ComicSource jm = ComicSource.named(
     },
     addOrDelFavorite: (comic, isAdding) async {
       return _jmNet.setFavorite(comic.id, add: isAdding);
+    },
+    loadComicInfo: (target) async {
+      final numericId = source_id_rules.extractJmNumericId(target);
+      if (numericId == null) {
+        return const Res.error('缺少有效的在线 ID');
+      }
+      final res = await _jmNet.getComicInfo(numericId);
+      if (res.error) return Res.fromErrorRes(res);
+      final info = res.data;
+      final authors = info.authors.join(', ').trim();
+      return Res(FavoriteInfoPatch(
+        name: info.title,
+        author: authors.isEmpty ? null : authors,
+        // 只写**列表口径**的分类标签。`info.tags` 是详情全量标签（可达数十条），
+        // 写进本地会把卡片填满并稀释搜索命中，因此不采用；
+        // 接口未返回 category 时为空列表 → 传 null，保留本地原值。
+        tags: info.categoryTags.isEmpty
+            ? null
+            : List<String>.from(info.categoryTags),
+        coverPath: info.coverUrl,
+      ));
     },
   ),
   searchPageData: SearchPageData(

@@ -5,6 +5,7 @@ import 'package:flutter_reorderable_grid_view/widgets/reorderable_builder.dart';
 import 'package:picakeep/base.dart';
 import 'package:picakeep/components/comic_tile.dart';
 import 'package:picakeep/components/layout.dart';
+import 'package:picakeep/components/local_favorite_update_dialog.dart';
 import 'package:picakeep/components/scrollable.dart';
 import 'package:picakeep/foundation/app.dart';
 import 'package:picakeep/foundation/comic_tile_display_config.dart';
@@ -14,6 +15,7 @@ import 'package:picakeep/foundation/download_model.dart';
 import 'package:picakeep/foundation/image_loader/stream_image_provider.dart';
 import 'package:picakeep/foundation/local_data_source.dart';
 import 'package:picakeep/foundation/local_favorites.dart';
+import 'package:picakeep/foundation/local_favorites_update.dart';
 import 'package:picakeep/foundation/local_library.dart';
 import 'package:picakeep/pages/download_page.dart';
 import 'package:picakeep/pages/local_comic_detail_page.dart';
@@ -1016,6 +1018,34 @@ class _ComicsPageViewState extends State<ComicsPageView> {
     );
   }
 
+  /// 更新选中的条目（长按多选后的入口，复用「更新卡片信息」的同一套流程）。
+  Future<void> _updateSelectedComics() async {
+    if (_selectedNum == 0) return;
+    final report = await showDialog<LocalFavoriteUpdateReport>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => PopScope(
+        canPop: false,
+        child: LocalFavoriteUpdateDialog(
+          folder: widget.folder,
+          comics: List<FavoriteItem>.of(widget.selectedComics),
+        ),
+      ),
+    );
+    if (!mounted) return;
+    if (report != null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(buildLocalFavoriteUpdateSummary(report).tl)),
+      );
+    }
+    // 已更新条目要立即显示新值；同时退出多选（更新完成即这项操作结束）。
+    setState(() {
+      _comics = LocalFavoritesManager().getAllComics(widget.folder);
+      widget.selectedComics.clear();
+      _selecting = false;
+    });
+  }
+
   Widget _buildSelectionBar() {
     if (!_selecting) {
       return const SizedBox.shrink();
@@ -1036,6 +1066,11 @@ class _ComicsPageViewState extends State<ComicsPageView> {
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
               ),
+            ),
+            IconButton(
+              tooltip: '更新信息'.tl,
+              onPressed: _selectedNum == 0 ? null : _updateSelectedComics,
+              icon: const Icon(Icons.cloud_sync_outlined),
             ),
             IconButton(
               tooltip: '删除选中'.tl,

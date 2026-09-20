@@ -46,6 +46,7 @@ class JmComicInfo {
     required this.isLiked,
     required this.coverUrl,
     required this.relatedComics,
+    this.categoryTags = const [],
   });
 
   final String id;
@@ -58,6 +59,13 @@ class JmComicInfo {
   final List<String> tags;
   final List<String> works;
   final List<String> actors;
+
+  /// 列表口径的分类标签（`category` + `category_sub`，与 [JmComicBrief.tags] 同源）。
+  ///
+  /// 详情响应的 `tags` 是**全量标签**（可达数十条），与本项目列表卡片的口径不同；
+  /// 分类标签单独保真出来，供"更新卡片信息"这类需要列表口径的链路使用。
+  /// 接口未返回 category 时为空列表 —— 调用方据此判定"本次没拿到"，保留原值。
+  final List<String> categoryTags;
 
   /// key = sort 顺序(1-based)，value = chapter id
   final Map<int, String> series;

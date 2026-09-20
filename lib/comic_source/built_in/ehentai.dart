@@ -1,6 +1,9 @@
 import 'package:picakeep/comic_source/comic_source.dart';
 import 'package:picakeep/comic_source/favorite_data.dart';
 import 'package:picakeep/foundation/app.dart';
+import 'package:picakeep/foundation/download_author_resolver.dart';
+import 'package:picakeep/foundation/favorite_source_id.dart'
+    as source_id_rules;
 import 'package:picakeep/network/base_comic.dart';
 import 'package:picakeep/network/eh_network/eh_main_network.dart';
 import 'package:picakeep/network/eh_network/eh_models.dart';
@@ -233,6 +236,31 @@ final ComicSource ehentai = ComicSource.named(
         final ok = await EhNetwork().unfavorite2(m.group(1)!);
         return ok ? const Res(true) : const Res.error('取消收藏失败');
       }
+    },
+    loadComicInfo: (target) async {
+      // EH 的 target 必须是完整画廊链接；`gid-token` 形态缺域名，无法拼出可
+      // 请求地址，也不去猜域名 —— 返回错误由调用方归类为"链接不可用"。
+      final link = source_id_rules.normalizeEhGalleryLink(target);
+      if (link == null) {
+        return const Res.error('该条目的画廊链接不可用');
+      }
+      // 批量更新不弹内容警告确认框（无 context，且逐条弹窗会打断整批）；
+      // 直接走网络层。个别需要确认的条目按失败计入统计。
+      final res = await EhNetwork().getGalleryInfo(link);
+      if (res.error) return Res.fromErrorRes(res);
+      final data = res.data;
+      final flatTags = data.toBrief().tags;
+      final authors = resolveEhAuthorsFromFlatTags(flatTags).join(', ').trim();
+      return Res(FavoriteInfoPatch(
+        name: data.title,
+        // EH 的 uploader 不是作者，作者只认 artist 命名空间（复用既有口径）。
+        author: authors.isEmpty ? null : authors,
+        // 标签可以直接写：EH 的"列表口径"就是 `toBrief().tags`
+        // （namespace:tag 拍平，转存时写入本地收藏的就是它），
+        // 详情拿到的分桶标签拍平后**正是同一份数据**，不存在口径漂移。
+        tags: flatTags.isEmpty ? null : List<String>.from(flatTags),
+        coverPath: data.coverPath,
+      ));
     },
   ),
 

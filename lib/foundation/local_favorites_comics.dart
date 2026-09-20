@@ -182,6 +182,73 @@ extension LocalFavoritesManagerComics on LocalFavoritesManager {
     }
   }
 
+  /// 按 `(target, type)` 把网络详情回写进本地收藏记录。
+  ///
+  /// 与 [editTags] 的关键区别：**`where` 必须同时匹配 target 与 type**。
+  /// `editTags` 只按 target 过滤，同一 id 存在于多个源（例如 picacg 与 jm 都有
+  /// 该 id）时会串改另一条记录；本方法用于"按来源更新"，必须带上 type。
+  ///
+  /// 只更新来源元数据（name / author / tags / cover_path）：
+  /// - **不碰 `time`**（收藏时间语义，不能被在线的上传时间覆盖）；
+  /// - **不碰 `display_order`**（用户手动排序）；
+  /// - 找不到记录时返回 false，**不静默新建**（新建会让"更新"变成"加条目"）。
+  ///
+  /// [tags] 为 null 表示本次没拿到该源的列表口径标签 → **保留原值**
+  /// （详情接口的全量标签口径不同，写进去会把卡片填满并稀释搜索命中）。
+  bool updateComicInfo(
+    String folder,
+    String target,
+    int type, {
+    String? name,
+    String? author,
+    List<String>? tags,
+    String? coverPath,
+  }) {
+    if (target.isEmpty) return false;
+    final db = _dbForFolderWrite(folder);
+    final tableName = _folderTableNameInDb(folder, db);
+    if (tableName == null) return false;
+    final typeKeys = _equivalentTypeList(type);
+    if (typeKeys.isEmpty) return false;
+    final placeholders = List.filled(typeKeys.length, '?').join(', ');
+
+    final sets = <String>[];
+    final args = <Object?>[];
+    if (name != null && name.trim().isNotEmpty) {
+      sets.add('name = ?');
+      args.add(name.trim());
+    }
+    if (author != null && author.trim().isNotEmpty) {
+      sets.add('author = ?');
+      args.add(author.trim());
+    }
+    if (tags != null && tags.isNotEmpty) {
+      sets.add('tags = ?');
+      args.add(tags.join(','));
+    }
+    if (coverPath != null && coverPath.trim().isNotEmpty) {
+      sets.add('cover_path = ?');
+      args.add(coverPath.trim());
+    }
+    if (sets.isEmpty) return false;
+
+    // 先确认记录存在（同时拿到"到底改的是哪一条"的证据），再执行更新。
+    // `Database` 上没有 updatedRows，用存在性判定等价表达"没找到就不算更新"。
+    final existing = db.select(
+      'select 1 from "$tableName" '
+      'where target == ? and type in ($placeholders) limit 1;',
+      [target, ...typeKeys],
+    );
+    if (existing.isEmpty) return false;
+
+    db.execute(
+      'update "$tableName" set ${sets.join(', ')} '
+      'where target == ? and type in ($placeholders);',
+      [...args, target, ...typeKeys],
+    );
+    return true;
+  }
+
   Future<void> clearAll() async {
     for (final folder in _getUserTables(_db)) {
       _db.execute('drop table "$folder";');

@@ -18,6 +18,24 @@ final ComicSource picacg = ComicSource.named(
     addOrDelFavorite: (comic, isAdding) async {
       return picacgNetwork.favouriteOrUnfavouriteComic(comic.id);
     },
+    loadComicInfo: (target) async {
+      final id = target.trim();
+      if (id.isEmpty) {
+        return const Res.error('缺少有效的在线 ID');
+      }
+      final res = await picacgNetwork.getComicInfo(id);
+      if (res.error) return Res.fromErrorRes(res);
+      final data = res.data;
+      return Res(FavoriteInfoPatch(
+        name: data.title,
+        author: data.author,
+        // Picacg 的列表口径标签 = tags + categories 合并
+        // （`PicacgComicItemBrief.fromApi` 就是这么拼的），详情对象直接继承，
+        // 因此这里拿到的就是列表口径，不需要额外请求。
+        tags: data.tags.isEmpty ? null : List<String>.from(data.tags),
+        coverPath: data.cover,
+      ));
+    },
   ),
   account: AccountConfig(
     login: (account, password) async {

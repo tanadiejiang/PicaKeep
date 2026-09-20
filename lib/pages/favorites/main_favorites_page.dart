@@ -6,11 +6,13 @@ import 'package:flutter_reorderable_grid_view/widgets/reorderable_builder.dart';
 import 'package:picakeep/base.dart';
 import 'package:picakeep/comic_source/comic_source.dart';
 import 'package:picakeep/components/comic_tile.dart';
+import 'package:picakeep/components/local_favorite_update_dialog.dart';
 import 'package:picakeep/components/layout.dart';
 import 'package:picakeep/foundation/app.dart';
 import 'package:picakeep/foundation/app_runtime_mode.dart';
 import 'package:picakeep/foundation/download.dart';
 import 'package:picakeep/foundation/local_favorites.dart';
+import 'package:picakeep/foundation/local_favorites_update.dart';
 import 'package:picakeep/foundation/local_library.dart';
 import 'package:picakeep/foundation/local_library_settings.dart';
 import 'package:picakeep/foundation/remote_library_data_source.dart';
@@ -512,6 +514,10 @@ class _MainFavoritesPageState extends State<MainFavoritesPage> {
           child: Text('重命名'.tl),
         ),
         PopupMenuItem(
+          value: _FolderMenuAction.updateCards,
+          child: Text('更新卡片信息'.tl),
+        ),
+        PopupMenuItem(
           value: _FolderMenuAction.delete,
           child: Text('删除'.tl),
         ),
@@ -525,6 +531,9 @@ class _MainFavoritesPageState extends State<MainFavoritesPage> {
     switch (action) {
       case _FolderMenuAction.rename:
         _renameFolder(folder);
+        return;
+      case _FolderMenuAction.updateCards:
+        await _updateCardInfoFor(folder);
         return;
       case _FolderMenuAction.delete:
         await _deleteFolder(folder);
@@ -566,6 +575,66 @@ class _MainFavoritesPageState extends State<MainFavoritesPage> {
           ),
         )
         .then((_) => _loadFolders());
+  }
+
+  /// 「更新卡片信息」入口（操作区）。
+  ///
+  /// 操作区在文件夹列表页（`_currentFolder == null`），所以这里先让用户选一个
+  /// 收藏夹；已在夹子内时则直接更新它。真正干活的是 [_updateCardInfoFor]，
+  /// 文件夹卡片菜单也走同一个方法。
+  Future<void> _updateCardInfo() async {
+    final current = _currentFolder;
+    if (current != null) {
+      await _updateCardInfoFor(current);
+      return;
+    }
+    final folder = await _pickFolderForUpdate();
+    if (folder == null || !mounted) return;
+    await _updateCardInfoFor(folder);
+  }
+
+  /// 选一个收藏夹（「更新卡片信息」在操作区触发时用）。
+  Future<String?> _pickFolderForUpdate() {
+    final candidates = _isRemoteView ? const <String>[] : List<String>.of(_folders);
+    if (candidates.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('还没有收藏夹'.tl)),
+      );
+      return Future.value();
+    }
+    return showDialog<String>(
+      context: context,
+      builder: (ctx) => SimpleDialog(
+        title: Text('更新哪个收藏夹的卡片信息？'.tl),
+        children: [
+          for (final folder in candidates)
+            SimpleDialogOption(
+              onPressed: () => Navigator.pop(ctx, folder),
+              child: Text(folder),
+            ),
+        ],
+      ),
+    );
+  }
+
+  /// 对指定收藏夹逐条拉取来源详情并回写本地库。
+  Future<void> _updateCardInfoFor(String folder) async {
+    final report = await showDialog<LocalFavoriteUpdateReport>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => PopScope(
+        canPop: false,
+        child: LocalFavoriteUpdateDialog(folder: folder),
+      ),
+    );
+    if (!mounted) return;
+    if (report != null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(buildLocalFavoriteUpdateSummary(report).tl)),
+      );
+    }
+    // 兜底刷新：批量流程也会经文件夹流通知一次，这里保证界面一定拿到新值。
+    unawaited(_loadFolders());
   }
 
   Widget _buildTopBar(BuildContext context) {
@@ -738,6 +807,11 @@ class _MainFavoritesPageState extends State<MainFavoritesPage> {
                             icon: Icons.reorder,
                             label: '排序'.tl,
                             onTap: _openReorderPage,
+                          ),
+                          _ActionItem(
+                            icon: Icons.cloud_sync_outlined,
+                            label: '更新卡片信息'.tl,
+                            onTap: _updateCardInfo,
                           ),
                         ] else ...[
                           _ActionItem(
@@ -1054,7 +1128,7 @@ class _RemoteFavoriteTile extends StatelessWidget {
   }
 }
 
-enum _FolderMenuAction { rename, delete }
+enum _FolderMenuAction { rename, updateCards, delete }
 
 class _NetworkSourceTile extends StatelessWidget {
   const _NetworkSourceTile({
@@ -1144,7 +1218,6 @@ class _FolderTile extends StatelessWidget {
     required this.onTap,
     required this.onMenu,
   });
-
   final String folder;
   final int count;
   final bool selected;

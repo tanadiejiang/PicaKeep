@@ -16,6 +16,8 @@ import 'package:picakeep/foundation/archive/archive_password_store.dart';
 import 'package:picakeep/foundation/download.dart';
 import 'package:picakeep/foundation/download_author_resolver.dart';
 import 'package:picakeep/foundation/download_model.dart';
+import 'package:picakeep/foundation/favorite_source_id.dart'
+    as source_id_rules;
 import 'package:picakeep/foundation/local_library.dart';
 import 'package:picakeep/foundation/log.dart';
 import 'package:picakeep/foundation/local_library_settings.dart';
@@ -50,21 +52,14 @@ String resolveOnlineRawId(DownloadedItem comic) {
 // 历史遗留/异常路径的落库数据可能缺少 comicId（jm 前缀去除后为空或非纯数字），
 // 直接放行会把空/非法 id 打到服务端，命中 jm_network.dart 的通用
 // 'Empty data' 兜底，报错文案对用户毫无意义。返回 null 表示应拦截。
-String? extractJmNumericId(String rawId) {
-  final numericId = rawId.startsWith('jm') ? rawId.substring(2) : rawId;
-  if (numericId.isEmpty || !RegExp(r'^\d+$').hasMatch(numericId)) {
-    return null;
-  }
-  return numericId;
-}
+//
+// 实现委托给 foundation/favorite_source_id.dart：来源层的
+// `FavoriteData.loadComicInfo` 也要用同一套规则，口径只能有一份。
+String? extractJmNumericId(String rawId) =>
+    source_id_rules.extractJmNumericId(rawId);
 
-String? extractNhentaiNumericId(String rawId) {
-  final numericId = rawId.startsWith('nhentai') ? rawId.substring(7) : rawId;
-  if (numericId.isEmpty || !RegExp(r'^\d+$').hasMatch(numericId)) {
-    return null;
-  }
-  return numericId;
-}
+String? extractNhentaiNumericId(String rawId) =>
+    source_id_rules.extractNhentaiNumericId(rawId);
 
 // 07号计划：菜单"更新信息"可见性条件必须与"在线详情"动作项共用同一判断，
 // 不重新发明一套条件（计划执行范围第1节明确要求）。提取为顶层纯函数便于

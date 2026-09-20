@@ -541,6 +541,9 @@ class JmNetwork {
         isLiked: d['liked'] == true || d['liked'] == 1,
         coverUrl: getJmCoverUrl(id),
         relatedComics: relatedComics,
+        // 保真列表口径的分类标签：详情响应的 tags 是全量标签，与列表卡片口径
+        // 不同；分类标签是"更新卡片信息"唯一能拿到的列表口径来源。
+        categoryTags: parseJmListTags(d),
       ));
     } catch (e, s) {
       LogManager.addLog(LogLevel.error, 'JmNetwork', 'getComicInfo: $e\n$s');
