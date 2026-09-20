@@ -126,3 +126,31 @@ void _addStable(List<String> result, String value) {
   if (normalized.isEmpty || result.contains(normalized)) return;
   result.add(normalized);
 }
+
+/// 列表卡片"描述位"的显示文本。
+///
+/// 约定：源自身有简介就显示简介；没有简介时回退到该源的标识号，避免描述位
+/// 空白（用户视角"卡片信息不全"）。JM / NH 的列表接口不返回简介，故回退标识号；
+/// picacg / ehentai 保持原描述不动。
+/// 该回退只在描述为空时发生，不会覆盖任何既有简介。
+String displaySourceInfoLine({
+  required String source,
+  required String comicId,
+  required String description,
+}) {
+  final desc = description.trim();
+  if (desc.isNotEmpty) return desc;
+  final id = comicId.trim();
+  if (id.isEmpty) return desc;
+  switch (source.trim().toLowerCase()) {
+    case 'jm':
+      // 与 local_app_links 的下载 id 同构（jm1466163），用户可在站点直接检索。
+      return 'jm$id';
+    case 'nhentai':
+    case 'nh':
+      return 'nhentai$id';
+    default:
+      return desc;
+  }
+}
+

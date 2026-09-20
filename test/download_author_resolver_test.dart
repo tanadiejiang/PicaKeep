@@ -76,4 +76,60 @@ void main() {
       ['A', 'B'],
     );
   });
+
+  // 04 计划追加：列表卡片描述位在源无简介时回退到源标识号。
+  group('displaySourceInfoLine', () {
+    test('JM 无简介时回退为 jm<id>', () {
+      expect(
+        displaySourceInfoLine(source: 'jm', comicId: '1466163', description: ''),
+        'jm1466163',
+      );
+    });
+
+    test('NH 无简介时回退为 nhentai<id>', () {
+      expect(
+        displaySourceInfoLine(
+            source: 'nhentai', comicId: '605366', description: ''),
+        'nhentai605366',
+      );
+    });
+
+    test('有简介时一律显示简介，不回退标识号', () {
+      for (final source in const ['jm', 'nhentai', 'picacg', 'ehentai']) {
+        expect(
+          displaySourceInfoLine(
+              source: source, comicId: '1466163', description: '作品简介'),
+          '作品简介',
+          reason: '$source 不应覆盖既有简介',
+        );
+      }
+    });
+
+    test('无简介且源不在回退名单内时保持为空', () {
+      for (final source in const ['picacg', 'ehentai', 'unknown']) {
+        expect(
+          displaySourceInfoLine(source: source, comicId: '1', description: ''),
+          isEmpty,
+        );
+      }
+    });
+
+    test('id 为空时不产生残缺前缀', () {
+      expect(
+        displaySourceInfoLine(source: 'jm', comicId: '', description: ''),
+        isEmpty,
+      );
+      expect(
+        displaySourceInfoLine(source: 'jm', comicId: '   ', description: ''),
+        isEmpty,
+      );
+    });
+
+    test('纯空白简介视为无简介', () {
+      expect(
+        displaySourceInfoLine(source: 'jm', comicId: '9', description: '   '),
+        'jm9',
+      );
+    });
+  });
 }

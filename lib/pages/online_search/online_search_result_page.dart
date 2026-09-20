@@ -520,7 +520,11 @@ class _OnlineSearchResultPageState extends State<OnlineSearchResultPage> {
                               imageProvider: _coverProvider(comic),
                               type: null,
                               tag: comic.tags,
-                              size: comic.description,
+                              size: displaySourceInfoLine(
+                                source: _source.key,
+                                comicId: comic.id,
+                                description: comic.description,
+                              ),
                               onTap: () => _openComic(comic),
                               onLongTap: () {},
                               onSecondaryTap: (_) {},

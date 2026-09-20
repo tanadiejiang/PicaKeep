@@ -201,6 +201,166 @@ void main() {
       expect(tester.takeException(), isNull);
     });
   });
+  // 04 计划：JM 列表卡片同时有分类标签与 jm 号时的布局回归。
+  group('标签 + 描述位同显时不出卡片', () {
+    const jmTitle = '【ばんばんべいん（ばんばん）】るりちゃ'
+        'んは調教済み【中國翻譯】[DL版]';
+    const jmTags = <String>['同人'];
+
+    testWidgets('JM 卡片：jm 号与标签都在卡片高度内', (tester) async {
+      const cardHeight = 164.0;
+      await tester.pumpWidget(
+        _tile(
+          height: cardHeight,
+          title: jmTitle,
+          author: 'ばんばん',
+          size: 'jm1473622',
+          tags: jmTags,
+          maxTagRows: 2,
+        ),
+      );
+
+      final footerBottom = tester.getBottomLeft(find.text('jm1473622')).dy;
+      expect(footerBottom, lessThanOrEqualTo(cardHeight),
+          reason: 'jm 号底部 $footerBottom 超出卡片高度 $cardHeight');
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('对照：描述位为空时同样不出卡片', (tester) async {
+      const cardHeight = 164.0;
+      await tester.pumpWidget(
+        _tile(
+          height: cardHeight,
+          title: jmTitle,
+          author: 'ばんばん',
+          size: '',
+          tags: jmTags,
+          maxTagRows: 2,
+        ),
+      );
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('真机宽度 544dp：jm 号底部落在卡片内', (tester) async {
+      const cardHeight = 164.0;
+      await tester.pumpWidget(
+        _tile(
+          width: 544,
+          height: cardHeight,
+          title: jmTitle,
+          author: 'ばんばん',
+          size: 'jm1473622',
+          tags: jmTags,
+          maxTagRows: 2,
+        ),
+      );
+
+      final footerBottom = tester.getBottomLeft(find.text('jm1473622')).dy;
+      expect(footerBottom, lessThanOrEqualTo(cardHeight),
+          reason: 'jm 号底部 $footerBottom 超出卡片高度 $cardHeight');
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('诊断：空间受压时 jm 号不被挤出卡片', (tester) async {
+      const cardHeight = 164.0;
+      for (final scale in <double>[1.0, 1.3, 1.6, 1.8]) {
+        await tester.pumpWidget(
+          _tile(
+            width: 411,
+            height: cardHeight,
+            textScale: scale,
+            title: jmTitle,
+            author: 'ばんばん',
+            size: 'jm1473622',
+            tags: jmTags,
+            maxTagRows: 2,
+          ),
+        );
+        final footerBottom = tester.getBottomLeft(find.text('jm1473622')).dy;
+        expect(footerBottom, lessThanOrEqualTo(cardHeight),
+            reason: 'textScale=$scale 时 jm 号底部 $footerBottom 超出 '
+                '卡片高度 $cardHeight');
+      }
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('描述位贴内容排布：标签区不抢占 footer 所需高度', (tester) async {
+      const cardHeight = 164.0;
+      await tester.pumpWidget(
+        _tile(
+          width: 544,
+          height: cardHeight,
+          title: jmTitle,
+          author: 'ばんばん',
+          size: 'jm1473622',
+          tags: jmTags,
+          maxTagRows: 2,
+        ),
+      );
+
+      final footerBottom = tester.getBottomLeft(find.text('jm1473622')).dy;
+      final cardBottom =
+          tester.getBottomLeft(find.byType(DownloadedComicTile)).dy;
+      // 关键性质：footer 底部必须留在卡片高度内。标签区若用 Expanded 抢满
+      // 剩余高度，footer 会被顶到定高之外（真机超出约 6.6dp）。
+      expect(footerBottom, lessThanOrEqualTo(cardBottom),
+          reason: '描述位被挤出卡片：footer=$footerBottom card=$cardBottom');
+      expect(footerBottom, lessThan(cardHeight));
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('标签区只占内容高度，不撑满剩余空间', (tester) async {
+      await tester.pumpWidget(
+        _tile(
+          width: 544,
+          height: 164,
+          title: jmTitle,
+          author: 'ばんばん',
+          size: 'jm1473622',
+          tags: jmTags,
+          maxTagRows: 2,
+        ),
+      );
+      const chipHeight = 23.0; // 12pt 文本 + 上下 padding + 行间距
+      final tagTop = tester.getTopLeft(find.text('同人')).dy;
+      final footerTop = tester.getTopLeft(find.text('jm1473622')).dy;
+      final tagBlockHeight = footerTop - tagTop;
+      // 单行标签时标签区应贴近一个 chip 的高度；若被撑满剩余空间会远大于此。
+      expect(tagBlockHeight, inInclusiveRange(chipHeight, chipHeight * 1.6),
+          reason: '标签区实际高度 $tagBlockHeight 偏离单行内容高度');
+      expect(tester.takeException(), isNull);
+    });
+
+    // 网络收藏页与搜索结果页都不传 maxTagRows，走的是"无限制"布局分支；
+    // 上面的用例走 _buildLimitedLayout，两者必须分别覆盖。
+    testWidgets('不传 maxTagRows 时（收藏/搜索实际路径）描述位仍在卡片内',
+        (tester) async {
+      const cardHeight = 164.0;
+      await tester.pumpWidget(
+        _tile(
+          width: 544,
+          height: cardHeight,
+          title: jmTitle,
+          author: 'ばんばん',
+          size: 'jm1473622',
+          tags: jmTags,
+        ),
+      );
+
+      final tagTop = tester.getTopLeft(find.text('同人')).dy;
+      final footerTop = tester.getTopLeft(find.text('jm1473622')).dy;
+      final footerBottom = tester.getBottomLeft(find.text('jm1473622')).dy;
+      final cardBottom =
+          tester.getBottomLeft(find.byType(DownloadedComicTile)).dy;
+      // 标签与描述行之间仍有实际间距（标签区没被压成 0 高）。
+      expect(footerTop - tagTop, greaterThanOrEqualTo(20.0),
+          reason: '标签与描述行间距异常：${footerTop - tagTop}');
+      // 关键性质：描述位整体留在卡片高度内，不被顶出去。
+      expect(footerBottom, lessThanOrEqualTo(cardBottom),
+          reason: '描述位被挤出卡片：footer=$footerBottom card=$cardBottom');
+      expect(tester.takeException(), isNull);
+    });
+  });
 }
 
 Widget _tile({
@@ -210,6 +370,9 @@ Widget _tile({
   double height = 164,
   double textScale = 1,
   String title = 'Downloaded comic',
+  String author = 'Always visible author',
+  String size = '128 MB',
+  bool? isFavorite = false,
 }) {
   return MaterialApp(
     home: MediaQuery(
@@ -222,12 +385,12 @@ Widget _tile({
             height: height,
             child: DownloadedComicTile(
               name: title,
-              author: 'Always visible author',
+              author: author,
               imagePath: File(''),
-              isFavoriteOverride: false,
+              isFavoriteOverride: isFavorite,
               type: 'EH',
               tag: tags,
-              size: '128 MB',
+              size: size,
               maxTagRows: maxTagRows,
               onTap: () {},
               onLongTap: () {},

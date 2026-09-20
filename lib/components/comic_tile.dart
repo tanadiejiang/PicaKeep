@@ -369,35 +369,32 @@ class _ComicDescription extends StatelessWidget {
           Text(user, style: const TextStyle(fontSize: 10.0), maxLines: 1),
         const SizedBox(height: 4),
         if (visibleTags != null)
-          Expanded(
-            child: LayoutBuilder(
-              builder: (context, constraints) => Padding(
-                padding: EdgeInsets.only(bottom: constraints.maxHeight % 23),
-                child: Wrap(
-                  runAlignment: WrapAlignment.start,
-                  clipBehavior: Clip.antiAlias,
-                  crossAxisAlignment: WrapCrossAlignment.end,
-                  children: [
-                    for (var s in visibleTags)
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(0, 0, 4, 3),
-                        child: Container(
-                          padding: const EdgeInsets.fromLTRB(3, 1, 3, 3),
-                          decoration: BoxDecoration(
-                            color: s == "Unavailable"
-                                ? Theme.of(context).colorScheme.errorContainer
-                                : Theme.of(context)
-                                    .colorScheme
-                                    .secondaryContainer,
-                            borderRadius:
-                                const BorderRadius.all(Radius.circular(8)),
-                          ),
-                          child: Text(s, style: const TextStyle(fontSize: 12)),
-                        ),
-                      )
-                  ],
-                ),
-              ),
+          // Flexible 而非 Expanded：Expanded 会抢占全部剩余高度，把后面的
+          // SizedBox(2) + footer 顶出卡片。列表用 childMainAxisExtent 定死
+          // 卡片高度，超出的部分会落到卡片外。
+          // 本分支是网络收藏/搜索结果页实际走的路径（它们不传 maxTagRows）。
+          Flexible(
+            child: Wrap(
+              runAlignment: WrapAlignment.start,
+              clipBehavior: Clip.antiAlias,
+              crossAxisAlignment: WrapCrossAlignment.end,
+              children: [
+                for (var s in visibleTags)
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(0, 0, 4, 3),
+                    child: Container(
+                      padding: const EdgeInsets.fromLTRB(3, 1, 3, 3),
+                      decoration: BoxDecoration(
+                        color: s == "Unavailable"
+                            ? Theme.of(context).colorScheme.errorContainer
+                            : Theme.of(context).colorScheme.secondaryContainer,
+                        borderRadius:
+                            const BorderRadius.all(Radius.circular(8)),
+                      ),
+                      child: Text(s, style: const TextStyle(fontSize: 12)),
+                    ),
+                  )
+              ],
             ),
           ),
         const SizedBox(height: 2),
@@ -423,7 +420,7 @@ class _ComicDescription extends StatelessWidget {
                 child: Text(badge!, style: const TextStyle(fontSize: 12)),
               )
           ],
-        )
+        ),
       ],
     );
   }
@@ -454,13 +451,18 @@ class _ComicDescription extends StatelessWidget {
           ),
         if (hasTags) ...[
           const SizedBox(height: 4),
-          Expanded(
-            child: Align(
-              alignment: Alignment.topLeft,
-              child: _LimitedTagWrap(
-                tags: visibleTags,
-                maxRows: maxTagRows!,
-              ),
+          // Flexible 而非 Expanded：Expanded 会抢占全部剩余高度，把后面的
+          // SizedBox(2) + footer 挤出固定卡片高度（列表用 childMainAxisExtent
+          // 定死 164dp，超出部分落在卡片外）。
+          //
+          // 这里**不能**再套 Align：Align 未设 heightFactor 时会撑满父级给的
+          // 高度，等于把 Flexible 的收缩效果抵消掉（实测与 Expanded 完全同高）。
+          // 直接给 _LimitedTagWrap，它内部的 Wrap 自然会贴内容高度。
+          // 高度限制仍由 maxRows 与约束共同决定（maxHeight 有界时继续参与裁剪）。
+          Flexible(
+            child: _LimitedTagWrap(
+              tags: visibleTags,
+              maxRows: maxTagRows!,
             ),
           ),
         ],

@@ -4,6 +4,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:picakeep/base.dart';
 import 'package:picakeep/foundation/app.dart';
 import 'package:picakeep/foundation/log.dart';
@@ -30,6 +31,82 @@ const List<int> _domainSecret = [
   100, 105, 111, 115, 102, 106, 99, 107, 119, 112, 113, 112,
   100, 102, 106, 107, 118, 110, 113, 81, 106, 115, 105, 107,
 ];
+
+// ============================================================================
+// JM 列表接口条目解析
+// ============================================================================
+//
+// 提成顶层函数是为了让 `test/jm_list_tags_test.dart` 能不经网络直接跑到生产
+// 解析代码（类内私有方法测试文件访问不到）。生产链路只有 [_parseBrief]
+// 一个薄包装入口，见下方 JmNetwork。
+
+/// 列表接口（搜索 / 收藏 / 收藏夹）条目 → [JmComicBrief]。
+/// 三处入口共用，避免解析口径漂移（`id` 为 null 等畸形条目由调用方 catch 跳过）。
+/// [withDesc] 为 true 时额外读取 `description`（搜索接口有该字段，收藏接口没有）。
+@visibleForTesting
+JmComicBrief parseJmListBrief(Map c, {bool withDesc = false}) {
+  final id = c['id'].toString();
+  return JmComicBrief(
+    id: id,
+    title: c['name']?.toString() ?? '',
+    author: joinJmListField(c['author']),
+    tags: parseJmListTags(c),
+    coverUrl: getJmCoverUrl(id),
+    desc: withDesc ? (c['description']?.toString() ?? '') : '',
+  );
+}
+
+/// JM 列表接口的分类标签：`category.title` + `category_sub.title`。
+/// 与原项目 `comic["category"]/["category_sub"]` 取法一致（列表接口无 `tags` 名称数组）。
+/// 按「category 在前、category_sub 在后」输出并**去重**：两者同标题时只保留一个
+/// （原项目会重复显示成「同人 同人」，用户明确要求本项目只显示一个）。
+/// `c['tags']` 仅作兜底，且过滤纯数字项（那里出现的往往是分类 id 而非名称）。
+/// 绝不返回 null，绝不把 Map 或数字 toString 成标签。
+/// 入参为 dynamic：`related_list` 等来源的元素未必是 Map，非 Map 直接返回空列表
+/// （不能让畸形条目把整段详情/列表解析打挂）。
+@visibleForTesting
+List<String> parseJmListTags(dynamic c) {
+  if (c is! Map) return const [];
+  final tags = <String>[];
+  _addCategoryTitle(tags, c['category']);
+  _addCategoryTitle(tags, c['category_sub']);
+  if (tags.isEmpty) {
+    for (final t in parseJmStringList(c['tags'])) {
+      final s = t.trim();
+      if (s.isNotEmpty && int.tryParse(s) == null) _addTag(tags, s);
+    }
+  }
+  return tags;
+}
+
+/// 仅当 [v] 是 Map 且 `title` 为非空字符串时收录；`id` 缺失不影响收录。
+void _addCategoryTitle(List<String> out, dynamic v) {
+  if (v is! Map) return;
+  final title = v['title'];
+  if (title is String) _addTag(out, title);
+}
+
+/// 去重收录：[title] 裁掉首尾空白后非空、且未出现过时才加入。
+void _addTag(List<String> out, String title) {
+  final s = title.trim();
+  if (s.isEmpty || out.contains(s)) return;
+  out.add(s);
+}
+
+/// 列表接口的 author 字段（可能是数组或字符串）→ 单个展示字符串。
+@visibleForTesting
+String joinJmListField(dynamic v) {
+  if (v is List) return v.join(' / ');
+  return v?.toString() ?? '';
+}
+
+/// 兼容数组/单字符串的字符串列表解析（详情接口的 author / tags / works 等）。
+@visibleForTesting
+List<String> parseJmStringList(dynamic v) {
+  if (v is List) return v.map((e) => e.toString()).toList();
+  if (v is String && v.isNotEmpty) return [v];
+  return const [];
+}
 
 class JmNetwork {
   JmNetwork._();
@@ -385,15 +462,7 @@ class JmNetwork {
       final comics = <JmComicBrief>[];
       for (final c in res.data['content'] as List) {
         try {
-          final id = c['id'].toString();
-          comics.add(JmComicBrief(
-            id: id,
-            title: c['name']?.toString() ?? '',
-            author: _joinList(c['author']),
-            tags: _parseStringList(c['tags']),
-            coverUrl: getJmCoverUrl(id),
-            desc: c['description']?.toString() ?? '',
-          ));
+          comics.add(_parseBrief(c as Map, withDesc: true));
         } catch (_) {
           continue;
         }
@@ -449,8 +518,8 @@ class JmNetwork {
         relatedComics.add(JmComicBrief(
           id: comicId,
           title: item['name']?.toString() ?? '',
-          author: _parseStringList(item['author']).join(', '),
-          tags: _parseStringList(item['tags']),
+          author: parseJmStringList(item['author']).join(', '),
+          tags: parseJmListTags(item),
           coverUrl: getJmCoverUrl(comicId),
         ));
       }
@@ -458,14 +527,14 @@ class JmNetwork {
       return Res(JmComicInfo(
         id: id,
         title: d['name']?.toString() ?? 'Unknown',
-        authors: _parseStringList(d['author']),
+        authors: parseJmStringList(d['author']),
         description: d['description']?.toString() ?? '',
         likes: _parseInt(d['likes']),
         views: _parseInt(d['total_views']),
         comments: _parseInt(d['comment_total']),
-        tags: _parseStringList(d['tags']),
-        works: _parseStringList(d['works']),
-        actors: _parseStringList(d['actors']),
+        tags: parseJmStringList(d['tags']),
+        works: parseJmStringList(d['works']),
+        actors: parseJmStringList(d['actors']),
         series: series,
         epNames: epNames,
         isFavourite: d['is_favorite'] == true || d['is_favorite'] == 1,
@@ -522,14 +591,7 @@ class JmNetwork {
       final comics = <JmComicBrief>[];
       for (final c in (res.data['list'] as List? ?? [])) {
         try {
-          final id = c['id'].toString();
-          comics.add(JmComicBrief(
-            id: id,
-            title: c['name']?.toString() ?? '',
-            author: _joinList(c['author']),
-            tags: _parseStringList(c['tags']),
-            coverUrl: getJmCoverUrl(id),
-          ));
+          comics.add(_parseBrief(c as Map));
         } catch (_) {
           continue;
         }
@@ -553,14 +615,7 @@ class JmNetwork {
       final comics = <JmComicBrief>[];
       for (final c in (res.data['list'] as List? ?? [])) {
         try {
-          final id = c['id'].toString();
-          comics.add(JmComicBrief(
-            id: id,
-            title: c['name']?.toString() ?? '',
-            author: _joinList(c['author']),
-            tags: _parseStringList(c['tags']),
-            coverUrl: getJmCoverUrl(id),
-          ));
+          comics.add(_parseBrief(c as Map));
         } catch (_) {
           continue;
         }
@@ -669,16 +724,9 @@ class JmNetwork {
         _ => 'Error',
       };
 
-  static List<String> _parseStringList(dynamic v) {
-    if (v is List) return v.map((e) => e.toString()).toList();
-    if (v is String && v.isNotEmpty) return [v];
-    return const [];
-  }
-
-  static String _joinList(dynamic v) {
-    if (v is List) return v.join(' / ');
-    return v?.toString() ?? '';
-  }
+  /// 列表接口条目解析入口（实现见顶层 [parseJmListBrief]）。
+  static JmComicBrief _parseBrief(Map c, {bool withDesc = false}) =>
+      parseJmListBrief(c, withDesc: withDesc);
 
   /// 点赞漫画
   Future<Res<bool>> likeComic(String id) async {

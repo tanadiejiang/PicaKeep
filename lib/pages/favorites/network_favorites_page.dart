@@ -442,7 +442,11 @@ class _NetworkFavoriteWidgetState extends State<NetworkFavoriteWidget> {
                       imageProvider: imageProvider,
                       type: null,
                       tag: comic.tags,
-                      size: comic.description,
+                      size: displaySourceInfoLine(
+                        source: widget.source.key,
+                        comicId: comic.id,
+                        description: comic.description,
+                      ),
                       onTap: () => _openComic(comic),
                       onLongTap: () {
                         showModalBottomSheet<void>(
