@@ -10,11 +10,13 @@ import 'package:flutter/services.dart';
 import 'package:local_auth/local_auth.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:picakeep/base.dart';
+import 'package:picakeep/comic_source/comic_source.dart';
 import 'package:picakeep/tools/translations.dart';
 import 'package:picakeep/components/select.dart' hide AnimatedContainer;
 import 'package:picakeep/components/scrollable.dart';
 import 'package:picakeep/foundation/app.dart';
 import 'package:picakeep/foundation/appearance_settings.dart';
+import 'package:picakeep/foundation/comic_tile_display_config.dart';
 import 'package:picakeep/foundation/download.dart';
 import 'package:picakeep/foundation/history.dart';
 import 'package:picakeep/foundation/online_download_manager.dart';
@@ -49,6 +51,7 @@ part 'log_settings.dart';
 part 'internal_directory_browser.dart';
 part 'app_capabilities_settings.dart';
 part 'explore_settings.dart';
+part 'comic_card_display_settings.dart';
 part 'reading_settings.dart';
 part 'local_favorite_settings.dart';
 part 'download_settings.dart';
@@ -91,6 +94,11 @@ Widget _buildSettingColorDot(Color color) {
       shape: BoxShape.circle,
     ),
   );
+}
+
+/// 颜色圆点预览。`black` 在深色模式下显示为白点（与卡片上的实际取值一致）。
+Widget cardDisplayIdColorDot(BuildContext context, String colorKey) {
+  return _buildSettingColorDot(resolveComicTileIdColor(context, colorKey));
 }
 
 Color _themeColorForValue(String value) {

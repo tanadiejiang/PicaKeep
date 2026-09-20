@@ -180,6 +180,7 @@ class Appdata {
     '1', //147 aiShowReasoning 会话中显示思考过程（纯 UI，不影响接收与存档）
     '0', //148 aiPersistentCardDismissed 已了解长期状态卡片（1=永久隐藏）
     '0', //149 aiAutoDownloadEnabled AI自动下载（0=关闭=工具不暴露给AI；1=允许AI自行入队）
+    '{}', //150 comicTileDisplayConfig 卡片信息显示配置 JSON，结构 {"local":{...},"online":{...},"search":{"<源key>":{...}}}，每个节点 {"tagRows":2,"showTags":true,"showId":true}（tagRows 0=不限行）；读写见 foundation/comic_tile_display_config.dart
   ];
 
   List<String> implicitData = [
@@ -349,8 +350,12 @@ class Appdata {
           settings[serviceScanCustomPortsSettingIndex]),
     );
     _syncArchiveRuntimeSettings();
-    var settingsFile = File("${App.dataPath}/settings");
-    await settingsFile.writeAsString(jsonEncode(settings));
+    // 落盘是尽力而为：设置本身已经写在内存的 settings 与 SharedPreferences 里，
+    // 仅因 dataPath 未就绪或目录不可写就抛异常，会把"改一个开关"升级成崩溃。
+    try {
+      var settingsFile = File("${App.dataPath}/settings");
+      await settingsFile.writeAsString(jsonEncode(settings));
+    } catch (_) {}
     if (syncData) {}
     final prefs = await SharedPreferences.getInstance();
     await prefs.setStringList("settings", settings);

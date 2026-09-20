@@ -5,6 +5,8 @@ part of 'settings_page.dart';
 
 Widget buildExploreSettings(double width, BuildContext context) {
   return buildTwoColumnLayout(width, [
+        // 按「设置生效的页面」分区，而不是按控件类型或数据源分组。
+        SettingsTitle('启动与列表'.tl),
         SelectSetting(
           title: "初始页面".tl,
           settingsIndex: 23,
@@ -17,18 +19,7 @@ Widget buildExploreSettings(double width, BuildContext context) {
           values: const ["0", "1"],
           titles: ["连续".tl, "分页".tl],
         ),
-        NewPageSetting(
-          title: "关键词屏蔽".tl,
-          page: const KeywordBlockingSetting(),
-        ),
-        SwitchSetting(
-          title: "完全隐藏屏蔽的作品".tl,
-          settingsIndex: 83,
-        ),
-        SwitchSetting(
-          title: "启用侧边翻页栏".tl,
-          settingsIndex: 64,
-        ),
+        SettingsTitle('漫画卡片'.tl),
         SelectSetting(
           title: "漫画块显示模式".tl,
           settingsIndex: 44,
@@ -56,14 +47,11 @@ Widget buildExploreSettings(double width, BuildContext context) {
           title: "显示阅读位置".tl,
           settingsIndex: 73,
         ),
-        ListTile(
-          title: Text("图片收藏大小".tl),
-          subtitle: const _ImageFavoriteSizeSlider(),
+        NewPageSetting(
+          title: "卡片信息显示".tl,
+          page: const ComicCardDisplaySetting(),
         ),
-        SwitchSetting(
-          title: "检查剪切板中的链接".tl,
-          settingsIndex: 61,
-        ),
+        SettingsTitle('在线浏览'.tl),
         SelectSetting(
           title: "浏览时远程图片并发".tl,
           settingsIndex: remoteBrowseImageConcurrencySettingIndex,
@@ -96,6 +84,29 @@ Widget buildExploreSettings(double width, BuildContext context) {
             "11",
             "12"
           ],
+        ),
+        SettingsTitle('阅读器'.tl),
+        SwitchSetting(
+          title: "启用侧边翻页栏".tl,
+          settingsIndex: 64,
+        ),
+        SettingsTitle('内容过滤'.tl),
+        NewPageSetting(
+          title: "关键词屏蔽".tl,
+          page: const KeywordBlockingSetting(),
+        ),
+        SwitchSetting(
+          title: "完全隐藏屏蔽的作品".tl,
+          settingsIndex: 83,
+        ),
+        SettingsTitle('其它'.tl),
+        ListTile(
+          title: Text("图片收藏大小".tl),
+          subtitle: const _ImageFavoriteSizeSlider(),
+        ),
+        SwitchSetting(
+          title: "检查剪切板中的链接".tl,
+          settingsIndex: 61,
         ),
   ]);
 }
