@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io' as io;
 
 import 'package:dio/dio.dart';
@@ -135,39 +136,54 @@ void passCloudflare(CloudflareException e, void Function() onFinished) async {
     // 可重入守卫：桌面端 onTitleChange 是 2 秒 Timer.periodic 轮询、
     // fire-and-forget 调用（webview.dart:346-371），多次 tick 的 async 回调可能重叠。
     bool closed = false;
+    bool finished = false;
+    bool reading = false;
+    void finishOnce() {
+      closed = true;
+      if (finished) return;
+      finished = true;
+      onFinished();
+    }
+
     var webview = DesktopWebview(
       initialUrl: url,
       onTitleChange: (title, controller) async {
-        var res = await controller.evaluateJavascript(
-            "document.head.innerHTML.includes('#challenge-success-text')");
-        if (res == 'false') {
-          var ua = controller.userAgent;
+        if (closed || reading) return;
+        reading = true;
+        try {
+          var res = await controller.evaluateJavascript(
+              "document.head.innerHTML.includes('#challenge-success-text')");
+          if (closed || res != 'false') return;
+          final ua = controller.userAgent;
+          final cookiesMap = await controller.getCookies(url);
+          if (closed) return;
+          // Keep the existing challenge predicate: clearance must differ from baseline.
+          final clearance = cookiesMap['cf_clearance'];
+          if (clearance == null || clearance == baseClearance) return;
+          closed = true;
           if (ua != null) {
             appdata.implicitData[3] = ua;
             appdata.writeImplicitData();
           }
-          var cookiesMap = await controller.getCookies(url);
-          // 真正的判据：cf_clearance 必须存在且不同于基线快照，
-          // 否则说明读到的是 webview profile 里的残留旧值（尚未过盾），继续等待。
-          final clearance = cookiesMap['cf_clearance'];
-          if (clearance == null || clearance == baseClearance) {
-            return;
-          }
-          if (closed) return;
-          closed = true;
           saveCookies(cookiesMap);
-          controller.close();
-          onFinished();
+          await controller.close();
+        } catch (_) {
+          if (closed) finishOnce();
+        } finally {
+          reading = false;
         }
       },
       // 用户手动点窗口 X 关闭（未过盾）时的降级路径：给出完成信号，
       // 让调用方立即返回 CF 失败消息，而非空等 180 秒超时。
-      // 过盾成功路径已在 onTitleChange 里调过一次 onFinished，
-      // 故它可能被调用两次，调用方必须幂等（search_by_image_tool.dart
-      // 用 Completer + `if (!completer.isCompleted)` 防护）。
-      onClose: () => onFinished(),
+      onClose: finishOnce,
     );
-    webview.open();
+    // open 现在返回 Future：创建失败必须给出完成信号，
+    // 否则调用方会一直等到它自己的超时（原本 async void 会静默吞掉异常）。
+    unawaited(
+      webview.open().catchError((Object error) {
+        finishOnce();
+      }),
+    );
   } else if (App.isMobile) {
     // 进入 Webview 时的 cf_clearance 快照（onStarted 中只读取、不落盘）。
     // 关窗判据以「cf_clearance 相对快照发生变化」为准，与质询页标题的

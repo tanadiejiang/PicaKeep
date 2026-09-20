@@ -322,31 +322,82 @@ class DesktopWebview {
       this.onTitleChange,
       this.onNavigation,
       this.onStarted,
-      this.onClose});
+      this.onClose,
+      @visibleForTesting
+      Future<Webview> Function(CreateConfiguration configuration)?
+          windowFactory})
+      : _windowFactory = windowFactory ?? _createWindow;
+
+  final Future<Webview> Function(CreateConfiguration configuration)
+      _windowFactory;
+
+  static Future<Webview> _createWindow(CreateConfiguration configuration) =>
+      WebviewWindow.create(configuration: configuration);
 
   Webview? _webview;
+  int _generation = 0;
+  Timer? _startedTimer;
 
   String? _ua;
 
   String? title;
 
   void onMessage(String message) {
-    var json = jsonDecode(message);
-    if (json is Map) {
-      if (json['id'] == 'document_created') {
-        title = json['data']['title'];
-        _ua = json['data']['ua'];
-        onTitleChange?.call(title!, this);
-      }
+    final webview = _webview;
+    if (webview != null) _onMessage(message, _generation, webview);
+  }
+
+  bool _isActive(int generation, Webview webview) =>
+      _lifecycle.canAdopt(generation) && identical(_webview, webview);
+
+  void _onMessage(String message, int generation, Webview webview) {
+    if (!_isActive(generation, webview) || message.isEmpty) return;
+    final dynamic decoded;
+    try {
+      decoded = jsonDecode(message);
+    } on FormatException {
+      return;
     }
+    if (decoded is! Map || decoded['id'] != 'document_created') return;
+    final data = decoded['data'];
+    if (data is! Map || data['title'] is! String) return;
+    title = data['title'] as String;
+    _ua = data['ua'] is String ? data['ua'] as String : null;
+    onTitleChange?.call(title!, this);
   }
 
   String? get userAgent => _ua;
 
   Timer? timer;
 
-  void _runTimer() {
+  /// 生命周期判定（代次、关闭请求）。抽成独立小类是为了让"创建中取消、
+  /// 旧代次不接管新窗口"这两条语义可以被直接验证，而不必启动真实平台窗口。
+  final DesktopWebviewLifecycle _lifecycle = DesktopWebviewLifecycle();
+
+  void _stopTimer() {
+    timer?.cancel();
+    timer = null;
+    _startedTimer?.cancel();
+    _startedTimer = null;
+  }
+
+  void _finishClose(int generation) {
+    if (!_lifecycle.finishClose(generation)) return;
+    _webview = null;
+    _ua = null;
+    title = null;
+    _stopTimer();
+    onClose?.call();
+  }
+
+  void _runTimer(int generation) {
     timer ??= Timer.periodic(const Duration(seconds: 2), (t) async {
+      // 已关闭或已换代时不再读取：否则旧窗口的读取异常会抛成无人处理的计时器错误。
+      if (!_lifecycle.isCurrent(generation) || _lifecycle.closeRequested) {
+        return;
+      }
+      final webview = _webview;
+      if (webview == null) return;
       const js = '''
         function collect() {
           if(document.readyState === 'loading') {
@@ -364,8 +415,12 @@ class DesktopWebview {
         }
         collect();
       ''';
-      if (_webview != null) {
-        onMessage(await evaluateJavascript(js) ?? '');
+      try {
+        final result = await webview.evaluateJavaScript(js);
+        if (!_isActive(generation, webview)) return;
+        _onMessage(result ?? '', generation, webview);
+      } catch (_) {
+        // 关闭过程中的读取失败按噪声收束，不再向上抛。
       }
     });
   }
@@ -380,42 +435,93 @@ class DesktopWebview {
     return null;
   }
 
-  void open() async {
-    _webview = await WebviewWindow.create(
-        configuration: CreateConfiguration(
-      useWindowPositionAndSize: true,
-      userDataFolderWindows: '${App.dataPath}\\webview',
-      title: 'webview',
-      proxy: _proxyStr,
-    ));
-    _webview!.addOnWebMessageReceivedCallback(onMessage);
-    _webview!.setOnNavigation((s) => onNavigation?.call(s, this));
-    _webview!.launch(initialUrl, triggerOnUrlRequestEvent: false);
-    _runTimer();
-    _webview!.onClose.then((value) {
-      _webview = null;
-      timer?.cancel();
-      timer = null;
-      onClose?.call();
-    });
-    Future.delayed(const Duration(milliseconds: 200), () {
-      onStarted?.call(this);
-    });
+  /// 创建并挂载窗口。
+  ///
+  /// 返回表示"窗口已创建并发出 launch 请求"；用户真正**完成**（关闭窗口）由 [onClose]
+  /// 表示——两者不是同一个完成信号。创建失败会向调用方抛出，由登录页复位并提示。
+  Future<void> open() async {
+    final previous = _webview;
+    _stopTimer();
+    _webview = null;
+    _ua = null;
+    title = null;
+    final generation = _generation = _lifecycle.beginOpen();
+    Webview? created;
+    try {
+      // Retiring an older window must not complete the newly opened generation.
+      previous?.close();
+      final webview = created = await _windowFactory(CreateConfiguration(
+        useWindowPositionAndSize: true,
+        userDataFolderWindows: '${App.dataPath}\\webview',
+        title: 'webview',
+        proxy: _proxyStr,
+      ));
+
+      // Subscribe before any cancellation/launch can close the native window.
+      unawaited(webview.onClose.then((_) => _finishClose(generation)));
+      if (!_lifecycle.canAdopt(generation)) {
+        webview.close();
+        return;
+      }
+
+      _webview = webview;
+      webview.addOnWebMessageReceivedCallback(
+          (message) => _onMessage(message, generation, webview));
+      webview.setOnNavigation((url) {
+        if (_isActive(generation, webview)) onNavigation?.call(url, this);
+      });
+      webview.launch(initialUrl, triggerOnUrlRequestEvent: false);
+      _runTimer(generation);
+      _startedTimer = Timer(const Duration(milliseconds: 200), () {
+        if (_isActive(generation, webview)) onStarted?.call(this);
+      });
+    } catch (_) {
+      if (_lifecycle.isCurrent(generation)) {
+        _lifecycle.requestClose();
+        _stopTimer();
+      }
+      if (created == null) {
+        // No native window exists to produce onClose for a failed creation.
+        _finishClose(generation);
+      } else {
+        created.close();
+      }
+      rethrow;
+    }
   }
 
-  Future<String?> evaluateJavascript(String source) {
-    return _webview!.evaluateJavaScript(source);
+  Future<String?> evaluateJavascript(String source) async {
+    final webview = _webview;
+    // 窗口已关闭/尚未创建时返回 null，调用方按"没抓到"处理，不做空断言崩溃。
+    final generation = _generation;
+    if (webview == null || !_isActive(generation, webview)) return null;
+    try {
+      final result = await webview.evaluateJavaScript(source);
+      return _isActive(generation, webview) ? result : null;
+    } catch (_) {
+      if (!_isActive(generation, webview)) return null;
+      rethrow;
+    }
   }
 
   Future<Map<String, String>> getCookies(String url) async {
-    var allCookies = await _webview!.getAllCookies();
-    var res = <String, String>{};
-    for (var c in allCookies) {
-      if (_cookieMatch(url, c.domain)) {
-        res[_removeCode0(c.name)] = _removeCode0(c.value);
+    final webview = _webview;
+    final generation = _generation;
+    if (webview == null || !_isActive(generation, webview)) return {};
+    try {
+      final allCookies = await webview.getAllCookies();
+      if (!_isActive(generation, webview)) return {};
+      final result = <String, String>{};
+      for (final cookie in allCookies) {
+        if (_cookieMatch(url, cookie.domain)) {
+          result[_removeCode0(cookie.name)] = _removeCode0(cookie.value);
+        }
       }
+      return result;
+    } catch (_) {
+      if (!_isActive(generation, webview)) return {};
+      rethrow;
     }
-    return res;
   }
 
   String _removeCode0(String s) {
@@ -440,8 +546,59 @@ class DesktopWebview {
     return acceptedDomains;
   }
 
-  void close() {
-    _webview?.close();
+  /// 请求关闭本次窗口（幂等）。
+  ///
+  /// 创建尚未完成时只登记请求，[open] 在 create 返回后会立即关掉新窗口；
+  /// 已挂载时直接关闭。窗口真正关闭仍以 [onClose] 为准。
+  Future<void> close() async {
+    if (_lifecycle.closeRequested) return;
+    _lifecycle.requestClose();
+    _stopTimer();
+    final webview = _webview;
     _webview = null;
+    if (webview == null) return;
+    try {
+      webview.close();
+    } catch (_) {
+      // 关闭失败按噪声处理。
+    }
   }
+}
+
+/// 桌面窗口的生命周期判定：代次与关闭请求。
+///
+/// 与平台窗口解耦，因此"创建期间取消"与"旧代次不接管新窗口"这两条语义
+/// 可以被直接验证，而不必在测试里启动真实窗口。
+class DesktopWebviewLifecycle {
+  int _generation = 0;
+  bool _closeRequested = false;
+  bool _closed = false;
+
+  /// 本次窗口是否已被请求关闭（创建期间取消也计入）。
+  bool get closeRequested => _closeRequested;
+
+  /// 开始一次创建，返回该次创建所属的代次。
+  int beginOpen() {
+    _closeRequested = false;
+    _closed = false;
+    return ++_generation;
+  }
+
+  /// 请求关闭当前窗口（幂等）。
+  void requestClose() => _closeRequested = true;
+
+  bool finishClose(int generation) {
+    if (!isCurrent(generation) || _closed) return false;
+    _closed = true;
+    _closeRequested = true;
+    return true;
+  }
+
+  /// 创建完成后能否接管这个窗口：必须是当前代次且期间没有被取消。
+  bool canAdopt(int generation) =>
+      generation == _generation && !_closeRequested;
+
+  /// 某代次是否仍是当前代次：旧代次的关闭事件、定时器 tick、延迟回调
+  /// 都据此判定为过期，不得影响新窗口。
+  bool isCurrent(int generation) => generation == _generation;
 }

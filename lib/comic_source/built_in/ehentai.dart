@@ -5,6 +5,7 @@ import 'package:picakeep/network/base_comic.dart';
 import 'package:picakeep/network/eh_network/eh_main_network.dart';
 import 'package:picakeep/network/eh_network/eh_models.dart';
 import 'package:picakeep/network/res.dart';
+import 'package:picakeep/pages/accounts/eh_cookie_management_view.dart';
 import 'package:picakeep/pages/online_comic/eh_comic_page_v2.dart';
 import 'package:picakeep/pages/online_comic/eh_login_page.dart';
 
@@ -92,16 +93,24 @@ final ComicSource ehentai = ComicSource.named(
 
   // ── 账号（04 计划已实现，08 补 reLogin）─────────────────────────────────
   account: AccountConfig(
+    // E-Hentai 无账号页"重新登录"能力：其 reLogin 语义是校验 Cookie 而非重登，
+    // 账号页不得把它显示成重新登录。内部校验闭包保留供其它链路兼容使用。
+    allowReLogin: false,
     // E-Hentai 无账密登录 API，login 仅占位，正常走 onLogin 跳登录页。
     login: (account, password) async =>
         const Res.error('E-Hentai 使用 Cookie 登录，请点击"登录"按钮'),
     onLogin: (context) => context.to(() => const EhLoginPage()),
     logout: () async {
       final source = ComicSource.require('ehentai');
+      final net = EhNetwork();
       // 清两域全部 cookie（含 ipb_member_id / ipb_pass_hash / igneous）
-      EhNetwork().cookieJar.deleteUri(Uri.parse('https://e-hentai.org'));
-      EhNetwork().cookieJar.deleteUri(Uri.parse('https://exhentai.org'));
-      EhNetwork().cookiesStr = '';
+      net.cookieJar.deleteUri(Uri.parse('https://e-hentai.org'));
+      net.cookieJar.deleteUri(Uri.parse('https://exhentai.org'));
+      // 同时清显示快照与拼接串：退出后账号页不能残留上一个身份的三项值。
+      net.cookiesStr = '';
+      net.id = '';
+      net.hash = '';
+      net.igneous = '';
       source.data
         ..remove('token')
         ..remove('name');
@@ -117,17 +126,16 @@ final ComicSource ehentai = ComicSource.named(
     infoItems: () async {
       final source = ComicSource.require('ehentai');
       final name = source.data['name']?.toString() ?? '';
-      // 先刷新一次 cookie，回填 EhNetwork 的 id/hash/igneous 字段。
+      // 先刷新一次 cookie：getCookies 会重建 id/hash/igneous 显示快照
+      // （重建前清空，缺键留空，不残留上一个身份的值）。
       await EhNetwork().getCookies(true);
-      final net = EhNetwork();
       return Res([
         if (name.isNotEmpty) AccountInfoItem(title: '用户名', value: name),
-        if (net.id.isNotEmpty)
-          AccountInfoItem(title: 'ipb_member_id', value: net.id),
-        if (net.hash.isNotEmpty)
-          AccountInfoItem(title: 'ipb_pass_hash', value: net.hash),
-        if (net.igneous.isNotEmpty)
-          AccountInfoItem(title: 'igneous', value: net.igneous),
+        // cookies 管理区：三项折叠展示 + 点按复制，仅 igneous 可编辑（双域同时生效）。
+        AccountInfoItem(
+          title: 'cookies',
+          builder: (context) => const EhCookieManagementView(),
+        ),
       ]);
     },
   ),

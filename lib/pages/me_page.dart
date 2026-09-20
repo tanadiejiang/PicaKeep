@@ -18,7 +18,7 @@ import 'package:picakeep/tools/translations.dart';
 import 'package:picakeep/tools/read_history_helper.dart';
 import 'package:picakeep/foundation/image_favorites.dart';
 import 'package:picakeep/foundation/online_download_manager.dart';
-import 'accounts/accounts_page.dart';
+import 'accounts/account_page_route.dart';
 import 'tool_display_config.dart';
 import 'history_page.dart';
 import 'image_favorites.dart';
@@ -1085,15 +1085,22 @@ class _MePageState extends State<MePage> {
   }
 
   Widget _buildAccountCard(BuildContext context) {
-    final loggedSources = ComicSource.sources
-        .where((source) => source.account != null && source.isLoggedIn)
-        .toList(growable: false);
+    final loggedSources = loggedInAccountSources();
     return _MePageCard(
-      icon: const Icon(Icons.account_circle_outlined),
-      title: '账号'.tl,
-      description: loggedSources.isEmpty
-          ? _buildCardDescriptionText('未登录 · 点击管理'.tl)
-          : Wrap(
+      icon: const Icon(Icons.switch_account),
+      title: '账号管理'.tl,
+      description: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _buildCardDescriptionText(
+            '已登录 @n 个账号'.tlParams({'n': '${loggedSources.length}'}),
+          ),
+          const SizedBox(height: 6),
+          if (loggedSources.isEmpty)
+            _buildCardDescriptionText('未登录'.tl)
+          else
+            Wrap(
               spacing: 8,
               runSpacing: 6,
               children: [
@@ -1120,14 +1127,9 @@ class _MePageState extends State<MePage> {
                   ),
               ],
             ),
-      onTap: () => Navigator.of(context)
-          .push(
-        MaterialPageRoute(
-          settings: const RouteSettings(name: 'AccountsPage'),
-          builder: (_) => const AccountsPage(),
-        ),
-      )
-          .then((_) {
+        ],
+      ),
+      onTap: () => showAccountsPage(context).then((_) {
         if (mounted) {
           setState(() {});
         }
@@ -1494,3 +1496,11 @@ class _MePageCard extends StatelessWidget {
     );
   }
 }
+
+/// 具备账号能力且当前已登录的源，顺序沿用注册表。
+///
+/// 我页「账号管理」卡片的数量与标签都取自这一个来源，保证二者不会分叉。
+@visibleForTesting
+List<ComicSource> loggedInAccountSources() => ComicSource.sources
+    .where((source) => source.account != null && source.isLoggedIn)
+    .toList(growable: false);

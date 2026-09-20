@@ -80,12 +80,23 @@ class NhentaiNetwork {
     dio.interceptors.add(CloudflareInterceptor());
   }
 
-  void logout() async {
+  /// 退出登录：清除新版 JWT token cookie（access_token + refresh_token）。
+  ///
+  /// - 返回可 await 的 Future：调用方必须等它结束才报"已退出"；
+  /// - 删除落在根路径 `/`：[CookieJarSql.delete] 严格按 path 精确匹配，而
+  ///   baseUrl 自身的 path 为空，写库时 Cookie 默认落在 `/`，用不带 `/` 的 Uri 删不到；
+  /// - jar 未绑定时取应用初始化好的共享 jar（只取用，不新建或重置整个库）；
+  ///   确实没有可用 jar 时抛错，由调用方显示"退出失败"，不静默谎报已退出。
+  Future<void> logout() async {
     logged = false;
-    // 清除新版 JWT token cookie（access_token + refresh_token）。
-    final uri = Uri.parse(baseUrl);
-    cookieJar!.delete(uri, "access_token");
-    cookieJar!.delete(uri, "refresh_token");
+    final jar = cookieJar ?? SingleInstanceCookieJar.instance;
+    if (jar == null) {
+      throw StateError('Cookie 存储尚未初始化，无法退出登录');
+    }
+    // 保持未初始化状态：只绑定 jar 会让下次请求跳过尚未完成的 Dio 初始化。
+    final uri = Uri.parse(baseUrl).replace(path: '/');
+    jar.delete(uri, 'access_token');
+    jar.delete(uri, 'refresh_token');
   }
 
   /// 从 cookieJar 读取 CSRF token。
@@ -159,7 +170,8 @@ class NhentaiNetwork {
       if (!res.error) {
         final data = const JsonDecoder().convert(res.data);
         // 实际响应字段名是 thumb_servers（用于缩略图），不是 servers
-        final servers = (data['thumb_servers'] as List?) ?? (data['servers'] as List?);
+        final servers =
+            (data['thumb_servers'] as List?) ?? (data['servers'] as List?);
         if (servers != null && servers.isNotEmpty) {
           _cdnServer = (servers.first as String).replaceAll(RegExp(r'/$'), '');
         }
@@ -181,7 +193,8 @@ class NhentaiNetwork {
     }
   }
 
-  Future<Res<String>> get(String url, [Map<String, String>? extraHeaders]) async {
+  Future<Res<String>> get(String url,
+      [Map<String, String>? extraHeaders]) async {
     if (cookieJar == null) {
       await init();
     }
@@ -193,7 +206,9 @@ class NhentaiNetwork {
           headers: extraHeaders,
         ),
       );
-      if (res.statusCode == 301 || res.statusCode == 302 || res.statusCode == 308) {
+      if (res.statusCode == 301 ||
+          res.statusCode == 302 ||
+          res.statusCode == 308) {
         final location = res.headers["Location"]?.first ??
             res.headers["location"]?.first ??
             "";
@@ -216,8 +231,8 @@ class NhentaiNetwork {
       await init();
     }
     try {
-      var res =
-          await dio.post<String>(url, data: data, options: Options(headers: headers));
+      var res = await dio.post<String>(url,
+          data: data, options: Options(headers: headers));
       return Res(res.data);
     } catch (e) {
       return Res(null, errorMessage: e.toString());
@@ -312,11 +327,11 @@ class NhentaiNetwork {
     await _fetchCdnServer();
     // 认证依赖 cookie interceptor，不发 Authorization header（access_token 值≠ v2 User Token）
     final sortParam = switch (sort) {
-      NhentaiSort.recent        => 'date',
-      NhentaiSort.popularToday  => 'popular-today',
-      NhentaiSort.popularWeek   => 'popular-week',
-      NhentaiSort.popularMonth  => 'popular-month',
-      NhentaiSort.popularAll    => 'popular',
+      NhentaiSort.recent => 'date',
+      NhentaiSort.popularToday => 'popular-today',
+      NhentaiSort.popularWeek => 'popular-week',
+      NhentaiSort.popularMonth => 'popular-month',
+      NhentaiSort.popularAll => 'popular',
     };
     final res = await get(
       '$baseUrl/api/v2/search'
@@ -504,7 +519,9 @@ class NhentaiNetwork {
     );
 
     // 若401，尝试刷新 token 后重试一次
-    if (res.error && res.errorMessage != null && res.errorMessage!.contains('401')) {
+    if (res.error &&
+        res.errorMessage != null &&
+        res.errorMessage!.contains('401')) {
       final newToken = await _refreshAccessToken();
       if (newToken.isEmpty) {
         return const Res(null, errorMessage: 'Token expired, please re-login');
@@ -546,7 +563,8 @@ class NhentaiNetwork {
           : (e['japanese_title'] as String?) ?? id;
       // thumbnail 是相对路径，拼动态 CDN 前缀（由 _fetchCdnServer 预取）
       final rawCover = (e['thumbnail'] as String?) ?? '';
-      final cdn = (_cdnServer ?? 'https://t.nhentai.net').replaceAll(RegExp(r'/$'), '');
+      final cdn =
+          (_cdnServer ?? 'https://t.nhentai.net').replaceAll(RegExp(r'/$'), '');
       final cover = rawCover.startsWith('http')
           ? rawCover
           : '$cdn/${rawCover.replaceAll(RegExp(r'^/+'), '')}';
@@ -561,7 +579,10 @@ class NhentaiNetwork {
       String lang = 'Unknown';
       for (final t in tagIdList) {
         final mapped = langTagIds[t.toString()];
-        if (mapped != null) { lang = mapped; break; }
+        if (mapped != null) {
+          lang = mapped;
+          break;
+        }
       }
       return NhentaiComicBrief(title, cover, id, lang, tagIds);
     } catch (_) {

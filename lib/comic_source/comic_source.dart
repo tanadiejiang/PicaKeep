@@ -53,7 +53,8 @@ class ComicSource {
 
   static final List<ComicSource> sources = <ComicSource>[];
 
-  static List<ComicSource> get builtIn => <ComicSource>[picacg, jm, ehentai, nhentai];
+  static List<ComicSource> get builtIn =>
+      <ComicSource>[picacg, jm, ehentai, nhentai];
 
   static Future<void> init() async {
     sources
@@ -105,11 +106,25 @@ class ComicSource {
 
   final Map<String, dynamic> data;
 
-  bool _isSaving = false;
-  bool _haveWaitingTask = false;
+  /// 同一实例正在进行的保存任务；null 表示空闲。
+  Future<void>? _saveTask;
+
+  /// 本轮保存期间是否又发生了新修改（需要再写一轮）。
+  bool _saveAgain = false;
 
   String get filePath => '${App.dataPath}${Platform.pathSeparator}comic_source'
       '${Platform.pathSeparator}$key.data';
+
+  /// 文件写入接缝：默认写 [filePath]，测试可替换为受控实现。
+  @visibleForTesting
+  Future<void> Function(String path, String contents) writeDataFile =
+      _writeDataFile;
+
+  static Future<void> _writeDataFile(String path, String contents) async {
+    final file = File(path);
+    await file.parent.create(recursive: true);
+    await file.writeAsString(contents, flush: true);
+  }
 
   bool get isLoggedIn {
     final token = data['token']?.toString() ?? '';
@@ -138,21 +153,39 @@ class ComicSource {
     }
   }
 
-  Future<void> saveData() async {
-    if (_isSaving) {
-      _haveWaitingTask = true;
-      return;
+  /// 保存源数据，并在返回时保证"调用者此前的修改已经落盘"。
+  ///
+  /// 同一实例的并发调用共享同一个保存任务：保存期间发生的调用**不会提前返回**，
+  /// 而是等待包含自己这次修改的最后一轮写入结束；任一轮写入失败都会把错误传播给
+  /// 本轮所有等待者，并释放任务状态以便重试。数据格式与文件位置保持不变。
+  Future<void> saveData() {
+    final pending = _saveTask;
+    if (pending != null) {
+      // 保存进行中：登记"还有新修改"，等待当前任务把这一轮补写完。
+      _saveAgain = true;
+      return pending;
     }
-    _isSaving = true;
+    // 占位必须早于序列化/调用 writer，避免同步异常清理后又挂回失败任务。
+    final completer = Completer<void>();
+    _saveTask = completer.future;
+    unawaited(_runSaveLoop().then<void>(
+      (_) => completer.complete(),
+      onError: completer.completeError,
+    ));
+    return completer.future;
+  }
+
+  Future<void> _runSaveLoop() async {
     try {
       do {
-        _haveWaitingTask = false;
-        final file = File(filePath);
-        await file.parent.create(recursive: true);
-        await file.writeAsString(jsonEncode(data), flush: true);
-      } while (_haveWaitingTask);
+        _saveAgain = false;
+        // jsonEncode 在 await 之前同步取快照，保证写出的正是本轮的数据。
+        await writeDataFile(filePath, jsonEncode(data));
+      } while (_saveAgain);
     } finally {
-      _isSaving = false;
+      // 失败或完成后都释放任务状态，使后续保存可以重新开始（可重试）。
+      _saveTask = null;
+      _saveAgain = false;
     }
   }
 
@@ -172,6 +205,8 @@ class AccountConfig {
     this.reLogin,
     this.infoItems,
     this.onLogin,
+    this.registerWebsite,
+    this.allowReLogin = true,
   });
 
   final LoginHandler login;
@@ -184,16 +219,30 @@ class AccountConfig {
   /// 走默认账密登录);ehentai 等 cookie 登录源在此挂自己的登录页。
   /// 返回 Future,账号页 await 它(登录页关闭)后再刷新账号信息区。
   final Future<void> Function(BuildContext context)? onLogin;
+
+  /// 可选:注册入口 URL。仅当非 null 时,通用登录页显示注册入口并外部打开。
+  /// 目前只有 jm 声明(取自原项目 `built_in/jm.dart`);picacg 无注册接口。
+  final String? registerWebsite;
+
+  /// 是否允许账号页显示"重新登录"。默认 true。
+  /// ehentai / nhentai 无账号页重登能力,显式置 false;
+  /// UI 需同时要求 [reLogin] 非 null,两者同时满足才显示。
+  final bool allowReLogin;
 }
 
 class AccountInfoItem {
   const AccountInfoItem({
     required this.title,
-    required this.value,
+    this.value = '',
+    this.builder,
   });
 
   final String title;
   final String value;
+
+  /// 可选:自定义渲染(例如 EH 的 cookies 折叠管理区)。
+  /// 非 null 时账号页优先使用它,忽略 [value]。
+  final WidgetBuilder? builder;
 }
 
 class SearchPageData {

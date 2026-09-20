@@ -104,6 +104,12 @@ class EhNetwork {
 
     var cookies = cookieJar.loadForRequest(Uri.parse(url));
 
+    // 重建显示快照前先清空：本次 cookie 里缺某个键时必须留空，
+    // 不能残留上一个账号/上一次登录的身份值（切换账号或退出后尤其明显）。
+    id = '';
+    hash = '';
+    igneous = '';
+
     var res = '';
     for (var cookie in cookies) {
       res += '${cookie.name}=${cookie.value}; ';

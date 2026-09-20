@@ -30,13 +30,18 @@ final ComicSource nhentai = ComicSource.named(
 
   // ── 账号（cookie 登录，走 webview）─────────────────────────────────────────
   account: AccountConfig(
+    // nhentai 无账号页"重新登录"能力：收藏请求走 access_token 自动刷新，
+    // 不是账号页可触发的重登操作，故不显示该行。
+    allowReLogin: false,
     // nhentai 无账密 API，login 仅占位，正常走 onLogin 跳登录页。
     login: (account, password) async =>
         const Res.error('Nhentai 使用网页登录，请点击"登录"按钮'),
     onLogin: (context) => context.to(() => const NhentaiLoginPage()),
     logout: () async {
       final source = ComicSource.require('nhentai');
-      NhentaiNetwork().logout();
+      // 先 await Cookie 清理：失败时向上抛，账号页显示"退出失败"并可重试，
+      // 不出现"本地标记清了但 token 还在"的假退出。
+      await NhentaiNetwork().logout();
       source.data
         ..remove('token')
         ..remove('name');
@@ -46,9 +51,12 @@ final ComicSource nhentai = ComicSource.named(
     infoItems: () async {
       final source = ComicSource.require('nhentai');
       final name = source.data['name']?.toString() ?? '';
-      return Res([
-        if (name.isNotEmpty) AccountInfoItem(title: '账号', value: name),
-      ]);
+      // 'Nhentai' 是历史登录流程写入的固定占位，不是真实用户名：不能当成资料行显示。
+      // 这里同时兼容已经写入该占位值的旧数据。
+      if (name.isEmpty || name == 'Nhentai') {
+        return const Res(<AccountInfoItem>[]);
+      }
+      return Res([AccountInfoItem(title: '账号', value: name)]);
     },
   ),
 

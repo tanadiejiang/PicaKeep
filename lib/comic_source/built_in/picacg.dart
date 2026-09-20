@@ -40,9 +40,12 @@ final ComicSource picacg = ComicSource.named(
     },
     logout: () async {
       final source = ComicSource.require('picacg');
+      // 退出必须同时清掉落盘的账密，否则"已退出"仍留着可直接重登的凭据。
+      // appChannel / imageQuality 等非账号偏好保留。
       source.data
         ..remove('token')
-        ..remove('user');
+        ..remove('user')
+        ..remove('account');
       picacgNetwork.user = null;
       await source.saveData();
     },

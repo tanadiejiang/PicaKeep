@@ -1,12 +1,11 @@
-import 'dart:io';
-
 import 'package:flutter/material.dart';
 import 'package:picakeep/base.dart';
 import 'package:picakeep/comic_source/comic_source.dart';
-import 'package:picakeep/foundation/app.dart';
 import 'package:picakeep/network/eh_network/eh_main_network.dart';
-import 'package:picakeep/pages/online_comic/webview.dart';
+import 'package:picakeep/tools/translations.dart';
 import 'package:url_launcher/url_launcher_string.dart';
+
+import 'account_webview_login.dart';
 
 /// 从多行 `key: value` 文本解析出 cookie map。
 ///
@@ -29,23 +28,30 @@ Map<String, String> parseCookieText(String text) {
 ///
 /// 主路径：手填 / 粘贴解析 ipb_member_id / ipb_pass_hash / igneous / star。
 /// 增强路径："在 Webview 中登录" —— 移动端 InAppWebview、桌面端 DesktopWebview，
-/// 登录论坛成功后自动抓两域 cookie + UA。两路最终都汇入 [loginWithCookies]。
+/// 手填和网页登录共用源级操作门禁与凭据保存流程。
 class EhLoginPage extends StatefulWidget {
-  const EhLoginPage({super.key});
+  const EhLoginPage({
+    super.key,
+    this.webviewFactory = createAccountLoginWebview,
+    this.submitCredentials,
+  });
+
+  final AccountLoginWebviewFactory webviewFactory;
+  final AccountLoginSubmit? submitCredentials;
 
   @override
   State<EhLoginPage> createState() => _EhLoginPageState();
 }
 
-class _EhLoginPageState extends State<EhLoginPage> {
+class _EhLoginPageState extends AccountCookieLoginState<EhLoginPage> {
+  @override
+  String get sourceKey => 'ehentai';
   final _idController = TextEditingController();
   final _hashController = TextEditingController();
   final _igneousController = TextEditingController();
   final _starController = TextEditingController();
   final _pasteController = TextEditingController();
-  bool _logging = false;
   bool _showPaste = false;
-  String? _error;
 
   @override
   void dispose() {
@@ -67,7 +73,7 @@ class _EhLoginPageState extends State<EhLoginPage> {
   void _parsePasted() {
     final cookieMap = parseCookieText(_pasteController.text);
     if (cookieMap.isEmpty) {
-      _showMessage('未能从文本中解析出 cookie');
+      _showMessage('未能从文本中解析出 cookie'.tl);
       return;
     }
     setState(() {
@@ -79,124 +85,70 @@ class _EhLoginPageState extends State<EhLoginPage> {
   }
 
   void _loginManually() {
-    if (_idController.text.isEmpty || _hashController.text.isEmpty) {
-      setState(() => _error = '请填写 ipb_member_id 与 ipb_pass_hash');
+    if (_idController.text.trim().isEmpty ||
+        _hashController.text.trim().isEmpty) {
+      setState(() => loginError = '请填写 ipb_member_id 与 ipb_pass_hash'.tl);
       return;
     }
-    loginWithCookies({
+    final candidate = AccountLoginCandidate({
       'ipb_member_id': _idController.text.trim(),
       'ipb_pass_hash': _hashController.text.trim(),
       if (_igneousController.text.trim().isNotEmpty)
         'igneous': _igneousController.text.trim(),
       if (_starController.text.trim().isNotEmpty)
         'star': _starController.text.trim(),
+    }, null);
+    runLogin(() async {
+      await (widget.submitCredentials ?? _submit)(candidate);
+      return true;
     });
   }
 
-  void _loginWithWebview() async {
-    const loginUrl = 'https://forums.e-hentai.org/index.php?act=Login&CODE=00';
-    if (App.isMobile) {
-      App.globalTo(() => AppWebview(
-            singlePage: true,
-            initialUrl: loginUrl,
-            onTitleChange: (title, controller) async {
-              if (title == 'E-Hentai Forums') {
-                final ua = await controller.getUA();
-                if (ua != null) {
-                  appdata.implicitData[3] = ua;
-                  appdata.writeImplicitData();
-                }
-                final cookies1 =
-                    await controller.getCookies('https://e-hentai.org') ?? {};
-                final cookies2 =
-                    await controller.getCookies('https://exhentai.org') ?? {};
-                final cookies = <String, String>{...cookies1, ...cookies2};
-                loginWithCookies(cookies);
-                App.globalBack();
-              }
-            },
-          ));
-    } else if (App.isDesktop) {
-      if (await DesktopWebview.isAvailable()) {
-        final webview = DesktopWebview(
-          initialUrl: loginUrl,
-          onTitleChange: (title, webview) async {
-            if (title == 'E-Hentai Forums') {
-              final ua = webview.userAgent;
-              if (ua != null) {
-                appdata.implicitData[3] = ua;
-                appdata.writeImplicitData();
-              }
-              final cookies1 = await webview.getCookies('https://e-hentai.org');
-              final cookies2 = await webview.getCookies('https://exhentai.org');
-              webview.close();
-              final cookies = <String, String>{...cookies1, ...cookies2};
-              loginWithCookies(cookies);
-            }
-          },
-        );
-        webview.open();
-      } else {
-        _showMessage('当前设备不支持 Webview，请使用手动填写 Cookie');
-      }
-    }
-  }
+  Future<void> _loginWithWebview() => runLogin(() => collectAndSubmit(
+        site: AccountLoginSite.ehentai,
+        url: 'https://forums.e-hentai.org/index.php?act=Login&CODE=00',
+        factory: widget.webviewFactory,
+        submit: widget.submitCredentials ?? _submit,
+      ));
 
-  void loginWithCookies(Map<String, String> cookiesMap) async {
-    setState(() {
-      _logging = true;
-      _error = null;
-    });
-
-    final cookieJar = EhNetwork().cookieJar;
-    // 先清旧 cookie，避免上一个账号残留与新账号混写。
-    cookieJar.deleteUri(Uri.parse('https://e-hentai.org'));
-    cookieJar.deleteUri(Uri.parse('https://exhentai.org'));
-
-    // 双域名双写：同一份身份 cookie 分别以 .e-hentai.org / .exhentai.org 各写一遍。
-    final cookies =
-        cookiesMap.entries.map((e) => Cookie(e.key, e.value)).toList();
-    for (final c in cookies) {
-      c.domain = '.e-hentai.org';
-    }
-    cookieJar.saveFromResponse(Uri.parse('https://e-hentai.org'), cookies);
-    for (final c in cookies) {
-      c.domain = '.exhentai.org';
-    }
-    cookieJar.saveFromResponse(Uri.parse('https://exhentai.org'), cookies);
-
-    final valid = await EhNetwork().validateCookies();
-    if (!mounted) return;
-    if (valid) {
-      final source = ComicSource.find('ehentai');
-      if (source != null) {
-        source.data['token'] = 'ok';
-        // 抓真实用户名；拿不到则回退占位，不阻断登录。
-        final name = await EhNetwork().getUserName();
-        source.data['name'] =
-            (name != null && name.isNotEmpty) ? name : 'E-Hentai';
-        await source.saveData();
-      }
-      _showMessage('登录成功');
-      if (mounted) {
-        Navigator.of(context).pop(true);
-      }
-    } else {
-      // 校验失败：清脏 cookie，不写 token，保持可重试。
-      cookieJar.deleteUri(Uri.parse('https://e-hentai.org'));
-      cookieJar.deleteUri(Uri.parse('https://exhentai.org'));
-      setState(() {
-        _logging = false;
-        _error = 'Cookie 无效或已过期，请检查后重试';
-      });
+  Future<void> _submit(AccountLoginCandidate candidate) async {
+    final network = EhNetwork();
+    try {
+      await persistAccountCookies(
+        jar: network.cookieJar,
+        source: ComicSource.require(sourceKey),
+        replacements: {
+          Uri.parse('https://e-hentai.org/'): candidate.cookies,
+          Uri.parse('https://exhentai.org/'): candidate.cookies,
+        },
+        identityCookieNames: const {
+          'ipb_member_id',
+          'ipb_pass_hash',
+          'igneous',
+          'star',
+        },
+        userAgent: candidate.userAgent,
+        authenticate: () async {
+          if (!await network.validateCookies()) {
+            throw StateError('Cookie 无效或已过期，请检查后重试'.tl);
+          }
+          final name = await network.getUserName();
+          return {
+            'token': 'ok',
+            'name': name?.isNotEmpty == true ? name! : 'E-Hentai'
+          };
+        },
+      );
+    } finally {
+      await network.getCookies(true);
     }
   }
 
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
-    return Scaffold(
-      appBar: AppBar(title: const Text('E-Hentai 登录')),
+    return withLoginBackHandling(Scaffold(
+      appBar: AppBar(title: Text('E-Hentai 登录'.tl)),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(20),
         child: Center(
@@ -209,44 +161,47 @@ class _EhLoginPageState extends State<EhLoginPage> {
                 DropdownButtonFormField<String>(
                   key: ValueKey(appdata.settings[20]),
                   initialValue: appdata.settings[20] == '0' ? '0' : '1',
-                  decoration: const InputDecoration(labelText: '搜索站点'),
-                  items: const [
-                    DropdownMenuItem(value: '0', child: Text('E-Hentai（表站）')),
-                    DropdownMenuItem(value: '1', child: Text('ExHentai（里站）')),
+                  decoration: InputDecoration(labelText: '搜索站点'.tl),
+                  items: [
+                    DropdownMenuItem(
+                        value: '0', child: Text('E-Hentai（表站）'.tl)),
+                    DropdownMenuItem(
+                        value: '1', child: Text('ExHentai（里站）'.tl)),
                   ],
-                  onChanged: _logging
+                  onChanged: logging
                       ? null
                       : (value) async {
                           if (value == null) return;
                           final previous = appdata.settings[20];
-                          setState(() => _logging = true);
+                          setState(() => logging = true);
                           appdata.settings[20] = value;
                           try {
                             await appdata.updateSettings(false);
                           } catch (_) {
                             appdata.settings[20] = previous;
-                            if (mounted) _showMessage('站点设置保存失败，请重试');
+                            if (mounted) _showMessage('站点设置保存失败，请重试'.tl);
                           } finally {
-                            if (mounted) setState(() => _logging = false);
+                            if (mounted) setState(() => logging = false);
                           }
                         },
                 ),
-                const Padding(
-                  padding: EdgeInsets.symmetric(vertical: 12),
-                  child:
-                      Text('里站需要账号具备访问权限及有效 Cookie。直接打开画廊链接时，阅读和下载跟随链接所属站点。'),
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  child: Text(
+                      '里站需要账号具备访问权限及有效 Cookie。直接打开画廊链接时，阅读和下载跟随链接所属站点。'.tl),
                 ),
                 const Text('Cookies', style: TextStyle(fontSize: 18)),
                 const SizedBox(height: 12),
                 _field(_idController, 'ipb_member_id'),
                 _field(_hashController, 'ipb_pass_hash'),
-                _field(_igneousController, 'igneous（里站需要，普通站可空）'),
-                _field(_starController, 'star（可空）'),
+                _field(_igneousController, 'igneous（里站需要，普通站可空）'.tl),
+                _field(_starController, 'star（可空）'.tl),
                 Align(
                   alignment: Alignment.centerLeft,
                   child: TextButton(
                     onPressed: () => setState(() => _showPaste = !_showPaste),
-                    child: Text(_showPaste ? '收起快速填写' : '通过 Cookie 文本快速填写'),
+                    child:
+                        Text(_showPaste ? '收起快速填写'.tl : '通过 Cookie 文本快速填写'.tl),
                   ),
                 ),
                 AnimatedSwitcher(
@@ -269,32 +224,32 @@ class _EhLoginPageState extends State<EhLoginPage> {
                             const SizedBox(height: 8),
                             OutlinedButton(
                               onPressed: _parsePasted,
-                              child: const Text('解析'),
+                              child: Text('解析'.tl),
                             ),
                           ],
                         )
                       : const SizedBox.shrink(),
                 ),
-                if (_error != null) ...[
+                if (loginError != null) ...[
                   const SizedBox(height: 8),
-                  Text(_error!, style: TextStyle(color: colorScheme.error)),
+                  Text(loginError!, style: TextStyle(color: colorScheme.error)),
                 ],
                 const SizedBox(height: 16),
                 FilledButton(
-                  onPressed: _logging ? null : _loginManually,
-                  child: _logging
+                  onPressed: logging ? null : _loginManually,
+                  child: logging
                       ? const SizedBox(
                           width: 18,
                           height: 18,
                           child: CircularProgressIndicator(strokeWidth: 2),
                         )
-                      : const Text('登录'),
+                      : Text('登录'.tl),
                 ),
                 const SizedBox(height: 8),
                 TextButton.icon(
-                  onPressed: _logging ? null : _loginWithWebview,
+                  onPressed: logging ? null : _loginWithWebview,
                   icon: const Icon(Icons.arrow_outward, size: 16),
-                  label: const Text('在 Webview 中登录'),
+                  label: Text('在 Webview 中登录'.tl),
                 ),
                 TextButton.icon(
                   onPressed: () => launchUrlString(
@@ -302,14 +257,14 @@ class _EhLoginPageState extends State<EhLoginPage> {
                     mode: LaunchMode.externalApplication,
                   ),
                   icon: const Icon(Icons.arrow_outward, size: 16),
-                  label: const Text('注册'),
+                  label: Text('注册'.tl),
                 ),
               ],
             ),
           ),
         ),
       ),
-    );
+    ));
   }
 
   Widget _field(TextEditingController controller, String label) {

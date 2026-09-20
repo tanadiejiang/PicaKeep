@@ -3,10 +3,13 @@ import 'package:flutter/material.dart';
 import 'package:picakeep/comic_source/comic_source.dart';
 import 'package:picakeep/foundation/app_page_route.dart';
 import 'package:picakeep/network/base_comic.dart';
-import 'package:picakeep/pages/accounts/accounts_page.dart';
+import 'package:picakeep/pages/accounts/account_page_route.dart';
 import 'package:picakeep/tools/tags_translation.dart'
-    show tagTranslations, tagTranslateCategory,
-        tagNamespacesForChineseCategory, loadTagTranslations;
+    show
+        tagTranslations,
+        tagTranslateCategory,
+        tagNamespacesForChineseCategory,
+        loadTagTranslations;
 
 import 'online_search_logic.dart';
 import 'online_search_result_page.dart';
@@ -52,7 +55,8 @@ List<_TagSug> _findTagSuggestions(String word) {
       final key = tag.key;
       final cn = tag.value;
       final keyLower = key.toLowerCase();
-      final lastWord = keyLower.contains(' ') ? keyLower.split(' ').last : keyLower;
+      final lastWord =
+          keyLower.contains(' ') ? keyLower.split(' ').last : keyLower;
       if (keyLower.startsWith(lower) ||
           lastWord.startsWith(lower) ||
           cn.toLowerCase().contains(lower)) {
@@ -114,8 +118,7 @@ class _OnlineSearchPageState extends State<OnlineSearchPage> {
 
   void _onKeywordChanged() {
     final text = _keywordController.text;
-    final enableSugg =
-        _source?.searchPageData?.enableTagsSuggestions == true;
+    final enableSugg = _source?.searchPageData?.enableTagsSuggestions == true;
     if (!enableSugg || !_tagsReady || text.isEmpty || text.endsWith(' ')) {
       if (_suggestions.isNotEmpty) setState(() => _suggestions = []);
       return;
@@ -176,9 +179,7 @@ class _OnlineSearchPageState extends State<OnlineSearchPage> {
   }
 
   Future<void> _openAccounts() async {
-    await Navigator.of(context).push(
-      AppPageRoute(builder: (_) => const AccountsPage()),
-    );
+    await showAccountsPage(context);
     if (mounted) setState(() {});
   }
 
@@ -221,8 +222,7 @@ class _OnlineSearchPageState extends State<OnlineSearchPage> {
                           ? _SuggestionListView(
                               suggestions: _suggestions,
                               onTap: _onSuggestionTap,
-                              onClose: () =>
-                                  setState(() => _suggestions = []),
+                              onClose: () => setState(() => _suggestions = []),
                             )
                           : _SearchConfigContent(
                               source: _source,
@@ -316,8 +316,7 @@ class _SearchBarSection extends StatelessWidget {
                     for (final m in matches)
                       ActionChip(
                         avatar: const Icon(Icons.open_in_new, size: 16),
-                        label: Text(
-                            '打开漫画: ${m.source.name}  ${m.cleanId}'),
+                        label: Text('打开漫画: ${m.source.name}  ${m.cleanId}'),
                         onPressed: () {
                           final page = m.source.comicPageBuilder!(
                             _IdBaseComic(m.cleanId),
@@ -508,8 +507,7 @@ class _SuggestionListView extends StatelessWidget {
                 subtitle: sug.cn.isNotEmpty && sug.cn != sug.key
                     ? Text(sug.cn,
                         style: TextStyle(
-                            fontSize: 12,
-                            color: colorScheme.onSurfaceVariant))
+                            fontSize: 12, color: colorScheme.onSurfaceVariant))
                     : null,
                 trailing: Column(
                   mainAxisSize: MainAxisSize.min,
@@ -553,8 +551,7 @@ class _NoLoggedInSourceView extends StatelessWidget {
           children: [
             const Icon(Icons.login, size: 56),
             const SizedBox(height: 12),
-            Text('请先登录在线源',
-                style: Theme.of(context).textTheme.titleMedium),
+            Text('请先登录在线源', style: Theme.of(context).textTheme.titleMedium),
             const SizedBox(height: 16),
             FilledButton.icon(
               onPressed: onOpenAccounts,
