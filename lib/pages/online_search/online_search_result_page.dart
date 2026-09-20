@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:picakeep/comic_source/comic_source.dart';
 import 'package:picakeep/components/comic_tile.dart';
 import 'package:picakeep/foundation/app_page_route.dart';
+import 'package:picakeep/foundation/comic_tile_display_config.dart';
 import 'package:picakeep/foundation/untranslated_tags/untranslated_tag_coordinator.dart';
 import 'package:picakeep/foundation/download_author_resolver.dart';
 import 'package:picakeep/foundation/image_loader/stream_image_provider.dart';
@@ -507,9 +508,14 @@ class _OnlineSearchResultPageState extends State<OnlineSearchResultPage> {
                             );
                           }
                           final comic = _items[index];
+                          // 搜索页按源取配置：切源后当前 build 立即用新值，
+                          // 无需额外监听（_source 变化一定伴随 setState）。
+                          final cardConfig =
+                              readSearchComicTileDisplayConfig(_source.key);
                           return SizedBox(
                             height: 164,
                             child: DownloadedComicTile(
+                              cardDisplayConfig: cardConfig,
                               name: comic.title,
                               author: resolveSourceAuthors(
                                 source: _source.key,
@@ -524,6 +530,7 @@ class _OnlineSearchResultPageState extends State<OnlineSearchResultPage> {
                                 source: _source.key,
                                 comicId: comic.id,
                                 description: comic.description,
+                                showId: cardConfig.showId,
                               ),
                               onTap: () => _openComic(comic),
                               onLongTap: () {},

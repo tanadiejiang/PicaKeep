@@ -7,6 +7,7 @@ import 'package:picakeep/comic_source/favorite_data.dart';
 import 'package:picakeep/components/comic_tile.dart';
 import 'package:picakeep/components/layout.dart';
 import 'package:picakeep/foundation/app_page_route.dart';
+import 'package:picakeep/foundation/comic_tile_display_config.dart';
 import 'package:picakeep/foundation/download_author_resolver.dart';
 import 'package:picakeep/foundation/local_favorites.dart';
 import 'package:picakeep/network/base_comic.dart';
@@ -429,9 +430,13 @@ class _NetworkFavoriteWidgetState extends State<NetworkFavoriteWidget> {
                   final imageProvider = headers.isEmpty
                       ? NetworkImage(comic.cover)
                       : NetworkImage(comic.cover, headers: headers);
+                  // 在线收藏只读「online」这一套（不区分源）：同一页面里 source
+                  // 固定，逐条读取没有额外信息量。
+                  final cardConfig = readOnlineComicTileDisplayConfig();
                   return Padding(
                     padding: const EdgeInsets.all(2),
                     child: DownloadedComicTile(
+                      cardDisplayConfig: cardConfig,
                       name: comic.title,
                       author: resolveSourceAuthors(
                         source: widget.source.key,
@@ -446,6 +451,7 @@ class _NetworkFavoriteWidgetState extends State<NetworkFavoriteWidget> {
                         source: widget.source.key,
                         comicId: comic.id,
                         description: comic.description,
+                        showId: cardConfig.showId,
                       ),
                       onTap: () => _openComic(comic),
                       onLongTap: () {
