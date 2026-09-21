@@ -327,6 +327,7 @@ class OnlineComicIconAction extends StatelessWidget {
     required this.icon,
     required this.label,
     required this.onTap,
+    this.onLongPress,
     this.busy = false,
     this.active = false,
   });
@@ -334,6 +335,9 @@ class OnlineComicIconAction extends StatelessWidget {
   final IconData icon;
   final String label;
   final VoidCallback onTap;
+
+  /// 长按动作（目前只有「收藏」用它做"取消网络收藏"的快捷入口）。
+  final VoidCallback? onLongPress;
   final bool busy;
   final bool active;
 
@@ -344,6 +348,7 @@ class OnlineComicIconAction extends StatelessWidget {
     final color = active ? cs.primary : cs.onSurface.withValues(alpha: 0.7);
     return InkWell(
       onTap: busy ? null : onTap,
+      onLongPress: busy ? null : onLongPress,
       borderRadius: BorderRadius.circular(40),
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),

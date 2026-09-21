@@ -81,10 +81,9 @@ void main() {
     ))));
     await tester.tap(find.text('打开收藏'));
     await tester.pumpAndSettle();
-    final local = find.text('本地收藏夹');
-    await tester.tap(local.evaluate().isNotEmpty
-        ? local
-        : find.textContaining('本地收藏').first);
+    // 收藏面板已改为「网络 / 本地」选项卡形态：先切到「本地」页，
+    // 才能进到本地收藏夹的复选框列表（面板底部按钮即原来的「完成」）。
+    await tester.tap(find.text('本地'));
     await tester.pumpAndSettle();
   }
 

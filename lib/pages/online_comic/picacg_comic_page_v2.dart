@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:picakeep/foundation/local_favorites.dart';
 import 'local_favorite_actions.dart';
+import 'platform_favorite_panel.dart';
 import 'package:picakeep/comic_source/comic_source.dart';
 import 'package:picakeep/foundation/app_page_route.dart';
 import 'package:picakeep/foundation/history.dart';
@@ -195,26 +196,62 @@ class PicacgComicPageV2 extends BaseOnlineComicPage<PicacgComicItem> {
   }
 
   @override
+  Future<bool?> performCancelPlatformFavorite(PicacgComicItem data) async {
+    // Picacg 的收藏接口是整本 toggle；长按只应在"已收藏"时被调用。
+    final res = await PicacgNetwork().favouriteOrUnfavouriteComic(data.id);
+    return res.error ? false : true;
+  }
+
+  @override
   Future<void> onFavorite(BuildContext context, PicacgComicItem data) async {
-    if (!await choosePlatformFavorite(context, FavoriteItem(
+    final localItem = FavoriteItem(
       target: data.id, name: data.title, coverPath: data.cover,
       author: data.author, type: FavoriteType.picacg, tags: data.tags,
-    ))) {
-      return;
-    }
-    // 基于当前真实收藏态 toggle（picacg 收藏接口本身就是 toggle）。
-    final adding = !currentFavorite;
-    final res = await PicacgNetwork().favouriteOrUnfavouriteComic(data.id);
-    if (!context.mounted) return;
-    if (res.error) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('操作失败: ${res.errorMessageWithoutNull}')),
-      );
-    } else {
-      refreshFavorite(adding);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(adding ? '收藏成功' : '已取消收藏')),
-      );
+    );
+    final wasFavorite = currentFavorite;
+
+    final result = await showPlatformFavoritePanel(
+      context,
+      sourceTitle: 'Picacg',
+      localItem: localItem,
+      isFavorite: wasFavorite,
+      canFavorite: true,
+      // Picacg 没有收藏夹概念，用单夹表达，行为与改造前的整本 toggle 等价。
+      folders: const [
+        FavoriteFolderOption(id: 'picacg', name: 'Picacg 收藏'),
+      ],
+      onSubmitPlatform: ({String? folderId, required bool favorite}) async {
+        // 接口是「翻转」而非置位：只有目标态与当前态不同才允许调用，
+        // 否则会把"保持收藏"翻成"取消收藏"。
+        if (favorite == wasFavorite) {
+          return const PlatformFavoriteSubmitResult.ok();
+        }
+        final res = await PicacgNetwork().favouriteOrUnfavouriteComic(data.id);
+        if (res.error) {
+          return PlatformFavoriteSubmitResult.failed(
+              '操作失败: ${res.errorMessageWithoutNull}');
+        }
+        return const PlatformFavoriteSubmitResult.ok();
+      },
+    );
+
+    if (!context.mounted || result == null) return;
+    switch (result.action) {
+      case PlatformFavoriteAction.platformSubmitted:
+        final nowFavorite = result.favoriteTarget ?? wasFavorite;
+        refreshFavorite(nowFavorite);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(nowFavorite ? '收藏成功' : '已取消收藏')),
+        );
+      case PlatformFavoriteAction.localSubmitted:
+        final localResult = result.localResult;
+        if (localResult != null) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(localFavoriteSingleMessage(localResult))),
+          );
+        }
+        // 本地操作不改变平台态，但图标是「平台 OR 本地」，重算一次。
+        refreshFavorite(wasFavorite || isLocallyFavorited(localItem));
     }
   }
 

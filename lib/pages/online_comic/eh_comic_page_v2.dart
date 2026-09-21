@@ -3,6 +3,7 @@
 // 这是全局引用（不依赖 widget 生命周期），suppression 是合理的。
 import 'package:flutter/material.dart';
 import 'local_favorite_actions.dart';
+import 'platform_favorite_panel.dart';
 import 'package:picakeep/base.dart';
 import 'package:picakeep/comic_source/comic_source.dart';
 import 'package:picakeep/foundation/app.dart';
@@ -172,6 +173,20 @@ class EhentaiComicPageV2 extends BaseOnlineComicPage<Gallery> {
   // ── 收藏（平台 + 本地双层）────────────────────────────────────────────────
 
   @override
+  Future<bool?> performCancelPlatformFavorite(Gallery data) async {
+    final auth = data.auth ?? {};
+    final ok = await EhNetwork().unfavorite(
+      auth['gid'] ?? '',
+      auth['token'] ?? '',
+      galleryLink: data.link,
+    );
+    if (!ok) return false;
+    // 与 JM / Picacg / NH 同理：`loadFavoriteState` 读的是页面加载快照，
+    // 取消后重读仍是旧值 —— 必须就地更新并返回"确定"。
+    return true;
+  }
+
+  @override
   Future<void> onFavorite(BuildContext context, Gallery data) async {
     final auth = data.auth ?? {};
     final gid = auth['gid'] ?? '';
@@ -187,51 +202,71 @@ class EhentaiComicPageV2 extends BaseOnlineComicPage<Gallery> {
       type: FavoriteType.ehentai,
       tags: data.tags.values.expand((tags) => tags).toList(),
     );
-    final localFav = isLocallyFavorited(localItem);
-
     if (!context.mounted) return;
-    await showModalBottomSheet<void>(
-      context: context,
-      builder: (ctx) => _EhFavoritePanel(
-        platformFavorite: platformFav,
-        localFavorite: localFav,
-        folderNames: EhNetwork().folderNames,
-        onPlatformAdd: (folderIndex) async {
-          Navigator.of(ctx).pop();
-          final res = await EhNetwork().favorite(gid, token,
-              id: folderIndex.toString(), galleryLink: data.link);
-          if (!context.mounted) return;
-          if (res) {
-            refreshFavorite(true);
-            ScaffoldMessenger.of(context)
-                .showSnackBar(const SnackBar(content: Text('已添加到平台收藏夹')));
-          } else {
-            ScaffoldMessenger.of(context)
-                .showSnackBar(const SnackBar(content: Text('平台收藏失败')));
-          }
-        },
-        onPlatformRemove: () async {
-          Navigator.of(ctx).pop();
-          final res =
+    final isLogin = EhNetwork().isLogin;
+    final result = await showPlatformFavoritePanel(
+      context,
+      sourceTitle: 'E-Hentai',
+      localItem: localItem,
+      isFavorite: platformFav,
+      canFavorite: isLogin,
+      folders: [
+        for (var i = 0; i < EhNetwork().folderNames.length; i++)
+          FavoriteFolderOption(
+            id: '$i',
+            name: isLogin
+                // 未登录时 folderNames 是占位值（Favorite 0..9），不当作真实夹名展示。
+                ? EhNetwork().folderNames[i]
+                : '收藏夹 $i',
+          ),
+      ],
+      foldersErrorText: '收藏夹加载失败',
+      onSubmitPlatform: ({String? folderId, required bool favorite}) async {
+        // 取消：整体取消平台收藏。
+        if (!favorite) {
+          final ok =
               await EhNetwork().unfavorite(gid, token, galleryLink: data.link);
-          if (!context.mounted) return;
-          if (res) {
-            refreshFavorite(localFav); // 本地收藏可能仍存在
-            ScaffoldMessenger.of(context)
-                .showSnackBar(const SnackBar(content: Text('已取消平台收藏')));
-          } else {
-            ScaffoldMessenger.of(context)
-                .showSnackBar(const SnackBar(content: Text('取消平台收藏失败')));
+          if (!ok) {
+            return const PlatformFavoriteSubmitResult.failed('取消平台收藏失败');
           }
-        },
-        onManageLocal: () async {
-          Navigator.of(ctx).pop();
-          await showLocalFavoriteFoldersWithFeedback(context, localItem);
-          if (!context.mounted) return;
-          refreshFavorite(platformFav || isLocallyFavorited(localItem));
-        },
-      ),
+          return const PlatformFavoriteSubmitResult.ok();
+        }
+        // 收藏：EH 的 addfav 会覆盖 favcat，换夹也用同一个方法，无需新接口。
+        final ok = await EhNetwork().favorite(
+          gid,
+          token,
+          id: folderId ?? '0',
+          galleryLink: data.link,
+        );
+        if (!ok) {
+          return const PlatformFavoriteSubmitResult.failed('平台收藏失败');
+        }
+        return const PlatformFavoriteSubmitResult.ok();
+      },
     );
+
+    if (!context.mounted || result == null) return;
+    switch (result.action) {
+      case PlatformFavoriteAction.platformSubmitted:
+        final nowFavorite = result.favoriteTarget ?? true;
+        if (nowFavorite) {
+          refreshFavorite(true);
+          ScaffoldMessenger.of(context)
+              .showSnackBar(const SnackBar(content: Text('已添加到平台收藏夹')));
+        } else {
+          refreshFavorite(isLocallyFavorited(localItem));
+          ScaffoldMessenger.of(context)
+              .showSnackBar(const SnackBar(content: Text('已取消平台收藏')));
+        }
+      case PlatformFavoriteAction.localSubmitted:
+        final localResult = result.localResult;
+        if (localResult != null) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(localFavoriteSingleMessage(localResult))),
+          );
+        }
+        refreshFavorite(platformFav || isLocallyFavorited(localItem));
+    }
   }
 
   // ── 评论按钮（非 null → 基类显示评论图标）───────────────────────────────
@@ -488,88 +523,6 @@ class _EhRatingSectionState extends State<_EhRatingSection> {
               child: CircularProgressIndicator(strokeWidth: 2),
             ),
           ],
-        ],
-      ),
-    );
-  }
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-//  收藏面板（平台收藏夹 0-9 + 本地收藏）
-// ═══════════════════════════════════════════════════════════════════════════
-
-class _EhFavoritePanel extends StatelessWidget {
-  const _EhFavoritePanel({
-    required this.platformFavorite,
-    required this.localFavorite,
-    required this.folderNames,
-    required this.onPlatformAdd,
-    required this.onPlatformRemove,
-    required this.onManageLocal,
-  });
-
-  final bool platformFavorite;
-  final bool localFavorite;
-  final List<String> folderNames;
-  final void Function(int folderIndex) onPlatformAdd;
-  final VoidCallback onPlatformRemove;
-  final VoidCallback onManageLocal;
-
-  @override
-  Widget build(BuildContext context) {
-    return DraggableScrollableSheet(
-      initialChildSize: 0.6,
-      minChildSize: 0.3,
-      maxChildSize: 0.9,
-      expand: false,
-      builder: (_, controller) => Column(
-        children: [
-          const SizedBox(height: 8),
-          Container(
-            width: 40,
-            height: 4,
-            decoration: BoxDecoration(
-              color: Theme.of(context).colorScheme.outline,
-              borderRadius: BorderRadius.circular(2),
-            ),
-          ),
-          const SizedBox(height: 12),
-          Text('收藏', style: Theme.of(context).textTheme.titleMedium),
-          const Divider(),
-          Expanded(
-            child: ListView(
-              controller: controller,
-              padding: const EdgeInsets.symmetric(horizontal: 8),
-              children: [
-                // 本地收藏
-                ListTile(
-                  leading: Icon(
-                    localFavorite ? Icons.bookmark : Icons.bookmark_border,
-                    color: localFavorite
-                        ? Theme.of(context).colorScheme.primary
-                        : null,
-                  ),
-                  title: Text(localFavorite ? '管理本地收藏夹（已收藏）' : '添加到本地收藏'),
-                  onTap: onManageLocal,
-                ),
-                const Divider(),
-                // 平台收藏夹
-                if (platformFavorite)
-                  ListTile(
-                    leading: const Icon(Icons.star_border),
-                    title: const Text('取消平台收藏'),
-                    onTap: onPlatformRemove,
-                  )
-                else
-                  for (var i = 0; i < folderNames.length; i++)
-                    ListTile(
-                      leading: const Icon(Icons.folder_outlined),
-                      title: Text('平台收藏夹 $i: ${folderNames[i]}'),
-                      onTap: () => onPlatformAdd(i),
-                    ),
-              ],
-            ),
-          ),
         ],
       ),
     );

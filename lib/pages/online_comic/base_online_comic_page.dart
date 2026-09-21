@@ -76,6 +76,75 @@ abstract class BaseOnlineComicPage<T> extends StatelessWidget {
   /// 收藏（点击收藏按钮）。完成后可通过 [refreshFavorite] 同步图标。
   void onFavorite(BuildContext context, T data);
 
+  /// 「取消网络收藏」的实际执行者（各源实现）。
+  ///
+  /// 只在 [_confirmAndCancelPlatformFavorite] 的用户确认之后被调用。
+  /// 返回值：
+  /// - `true` —— 取消成功，**平台收藏已确定没了**（图标直接置为"未收藏"）；
+  /// - `false` —— 失败；
+  /// - `null` —— 请求成功但状态不确定（例如需要重新解析详情页），
+  ///   此时基类回退到 [loadFavoriteState] 重新计算。
+  ///
+  /// 之所以要区分 `true` 与 `null`：`loadFavoriteState` 读的往往是**页面加载时的
+  /// 快照**（JM 的 `data.isFavourite`、Picacg 的 `data.isFavourite`），取消后重读
+  /// 仍是旧值，图标不会变 —— 这正是"提示成功但图标不动"的原因。
+  Future<bool?> performCancelPlatformFavorite(T data) async => false;
+
+  /// 长按操作栏的「收藏」按钮：确认后取消网络收藏。
+  ///
+  /// 做成"确认 + 执行"两步的模板方法：四个源共用同一段确认与结果处理，
+  /// 各自只需实现 [performCancelPlatformFavorite]。
+  @protected
+  Future<void> _confirmAndCancelPlatformFavorite(
+      BuildContext context, T data, bool wasFavorite) async {
+    if (!wasFavorite) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('当前未收藏，无需取消')),
+      );
+      return;
+    }
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('取消网络收藏'),
+        content: const Text('确定取消这本漫画的网络收藏吗？'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('确定'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !context.mounted) return;
+
+    final ok = await performCancelPlatformFavorite(data);
+    if (!context.mounted) return;
+    if (ok == null || ok == true) {
+      // 图标语义是「平台 OR 本地」，但这里只做平台取消：直接熄灭图标。
+      // **不能**重读 loadFavoriteState —— 四源它读的都是页面加载时的快照
+      //（`data.isFavourite` / `data.favorite`），取消后重读仍是旧值，
+      // 图标会"提示已取消却还亮着"（真机实测到的 bug）。
+      refreshFavorite(ok == true ? false : await loadFavoriteState(data));
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('已取消网络收藏')),
+      );
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('取消网络收藏失败')),
+      );
+    }
+  }
+
+  /// 供操作栏引用（`@protected` 的私有方法通过它暴露给同一实例的 build）。
+  void Function(BuildContext context, T data, bool wasFavorite)?
+      get onCancelPlatformFavorite => _confirmAndCancelPlatformFavorite;
+
   /// 加载收藏态（数据加载成功后调用）。
   Future<bool> loadFavoriteState(T data);
 
@@ -525,6 +594,9 @@ abstract class BaseOnlineComicPage<T> extends StatelessWidget {
         label: '收藏',
         active: logic.favorite,
         onTap: () => onFavorite(context, data),
+        onLongPress: onCancelPlatformFavorite == null
+            ? null
+            : () => onCancelPlatformFavorite!(context, data, logic.favorite),
       ),
       if (onLike != null)
         OnlineComicIconAction(

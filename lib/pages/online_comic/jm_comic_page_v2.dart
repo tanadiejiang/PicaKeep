@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:picakeep/foundation/local_favorites.dart';
 import 'local_favorite_actions.dart';
+import 'platform_favorite_panel.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:picakeep/comic_source/comic_source.dart';
 import 'package:picakeep/foundation/app_page_route.dart';
@@ -149,63 +150,87 @@ class JmComicPageV2 extends BaseOnlineComicPage<JmComicInfo> {
   }
 
   @override
+  Future<bool?> performCancelPlatformFavorite(JmComicInfo data) async {
+    final res = await JmNetwork().setFavorite(data.id, add: false);
+    // 成功即"平台已取消"。`data.isFavourite` 是 final 快照改不了，
+    // 由基类按"平台已取消"置图标（不重读快照）。
+    return res.error ? false : true;
+  }
+
+  @override
   Future<void> onFavorite(BuildContext context, JmComicInfo data) async {
-    if (!await choosePlatformFavorite(context, FavoriteItem(
+    final localItem = FavoriteItem(
       target: data.id, name: data.title, coverPath: data.coverUrl,
       author: data.author, type: FavoriteType.jm, tags: data.tags,
-    ))) {
-      return;
-    }
-    // 基于当前真实收藏态 toggle（data.isFavourite 是加载时的不可变快照）。
-    final adding = !currentFavorite;
+    );
+    final wasFavorite = currentFavorite;
 
-    // 取消收藏：直接调用即可。
-    if (!adding) {
-      final res = await JmNetwork().setFavorite(data.id, add: false);
-      if (!context.mounted) return;
-      if (res.error) {
+    final result = await showPlatformFavoritePanel(
+      context,
+      sourceTitle: '禁漫',
+      localItem: localItem,
+      isFavorite: wasFavorite,
+      canFavorite: true,
+      foldersLoader: () async {
+        final res = await JmNetwork().getFolders();
+        if (res.error) {
+          return const <FavoriteFolderOption>[];
+        }
+        return [
+          // 「默认收藏夹」是页面层拼的（服务端 folder_list 里没有它），
+          // 空 id 即默认夹 —— 与原 `_JmFolderSelectDialog` 的取值一致。
+          const FavoriteFolderOption(id: '', name: '默认收藏夹'),
+          for (final f in res.data)
+            FavoriteFolderOption(id: f.id, name: f.name),
+        ];
+      },
+      onSubmitPlatform: ({String? folderId, required bool favorite}) async {
+        // 取消平台收藏：整体取消，不涉及夹。
+        if (!favorite) {
+          final res = await JmNetwork().setFavorite(data.id, add: false);
+          if (res.error) {
+            return PlatformFavoriteSubmitResult.failed(
+                '操作失败: ${res.errorMessageWithoutNull}');
+          }
+          return const PlatformFavoriteSubmitResult.ok();
+        }
+
+        // 收藏：`setFavorite` 是 toggle 端点，网络层内部已做自纠正。
+        final res = await JmNetwork().setFavorite(data.id, add: true);
+        if (res.error) {
+          return PlatformFavoriteSubmitResult.failed(
+              '操作失败: ${res.errorMessageWithoutNull}');
+        }
+        // 非默认夹才需要移动；移动失败不谎报成功（原实现丢弃了返回值）。
+        if (folderId != null && folderId.isNotEmpty) {
+          final moveRes =
+              await JmNetwork().moveFavoriteToFolder(data.id, folderId);
+          if (moveRes.error) {
+            return const PlatformFavoriteSubmitResult.failed(
+                '收藏成功，但移入所选收藏夹失败');
+          }
+        }
+        return const PlatformFavoriteSubmitResult.ok();
+      },
+    );
+
+    if (!context.mounted || result == null) return;
+    switch (result.action) {
+      case PlatformFavoriteAction.platformSubmitted:
+        final nowFavorite = result.favoriteTarget ?? !wasFavorite;
+        refreshFavorite(nowFavorite);
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('操作失败: ${res.errorMessageWithoutNull}')),
+          SnackBar(content: Text(nowFavorite ? '收藏成功' : '已取消收藏')),
         );
-      } else {
-        refreshFavorite(false);
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('已取消收藏')),
-        );
-      }
-      return;
-    }
-
-    // 加收藏：先拉收藏夹列表，有则弹选择框（JM 网络收藏支持多收藏夹）。
-    final foldersRes = await JmNetwork().getFolders();
-    if (!context.mounted) return;
-
-    String? folderId;
-    if (!foldersRes.error && foldersRes.data.isNotEmpty) {
-      folderId = await showDialog<String>(
-        context: context,
-        builder: (_) => _JmFolderSelectDialog(folders: foldersRes.data),
-      );
-      if (folderId == null || !context.mounted) return; // 用户取消
-    } else {
-      folderId = ''; // 无收藏夹或获取失败 → 默认夹
-    }
-
-    final res = await JmNetwork().setFavorite(data.id, add: true);
-    if (!context.mounted) return;
-    if (!res.error && folderId.isNotEmpty) {
-      await JmNetwork().moveFavoriteToFolder(data.id, folderId);
-      if (!context.mounted) return;
-    }
-    if (res.error) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('操作失败: ${res.errorMessageWithoutNull}')),
-      );
-    } else {
-      refreshFavorite(true);
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('收藏成功')),
-      );
+      case PlatformFavoriteAction.localSubmitted:
+        final localResult = result.localResult;
+        if (localResult != null) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(localFavoriteSingleMessage(localResult))),
+          );
+        }
+        // 本地收藏不影响平台图标，但图标语义是「平台 OR 本地」，重算一次。
+        refreshFavorite(wasFavorite || isLocallyFavorited(localItem));
     }
   }
 
@@ -303,37 +328,4 @@ class JmComicPageV2 extends BaseOnlineComicPage<JmComicInfo> {
 
   @override
   List<String>? downloadCandidateIds(JmComicInfo data) => ['jm${data.id}'];
-}
-
-/// JM 网络收藏夹选择弹窗。返回选中的收藏夹 id（'' = 默认夹），取消返回 null。
-class _JmFolderSelectDialog extends StatelessWidget {
-  const _JmFolderSelectDialog({required this.folders});
-
-  final List<JmFolder> folders;
-
-  @override
-  Widget build(BuildContext context) {
-    return SimpleDialog(
-      title: const Text('选择收藏夹'),
-      children: [
-        SimpleDialogOption(
-          onPressed: () => Navigator.of(context).pop(''),
-          child: const Text('默认收藏夹'),
-        ),
-        for (final f in folders)
-          SimpleDialogOption(
-            onPressed: () => Navigator.of(context).pop(f.id),
-            child: Text(f.name),
-          ),
-        SimpleDialogOption(
-          onPressed: () => Navigator.of(context).pop(null),
-          child: Text(
-            '取消',
-            style: TextStyle(
-                color: Theme.of(context).colorScheme.onSurfaceVariant),
-          ),
-        ),
-      ],
-    );
-  }
 }

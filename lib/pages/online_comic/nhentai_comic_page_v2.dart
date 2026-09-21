@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'local_favorite_actions.dart';
+import 'platform_favorite_panel.dart';
 import 'package:picakeep/comic_source/comic_source.dart';
 import 'package:picakeep/foundation/app_page_route.dart';
 import 'package:picakeep/components/info_value_action.dart';
@@ -276,6 +277,14 @@ class NhentaiComicPageV2 extends BaseOnlineComicPage<NhentaiComic> {
   // ── 收藏（平台 toggle + 本地双层）────────────────────────────────────────
 
   @override
+  Future<bool?> performCancelPlatformFavorite(NhentaiComic data) async {
+    final res = await NhentaiNetwork().unfavoriteComic(data.id, data.token);
+    // NH 的 loadFavoriteState 是 `data.favorite || 本地已收藏`，不会重拉详情，
+    // 所以取消成功即确定（本地仍收藏时由基类置 false 后不影响本地状态）。
+    return res.success ? true : false;
+  }
+
+  @override
   Future<void> onFavorite(BuildContext context, NhentaiComic data) async {
     final localItem = FavoriteItem(
       target: data.id, name: data.title, coverPath: data.cover,
@@ -283,38 +292,55 @@ class NhentaiComicPageV2 extends BaseOnlineComicPage<NhentaiComic> {
       type: FavoriteType.nhentai,
       tags: data.tags.values.expand((tags) => tags).toList(),
     );
-    final localFav = isLocallyFavorited(localItem);
-    await showModalBottomSheet<void>(
-      context: context,
-      builder: (ctx) => _NhentaiFavoritePanel(
-        platformFavorite: data.favorite,
-        localFavorite: localFav,
-        loggedIn: ComicSource.find('nhentai')?.isLoggedIn ?? false,
-        onPlatformToggle: () async {
-          Navigator.of(ctx).pop();
-          final wantFav = !data.favorite;
-          final res = wantFav
-              ? await NhentaiNetwork().favoriteComic(data.id, data.token)
-              : await NhentaiNetwork().unfavoriteComic(data.id, data.token);
-          if (!context.mounted) return;
-          if (res.success) {
-            data.favorite = wantFav;
-            refreshFavorite(wantFav || localFav);
-            ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(content: Text(wantFav ? '已收藏' : '已取消收藏')));
-          } else {
-            ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(content: Text('操作失败：${res.errorMessageWithoutNull}')));
-          }
-        },
-        onManageLocal: () async {
-          Navigator.of(ctx).pop();
-          await showLocalFavoriteFoldersWithFeedback(context, localItem);
-          if (!context.mounted) return;
-          refreshFavorite(data.favorite || isLocallyFavorited(localItem));
-        },
-      ),
+    final wasFavorite = data.favorite;
+    final loggedIn = ComicSource.find('nhentai')?.isLoggedIn ?? false;
+
+    final result = await showPlatformFavoritePanel(
+      context,
+      sourceTitle: 'Nhentai',
+      localItem: localItem,
+      // 初始勾选态取**平台态**（不是 `currentFavorite`，后者含本地收藏，
+      // 会把"本地已收藏"误判成"平台已收藏"）。
+      isFavorite: wasFavorite,
+      canFavorite: loggedIn,
+      // NH 没有收藏夹概念，单夹表达；行为与改造前的整本 toggle 等价。
+      folders: const [
+        FavoriteFolderOption(id: 'nhentai', name: 'Nhentai 收藏'),
+      ],
+      onSubmitPlatform: ({String? folderId, required bool favorite}) async {
+        // 接口是「翻转」而非置位：只有目标态与当前态不同才允许调用
+        // （面板已保证无变化不提交，这里再兜一层）。
+        if (favorite == wasFavorite) {
+          return const PlatformFavoriteSubmitResult.ok();
+        }
+        final res = favorite
+            ? await NhentaiNetwork().favoriteComic(data.id, data.token)
+            : await NhentaiNetwork().unfavoriteComic(data.id, data.token);
+        if (!res.success) {
+          return PlatformFavoriteSubmitResult.failed(
+              '操作失败：${res.errorMessageWithoutNull}');
+        }
+        return const PlatformFavoriteSubmitResult.ok();
+      },
     );
+
+    if (!context.mounted || result == null) return;
+    switch (result.action) {
+      case PlatformFavoriteAction.platformSubmitted:
+        final nowFavorite = result.favoriteTarget ?? wasFavorite;
+        data.favorite = nowFavorite;
+        refreshFavorite(nowFavorite || isLocallyFavorited(localItem));
+        ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(nowFavorite ? '已收藏' : '已取消收藏')));
+      case PlatformFavoriteAction.localSubmitted:
+        final localResult = result.localResult;
+        if (localResult != null) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(localFavoriteSingleMessage(localResult))),
+          );
+        }
+        refreshFavorite(data.favorite || isLocallyFavorited(localItem));
+    }
   }
 
   // ── 评论按钮（非 null → 基类显示评论图标）───────────────────────────────
@@ -362,76 +388,4 @@ class NhentaiComicPageV2 extends BaseOnlineComicPage<NhentaiComic> {
   @override
   List<String>? downloadCandidateIds(NhentaiComic data) =>
       ['nhentai${data.id}'];
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-//  收藏面板（平台单一 toggle + 本地收藏）
-// ═══════════════════════════════════════════════════════════════════════════
-
-class _NhentaiFavoritePanel extends StatelessWidget {
-  const _NhentaiFavoritePanel({
-    required this.platformFavorite,
-    required this.localFavorite,
-    required this.loggedIn,
-    required this.onPlatformToggle,
-    required this.onManageLocal,
-  });
-
-  final bool platformFavorite;
-  final bool localFavorite;
-  final bool loggedIn;
-  final VoidCallback onPlatformToggle;
-  final VoidCallback onManageLocal;
-
-  @override
-  Widget build(BuildContext context) {
-    return SafeArea(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          const SizedBox(height: 8),
-          Container(
-            width: 40,
-            height: 4,
-            decoration: BoxDecoration(
-              color: Theme.of(context).colorScheme.outline,
-              borderRadius: BorderRadius.circular(2),
-            ),
-          ),
-          const SizedBox(height: 12),
-          Text('收藏', style: Theme.of(context).textTheme.titleMedium),
-          const Divider(),
-          // 本地收藏
-          ListTile(
-            leading: Icon(
-              localFavorite ? Icons.bookmark : Icons.bookmark_border,
-              color:
-                  localFavorite ? Theme.of(context).colorScheme.primary : null,
-            ),
-            title: Text(localFavorite ? '管理本地收藏夹（已收藏）' : '添加到本地收藏'),
-            onTap: onManageLocal,
-          ),
-          // 平台收藏（需登录）
-          if (loggedIn)
-            ListTile(
-              leading: Icon(
-                platformFavorite ? Icons.favorite : Icons.favorite_border,
-                color: platformFavorite
-                    ? Theme.of(context).colorScheme.primary
-                    : null,
-              ),
-              title: Text(platformFavorite ? '取消平台收藏' : '添加到平台收藏'),
-              onTap: onPlatformToggle,
-            )
-          else
-            const ListTile(
-              leading: Icon(Icons.info_outline),
-              title: Text('登录 Nhentai 后可使用平台收藏'),
-              enabled: false,
-            ),
-          const SizedBox(height: 12),
-        ],
-      ),
-    );
-  }
 }
