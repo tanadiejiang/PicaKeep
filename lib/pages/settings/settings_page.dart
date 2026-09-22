@@ -788,12 +788,14 @@ class SwitchSetting extends StatefulWidget {
     required this.title,
     this.subTitle,
     required this.settingsIndex,
+    this.onChanged,
   });
 
   final Widget? leading;
   final String title;
   final String? subTitle;
   final int settingsIndex;
+  final ValueChanged<bool>? onChanged;
 
   @override
   State<SwitchSetting> createState() => _SwitchSettingState();
@@ -814,6 +816,7 @@ class _SwitchSettingState extends State<SwitchSetting> {
             appdata.settings[widget.settingsIndex] = value ? '1' : '0';
           });
           appdata.updateSettings();
+          widget.onChanged?.call(value);
         },
       ),
     );

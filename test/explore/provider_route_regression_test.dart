@@ -17,6 +17,21 @@ class _Jm extends Fake implements JmNetwork {
   String? category;
   final categoryPages = <int>[];
   bool repeatedCategory = false;
+  int categoryDirectoryCalls = 0;
+  final searches = <String>[];
+
+  @override
+  Future<Res<List<JmCategory>>> getCategories() async {
+    categoryDirectoryCalls++;
+    return const Res.error('Offline');
+  }
+
+  @override
+  Future<Res<List<JmComicBrief>>> search(
+      String keyword, String order, int page) async {
+    searches.add(keyword);
+    return Res([_jm('400')], subData: 1);
+  }
 
   @override
   Future<Res<JmPromoteList>> getPromoteList(String id, int page) async {
@@ -77,6 +92,22 @@ class _Jm extends Fake implements JmNetwork {
 
 class _Pica extends Fake implements PicacgNetwork {
   int calls = 0;
+  int categoryDirectoryCalls = 0;
+  final categories = <String>[];
+
+  @override
+  Future<Res<List<PicacgCategoryItem>>> getCategories() async {
+    categoryDirectoryCalls++;
+    return const Res.error('Offline');
+  }
+
+  @override
+  Future<Res<List<PicacgComicItemBrief>>> getCategoryComics(
+      String category, String sort, int page) async {
+    categories.add('$category/$sort/$page');
+    return const Res([], subData: 1);
+  }
+
   @override
   Future<Res<List<PicacgCollection>>> getCollections() async {
     calls++;
@@ -110,6 +141,119 @@ void main() {
           sourceKey: 'jm',
           entryId: entry,
           category: category);
+
+  test('JM complete original category directory is local and retains routes',
+      () async {
+    final directory =
+        (await registry.loadDirectory(request(JmExploreEntries.categories)))
+            .dataOrNull!;
+    final group = directory.groups.single;
+    expect(group.title, '成人A漫');
+    expect(group.items.map((item) => (item.label, item.route!.value)), [
+      ('最新A漫', '0'),
+      ('同人', 'doujin'),
+      ('單本', 'single'),
+      ('短篇', 'short'),
+      ('其他類', 'another'),
+      ('韓漫', 'hanman'),
+      ('美漫', 'meiman'),
+      ('Cosplay', 'another_cosplay'),
+      ('3D', '3D'),
+      ('禁漫漢化組', '禁漫漢化組'),
+    ]);
+    expect(group.items.every((item) => item.route!.kind == 'native'), isTrue);
+    final topics =
+        (await registry.loadDirectory(request(JmExploreEntries.topicTags)))
+            .dataOrNull!;
+    expect(topics.groups.map((group) => group.title),
+        ['主題A漫', '角色扮演', '特殊PLAY', '其它']);
+    expect(topics.groups.map((group) => group.items.length), [18, 13, 18, 6]);
+    expect(topics.groups.first.items[16].label, '純愛');
+    expect(
+        topics.groups.expand((group) => group.items).every((item) =>
+            item.isSearch &&
+            item.route!.kind == 'search' &&
+            item.route!.value == item.label),
+        isTrue);
+    expect(jm.categoryDirectoryCalls, 0);
+    expect(jm.categoryPages, isEmpty);
+    expect(jm.searches, isEmpty);
+
+    await registry.loadComics(
+        request(JmExploreEntries.categories, category: group.items[7].route));
+    expect(jm.category, 'another_cosplay');
+    await registry.loadComics(request(JmExploreEntries.topicTags,
+        category: topics.groups.first.items.first.route));
+    expect(jm.searches, ['無修正']);
+  });
+
+  test('Pica complete original category directory is local and retains titles',
+      () async {
+    final pica = _Pica();
+    registry.register(PicacgExploreProvider(
+        isLoggedInGetter: () => true,
+        contextFingerprintGetter: () => 'test',
+        network: pica));
+    final base = ExploreRequest(
+        sessionId: session,
+        sourceKey: 'picacg',
+        entryId: PicacgExploreEntries.categories);
+    final directory = (await registry.loadDirectory(base)).dataOrNull!;
+    final items = directory.groups.single.items;
+    expect(directory.groups.single.title, '分类');
+    expect(items.map((item) => item.label), [
+      '大家都在看',
+      '大濕推薦',
+      '那年今天',
+      '官方都在看',
+      '嗶咔漢化',
+      '全彩',
+      '長篇',
+      '同人',
+      '短篇',
+      '圓神領域',
+      '碧藍幻想',
+      'CG雜圖',
+      '英語 ENG',
+      '生肉',
+      '純愛',
+      '百合花園',
+      '耽美花園',
+      '偽娘哲學',
+      '後宮閃光',
+      '扶他樂園',
+      '單行本',
+      '姐姐系',
+      '妹妹系',
+      'SM',
+      '性轉換',
+      '足の恋',
+      '人妻',
+      'NTR',
+      '強暴',
+      '非人類',
+      '艦隊收藏',
+      'Love Live',
+      'SAO 刀劍神域',
+      'Fate',
+      '東方',
+      'WEBTOON',
+      '禁書目錄',
+      '歐美',
+      'Cosplay',
+      '重口地帶',
+    ]);
+    expect(
+        items.every((item) =>
+            item.route!.kind == 'native' &&
+            item.route!.value == item.label &&
+            item.route!.optionId == 'dd'),
+        isTrue);
+    expect(pica.categoryDirectoryCalls, 0);
+    expect(pica.categories, isEmpty);
+    await registry.loadComics(base.copyWith(category: items[32].route));
+    expect(pica.categories, ['SAO 刀劍神域/dd/1']);
+  });
 
   test('JM promote pages advance 0,1,2 and stop by cumulative raw records',
       () async {

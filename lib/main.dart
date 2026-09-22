@@ -447,6 +447,7 @@ class _PicaKeepAppState extends State<PicaKeepApp> with WidgetsBindingObserver {
     }
 
     if (state == AppLifecycleState.resumed) {
+      unawaited(App.applyDisplayModePreference());
       RemoteLibraryClient.rebuildAllTransports();
       RemoteLibraryEventChannel.instance.onForeground();
       _scheduleDynamicColorRefresh();

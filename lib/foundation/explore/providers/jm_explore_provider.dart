@@ -49,6 +49,20 @@ const List<ExploreOption> jmWeekTypeOptions = <ExploreOption>[
   ExploreOption(id: 'another', label: '其他'),
 ];
 
+/// 原项目的固定分类目录；展示目录不依赖 `/categories` 的在线响应。
+const Map<String, String> jmNativeCategories = <String, String>{
+  '最新A漫': '0',
+  '同人': 'doujin',
+  '單本': 'single',
+  '短篇': 'short',
+  '其他類': 'another',
+  '韓漫': 'hanman',
+  '美漫': 'meiman',
+  'Cosplay': 'another_cosplay',
+  '3D': '3D',
+  '禁漫漢化組': '禁漫漢化組',
+};
+
 /// 原项目固定主题词分组：目标是**具名搜索**，不与 slug 分类混为一谈。
 const Map<String, List<String>> jmTopicTagGroups = <String, List<String>>{
   '主題A漫': <String>[
@@ -68,6 +82,7 @@ const Map<String, List<String>> jmTopicTagGroups = <String, List<String>>{
     '全彩',
     '女性向',
     '完結',
+    '純愛',
     '禁漫漢化組',
   ],
   '角色扮演': <String>[
@@ -198,7 +213,7 @@ class JmExploreProvider implements ExploreProvider {
   ) async {
     switch (request.entryId) {
       case JmExploreEntries.categories:
-        return _loadNativeDirectory(request);
+        return ExploreSuccess(_nativeDirectory());
       case JmExploreEntries.topicTags:
         return ExploreSuccess(_topicTagDirectory());
       case JmExploreEntries.week:
@@ -300,56 +315,24 @@ class JmExploreProvider implements ExploreProvider {
 
   // ── 各入口实现 ────────────────────────────────────────────────────────────
 
-  Future<ExploreResult<ExploreDirectory>> _loadNativeDirectory(
-    ExploreRequest request,
-  ) async {
-    final res = await _network.getCategories();
-    if (res.error) {
-      return ExploreFailure(exploreErrorFromRes(res));
-    }
-    final groups = <ExploreCategoryGroup>[];
-    // 「全部」入口：原模型约定空主分类 slug 归一为 0。
-    groups.add(const ExploreCategoryGroup(
-      id: 'all',
-      title: '全部',
-      items: <ExploreCategoryItem>[
-        ExploreCategoryItem(
-          id: 'all',
-          label: '全部',
-          route: ExploreCategoryTarget(kind: 'native', value: '0'),
-        ),
-      ],
-    ));
-    for (final category in res.data) {
-      final items = <ExploreCategoryItem>[
-        // 主分类自身也是一个可加载入口：用主分类 slug；为空则跳过，
-        // 绝不生成空 route 把请求打到"全部"。
-        if (category.slug.isNotEmpty && category.slug != '0')
-          ExploreCategoryItem(
-            id: 'main:${category.slug}',
-            label: category.name.isEmpty ? category.slug : category.name,
-            route: ExploreCategoryTarget(
-              kind: 'native',
-              value: category.slug,
-            ),
+  ExploreDirectory _nativeDirectory() => ExploreDirectory(
+        sourceKey: 'jm',
+        groups: <ExploreCategoryGroup>[
+          ExploreCategoryGroup(
+            id: 'native',
+            title: '成人A漫',
+            items: <ExploreCategoryItem>[
+              for (final category in jmNativeCategories.entries)
+                ExploreCategoryItem(
+                  id: 'native:${category.value}',
+                  label: category.key,
+                  route: ExploreCategoryTarget(
+                      kind: 'native', value: category.value),
+                ),
+            ],
           ),
-        for (final sub in category.subCategories)
-          if (sub.slug.isNotEmpty && sub.slug != '0')
-            ExploreCategoryItem(
-              id: 'sub:${sub.slug}',
-              label: sub.name.isEmpty ? sub.slug : sub.name,
-              route: ExploreCategoryTarget(kind: 'native', value: sub.slug),
-            ),
-      ];
-      if (items.isEmpty) continue;
-      groups.add(ExploreCategoryGroup(
-        id: category.slug.isEmpty ? category.name : category.slug,
-        title: category.name.isEmpty ? '分类' : category.name,
-        items: items,
-      ));
-    }
-    return ExploreSuccess(ExploreDirectory(sourceKey: 'jm', groups: groups));
-  }
+        ],
+      );
 
   ExploreDirectory _topicTagDirectory() {
     return ExploreDirectory(

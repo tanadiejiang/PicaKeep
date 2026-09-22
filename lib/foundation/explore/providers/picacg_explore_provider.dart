@@ -34,6 +34,50 @@ const List<ExploreOption> picacgRankingOptions = <ExploreOption>[
   ExploreOption(id: 'D30', label: '30天'),
 ];
 
+/// 沿用原项目内置目录的原始名称和顺序；只有分类结果需要联网。
+const List<String> picacgCategories = <String>[
+  '大家都在看',
+  '大濕推薦',
+  '那年今天',
+  '官方都在看',
+  '嗶咔漢化',
+  '全彩',
+  '長篇',
+  '同人',
+  '短篇',
+  '圓神領域',
+  '碧藍幻想',
+  'CG雜圖',
+  '英語 ENG',
+  '生肉',
+  '純愛',
+  '百合花園',
+  '耽美花園',
+  '偽娘哲學',
+  '後宮閃光',
+  '扶他樂園',
+  '單行本',
+  '姐姐系',
+  '妹妹系',
+  'SM',
+  '性轉換',
+  '足の恋',
+  '人妻',
+  'NTR',
+  '強暴',
+  '非人類',
+  '艦隊收藏',
+  'Love Live',
+  'SAO 刀劍神域',
+  'Fate',
+  '東方',
+  'WEBTOON',
+  '禁書目錄',
+  '歐美',
+  'Cosplay',
+  '重口地帶',
+];
+
 class PicacgExploreProvider implements ExploreProvider {
   PicacgExploreProvider({
     required this.isLoggedInGetter,
@@ -124,21 +168,18 @@ class PicacgExploreProvider implements ExploreProvider {
         ExploreError(ExploreErrorCode.unsupported, '该入口没有分类目录'),
       );
     }
-    final res = await _network.getCategories();
-    if (res.error) return ExploreFailure(exploreErrorFromRes(res));
-    // 过滤外部网页类；分类展示可翻译，但 `c` 始终传服务器原始 title。
+    // 分类展示可翻译，但 `c` 始终传原项目内置的原始 title。
     final items = <ExploreCategoryItem>[
-      for (final category in res.data)
-        if (!category.isWeb)
-          ExploreCategoryItem(
-            id: 'cat:${category.title}',
-            label: category.title,
-            route: ExploreCategoryTarget(
-              kind: 'native',
-              value: category.title,
-              optionId: picacgSortOptions.first.id,
-            ),
+      for (final category in picacgCategories)
+        ExploreCategoryItem(
+          id: 'cat:$category',
+          label: category,
+          route: ExploreCategoryTarget(
+            kind: 'native',
+            value: category,
+            optionId: picacgSortOptions.first.id,
           ),
+        ),
     ];
     return ExploreSuccess(ExploreDirectory(
       sourceKey: 'picacg',

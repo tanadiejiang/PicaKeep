@@ -8,7 +8,13 @@ import 'package:picakeep/foundation/app_page_route.dart';
 import 'package:picakeep/foundation/explore/explore_bindings.dart';
 import 'package:picakeep/foundation/explore/explore_models.dart';
 import 'package:picakeep/foundation/explore/explore_registry.dart';
+import 'package:picakeep/foundation/explore/providers/jm_explore_provider.dart'
+    show JmExploreEntries;
+import 'package:picakeep/foundation/explore/providers/picacg_explore_provider.dart'
+    show PicacgExploreEntries;
 import 'package:picakeep/pages/explore/explore_common.dart';
+import 'package:picakeep/pages/explore/explore_category_button.dart';
+import 'package:picakeep/pages/explore/explore_category_label_metrics.dart';
 import 'package:picakeep/pages/explore/explore_result_page.dart';
 import 'package:picakeep/tools/tags_translation.dart';
 
@@ -33,9 +39,11 @@ class ExploreCategoryPanel extends StatefulWidget {
 }
 
 class _ExploreCategoryPanelState extends State<ExploreCategoryPanel> {
+  final _rowCache = _CategoryRowCache();
   final _directories = <String, ExploreDirectory>{};
   final _errors = <String, ExploreError>{};
   final _loading = <String>{};
+  final _groups = <String, _CategoryGroupData>{};
   ExploreRegistry? _sessionRegistry;
   String? _sessionId;
   String? _fingerprint;
@@ -79,7 +87,15 @@ class _ExploreCategoryPanelState extends State<ExploreCategoryPanel> {
   void dispose() {
     _generation++;
     _sessionRegistry?.releaseSession(_sessionId ?? '');
+    _disposeGroups();
     super.dispose();
+  }
+
+  void _disposeGroups() {
+    for (final group in _groups.values) {
+      group.dispose();
+    }
+    _groups.clear();
   }
 
   void _reset() {
@@ -90,6 +106,7 @@ class _ExploreCategoryPanelState extends State<ExploreCategoryPanel> {
     _directories.clear();
     _errors.clear();
     _loading.clear();
+    _disposeGroups();
   }
 
   Future<void> _loadAll() async {
@@ -201,90 +218,210 @@ class _ExploreCategoryPanelState extends State<ExploreCategoryPanel> {
       }
       return const Center(child: CircularProgressIndicator());
     }
+    return RefreshIndicator(
+      onRefresh: _loadAll,
+      // Box constraints remain unchanged while scrolling. A SliverLayoutBuilder
+      // per group instead invokes a build callback on every scroll frame.
+      child: LayoutBuilder(
+        builder: (context, constraints) =>
+            _buildList(context, descriptor, constraints.maxWidth),
+      ),
+    );
+  }
+
+  Widget _buildList(
+      BuildContext context, ExploreSourceDescriptor descriptor, double width) {
     final entries = _entries;
-    final children = <Widget>[];
-    void addBox(Widget child) => children.add(SliverToBoxAdapter(child: child));
+    final rows = <_CategoryListRow>[];
+    void add(String id, WidgetBuilder builder) =>
+        rows.add(_CategoryListRow(id, builder));
+    add('top', (_) => const SizedBox(height: 4));
     final onSelectEntry = widget.onSelectEntry;
     if (widget.entryId == null) {
-      addBox(_groupTitle(context, descriptor.name));
+      add('source', (context) => _groupTitle(context, descriptor.name));
       if (onSelectEntry != null) {
         final ranking =
             descriptor.entriesOf(ExploreSectionKind.ranking).firstOrNull;
-        final recommend = descriptor
+        final recommendations = descriptor
             .entriesOf(ExploreSectionKind.recommend)
-            .where((entry) => entry.availableAsTab)
-            .firstOrNull;
-        addBox(Padding(
-          padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-          child: Wrap(
-            spacing: 12,
-            runSpacing: 8,
-            children: [
-              if (ranking != null)
-                _categoryButton(context,
-                    label: '排行榜', onPressed: () => onSelectEntry(ranking)),
-              if (recommend != null)
-                _categoryButton(context,
-                    label: '推荐', onPressed: () => onSelectEntry(recommend)),
-            ],
-          ),
-        ));
+            .where((entry) => entry.availableAsTab);
+        final shortcutEntryId = switch (widget.sourceKey) {
+          'jm' => JmExploreEntries.week,
+          'picacg' => PicacgExploreEntries.collections,
+          _ => null,
+        };
+        final recommend = shortcutEntryId == null
+            ? recommendations.firstOrNull
+            : recommendations
+                .where((entry) => entry.id == shortcutEntryId)
+                .firstOrNull;
+        add(
+            'shortcuts',
+            (context) => Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                  child: Wrap(spacing: 12, runSpacing: 8, children: [
+                    if (ranking != null)
+                      _categoryButton(context,
+                          label: '排行榜',
+                          onPressed: () => onSelectEntry(ranking)),
+                    if (recommend != null)
+                      _categoryButton(context,
+                          label: widget.sourceKey == 'jm' ? '每周推荐' : '推荐',
+                          onPressed: () => onSelectEntry(recommend)),
+                  ]),
+                ));
       }
     }
     if (entries.isEmpty) {
-      addBox(const Padding(
-        padding: EdgeInsets.all(24),
-        child: Text('该源没有分类目录'),
-      ));
+      add(
+          'empty',
+          (_) => const Padding(
+                padding: EdgeInsets.all(24),
+                child: Text('该源没有分类目录'),
+              ));
     }
+    final currentGroups = <String>{};
     for (final entry in entries) {
       final directory = _directories[entry.id];
       final error = _errors[entry.id];
       if (_loading.contains(entry.id) && directory == null) {
-        addBox(Padding(
-          padding: const EdgeInsets.all(24),
-          child: Row(children: [
-            const SizedBox(
-                width: 20,
-                height: 20,
-                child: CircularProgressIndicator(strokeWidth: 2)),
-            const SizedBox(width: 12),
-            Expanded(child: Text('正在加载${entry.label}…')),
-          ]),
-        ));
+        add(
+            '${entry.id}/loading',
+            (_) => Padding(
+                  padding: const EdgeInsets.all(24),
+                  child: Row(children: [
+                    const SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(strokeWidth: 2)),
+                    const SizedBox(width: 12),
+                    Expanded(child: Text('正在加载${entry.label}…')),
+                  ]),
+                ));
       }
       if (error != null || (directory != null && directory.isEmpty)) {
-        addBox(Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-          child: Row(children: [
-            Expanded(
-                child: Text(error?.message ?? '${entry.label}目录暂不可用，请稍后重试')),
-            TextButton(
-                onPressed: () => _loadEntry(entry), child: const Text('重试')),
-          ]),
-        ));
+        add(
+            '${entry.id}/error',
+            (_) => Padding(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  child: Row(children: [
+                    Expanded(
+                        child: Text(
+                            error?.message ?? '${entry.label}目录暂不可用，请稍后重试')),
+                    TextButton(
+                        onPressed: () => _loadEntry(entry),
+                        child: const Text('重试')),
+                  ]),
+                ));
       }
       for (final group in directory?.groups ?? const <ExploreCategoryGroup>[]) {
-        children.add(_CategoryGroup(
-          key: ValueKey(
-              '${widget.sourceKey}/${entry.id}/${group.id}/$_fingerprint'),
-          group: group,
-          onOpen: (item) => _openItem(entry, item),
-        ));
+        final key = '${widget.sourceKey}/${entry.id}/${group.id}/$_fingerprint';
+        currentGroups.add(key);
+        final data = _groups.putIfAbsent(key, () => _CategoryGroupData(group));
+        data.update(group, context, (width - 32).clamp(0.0, double.infinity));
+        add('$key/header', (context) => _buildGroupHeader(context, data));
+        if (data.rows.isEmpty) {
+          add(
+              '$key/empty',
+              (_) => const Padding(
+                    padding: EdgeInsets.fromLTRB(16, 0, 16, 16),
+                    child: Text('没有匹配的分类'),
+                  ));
+        }
+        for (var index = 0; index < data.rows.length; index++) {
+          final row = data.rows[index];
+          final isLast = index == data.rows.length - 1;
+          final style = data.style;
+          add(
+              '$key/row/$index',
+              (context) => Padding(
+                    padding: EdgeInsets.fromLTRB(16, 0, 16, isLast ? 16 : 8),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        for (var i = 0; i < row.length; i++) ...[
+                          if (i != 0) const SizedBox(width: 12),
+                          SizedBox(
+                            width: row[i].width,
+                            child: _categoryButton(context,
+                                textStyle: style,
+                                label: row[i].label,
+                                onPressed: row[i].item.route == null
+                                    ? null
+                                    : () => _openItem(entry, row[i].item)),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ));
+        }
       }
     }
-    return RefreshIndicator(
-      onRefresh: _loadAll,
-      child: CustomScrollView(
-        key: PageStorageKey(
-            'category/${widget.sourceKey}/${widget.entryId ?? 'all'}'),
-        physics: const AlwaysScrollableScrollPhysics(),
-        slivers: [
-          const SliverToBoxAdapter(child: SizedBox(height: 4)),
-          ...children,
-          const SliverToBoxAdapter(child: SizedBox(height: 24)),
-        ],
-      ),
+    for (final key in _groups.keys.toList(growable: false)) {
+      if (!currentGroups.contains(key)) _groups.remove(key)!.dispose();
+    }
+    add('bottom', (_) => const SizedBox(height: 24));
+    final indices = {for (var i = 0; i < rows.length; i++) rows[i].key: i};
+    return CustomScrollView(
+      key: PageStorageKey(
+          'category/${widget.sourceKey}/${widget.entryId ?? 'all'}'),
+      physics: const AlwaysScrollableScrollPhysics(),
+      // Roughly three button rows of prefetch per edge keep new rows ready
+      // without updating a large offscreen semantics tree on every scroll tick.
+      cacheExtent: 160,
+      slivers: [
+        // A single delegate also recycles offscreen group headers and avoids
+        // retaining one materialized button row for every offscreen group.
+        SliverList(
+          delegate: SliverChildBuilderDelegate(
+            (context, index) => rows[index].build(context, _rowCache),
+            childCount: rows.length,
+            findChildIndexCallback: (key) => indices[key],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildGroupHeader(BuildContext context, _CategoryGroupData data) {
+    final group = data.group;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(children: [
+          Expanded(child: _groupTitle(context, group.title)),
+          if (data.matches.length > _CategoryGroupData.pageSize)
+            IconButton(
+              tooltip: '换一批${group.title}',
+              onPressed: () => setState(data.nextPage),
+              icon: const Icon(Icons.refresh),
+            ),
+          const SizedBox(width: 8),
+        ]),
+        if (group.items.length > _CategoryGroupData.pageSize)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+            child: TextField(
+              controller: data.filterController,
+              focusNode: data.focusNode,
+              decoration: InputDecoration(
+                hintText: '筛选${group.title}',
+                prefixIcon: const Icon(Icons.search),
+                isDense: true,
+                border: const OutlineInputBorder(),
+                helperText: '共 ${data.matches.length} 项，每次显示最多 '
+                    '${_CategoryGroupData.pageSize} 项',
+              ),
+              onChanged: (_) => setState(data.filterChanged),
+            ),
+          ),
+        if (group.isSearch)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 6),
+            child: Text('点击标签搜索', style: Theme.of(context).textTheme.bodySmall),
+          ),
+      ],
     );
   }
 }
@@ -300,227 +437,207 @@ Widget _categoryButton(
   required VoidCallback? onPressed,
   TextStyle? textStyle,
 }) =>
-    ElevatedButton(
-      style: ElevatedButton.styleFrom(
-        elevation: 1,
-        // Keep the original soft, raised category buttons, with enough seed
-        // color to remain visibly themed under Material 3's neutral surfaces.
-        backgroundColor: Color.alphaBlend(
-          Theme.of(context).colorScheme.primaryContainer.withValues(alpha: .55),
-          Theme.of(context).colorScheme.surfaceContainerLow,
-        ),
-        foregroundColor: Theme.of(context).colorScheme.onSurface,
-        textStyle: textStyle,
-        visualDensity: VisualDensity.standard,
-        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-        minimumSize: const Size(0, 48),
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      ),
+    ExploreCategoryButton(
+      label: label,
       onPressed: onPressed,
-      child: Text(label),
+      textStyle: textStyle,
     );
 
-class _CategoryGroup extends StatefulWidget {
-  const _CategoryGroup({super.key, required this.group, required this.onOpen});
+/// Editing and measurement state outlives recycled group headers and rows.
+class _CategoryGroupData {
+  _CategoryGroupData(this.group);
 
-  final ExploreCategoryGroup group;
-  final ValueChanged<ExploreCategoryItem> onOpen;
-
-  @override
-  State<_CategoryGroup> createState() => _CategoryGroupState();
-}
-
-class _CategoryGroupState extends State<_CategoryGroup> {
-  static const _pageSize = 50;
-  String _filter = '';
+  static const pageSize = 50;
+  ExploreCategoryGroup group;
+  final filterController = TextEditingController();
+  final focusNode = FocusNode();
   int _offset = 0;
   Object? _labelContext;
   final _labels = <ExploreCategoryItem, String>{};
   List<ExploreCategoryItem>? _matches;
   Object? _rowContext;
-  ThemeData? _rowTheme;
-  List<List<({ExploreCategoryItem item, String label, double width})>> _rows =
+  late TextStyle style;
+  List<List<({ExploreCategoryItem item, String label, double width})>> rows =
       [];
-  Widget? _buttonRowsSliver;
 
-  @override
-  void didUpdateWidget(covariant _CategoryGroup oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.group != widget.group) _invalidateLabels();
+  List<ExploreCategoryItem> get matches => _matches!;
+
+  void dispose() {
+    filterController.dispose();
+    focusNode.dispose();
+  }
+
+  void filterChanged() {
+    _offset = 0;
+    _matches = null;
+  }
+
+  void nextPage() {
+    _offset = (_offset + pageSize) % matches.length;
   }
 
   void _invalidateLabels() {
     _labels.clear();
     _matches = null;
     _rowContext = null;
-    _buttonRowsSliver = null;
   }
 
-  String _label(ExploreCategoryItem item) {
+  String _label(ExploreCategoryItem item, Locale locale) {
     return _labels.putIfAbsent(item, () {
-      if (!widget.group.isSearch ||
-          Localizations.localeOf(context).languageCode != 'zh') {
-        return item.label;
-      }
+      if (!group.isSearch || locale.languageCode != 'zh') return item.label;
       return lookupTagTranslation(
               item.label, item.groupId.isEmpty ? 'tags' : item.groupId)
           .displayText;
     });
   }
 
-  void _updateRows(
-      double width,
-      ThemeData theme,
-      TextStyle style,
-      TextScaler scaler,
-      TextDirection direction,
-      Locale locale,
-      List<ExploreCategoryItem> matches,
-      int offset) {
-    // ThemeData equality compares the whole theme. Scrolling calls this for
-    // each group, so use identity; unchanged text styles can reuse measurements.
-    if (!identical(_rowTheme, theme)) {
-      _rowTheme = theme;
-      _buttonRowsSliver = null;
+  void update(
+      ExploreCategoryGroup nextGroup, BuildContext context, double width) {
+    if (!identical(group, nextGroup)) {
+      group = nextGroup;
+      _invalidateLabels();
     }
-    final signature =
-        (width, style, scaler, direction, locale, matches, offset);
-    if (_rowContext == signature) return;
-    _rowContext = signature;
-    _buttonRowsSliver = null;
-    _rows = [];
-    var row = <({ExploreCategoryItem item, String label, double width})>[];
-    var usedWidth = 0.0;
-    final painter = TextPainter(
-        textDirection: direction, textScaler: scaler, locale: locale);
-    for (final item in matches.skip(offset).take(_pageSize)) {
-      final label = _label(item);
-      painter.text = TextSpan(text: label, style: style);
-      painter.layout();
-      // Reserve the same 16dp padding on each side as the real button. Ceil
-      // fractional text widths so a label never wraps due to rounding alone.
-      final itemWidth = (painter.width.ceilToDouble() + 32).clamp(0.0, width);
-      if (row.isNotEmpty && usedWidth + 12 + itemWidth > width) {
-        _rows.add(row);
-        row = [];
-        usedWidth = 0;
-      }
-      usedWidth += (row.isEmpty ? 0 : 12) + itemWidth;
-      row.add((item: item, label: label, width: itemWidth));
-    }
-    painter.dispose();
-    if (row.isNotEmpty) _rows.add(row);
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final group = widget.group;
     final locale = Localizations.localeOf(context);
     final labelContext = (locale, tagTranslations, tagTranslationsReady);
     if (_labelContext != labelContext) {
       _labelContext = labelContext;
       _invalidateLabels();
     }
-    final query = _filter.trim().toLowerCase();
-    final matches = _matches ??= query.isEmpty
+    final query = filterController.text.trim().toLowerCase();
+    _matches ??= query.isEmpty
         ? group.items
         : group.items
-            .where(
-              (item) =>
-                  item.label.toLowerCase().contains(query) ||
-                  _label(item).toLowerCase().contains(query),
-            )
+            .where((item) =>
+                item.label.toLowerCase().contains(query) ||
+                _label(item, locale).toLowerCase().contains(query))
             .toList(growable: false);
-    final offset = _offset < matches.length ? _offset : 0;
-    final theme = Theme.of(context);
-    var style = (theme.elevatedButtonTheme.style?.textStyle
-            ?.resolve(const <WidgetState>{}) ??
-        theme.textTheme.labelLarge)!;
-    if (MediaQuery.boldTextOf(context)) {
-      style = style.copyWith(fontWeight: FontWeight.bold);
-    }
+    if (_offset >= matches.length) _offset = 0;
+    style = ExploreCategoryButton.labelStyleOf(context);
     final scaler = MediaQuery.textScalerOf(context);
     final direction = Directionality.of(context);
-    // Only this small header stays mounted to retain text editing/focus state.
-    // Buttons below are materialized by visual row, never as a 50-button Wrap.
-    final header = Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(children: [
-          Expanded(child: _groupTitle(context, group.title)),
-          if (matches.length > _pageSize)
-            IconButton(
-              tooltip: '换一批${group.title}',
-              onPressed: () => setState(
-                  () => _offset = (offset + _pageSize) % matches.length),
-              icon: const Icon(Icons.refresh),
-            ),
-          const SizedBox(width: 8),
-        ]),
-        if (group.items.length > _pageSize)
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-            child: TextField(
-              decoration: InputDecoration(
-                hintText: '筛选${group.title}',
-                prefixIcon: const Icon(Icons.search),
-                isDense: true,
-                border: const OutlineInputBorder(),
-                helperText: '共 ${matches.length} 项，每次显示最多 $_pageSize 项',
-              ),
-              onChanged: (value) => setState(() {
-                _filter = value;
-                _offset = 0;
-                _matches = null;
-              }),
-            ),
-          ),
-        if (group.isSearch)
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 6),
-            child: Text('点击标签搜索', style: Theme.of(context).textTheme.bodySmall),
-          ),
-      ],
-    );
-    return SliverMainAxisGroup(slivers: [
-      SliverToBoxAdapter(child: header),
-      SliverPadding(
-        padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-        sliver: SliverLayoutBuilder(builder: (context, constraints) {
-          _updateRows(constraints.crossAxisExtent, theme, style, scaler,
-              direction, locale, matches, offset);
-          if (matches.isEmpty) {
-            return const SliverToBoxAdapter(child: Text('没有匹配的分类'));
-          }
-          // SliverLayoutBuilder runs as scroll constraints change. Reuse the
-          // delegate so scrolling does not rebuild every already-visible row.
-          return _buttonRowsSliver ??= SliverList.builder(
-            itemCount: _rows.length,
-            itemBuilder: (context, index) => Padding(
-              padding:
-                  EdgeInsets.only(bottom: index == _rows.length - 1 ? 0 : 8),
-              child:
-                  Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                for (var i = 0; i < _rows[index].length; i++) ...[
-                  if (i != 0) const SizedBox(width: 12),
-                  SizedBox(
-                    width: _rows[index][i].width,
-                    child: _categoryButton(
-                      context,
-                      textStyle: style,
-                      label: _rows[index][i].label,
-                      onPressed: _rows[index][i].item.route == null
-                          ? null
-                          : () => widget.onOpen(_rows[index][i].item),
-                    ),
-                  ),
-                ],
-              ]),
-            ),
-          );
-        }),
-      ),
-    ]);
+    final signature =
+        (width, style, scaler, direction, locale, matches, _offset);
+    if (_rowContext == signature) return;
+    _rowContext = signature;
+    rows = [];
+    var row = <({ExploreCategoryItem item, String label, double width})>[];
+    var usedWidth = 0.0;
+    final visible =
+        matches.skip(_offset).take(pageSize).toList(growable: false);
+    final labels =
+        visible.map((item) => _label(item, locale)).toList(growable: false);
+    final labelWidths = measureCategoryLabelWidths(labels,
+        style: style,
+        textScaler: scaler,
+        textDirection: direction,
+        locale: locale);
+    for (var index = 0; index < visible.length; index++) {
+      final item = visible[index];
+      final label = labels[index];
+      // Match button padding and round up to avoid accidental line breaks.
+      final itemWidth =
+          (labelWidths[index].ceilToDouble() + 32).clamp(0.0, width);
+      if (row.isNotEmpty && usedWidth + 12 + itemWidth > width) {
+        rows.add(row);
+        row = [];
+        usedWidth = 0;
+      }
+      usedWidth += (row.isEmpty ? 0 : 12) + itemWidth;
+      row.add((item: item, label: label, width: itemWidth));
+    }
+    if (row.isNotEmpty) rows.add(row);
+  }
+}
+
+/// A lightweight descriptor; unvisited rows do not create button widgets.
+class _CategoryListRow {
+  _CategoryListRow(String id, this.builder) : key = ValueKey<String>(id);
+
+  final ValueKey<String> key;
+  final WidgetBuilder builder;
+  Widget? _widget;
+
+  Widget build(BuildContext context, _CategoryRowCache cache) =>
+      _widget ??= KeyedSubtree(
+        key: key,
+        child: _CachedCategoryRow(cache: cache, child: builder(context)),
+      );
+}
+
+/// Recently created rows survive short reverse scrolls in the sliver's cache.
+/// Unlike cacheExtent, kept-alive rows do not enter layout, paint or semantics.
+class _CategoryRowCache {
+  static const capacity = 40;
+  final _rows = <_CachedCategoryRowState>{};
+  final _pendingRelease = <_CachedCategoryRowState>{};
+  bool _releaseScheduled = false;
+
+  void retain(_CachedCategoryRowState row) {
+    _rows.add(row);
+    while (_rows.length > capacity) {
+      final oldest = _rows.first;
+      _rows.remove(oldest);
+      _pendingRelease.add(oldest);
+    }
+    if (_pendingRelease.isNotEmpty && !_releaseScheduled) {
+      _releaseScheduled = true;
+      // A cold layout at a restored offset can create more than capacity rows.
+      // Let their initial AutomaticKeepAlive post-frame callbacks run before
+      // withdrawing handles, or they may apply invalid parent data out of turn.
+      scheduleMicrotask(() {
+        _releaseScheduled = false;
+        final pending = _pendingRelease.toList(growable: false);
+        _pendingRelease.clear();
+        for (final row in pending) {
+          if (row.mounted) row.release();
+        }
+      });
+    }
+  }
+
+  void forget(_CachedCategoryRowState row) {
+    _rows.remove(row);
+    _pendingRelease.remove(row);
+  }
+}
+
+class _CachedCategoryRow extends StatefulWidget {
+  const _CachedCategoryRow({required this.cache, required this.child});
+
+  final _CategoryRowCache cache;
+  final Widget child;
+
+  @override
+  State<_CachedCategoryRow> createState() => _CachedCategoryRowState();
+}
+
+class _CachedCategoryRowState extends State<_CachedCategoryRow>
+    with AutomaticKeepAliveClientMixin {
+  bool _retained = true;
+
+  @override
+  bool get wantKeepAlive => _retained;
+
+  @override
+  void initState() {
+    super.initState();
+    widget.cache.retain(this);
+  }
+
+  void release() {
+    _retained = false;
+    updateKeepAlive();
+  }
+
+  @override
+  void dispose() {
+    widget.cache.forget(this);
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    super.build(context);
+    return widget.child;
   }
 }

@@ -321,17 +321,34 @@ class App {
     }
   }
 
-  static Future<void> applyDisplayModePreference() async {
-    if (!isAndroid) {
-      return;
+  @visibleForTesting
+  static bool? debugDisplayModeAndroidOverride;
+
+  static Future<void>? _displayModeUpdate;
+  static int _displayModeRequest = 0;
+
+  static Future<void> applyDisplayModePreference() {
+    if (!(debugDisplayModeAndroidOverride ?? isAndroid)) {
+      return Future<void>.value();
     }
-    try {
-      if (appdata.settings[38] == "1") {
-        await FlutterDisplayMode.setHighRefreshRate();
-      } else {
-        await FlutterDisplayMode.setLowRefreshRate();
-      }
-    } catch (_) {}
+    final request = ++_displayModeRequest;
+    final highRefreshRate = appdata.settings[38] == '1';
+    // Mode discovery is asynchronous. Serialize writes so a slow, older high
+    // refresh request cannot overwrite a more recent switch back to automatic.
+    final update = (_displayModeUpdate ?? Future<void>.value()).then((_) async {
+      if (request != _displayModeRequest) return;
+      try {
+        if (highRefreshRate) {
+          await FlutterDisplayMode.setHighRefreshRate();
+        } else {
+          await FlutterDisplayMode.setPreferredMode(DisplayMode.auto);
+        }
+      } catch (_) {}
+    });
+    _displayModeUpdate = update;
+    return update.whenComplete(() {
+      if (identical(_displayModeUpdate, update)) _displayModeUpdate = null;
+    });
   }
 
   static Locale get locale {

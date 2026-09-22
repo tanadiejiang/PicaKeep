@@ -28,19 +28,7 @@ class ReadingSettings extends StatelessWidget {
         title: "自动翻页".tl,
         settingsIndex: 33,
         controlWidth: 120,
-        values: const [
-          "0",
-          "1",
-          "2",
-          "3",
-          "4",
-          "5",
-          "6",
-          "7",
-          "8",
-          "9",
-          "10"
-        ],
+        values: const ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10"],
         titles: const [
           "禁用",
           "1s",
@@ -140,6 +128,7 @@ class ReadingSettings extends StatelessWidget {
       SwitchSetting(
         title: "高刷新率".tl,
         settingsIndex: 38,
+        onChanged: (_) => unawaited(App.applyDisplayModePreference()),
       ),
       SwitchSetting(
         title: "阅读器中双击放缩".tl,

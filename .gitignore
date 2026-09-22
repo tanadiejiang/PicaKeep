@@ -43,6 +43,7 @@ installer.iss
 android/build/
 android/app/build/
 .tmp_remote/
+.tmp_*.py
 publish/
 
 # Symbolication related
