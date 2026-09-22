@@ -10,8 +10,14 @@ import 'package:picakeep/network/res.dart';
 
 import 'headers.dart';
 import 'models.dart';
+import 'picacg_parsing.dart';
 
 export 'models.dart';
+
+// 探索相关的纯解析已下沉到 picacg_parsing.dart：本文件依赖 Flutter 与
+// comic_source/built_in/picacg.dart，解析留在里面会让纯层测试无法用
+// `dart test` 运行。这里再导出一次，既有 import 点无需改动。
+export 'picacg_parsing.dart';
 
 class PicacgNetwork {
   factory PicacgNetwork() => _cache ??= PicacgNetwork._create();
@@ -40,7 +46,7 @@ class PicacgNetwork {
     bool noRetry = false,
   }) async {
     if (!allowAnonymous && token.isEmpty) {
-      return const Res.error('未登录');
+      return const Res.error('未登录', errorCode: ResErrorCode.loginRequired);
     }
     final path = url.replaceFirst('$apiUrl/', '');
     final dio = logDio(picacgHeaders(method, token, path));
@@ -75,19 +81,29 @@ class PicacgNetwork {
             retryingLogin: true,
           );
         }
-        return Res.error('登录失效且重新登录失败: ${reLogin.errorMessageWithoutNull}');
+        return Res.error('登录失效且重新登录失败: ${reLogin.errorMessageWithoutNull}',
+            errorCode: ResErrorCode.loginRequired, statusCode: 401);
       }
-      return Res.error(decoded['message']?.toString() ??
-          'Invalid Status Code ${response.statusCode}');
+      return Res.error(
+        decoded['message']?.toString() ??
+            'Invalid Status Code ${response.statusCode}',
+        // 400/401 之外的 4xx/5xx：传输层失败，不猜成登录问题。
+        errorCode: response.statusCode == 401
+            ? ResErrorCode.loginRequired
+            : ResErrorCode.network,
+        statusCode: response.statusCode,
+      );
     } on DioException catch (error) {
-      return Res.error(_dioErrorMessage(error));
+      return Res.error(_dioErrorMessage(error),
+          errorCode: ResErrorCode.network,
+          statusCode: error.response?.statusCode);
     } catch (error, stackTrace) {
       LogManager.addLog(
         LogLevel.error,
         'PicacgNetwork',
         '$error\n$stackTrace',
       );
-      return Res.error(error.toString());
+      return Res.error(error.toString(), errorCode: ResErrorCode.parse);
     }
   }
 
@@ -344,11 +360,12 @@ class PicacgNetwork {
       final data = res.data['data']['comments'] as Map;
       final totalPages = (data['pages'] as num).toInt();
       final docs = data['docs'] as List;
-      final comments = docs.whereType<Map>().map(PicacgComment.fromApi).toList();
+      final comments =
+          docs.whereType<Map>().map(PicacgComment.fromApi).toList();
       return Res(comments, subData: totalPages);
     } catch (e, s) {
-      LogManager.addLog(LogLevel.error, 'PicacgNetwork',
-          'Failed to parse comments: $e\n$s');
+      LogManager.addLog(
+          LogLevel.error, 'PicacgNetwork', 'Failed to parse comments: $e\n$s');
       return Res.error(e.toString());
     }
   }
@@ -382,11 +399,12 @@ class PicacgNetwork {
       final data = res.data['data']['comments'] as Map;
       final totalPages = (data['pages'] as num).toInt();
       final docs = data['docs'] as List;
-      final comments = docs.whereType<Map>().map(PicacgComment.fromApi).toList();
+      final comments =
+          docs.whereType<Map>().map(PicacgComment.fromApi).toList();
       return Res(comments, subData: totalPages);
     } catch (e, s) {
-      LogManager.addLog(LogLevel.error, 'PicacgNetwork',
-          'Failed to parse reply: $e\n$s');
+      LogManager.addLog(
+          LogLevel.error, 'PicacgNetwork', 'Failed to parse reply: $e\n$s');
       return Res.error(e.toString());
     }
   }
@@ -407,7 +425,114 @@ class PicacgNetwork {
         'PicacgNetwork',
         'Failed to parse comic list: $error\n$stackTrace',
       );
-      return Res.error(error.toString());
+      return Res.error(error.toString(), errorCode: ResErrorCode.parse);
     }
+  }
+
+  // ── 探索：分类 / 榜单 / 随机 / 集合 / 最新 ────────────────────────────────
+
+  /// 分类目录 `GET /categories`。
+  ///
+  /// 过滤掉 `isWeb` 的外部网页类；条目保留**服务器原始 title** —— 展示可以翻译，
+  /// 但发请求时必须原样回传 `c=<title>`。
+  Future<Res<List<PicacgCategoryItem>>> getCategories() async {
+    final response = await get('$apiUrl/categories');
+    if (response.error) return Res.fromErrorRes(response);
+    try {
+      return Res(parsePicacgCategories(response.data['data']));
+    } catch (error, stackTrace) {
+      LogManager.addLog(LogLevel.error, 'PicacgNetwork',
+          'Failed to parse categories: $error\n$stackTrace');
+      return Res.error('目录解析失败：$error', errorCode: ResErrorCode.parse);
+    }
+  }
+
+  /// 分类结果 `GET /comics?page=&c=<原始 title>&s=<dd/da/ld/vd>`（1 起页）。
+  Future<Res<List<PicacgComicItemBrief>>> getCategoryComics(
+    String categoryTitle,
+    String sort,
+    int page,
+  ) async {
+    final title = categoryTitle.trim();
+    if (title.isEmpty) {
+      return const Res.error('分类名为空', errorCode: ResErrorCode.invalidArgument);
+    }
+    if (!picacgSorts.contains(sort)) {
+      return Res.error('未知排序：$sort', errorCode: ResErrorCode.invalidArgument);
+    }
+    final response = await get(
+      '$apiUrl/comics?page=$page&c=${Uri.encodeComponent(title)}&s=$sort',
+    );
+    if (response.error) return Res.fromErrorRes(response);
+    return _parseComicDocs(response.data['data']?['comics']);
+  }
+
+  /// 最新 `GET /comics?page=&s=dd`。**必须保留 pages**。
+  Future<Res<List<PicacgComicItemBrief>>> getLatest(int page) async {
+    final response = await get('$apiUrl/comics?page=$page&s=dd');
+    if (response.error) return Res.fromErrorRes(response);
+    return _parseComicDocs(response.data['data']?['comics']);
+  }
+
+  /// 随机 `GET /comics/random`，`data.comics[]` 是**数组**。单页。
+  Future<Res<List<PicacgComicItemBrief>>> getRandomComics() async {
+    final response = await get('$apiUrl/comics/random');
+    if (response.error) return Res.fromErrorRes(response);
+    return _parseComicArray(response.data['data']?['comics']);
+  }
+
+  /// 榜单 `GET /comics/leaderboard?tt=<period>&ct=VC`，单页。
+  ///
+  /// [period] 必须是 H24 / D7 / D30；不虚构"总榜"。
+  Future<Res<List<PicacgComicItemBrief>>> getLeaderboard(String period) async {
+    if (!picacgLeaderboardPeriods.contains(period)) {
+      return Res.error('未知榜期：$period', errorCode: ResErrorCode.invalidArgument);
+    }
+    final response = await get('$apiUrl/comics/leaderboard?tt=$period&ct=VC');
+    if (response.error) return Res.fromErrorRes(response);
+    return _parseComicArray(response.data['data']?['comics']);
+  }
+
+  /// 推荐集合 `GET /collections`：**所有真实分组**（不照抄上游固定两组）。
+  Future<Res<List<PicacgCollection>>> getCollections() async {
+    final response = await get('$apiUrl/collections');
+    if (response.error) return Res.fromErrorRes(response);
+    try {
+      return Res(parsePicacgCollections(response.data['data']));
+    } catch (error, stackTrace) {
+      LogManager.addLog(LogLevel.error, 'PicacgNetwork',
+          'Failed to parse collections: $error\n$stackTrace');
+      return Res.error('推荐集合解析失败：$error', errorCode: ResErrorCode.parse);
+    }
+  }
+
+  /// ``docs/pages`` 容器解析。
+  ///
+  /// 字段缺失/类型错 → parse；`docs: []` 是合法空成功。
+  Res<List<PicacgComicItemBrief>> _parseComicDocs(Object? comicsJson) {
+    if (comicsJson is! Map) {
+      return const Res.error('分类响应缺少 comics 对象', errorCode: ResErrorCode.parse);
+    }
+    final docsRaw = comicsJson['docs'];
+    if (docsRaw is! List) {
+      return const Res.error('分类响应缺少 docs 数组', errorCode: ResErrorCode.parse);
+    }
+    final parsed = parsePicacgComicDocs(docsRaw);
+    if (docsRaw.isNotEmpty && parsed.parsed.isEmpty) {
+      return const Res.error('分类响应非空但无有效条目', errorCode: ResErrorCode.parse);
+    }
+    return Res(parsed.parsed, subData: comicsJson['pages']);
+  }
+
+  /// 裸数组容器解析（榜单 / 随机）。`[]` 是空成功，全坏项是 parse。
+  Res<List<PicacgComicItemBrief>> _parseComicArray(Object? comicsJson) {
+    if (comicsJson is! List) {
+      return const Res.error('榜单响应缺少 comics 数组', errorCode: ResErrorCode.parse);
+    }
+    final parsed = parsePicacgComicDocs(comicsJson);
+    if (comicsJson.isNotEmpty && parsed.parsed.isEmpty) {
+      return const Res.error('榜单响应非空但无有效条目', errorCode: ResErrorCode.parse);
+    }
+    return Res(parsed.parsed);
   }
 }

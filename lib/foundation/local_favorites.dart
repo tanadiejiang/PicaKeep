@@ -504,6 +504,7 @@ class LocalFavoritesManager {
 
   final _foldersController = StreamController<List<FavGroup>>.broadcast();
   final _cachedFavoritedTargets = <String, bool>{};
+  final _cachedFavoritedComics = <(String, String)>{};
   bool _favoritedTargetsDirty = true;
   int _storageGeneration = 0;
   bool _storageReady = false;
@@ -512,6 +513,9 @@ class LocalFavoritesManager {
   Future<void> init({List<String>? dataRoots}) async {
     _storageGeneration++;
     _storageReady = false;
+    _favoritedTargetsDirty = true;
+    _cachedFavoritedTargets.clear();
+    _cachedFavoritedComics.clear();
     final roots = dataRoots ?? await getManagedDataRoots();
     final primaryPath = managedDataFilePath(roots.first, 'local_favorite.db');
     File(primaryPath).parent.createSync(recursive: true);
@@ -559,6 +563,9 @@ class LocalFavoritesManager {
   void dispose() {
     _storageGeneration++;
     _storageReady = false;
+    _favoritedTargetsDirty = true;
+    _cachedFavoritedTargets.clear();
+    _cachedFavoritedComics.clear();
     try {
       _db.dispose();
     } catch (_) {}

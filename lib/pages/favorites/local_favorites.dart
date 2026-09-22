@@ -228,6 +228,14 @@ String translateFavoriteTag(String tag) {
 @visibleForTesting
 void clearFavoriteTagTranslationCache() => _tagTranslationCache.clear();
 
+/// 在线列表（搜索 / 探索）用的标签翻译。
+///
+/// 与本地收藏共用**同一份缓存实现**（[translateFavoriteTag]）：在线与本地看到
+/// 的译名必须一致，分成两套缓存只会让同一标签在两处显示不同文字。
+/// 单独暴露这个名字是为了让 `pages/` 下的其它模块能合法调用，而不是去碰
+/// 标注为测试专用的符号。
+String translateOnlineTag(String tag) => translateFavoriteTag(tag);
+
 /// 整个标签列表的翻译结果缓存（键为原始标签序列）。
 final Map<String, List<String>> _generatedTagsCache = {};
 
@@ -766,7 +774,8 @@ class LocalFavoriteTile extends StatelessWidget {
     // 不能写成"已下载就用本地、否则用网络"：用户实测已下载的条目本地封面
     // 仍可能取不到（_coverFile 落到 File('')），那样不兜底网络就一直是破图。
     final cached = _coverFile;
-    final localCover = cached.path.isNotEmpty && cached.existsSync() ? cached : null;
+    final localCover =
+        cached.path.isNotEmpty && cached.existsSync() ? cached : null;
     final coverSource = resolveFavoriteCoverSource(
       localCover: localCover,
       coverPath: comic.coverPath,
@@ -793,9 +802,8 @@ class LocalFavoriteTile extends StatelessWidget {
       // 本地已命中时不传网络图源，保持原行为（本地优先）。
       // 未命中时走带磁盘缓存的 provider（而非 NetworkImage），避免每次滚入
       // 都重新下载 + 全尺寸解码。
-      imageProvider: networkCover == null
-          ? null
-          : networkCoverProvider(networkCover),
+      imageProvider:
+          networkCover == null ? null : networkCoverProvider(networkCover),
       type: badge,
       // 「显示标签」关闭时不白跑一遍整表标签翻译（_generateTags 是本页最大的
       // CPU 热点之一）：卡片侧本就不会渲染标签区，结果等价。

@@ -1,20 +1,14 @@
 import 'dart:async';
-import 'dart:io';
 import 'package:flutter/material.dart';
 
 import 'package:picakeep/comic_source/comic_source.dart';
-import 'package:picakeep/components/comic_tile.dart';
-import 'package:picakeep/foundation/app_page_route.dart';
-import 'package:picakeep/foundation/comic_tile_display_config.dart';
 import 'package:picakeep/foundation/untranslated_tags/untranslated_tag_coordinator.dart';
-import 'package:picakeep/foundation/download_author_resolver.dart';
-import 'package:picakeep/foundation/image_loader/stream_image_provider.dart';
 import 'package:picakeep/network/base_comic.dart';
-import 'package:picakeep/network/online_image/online_image_manager.dart';
 import 'package:picakeep/network/res.dart';
 import 'package:uuid/uuid.dart';
 import 'package:picakeep/network/eh_network/eh_models.dart';
 import 'package:picakeep/network/nhentai_network/models.dart';
+import 'package:picakeep/pages/online_common/online_comic_list_item.dart';
 import 'package:picakeep/tools/tags_translation.dart';
 
 import 'online_search_logic.dart';
@@ -356,33 +350,6 @@ class _OnlineSearchResultPageState extends State<OnlineSearchResultPage> {
     );
   }
 
-  void _openComic(BaseComic comic) {
-    final builder = _source.comicPageBuilder;
-    if (builder == null) return;
-    Navigator.of(context).push(
-      AppPageRoute(builder: (_) => builder(comic)),
-    );
-  }
-
-  /// 构造封面 imageProvider。
-  /// - 源未提供 [imageHeadersBuilder](picacg / jm)→ 走裸 `NetworkImage`,与改造前完全一致。
-  /// - 钩子返回 `null` 或空 header → 同样回退 `NetworkImage`。
-  /// - 钩子返回非空 header → 走带 header 的 `StreamImageProvider`,header 透传到图片请求。
-  ImageProvider _coverProvider(BaseComic comic) {
-    final builder = _source.imageHeadersBuilder;
-    if (builder == null) {
-      return NetworkImage(comic.cover);
-    }
-    final headers = builder(comic);
-    if (headers == null || headers.isEmpty) {
-      return NetworkImage(comic.cover);
-    }
-    return StreamImageProvider.withProgress(
-      () => OnlineImageManager.instance.getImage(comic.cover, headers: headers),
-      comic.cover,
-    );
-  }
-
   List<Widget> _buildActions(bool wideLayout) {
     final canChangeOption = _canChangeOption;
     if (wideLayout) {
@@ -508,34 +475,13 @@ class _OnlineSearchResultPageState extends State<OnlineSearchResultPage> {
                             );
                           }
                           final comic = _items[index];
-                          // 搜索页按源取配置：切源后当前 build 立即用新值，
-                          // 无需额外监听（_source 变化一定伴随 setState）。
-                          final cardConfig =
-                              readSearchComicTileDisplayConfig(_source.key);
-                          return SizedBox(
-                            height: 164,
-                            child: DownloadedComicTile(
-                              cardDisplayConfig: cardConfig,
-                              name: comic.title,
-                              author: resolveSourceAuthors(
-                                source: _source.key,
-                                flatTags: comic.tags,
-                                fallbackAuthor: comic.subTitle,
-                              ).join(', '),
-                              imagePath: File(''),
-                              imageProvider: _coverProvider(comic),
-                              type: null,
-                              tag: comic.tags,
-                              size: displaySourceInfoLine(
-                                source: _source.key,
-                                comicId: comic.id,
-                                description: comic.description,
-                                showId: cardConfig.showId,
-                              ),
-                              onTap: () => _openComic(comic),
-                              onLongTap: () {},
-                              onSecondaryTap: (_) {},
-                            ),
+                          // 卡片由公共组件渲染：它内部按当前源取配置
+                          // （readSearchComicTileDisplayConfig(source.key)），
+                          // 切源后当前 build 立即用新值，无需额外监听
+                          // （_source 变化一定伴随 setState）。
+                          return OnlineComicListItem(
+                            source: _source,
+                            comic: comic,
                           );
                         },
                       ),

@@ -12,8 +12,7 @@ const String kJmSecret = '185Hcomic3PAPP7R';
 const String _jmPkgName = 'com.example.app';
 const String jmAppVersion = '2.0.11';
 
-String get _ua =>
-    'Mozilla/5.0 (Linux; Android 10; K; wv) AppleWebKit/537.36 '
+String get _ua => 'Mozilla/5.0 (Linux; Android 10; K; wv) AppleWebKit/537.36 '
     '(KHTML, like Gecko) Version/4.0 Chrome/138.0.0.0 Mobile Safari/537.36';
 
 String get jmImgUA => 'Dalvik/2.1.0 (Linux; Android 10; K)';
@@ -32,7 +31,8 @@ Map<String, String> getJmBaseHeaders() => {
     };
 
 Map<String, String> getJmImgHeaders() => {
-      'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+      'Accept':
+          'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
       'Accept-Encoding': 'gzip, deflate, br',
       'Accept-Language': 'zh-CN,zh;q=0.9,en-US;q=0.8,en;q=0.7',
       'Connection': 'keep-alive',

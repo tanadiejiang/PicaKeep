@@ -12,6 +12,7 @@ import 'components/window_frame.dart';
 import 'foundation/app.dart';
 import 'foundation/appearance_settings.dart';
 import 'foundation/archive/archive_registry.dart';
+import 'foundation/explore/explore_bindings.dart';
 import 'foundation/history.dart';
 import 'foundation/local_favorites.dart';
 import 'foundation/log_file_service.dart';
@@ -174,6 +175,14 @@ Future<void> _initializeOnlineFoundation() async {
   await ComicSource.init();
   await AiDownloadQueue.instance.load();
   unawaited(OnlineDownloadManager.instance.loadQueue());
+  // 探索能力：在 ComicSource.init() 之后组装四源 Provider。
+  // 只建立描述与加载入口，不在此发任何网络请求。
+  ExploreBindings.comicSourceSettingsReader = (index) {
+    final settings = appdata.settings;
+    if (index < 0 || index >= settings.length) return '';
+    return settings[index];
+  };
+  ExploreBindings.install();
   // tags 翻译数据：非阻塞预热，搜索/详情页翻译按需使用。
   unawaited(_warmTagTranslations());
   // jm 启动预热：活域名重选 + 已登录则用存储账密重换新鲜会话 cookie。

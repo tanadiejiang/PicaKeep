@@ -2,7 +2,10 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:picakeep/base.dart';
 import 'package:picakeep/components/comic_tile.dart';
+import 'package:picakeep/foundation/comic_tile_display_config.dart';
+import 'package:picakeep/foundation/history.dart';
 
 void main() {
   const author = 'Always visible author';
@@ -178,7 +181,7 @@ void main() {
       expect(tester.takeException(), isNull);
     });
 
-    testWidgets('retains the historical expanded empty-list layout by default',
+    testWidgets('empty tag lists keep both layout footers at the same bottom',
         (tester) async {
       await tester.pumpWidget(
         _tile(
@@ -197,7 +200,8 @@ void main() {
       );
       final limitedFooterY = tester.getTopLeft(find.text(size)).dy;
 
-      expect(unrestrictedFooterY, greaterThan(limitedFooterY));
+      expect(unrestrictedFooterY, closeTo(limitedFooterY, 0.01));
+      expect(tester.getBottomLeft(find.text(size)).dy, closeTo(272, 0.01));
       expect(tester.takeException(), isNull);
     });
   });
@@ -309,7 +313,7 @@ void main() {
       expect(tester.takeException(), isNull);
     });
 
-    testWidgets('标签区只占内容高度，不撑满剩余空间', (tester) async {
+    testWidgets('单行标签保持紧凑，空余高度留在标签和贴底描述之间', (tester) async {
       await tester.pumpWidget(
         _tile(
           width: 544,
@@ -321,20 +325,22 @@ void main() {
           maxTagRows: 2,
         ),
       );
-      const chipHeight = 23.0; // 12pt 文本 + 上下 padding + 行间距
-      final tagTop = tester.getTopLeft(find.text('同人')).dy;
-      final footerTop = tester.getTopLeft(find.text('jm1473622')).dy;
-      final tagBlockHeight = footerTop - tagTop;
-      // 单行标签时标签区应贴近一个 chip 的高度；若被撑满剩余空间会远大于此。
-      expect(tagBlockHeight, inInclusiveRange(chipHeight, chipHeight * 1.6),
-          reason: '标签区实际高度 $tagBlockHeight 偏离单行内容高度');
+      final tagWrap = find.ancestor(
+        of: find.text('同人'),
+        matching: find.byType(Wrap),
+      );
+      final tagBlock = tester.getRect(tagWrap);
+      final footer = tester.getRect(find.text('jm1473622'));
+      // 页脚与标签之间允许留白；标签本身仍只占一行，不能被空余高度拉伸。
+      expect(tagBlock.height, inInclusiveRange(20.0, 32.0));
+      expect(tagBlock.bottom, lessThan(footer.top));
+      expect(footer.bottom, closeTo(156, 0.01));
       expect(tester.takeException(), isNull);
     });
 
     // 网络收藏页与搜索结果页都不传 maxTagRows，走的是"无限制"布局分支；
     // 上面的用例走 _buildLimitedLayout，两者必须分别覆盖。
-    testWidgets('不传 maxTagRows 时（收藏/搜索实际路径）描述位仍在卡片内',
-        (tester) async {
+    testWidgets('不传 maxTagRows 时（收藏/搜索实际路径）描述位仍在卡片内', (tester) async {
       const cardHeight = 164.0;
       await tester.pumpWidget(
         _tile(
@@ -361,6 +367,115 @@ void main() {
       expect(tester.takeException(), isNull);
     });
   });
+
+  group('底部信息固定在卡片底部', () {
+    const id = 'jm123456';
+    const description = '2026-09-22 | JM';
+    final manyTags = List<String>.generate(24, (index) => 'topic-$index');
+    final tagCases = <({List<String> tags, bool showTags})>[
+      (tags: const [], showTags: true),
+      (tags: const ['topic'], showTags: true),
+      (tags: manyTags, showTags: true),
+      (tags: manyTags, showTags: false),
+    ];
+    const headers = <({String title, String author})>[
+      (title: 'Short title', author: ''),
+      (title: 'Short title', author: 'Author'),
+      (
+        title: 'A longer archive entry title that wraps onto a second line',
+        author: 'An author name long enough to require truncation on this card',
+      ),
+    ];
+
+    for (final maxTagRows in <int?>[null, 2, 3]) {
+      testWidgets('tagRows=${maxTagRows ?? '不限'}：标题作者和标签变化不移动底部信息',
+          (tester) async {
+        double? idOffset;
+        double? descriptionOffset;
+        for (final header in headers) {
+          for (final tagCase in tagCases) {
+            await tester.pumpWidget(_tile(
+              width: 411,
+              title: header.title,
+              author: header.author,
+              tags: tagCase.tags,
+              maxTagRows: maxTagRows,
+              cardDisplayConfig: ComicTileDisplayConfig(
+                tagRows: maxTagRows ?? 0,
+                showTags: tagCase.showTags,
+                showId: true,
+              ),
+              descriptionLeading: const Text(id),
+              size: description,
+            ));
+
+            final card = tester.getRect(find.byType(DownloadedComicTile));
+            final idRect = tester.getRect(find.text(id));
+            final descriptionRect = tester.getRect(find.text(description));
+            final badgeRect = tester.getRect(find.byWidgetPredicate(
+              (widget) =>
+                  widget is Container &&
+                  widget.child is Text &&
+                  (widget.child! as Text).data == badge,
+            ));
+            idOffset ??= card.bottom - idRect.top;
+            descriptionOffset ??= descriptionRect.top - idRect.bottom;
+            expect(card.bottom - descriptionRect.bottom, closeTo(8, 0.01));
+            expect(card.bottom - badgeRect.bottom, closeTo(8, 0.01));
+            expect(card.bottom - idRect.top, closeTo(idOffset, 0.01));
+            expect(descriptionRect.top - idRect.bottom,
+                closeTo(descriptionOffset, 0.01));
+            // 不限档会构建被裁剪的标签；检查实际标签容器边界而非隐藏子项坐标。
+            for (final wrap in find.byType(Wrap).evaluate()) {
+              expect(tester.getRect(find.byWidget(wrap.widget)).bottom,
+                  lessThanOrEqualTo(idRect.top));
+            }
+            if (!tagCase.showTags) {
+              for (final tag in tagCase.tags) {
+                expect(find.text(tag), findsNothing);
+              }
+            }
+            expect(tester.takeException(), isNull);
+          }
+        }
+      });
+
+      testWidgets('tagRows=${maxTagRows ?? '不限'}：阅读进度与底部信息整块贴底',
+          (tester) async {
+        final previous = appdata.settings[73];
+        appdata.settings[73] = '1';
+        addTearDown(() => appdata.settings[73] = previous);
+        final history = History(HistoryType.jmComic, DateTime(2026, 9, 22),
+            'Archive entry', '', '', 2, 7, '123456');
+        double? idOffset;
+        for (final tags in <List<String>>[
+          const [],
+          const ['topic'],
+          manyTags
+        ]) {
+          await tester.pumpWidget(_tile(
+            width: 411,
+            height: 190,
+            tags: tags,
+            maxTagRows: maxTagRows,
+            descriptionLeading: const Text(id),
+            size: description,
+            readingHistory: history,
+          ));
+          final card = tester.getRect(find.byType(DownloadedComicTile));
+          final idRect = tester.getRect(find.text(id));
+          final progress = tester.getRect(find.text('E2 · P7'));
+          final footer = tester.getRect(find.text(description));
+          idOffset ??= card.bottom - idRect.top;
+          expect(card.bottom - idRect.top, closeTo(idOffset, 0.01));
+          expect(idRect.bottom, lessThanOrEqualTo(progress.top));
+          expect(progress.bottom, lessThanOrEqualTo(footer.top));
+          expect(card.bottom - footer.bottom, closeTo(8, 0.01));
+          expect(tester.takeException(), isNull);
+        }
+      });
+    }
+  });
 }
 
 Widget _tile({
@@ -373,6 +488,9 @@ Widget _tile({
   String author = 'Always visible author',
   String size = '128 MB',
   bool? isFavorite = false,
+  ComicTileDisplayConfig? cardDisplayConfig,
+  Widget? descriptionLeading,
+  History? readingHistory,
 }) {
   return MaterialApp(
     home: MediaQuery(
@@ -392,6 +510,9 @@ Widget _tile({
               tag: tags,
               size: size,
               maxTagRows: maxTagRows,
+              cardDisplayConfig: cardDisplayConfig,
+              descriptionLeading: descriptionLeading,
+              readingHistoryOverride: readingHistory,
               onTap: () {},
               onLongTap: () {},
               onSecondaryTap: (_) {},

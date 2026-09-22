@@ -2,6 +2,7 @@ part of 'local_favorites.dart';
 
 extension LocalFavoritesManagerComics on LocalFavoritesManager {
   void _insertComic(Database db, String folder, FavoriteItem comic, int order) {
+    _favoritedTargetsDirty = true;
     final tableName = _folderTableNameInDb(folder, db);
     if (tableName == null) {
       throw Exception('Folder does not exist');
@@ -48,6 +49,7 @@ extension LocalFavoritesManagerComics on LocalFavoritesManager {
     String target,
     Iterable<int> typeKeys,
   ) {
+    _favoritedTargetsDirty = true;
     final keys = typeKeys.toList(growable: false);
     final tableName = _folderTableNameInDb(folder, db);
     if (target.isEmpty || keys.isEmpty || tableName == null) {
@@ -250,6 +252,7 @@ extension LocalFavoritesManagerComics on LocalFavoritesManager {
   }
 
   Future<void> clearAll() async {
+    _favoritedTargetsDirty = true;
     for (final folder in _getUserTables(_db)) {
       _db.execute('drop table "$folder";');
     }

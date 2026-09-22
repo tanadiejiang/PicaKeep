@@ -1,4 +1,3 @@
-
 // ignore_for_file: avoid_unused_constructor_params, unused_element, no_leading_underscores_for_local_identifiers
 
 part of 'settings_page.dart';
@@ -196,8 +195,9 @@ class _CardDisplayConfigRows extends StatelessWidget {
 
 /// 「设置 → 浏览 → 卡片信息显示」。
 ///
-/// 粒度：本地收藏一套、在线收藏一套（都不区分源），搜索页**按源切换页签**各一套
-/// （不另开子页 —— 用户明确要求做成"选哪个源就配哪个源"的形态）。改动立即写回
+/// 粒度：本地收藏一套、在线收藏一套（都不区分源），搜索页与探索页**按源切换页签**
+/// 各一套（不另开子页 —— 用户明确要求做成"选哪个源就配哪个源"的形态；探索页复用
+/// 同一套源配置，因此两处的在线列表卡片观感一致）。改动立即写回
 /// settings 索引 150，对应页面下次构建即生效。
 class ComicCardDisplaySetting extends StatefulWidget {
   const ComicCardDisplaySetting({super.key});
@@ -280,11 +280,13 @@ class _ComicCardDisplaySettingState extends State<ComicCardDisplaySetting>
               onChanged: (config) => _apply(_settings.withOnline(config)),
             ),
             const _CardDisplayDivider(section: true),
-            SettingsTitle('搜索页（按源）'.tl),
+            SettingsTitle('搜索与探索（按源）'.tl),
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
               child: Text(
-                '搜索页支持切换源，因此每个源单独一套配置；其它页面不受影响。'
+                '这组配置按源分别保存，共同控制搜索页与探索页的在线列表卡片：'
+                        '两个页面都支持切换源，因此每个源单独一套，改一次两处同时生效；'
+                        '本地收藏 / 在线收藏等其它页面不受影响。'
                         '「显示来源 id」只对禁漫 / NHentai 有可见效果'
                         '（它们的描述位在无简介时回退为 jm<id> / nhentai<id>）；'
                         '注意搜索结果卡片的标签通常很少（禁漫多为 1~2 个），'

@@ -74,7 +74,7 @@ extension LocalFavoritesManagerQuery on LocalFavoritesManager {
 
   bool isExist(String target) {
     final normalized = target.trim();
-    if (normalized.isEmpty) {
+    if (!_storageReady || normalized.isEmpty) {
       return false;
     }
     if (_favoritedTargetsDirty) {
@@ -84,7 +84,7 @@ extension LocalFavoritesManagerQuery on LocalFavoritesManager {
   }
 
   Map<String, bool> existsMany(Iterable<String> targets) {
-    if (_favoritedTargetsDirty) {
+    if (_storageReady && _favoritedTargetsDirty) {
       _cacheFavoritedTargets();
     }
     final result = <String, bool>{};
@@ -93,39 +93,62 @@ extension LocalFavoritesManagerQuery on LocalFavoritesManager {
       if (normalized.isEmpty) {
         continue;
       }
-      result[normalized] = _cachedFavoritedTargets.containsKey(normalized);
+      result[normalized] =
+          _storageReady && _cachedFavoritedTargets.containsKey(normalized);
     }
     return result;
   }
 
+  /// Cached membership for a source identity, independent of folder location.
+  /// Numeric IDs from different sources must never share a favorite badge.
+  bool isComicFavorited(String target, FavoriteType type) {
+    final normalized = target.trim();
+    if (!_storageReady || normalized.isEmpty) return false;
+    if (_favoritedTargetsDirty) _cacheFavoritedTargets();
+    final identity = _canonicalFavoriteTypeIdentity(type.key);
+    return _buildFavoriteDownloadIdCandidates(normalized, type.key).any(
+      (candidate) =>
+          _cachedFavoritedComics.contains((identity, candidate.trim())),
+    );
+  }
+
   void _cacheFavoritedTargets() {
-    _favoritedTargetsDirty = false;
-    _cachedFavoritedTargets.clear();
+    // Publish only a complete snapshot: a failed read must remain retryable.
+    final targets = <String, bool>{};
+    final comics = <(String, String)>{};
     for (final db in _dbs) {
       for (final folder in _getFolderRecords(db)) {
         final rows = db.select("""
-            select * from "${folder.tableName}";
+            select target, type from "${folder.tableName}";
           """);
         for (final row in rows) {
-          final item = FavoriteItem.fromRow(row);
+          final target = row['target'] as String;
+          final type = row['type'] as int;
+          final identity = _canonicalFavoriteTypeIdentity(type);
           final candidates = <String>{
-            item.target,
-            ...item.candidateDownloadIds(),
+            target,
+            ..._buildFavoriteDownloadIdCandidates(target, type),
           };
           for (final candidate in candidates) {
             final normalized = candidate.trim();
             if (normalized.isEmpty) {
               continue;
             }
-            _cachedFavoritedTargets[normalized] = true;
-            _cachedFavoritedTargets[
-                'local_download::current_download::$normalized'] = true;
-            _cachedFavoritedTargets[
-                'local_download::original_download::$normalized'] = true;
+            comics.add((identity, normalized));
+            targets[normalized] = true;
+            targets['local_download::current_download::$normalized'] = true;
+            targets['local_download::original_download::$normalized'] = true;
           }
         }
       }
     }
+    _cachedFavoritedTargets
+      ..clear()
+      ..addAll(targets);
+    _cachedFavoritedComics
+      ..clear()
+      ..addAll(comics);
+    _favoritedTargetsDirty = false;
   }
 
   List<int> _equivalentTypeList(int type) =>

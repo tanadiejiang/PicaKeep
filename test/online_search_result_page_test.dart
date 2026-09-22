@@ -8,10 +8,12 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:path_provider_platform_interface/path_provider_platform_interface.dart';
 import 'package:picakeep/base.dart';
 import 'package:picakeep/comic_source/comic_source.dart';
-import 'package:picakeep/components/comic_tile.dart';
 import 'package:picakeep/foundation/app.dart';
+import 'package:picakeep/foundation/comic_tile_display_config.dart';
 import 'package:picakeep/network/base_comic.dart';
+import 'package:picakeep/network/nhentai_network/models.dart';
 import 'package:picakeep/network/res.dart';
+import 'package:picakeep/pages/online_common/online_comic_list_item.dart';
 import 'package:picakeep/pages/online_search/online_search_result_page.dart';
 import 'package:picakeep/tools/tags_translation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -336,6 +338,39 @@ void main() {
   // ───────────────────────────────────────────────────────────────────────────
   //  A01 初始选项规范化
   // ───────────────────────────────────────────────────────────────────────────
+
+  testWidgets('NH ID 独立于语言描述显示，并尊重显示 ID 开关', (tester) async {
+    final original = appdata.settings[comicTileDisplayConfigSettingIndex];
+    addTearDown(
+        () => appdata.settings[comicTileDisplayConfigSettingIndex] = original);
+    final source = ComicSource.named(key: 'nhentai', name: 'NH');
+    const comic = NhentaiComicBrief(
+        'Sample title', '', '123456', 'English', ['full color']);
+    Future<void> render({required bool showId}) async {
+      appdata.settings[comicTileDisplayConfigSettingIndex] = jsonEncode({
+        'search': {
+          'nhentai': {'showId': showId, 'showTags': true, 'tagRows': 2}
+        },
+      });
+      await tester.pumpWidget(MaterialApp(
+          home: Scaffold(
+              body: OnlineComicListItem(
+        key: ValueKey(showId),
+        source: source,
+        comic: comic,
+      ))));
+      await tester.pumpAndSettle();
+    }
+
+    await render(showId: true);
+    expect(find.text('ID: 123456'), findsOneWidget);
+    expect(find.text('English'), findsOneWidget);
+    expect(find.text('Unknown'), findsNothing);
+    await render(showId: false);
+    expect(find.text('ID: 123456'), findsNothing);
+    expect(find.text('English'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
 
   group('A01 初始选项规范化', () {
     testWidgets('未命中的传入值在首次请求前回落到源默认值', (tester) async {
@@ -1189,7 +1224,7 @@ void main() {
 
       expect(find.text('page2-failed'), findsOneWidget);
       // 既有条目仍在列表里(滚动位置可能让首项离屏,故按列表项计数断言)
-      expect(find.byType(DownloadedComicTile), findsWidgets);
+      expect(find.byType(OnlineComicListItem), findsWidgets);
 
       await tester.drag(find.byType(ListView), const Offset(0, -3000));
       await tester.pump();

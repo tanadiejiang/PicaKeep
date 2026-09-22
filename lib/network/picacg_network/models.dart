@@ -1,34 +1,15 @@
 import 'package:picakeep/foundation/history.dart';
-import 'package:picakeep/network/base_comic.dart';
+import 'package:picakeep/network/picacg_network/picacg_brief_models.dart';
+
+// 列表条目 brief / 分类项 / 推荐集合与图片 URL 工具已拆到纯 Dart 的
+// `picacg_brief_models.dart`；这里再导出一次，既有 import 点无需改动。
+export 'package:picakeep/network/picacg_network/picacg_brief_models.dart';
 
 const String defaultPicacgAvatarUrl = 'DEFAULT AVATAR URL';
 
-String picacgImageUrl(Map? media) {
-  if (media == null) {
-    return '';
-  }
-  final server = media['fileServer']?.toString() ?? '';
-  final path = media['path']?.toString() ?? '';
-  if (server.isEmpty || path.isEmpty) {
-    return '';
-  }
-  final base = server.endsWith('/') ? '${server}static/' : '$server/static/';
-  return '$base$path';
-}
+int _intValue(Object? value) => picacgIntValue(value);
 
-int _intValue(Object? value) {
-  if (value is int) {
-    return value;
-  }
-  return int.tryParse(value?.toString() ?? '') ?? 0;
-}
-
-List<String> _stringList(Object? value) {
-  if (value is List) {
-    return value.map((e) => e.toString()).toList(growable: false);
-  }
-  return const <String>[];
-}
+List<String> _stringList(Object? value) => picacgStringList(value);
 
 class PicacgProfile {
   const PicacgProfile({
@@ -97,61 +78,6 @@ class PicacgProfile {
         'slogan': slogan,
         'frameUrl': frameUrl,
       };
-}
-
-class PicacgComicItemBrief extends BaseComic {
-  const PicacgComicItemBrief({
-    required this.id,
-    required this.title,
-    required this.author,
-    required this.likes,
-    required this.path,
-    required this.tags,
-    this.pages,
-  });
-
-  factory PicacgComicItemBrief.fromApi(Map json) {
-    final tags = <String>[
-      ..._stringList(json['tags']),
-      ..._stringList(json['categories']),
-    ];
-    return PicacgComicItemBrief(
-      id: json['_id']?.toString() ?? '',
-      title: json['title']?.toString() ?? 'Unknown',
-      author: json['author']?.toString() ?? 'Unknown',
-      likes: _intValue(json['likesCount'] ?? json['totalLikes']),
-      path: picacgImageUrl(json['thumb'] as Map?),
-      tags: tags,
-      pages: _intValue(json['pagesCount']),
-    );
-  }
-
-  @override
-  final String id;
-
-  @override
-  final String title;
-
-  final String author;
-  final int likes;
-  final String path;
-
-  @override
-  final List<String> tags;
-
-  final int? pages;
-
-  @override
-  String get cover => path;
-
-  @override
-  String get description {
-    final pageText = pages == null || pages == 0 ? '' : ' · $pages 页';
-    return '$likes 喜欢$pageText';
-  }
-
-  @override
-  String get subTitle => author;
 }
 
 class PicacgComicItem extends PicacgComicItemBrief {
@@ -267,7 +193,13 @@ class PicacgComicItem extends PicacgComicItemBrief {
       path: json['path']?.toString() ?? '',
       tags: tags,
       creator: const PicacgProfile(
-        id: '', avatarUrl: '', email: '', exp: 0, level: 0, name: '', title: '',
+        id: '',
+        avatarUrl: '',
+        email: '',
+        exp: 0,
+        level: 0,
+        name: '',
+        title: '',
       ),
       detailDescription: json['description']?.toString() ?? '',
       chineseTeam: '',

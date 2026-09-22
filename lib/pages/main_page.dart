@@ -11,6 +11,8 @@ import 'package:picakeep/tools/local_app_links.dart';
 import '../base.dart';
 import '../components/components.dart';
 import 'ai/ai_page.dart';
+import 'explore/explore_page.dart';
+import 'explore/explore_route_scope.dart';
 import 'favorites/main_favorites_page.dart';
 import 'local_search_page.dart';
 import 'me_page.dart';
@@ -22,6 +24,33 @@ enum _MainPaneActionPage {
   onlineSearch,
   search,
   settings,
+}
+
+/// 主导航的局部稳定标识。
+///
+/// `settings[23]` 是**历史存储值**（0=我，1=收藏），不是"最终数组下标"：
+/// 直接拿它当索引，在开启 AI 或服务信息 tab 后含义就会漂移（1 会落到 AI）。
+/// 因此固定语义映射按 id 查当前可见列表内的下标。
+enum MainTabId { me, ai, favorites, explore, serviceInfo }
+
+/// 把历史设置值 `settings[23]`（`0`=我 / `1`=收藏）解析成**当前可见列表**内的下标。
+///
+/// 关键点：`settings[23]` 是历史存储值，含义只有"我 / 收藏"两种，**不是**最终
+/// 数组下标 —— 直接拿它当索引，开启 AI 后 `1` 会落到 AI 页。因此这里按
+/// [MainTabId] 在当前可见 tab 列表里查下标；坏值一律回落到「我」。
+///
+/// 不迁移、不改写旧存储值。
+@visibleForTesting
+int resolveInitialMainTabIndex({
+  required List<MainTabId> visibleTabs,
+  required String storedSetting,
+}) {
+  final wanted =
+      storedSetting.trim() == '1' ? MainTabId.favorites : MainTabId.me;
+  final index = visibleTabs.indexOf(wanted);
+  if (index >= 0) return index;
+  final fallback = visibleTabs.indexOf(MainTabId.me);
+  return fallback >= 0 ? fallback : 0;
 }
 
 class MainPage extends StatefulWidget {
@@ -43,37 +72,64 @@ class _MainPageState extends State<MainPage> {
 
   bool get _showAiTab => appdata.settings[showAiTabSettingIndex] == '1';
 
-  List<Widget> get _pages => [
-        const MePage(),
-        if (_showAiTab) const AiPage(),
-        const MainFavoritesPage(),
-        if (_showServiceInfoTab) const ServiceInfoPage(),
-      ];
-
-  List<PaneItemEntry> get _paneItems => [
-        PaneItemEntry(
-          label: '我',
-          icon: Icons.person_outline,
-          activeIcon: Icons.person,
+  /// 当前可见的 tab 声明（**唯一来源**）：手机底栏与桌面侧栏都由它生成，
+  /// 避免"两份索引各写一遍"后分叉。
+  List<({MainTabId id, Widget page, PaneItemEntry item})> get _tabs => [
+        (
+          id: MainTabId.me,
+          page: const MePage(),
+          item: PaneItemEntry(
+            label: '我',
+            icon: Icons.person_outline,
+            activeIcon: Icons.person,
+          ),
         ),
         if (_showAiTab)
-          PaneItemEntry(
-            label: 'AI',
-            icon: Icons.smart_toy_outlined,
-            activeIcon: Icons.smart_toy,
+          (
+            id: MainTabId.ai,
+            page: const AiPage(),
+            item: PaneItemEntry(
+              label: 'AI',
+              icon: Icons.smart_toy_outlined,
+              activeIcon: Icons.smart_toy,
+            ),
           ),
-        PaneItemEntry(
-          label: '收藏',
-          icon: Icons.local_activity_outlined,
-          activeIcon: Icons.local_activity,
+        (
+          id: MainTabId.favorites,
+          page: const MainFavoritesPage(),
+          item: PaneItemEntry(
+            label: '收藏',
+            icon: Icons.local_activity_outlined,
+            activeIcon: Icons.local_activity,
+          ),
+        ),
+        // 探索恒显示：不加隐藏开关，也不用服务配置事件兜底。
+        (
+          id: MainTabId.explore,
+          page: const ExplorePage(),
+          item: PaneItemEntry(
+            label: '探索',
+            icon: Icons.explore_outlined,
+            activeIcon: Icons.explore,
+          ),
         ),
         if (_showServiceInfoTab)
-          PaneItemEntry(
-            label: '服务信息',
-            icon: Icons.router_outlined,
-            activeIcon: Icons.router,
+          (
+            id: MainTabId.serviceInfo,
+            page: const ServiceInfoPage(),
+            item: PaneItemEntry(
+              label: '服务信息',
+              icon: Icons.router_outlined,
+              activeIcon: Icons.router,
+            ),
           ),
       ];
+
+  List<Widget> get _pages =>
+      _tabs.map((tab) => tab.page).toList(growable: false);
+
+  List<PaneItemEntry> get _paneItems =>
+      _tabs.map((tab) => tab.item).toList(growable: false);
 
   _MainPaneActionPage? _currentPaneActionPage() {
     if (observer.routes.isEmpty) {
@@ -178,14 +234,15 @@ class _MainPageState extends State<MainPage> {
     super.dispose();
   }
 
-  int _initialTabIndex(int pageCount) {
-    try {
-      final i = int.parse(appdata.settings[23]);
-      if (i >= 0 && i < pageCount) {
-        return i;
-      }
-    } catch (_) {}
-    return 0;
+  /// 启动页下标：由历史设置值 + 当前可见 tab 列表共同决定。
+  ///
+  /// 不再把 `settings[23]` 直接当数组下标：开启 AI 后它会把"收藏"错落到 AI 页。
+  int _initialTabIndex() {
+    final stored = 23 < appdata.settings.length ? appdata.settings[23] : '';
+    return resolveInitialMainTabIndex(
+      visibleTabs: _tabs.map((tab) => tab.id).toList(growable: false),
+      storedSetting: stored,
+    );
   }
 
   @override
@@ -194,7 +251,7 @@ class _MainPageState extends State<MainPage> {
     final paneItems = _paneItems;
     return NaviPane(
       key: ValueKey((_showServiceInfoTab, _showAiTab)),
-      initialPage: _initialTabIndex(pages.length),
+      initialPage: _initialTabIndex(),
       observer: observer,
       paneItems: paneItems,
       paneActions: [
@@ -228,7 +285,7 @@ class _MainPageState extends State<MainPage> {
             preventRebuild: false,
             isRootRoute: true,
             builder: (context) {
-              return NaviPaddingWidget(child: pages[index]);
+              return _wrapPage(pages[index]);
             },
           ),
         );
@@ -243,12 +300,23 @@ class _MainPageState extends State<MainPage> {
             preventRebuild: false,
             isRootRoute: true,
             builder: (context) {
-              return NaviPaddingWidget(child: pages[index]);
+              return _wrapPage(pages[index]);
             },
           ),
           (route) => false,
         );
       },
+    );
+  }
+
+  /// 给 tab 页面套上导航 padding 与**路由恢复作用域**。
+  ///
+  /// 探索页需要知道自己何时"重新成为当前路由"，才能在从侧栏设置/详情/账号页
+  /// 返回后做一次上下文核对 —— 它拿不到那些 push 的 Future，只能靠路由观察。
+  Widget _wrapPage(Widget page) {
+    return ExploreRouteScope(
+      observer: observer,
+      child: NaviPaddingWidget(child: page),
     );
   }
 }

@@ -162,6 +162,7 @@ extension LocalFavoritesManagerFolders on LocalFavoritesManager {
   }
 
   void _createFolderTable(Database db, String name) {
+    _favoritedTargetsDirty = true;
     db.execute("""
         create table "$name"(
           target text,
@@ -178,6 +179,7 @@ extension LocalFavoritesManagerFolders on LocalFavoritesManager {
   }
 
   void _dropFolder(Database db, String folderName) {
+    _favoritedTargetsDirty = true;
     final tableName = _folderTableNameInDb(folderName, db) ?? folderName;
     db.execute('drop table if exists "$tableName";');
     db.execute("""

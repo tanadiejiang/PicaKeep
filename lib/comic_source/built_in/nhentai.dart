@@ -4,8 +4,7 @@ import 'package:picakeep/comic_source/comic_source.dart';
 import 'package:picakeep/comic_source/favorite_data.dart';
 import 'package:picakeep/foundation/app.dart';
 import 'package:picakeep/foundation/download_author_resolver.dart';
-import 'package:picakeep/foundation/favorite_source_id.dart'
-    as source_id_rules;
+import 'package:picakeep/foundation/favorite_source_id.dart' as source_id_rules;
 import 'package:picakeep/network/base_comic.dart';
 import 'package:picakeep/network/nhentai_network/nhentai_main_network.dart';
 import 'package:picakeep/network/res.dart';

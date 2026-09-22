@@ -1,7 +1,9 @@
 import 'dart:convert';
 import 'dart:io' show Cookie;
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:html/dom.dart';
+import 'package:picakeep/foundation/explore/providers/nhentai_explore_options.dart';
 import 'package:picakeep/foundation/log.dart';
 import 'package:picakeep/network/cloudflare.dart';
 import 'package:picakeep/network/cookie_jar.dart';
@@ -40,10 +42,173 @@ String _nhTimeToString(DateTime time) {
   }
 }
 
+/// nhentai 语言类 tag id → 展示语言名（`Unknown` 表示判定不出，不入表）。
+///
+/// 与 v2 API 的 `tag_ids`、HTML 的 `data-tags` 共用同一份映射：两处判定口径
+/// 必须一致，否则同一本书在首页与搜索页会显示不同语言。
+const Map<String, String> nhentaiLanguageTagNames = {
+  '12227': 'English',
+  '6346': '日本語',
+  '29963': '中文',
+};
+
+/// v2 列表与随机详情共用的轻量元数据解析；不补发逐本详情请求。
+/// 列表主要给 tag_ids，详情/部分响应可直接给具名 tags。
+@visibleForTesting
+NhentaiComicBrief? parseNhentaiV2Gallery(
+  Map<String, dynamic> item, {
+  required String cdnServer,
+}) {
+  final id = item['id']?.toString() ?? '';
+  if (!RegExp(r'^\d+$').hasMatch(id) || int.tryParse(id) == 0) return null;
+
+  final titles = item['title'];
+  final title = <Object?>[
+    item['english_title'],
+    if (titles is Map) titles['english'],
+    item['japanese_title'],
+    if (titles is Map) titles['japanese'],
+    if (titles is Map) titles['pretty'],
+    if (titles is String) titles,
+  ].whereType<String>().map((value) => value.trim()).firstWhere(
+        (value) => value.isNotEmpty,
+        orElse: () => id,
+      );
+
+  String imagePath(Object? value) {
+    if (value is String) return value.trim();
+    if (value is Map) return imagePath(value['path'] ?? value['url']);
+    return '';
+  }
+
+  var rawCover = imagePath(item['thumbnail']);
+  if (rawCover.isEmpty) rawCover = imagePath(item['cover']);
+  final cdn = cdnServer.replaceAll(RegExp(r'/+$'), '');
+  final cover = rawCover.isEmpty
+      ? ''
+      : rawCover.startsWith('//')
+          ? 'https:$rawCover'
+          : Uri.tryParse(rawCover)?.hasScheme == true
+              ? rawCover
+              : '$cdn/${rawCover.replaceAll(RegExp(r'^/+'), '')}';
+
+  final tagIds = <String>{};
+  final namesById = <String, String>{};
+  final namedTags = <String>{};
+  String? language;
+  const languageNames = {
+    'english': 'English',
+    'japanese': '日本語',
+    'chinese': '中文',
+  };
+  final rawIds = item['tag_ids'];
+  if (rawIds is List) {
+    tagIds.addAll(rawIds.where((value) => value != null).map((e) => '$e'));
+  }
+  final rawTags = item['tags'];
+  if (rawTags is List) {
+    for (final tag in rawTags) {
+      if (tag is! Map) continue;
+      final tagId = tag['id']?.toString();
+      final name = tag['name'] is String ? (tag['name'] as String).trim() : '';
+      if (tagId != null) {
+        tagIds.add(tagId);
+        if (name.isNotEmpty) namesById[tagId] = name;
+      }
+      if (tag['type'] == 'language') {
+        language ??= languageNames[name.toLowerCase()];
+      } else if (name.isNotEmpty) {
+        namedTags.add(name);
+      }
+    }
+  }
+  final tags = <String>{};
+  for (final tagId in tagIds) {
+    final mappedLanguage = nhentaiLanguageTagNames[tagId];
+    if (mappedLanguage != null) {
+      language ??= mappedLanguage;
+      continue;
+    }
+    final name = namesById[tagId] ?? nhentaiTags[tagId];
+    if (name != null && name.isNotEmpty) tags.add(name);
+  }
+  tags.addAll(namedTags);
+  return NhentaiComicBrief(
+      title, cover, id, language ?? 'Unknown', tags.toList());
+}
+
+/// 探索首页单本 `div.gallery` 的**容错解析**（顶层函数，便于直接用 HTML 夹具测试）。
+///
+/// 与 [NhentaiNetwork.parseComic] 的**唯一差异是容错性，不是字段口径**：
+/// - 字段口径完全一致：`a > img` 取封面、`div.caption` 取标题、`a[href]` 取数字
+///   id、`data-tags` 按空格切分后经 [nhentaiTags] 映射成英文标签名、语言按
+///   [nhentaiLanguageTagNames] 判定（判定不出为 `Unknown`）。
+/// - 容错差异：`parseComic` 对四个元素一律 `!` 强制解包，缺任何一个就抛异常
+///   （调用方整页失败）；本函数缺字段不崩、能用多少用多少，id 非法时才返回
+///   `null`（且**只因此一处**返回 null，调用方据此跳过坏条目）。
+///
+/// 注意：`data-tags` 缺失或为空时返回**空标签列表 + `Unknown`**，不补发详情
+/// 请求、也不把数字 id 当标签名——这是"允许未知"，不是功能回退。
+@visibleForTesting
+NhentaiComicBrief? parseNhentaiHomeComic(Element comicDom) {
+  try {
+    // id：href 里抠数字，空 / 非数字一律判坏（唯一返回 null 的出口）。
+    final anchor = comicDom.querySelector("a");
+    final id = anchor?.attributes["href"]?.nums ?? '';
+    if (id.isEmpty || int.tryParse(id) == null) return null;
+
+    // 封面：懒加载时 `src` 是空串或内联 `data:` 占位，回退 `data-src`。
+    final img = comicDom.querySelector("a > img");
+    var cover = img?.attributes["src"] ?? '';
+    if (cover.isEmpty || cover.startsWith('data:')) {
+      final lazy = img?.attributes["data-src"] ?? '';
+      if (lazy.isNotEmpty) cover = lazy;
+    }
+
+    final name = comicDom.querySelector("div.caption")?.text ?? '';
+
+    // 标签 / 语言同源：都从 data-tags 的空格分隔 id 列表读。
+    final tagIds = (comicDom.attributes["data-tags"] ?? '')
+        .split(RegExp(r'\s+'))
+        .where((e) => e.isNotEmpty)
+        .toList();
+
+    // 只保留 nhentaiTags 里有英文名的 id，未知数字 id 直接丢弃（不落地数字）。
+    final tags =
+        tagIds.map((tag) => nhentaiTags[tag]).whereType<String>().toList();
+
+    var lang = 'Unknown';
+    for (final tag in tagIds) {
+      final mapped = nhentaiLanguageTagNames[tag];
+      if (mapped != null) {
+        lang = mapped;
+        break;
+      }
+    }
+
+    return NhentaiComicBrief(
+      name.trim().isEmpty ? id : name,
+      cover,
+      id,
+      lang,
+      tags,
+    );
+  } catch (_) {
+    return null;
+  }
+}
+
 class NhentaiNetwork {
   factory NhentaiNetwork() => _cache ?? (_cache = NhentaiNetwork._create());
 
   NhentaiNetwork._create();
+
+  @visibleForTesting
+  NhentaiNetwork.forTesting({
+    required Future<Res<String>> Function(String url) get,
+  }) : _getOverride = get;
+
+  Future<Res<String>> Function(String url)? _getOverride;
 
   static NhentaiNetwork? _cache;
 
@@ -195,6 +360,7 @@ class NhentaiNetwork {
 
   Future<Res<String>> get(String url,
       [Map<String, String>? extraHeaders]) async {
+    if (_getOverride != null) return _getOverride!(url);
     if (cookieJar == null) {
       await init();
     }
@@ -221,7 +387,11 @@ class NhentaiNetwork {
       }
       return Res(res.data);
     } catch (e) {
-      return Res(null, errorMessage: e.toString());
+      // NH 的传输失败无法从文案可靠区分类别，一律归 network（不猜登录）。
+      return Res(null,
+          errorMessage: e.toString(),
+          errorCode: ResErrorCode.network,
+          statusCode: e is DioException ? e.response?.statusCode : null);
     }
   }
 
@@ -267,58 +437,18 @@ class NhentaiNetwork {
   }
 
   Future<Res<NhentaiHomePageData>> getHomePage([int? page]) async {
-    var url = baseUrl;
-    if (page != null && page != 1) {
-      url = "$url?page=$page";
-    }
-    var res = await get(url);
-    if (res.error) {
-      return Res.fromErrorRes(res);
-    }
-    try {
-      var document = parse(res.data);
-      List<Element> popularDoms;
-      if (url == baseUrl) {
-        popularDoms = document.querySelectorAll(
-            "div.container.index-container.index-popular > div.gallery");
-      } else {
-        popularDoms = const [];
-      }
-      var latest = document
-          .querySelectorAll("div.container.index-container > div.gallery");
-
-      return Res(NhentaiHomePageData(
-        removeNullValue(List.generate(
-            popularDoms.length, (index) => parseComic(popularDoms[index]))),
-        removeNullValue(List.generate(latest.length - popularDoms.length,
-            (index) => parseComic(latest[index + popularDoms.length]))),
-      ));
-    } catch (e, s) {
-      LogManager.addLog(LogLevel.error, "Data Analyse", "$e\n$s");
-      return Res(null, errorMessage: "Failed to Parse Data: $e");
-    }
+    return getHomePageData(page ?? 1);
   }
 
   Future<Res<bool>> loadMoreHomePageData(NhentaiHomePageData data) async {
-    var res = await get("$baseUrl?page=${data.page + 1}");
-    if (res.error) {
-      return Res.fromErrorRes(res);
+    final res = await getHomePageData(data.page + 1);
+    if (res.error) return Res.fromErrorRes(res);
+    if (res.data.latestError != null) {
+      return Res.fromErrorRes(res.data.latestError!);
     }
-    try {
-      var document = parse(res.data);
-
-      var latest = document.querySelectorAll("div.gallery");
-
-      data.latest.addAll(removeNullValue(
-          List.generate(latest.length, (index) => parseComic(latest[index]))));
-
-      data.page++;
-
-      return const Res(true);
-    } catch (e, s) {
-      LogManager.addLog(LogLevel.error, "Data Analyse", "$e\n$s");
-      return Res(null, errorMessage: "Failed to Parse Data: $e");
-    }
+    data.latest.addAll(res.data.latest);
+    data.page = res.data.page;
+    return const Res(true);
   }
 
   Future<Res<List<NhentaiComicBrief>>> search(String keyword, int page,
@@ -326,29 +456,146 @@ class NhentaiNetwork {
     // 改用 v2 API，规避 HTML 抓取 data-tags 属性已消失导致标签/语言全空的问题
     await _fetchCdnServer();
     // 认证依赖 cookie interceptor，不发 Authorization header（access_token 值≠ v2 User Token）
-    final sortParam = switch (sort) {
-      NhentaiSort.recent => 'date',
-      NhentaiSort.popularToday => 'popular-today',
-      NhentaiSort.popularWeek => 'popular-week',
-      NhentaiSort.popularMonth => 'popular-month',
-      NhentaiSort.popularAll => 'popular',
-    };
     final res = await get(
       '$baseUrl/api/v2/search'
-      '?query=${Uri.encodeComponent(keyword)}&page=$page&sort=$sortParam',
+      '?query=${Uri.encodeComponent(keyword)}&page=$page&sort=${nhentaiSortParam(sort)}',
     );
     if (res.error) return Res.fromErrorRes(res);
+    return _parseV2SearchResponse(res.data);
+  }
+
+  /// v2 search 响应解析（榜单与关键字搜索共用）。
+  Res<List<NhentaiComicBrief>> _parseV2SearchResponse(String data) {
     try {
-      final json = const JsonDecoder().convert(res.data);
-      final items = (json['result'] as List)
-          .map((e) => _parseV2GalleryItem(e as Map<String, dynamic>))
+      final json = const JsonDecoder().convert(data);
+      final rawResult = json is List ? json : json['result'];
+      if (rawResult is! List) {
+        return const Res.error('搜索响应缺少 result 数组',
+            errorCode: ResErrorCode.parse);
+      }
+      final items = rawResult
+          .whereType<Map<String, dynamic>>()
+          .map(_parseV2GalleryItem)
           .whereType<NhentaiComicBrief>()
+          .where((comic) => comic.id.isNotEmpty)
           .toList();
-      final numPages = (json['num_pages'] as num?)?.toInt() ?? 1;
+      if (rawResult.isNotEmpty && items.isEmpty) {
+        return const Res.error('搜索响应非空但无有效条目', errorCode: ResErrorCode.parse);
+      }
+      final numPages =
+          json is Map ? int.tryParse('${json['num_pages']}') ?? 1 : 1;
       return Res(items, subData: numPages);
     } catch (e, s) {
       LogManager.addLog(LogLevel.error, "Data Analyse", "$e\n$s");
-      return Res(null, errorMessage: "Failed to Parse Data: $e");
+      return Res.error("Failed to Parse Data: $e",
+          errorCode: ResErrorCode.parse);
+    }
+  }
+
+  /// 热门榜单：空关键词 + 四种热门排序，走 `/api/v2/search`。
+  ///
+  /// 这是**榜单**语义，与首页 Popular 推荐块是两件事：首页 Popular 不冒充榜期。
+  /// [sort] 必须是四种热门排序之一；传入 [NhentaiSort.recent] 属调用方错误。
+  Future<Res<List<NhentaiComicBrief>>> getPopularRanking(
+    NhentaiSort sort,
+    int page,
+  ) async {
+    if (sort == NhentaiSort.recent) {
+      return const Res.error('榜单不支持"最新"排序',
+          errorCode: ResErrorCode.invalidArgument);
+    }
+    return search('', page, sort);
+  }
+
+  /// 语言分类：单个 `language:<lang>` 查询（**不把三种语言拼成一个字符串**）。
+  Future<Res<List<NhentaiComicBrief>>> getLanguageComics(
+    NhentaiLanguage language,
+    int page, {
+    NhentaiSort sort = NhentaiSort.recent,
+  }) {
+    return search('language:${language.tag}', page, sort);
+  }
+
+  /// 本地标签目录的具名搜索：**发送原始词**（不发送中文翻译）。
+  ///
+  /// 多词 / 标点 / 引号由 [buildNhentaiTagQuery] 统一组装，URI 编码由网络层
+  /// 的 `Uri.encodeComponent` 完成。
+  Future<Res<List<NhentaiComicBrief>>> searchTag(
+    String rawTag,
+    int page, {
+    NhentaiSort sort = NhentaiSort.recent,
+  }) {
+    final query = buildNhentaiTagQuery(rawTag);
+    if (query == null) {
+      return Future.value(
+          const Res.error('标签为空', errorCode: ResErrorCode.invalidArgument));
+    }
+    return search(query, page, sort);
+  }
+
+  /// 首页：Popular 推荐块（**仅第一页**）+ 最新列表。
+  ///
+  /// v2 列表直接提供 tag_ids；HTML 首页已经不再保证提供 data-tags。
+  /// Popular 仍来自独立推荐端点，不用榜期搜索代替，也不逐本查详情。
+  Future<Res<NhentaiHomePageData>> getHomePageData(int page) async {
+    final normalizedPage = page < 1 ? 1 : page;
+    await _fetchCdnServer();
+    final responses = await Future.wait([
+      _getV2List('$baseUrl/api/v2/galleries?page=$normalizedPage'),
+      if (normalizedPage == 1) _getHomePopular(),
+    ]);
+    final latest = responses.first;
+    final popular = normalizedPage == 1 ? responses[1] : null;
+    return Res(
+      NhentaiHomePageData(
+        popular?.dataOrNull ?? <NhentaiComicBrief>[],
+        latest.dataOrNull ?? <NhentaiComicBrief>[],
+        popularError: popular?.error == true ? popular : null,
+        latestError: latest.error ? latest : null,
+      )..page = normalizedPage,
+      subData: responses.first.subData,
+    );
+  }
+
+  Future<Res<List<NhentaiComicBrief>>> getLatest(int page) async {
+    await _fetchCdnServer();
+    return _getV2List('$baseUrl/api/v2/galleries?page=$page');
+  }
+
+  Future<Res<List<NhentaiComicBrief>>> _getV2List(String url) async {
+    final response = await get(url);
+    if (response.error) return Res.fromErrorRes(response);
+    return _parseV2SearchResponse(response.data);
+  }
+
+  Future<Res<List<NhentaiComicBrief>>> _getHomePopular() async {
+    final response = await _getV2List('$baseUrl/api/v2/popular');
+    // 仅兼容不存在的端点别名；429 / 登录 / 网络失败不额外重试。
+    if (response.statusCode == 404 || response.statusCode == 405) {
+      return _getV2List('$baseUrl/api/v2/galleries/popular');
+    }
+    return response;
+  }
+
+  /// 单本随机推荐。
+  ///
+  /// v2 随机端点已经返回完整标签，不需要再取一次详情页。
+  Future<Res<NhentaiComicBrief>> getRandomComic() async {
+    await _fetchCdnServer();
+    final res = await get('$baseUrl/api/v2/galleries/random');
+    if (res.error) return Res.fromErrorRes(res);
+    try {
+      final json = const JsonDecoder().convert(res.data);
+      final comic =
+          json is Map<String, dynamic> ? _parseV2GalleryItem(json) : null;
+      if (comic == null) {
+        return const Res.error('随机推荐未返回有效 id', errorCode: ResErrorCode.parse);
+      }
+      return Res(comic);
+    } catch (e, s) {
+      LogManager.addLog(LogLevel.error, "Data Analyse", "$e\n$s");
+      return Res.error("Failed to Parse Data: $e",
+          errorCode: ResErrorCode.parse);
     }
   }
 
@@ -435,7 +682,9 @@ class NhentaiNetwork {
           thumbnails, recommendations, token));
     } catch (e, s) {
       LogManager.addLog(LogLevel.error, "Data Analyse", "$e\n$s");
-      return Res(null, errorMessage: "Failed to Parse Data: $e");
+      return Res(null,
+          errorMessage: "Failed to Parse Data: $e",
+          errorCode: ResErrorCode.parse);
     }
   }
 
@@ -466,7 +715,9 @@ class NhentaiNetwork {
       return Res(comments);
     } catch (e, s) {
       LogManager.addLog(LogLevel.error, "Data Analyse", "$e\n$s");
-      return Res(null, errorMessage: "Failed to Parse Data: $e");
+      return Res(null,
+          errorMessage: "Failed to Parse Data: $e",
+          errorCode: ResErrorCode.parse);
     }
   }
 
@@ -499,19 +750,29 @@ class NhentaiNetwork {
       return Res(images);
     } catch (e, s) {
       LogManager.addLog(LogLevel.error, "Data Analyse", "$e\n$s");
-      return Res(null, errorMessage: "Failed to Parse Data: $e");
+      return Res(null,
+          errorMessage: "Failed to Parse Data: $e",
+          errorCode: ResErrorCode.parse);
     }
   }
 
   // ── v2 收藏列表（带 token 刷新）──────────────────────────────────────
   Future<Res<List<NhentaiComicBrief>>> getFavorites(int page) async {
     if (cookieJar == null) await init();
-    if (!logged) return const Res(null, errorMessage: 'login required');
+    if (!logged) {
+      return const Res(null,
+          errorMessage: 'login required',
+          errorCode: ResErrorCode.loginRequired);
+    }
     await _fetchCdnServer();
 
     // 首次尝试
     final token = _getAccessToken();
-    if (token.isEmpty) return const Res(null, errorMessage: 'login required');
+    if (token.isEmpty) {
+      return const Res(null,
+          errorMessage: 'login required',
+          errorCode: ResErrorCode.loginRequired);
+    }
 
     final res = await get(
       '$baseUrl/api/v2/favorites?page=$page',
@@ -540,54 +801,15 @@ class NhentaiNetwork {
 
   /// 解析 v2 favorites 响应
   Res<List<NhentaiComicBrief>> _parseFavoritesV2(String data) {
-    try {
-      final json = const JsonDecoder().convert(data);
-      final items = (json['result'] as List)
-          .map((e) => _parseV2GalleryItem(e as Map<String, dynamic>))
-          .whereType<NhentaiComicBrief>()
-          .toList();
-      final numPages = (json['num_pages'] as num?)?.toInt() ?? 1;
-      return Res(items, subData: numPages);
-    } catch (e, s) {
-      LogManager.addLog(LogLevel.error, 'Data Analyse', '$e\n$s');
-      return Res(null, errorMessage: 'Failed to Parse Data: $e');
-    }
+    return _parseV2SearchResponse(data);
   }
 
   /// v2 GalleryListItem → NhentaiComicBrief
   NhentaiComicBrief? _parseV2GalleryItem(Map<String, dynamic> e) {
-    try {
-      final id = e['id'].toString();
-      final title = (e['english_title'] as String?)?.trim().isNotEmpty == true
-          ? e['english_title'] as String
-          : (e['japanese_title'] as String?) ?? id;
-      // thumbnail 是相对路径，拼动态 CDN 前缀（由 _fetchCdnServer 预取）
-      final rawCover = (e['thumbnail'] as String?) ?? '';
-      final cdn =
-          (_cdnServer ?? 'https://t.nhentai.net').replaceAll(RegExp(r'/$'), '');
-      final cover = rawCover.startsWith('http')
-          ? rawCover
-          : '$cdn/${rawCover.replaceAll(RegExp(r'^/+'), '')}';
-      final tagIdList = (e['tag_ids'] as List?) ?? [];
-      // 只保留 nhentaiTags 里有英文名的 tag，过滤掉未知数字 ID
-      final tagIds = tagIdList
-          .map((t) => nhentaiTags[t.toString()])
-          .whereType<String>()
-          .toList();
-      // 语言直接从 tag_ids 判断（比对 nhentai 语言 tag ID）
-      const langTagIds = {'12227': 'English', '6346': '日本語', '29963': '中文'};
-      String lang = 'Unknown';
-      for (final t in tagIdList) {
-        final mapped = langTagIds[t.toString()];
-        if (mapped != null) {
-          lang = mapped;
-          break;
-        }
-      }
-      return NhentaiComicBrief(title, cover, id, lang, tagIds);
-    } catch (_) {
-      return null;
-    }
+    return parseNhentaiV2Gallery(
+      e,
+      cdnServer: _cdnServer ?? 'https://t.nhentai.net',
+    );
   }
 
   // ── v2 收藏/取消收藏（替代旧版 /api/gallery/{id}/favorite）────────────────
@@ -670,7 +892,9 @@ class NhentaiNetwork {
           subData: lastPagination == null ? 1 : int.parse(lastPagination));
     } catch (e, s) {
       LogManager.addLog(LogLevel.error, "Data Analyse", "$e\n$s");
-      return Res(null, errorMessage: "Failed to Parse Data: $e");
+      return Res(null,
+          errorMessage: "Failed to Parse Data: $e",
+          errorCode: ResErrorCode.parse);
     }
   }
 }
@@ -686,6 +910,9 @@ enum NhentaiSort {
 
   const NhentaiSort(this.value);
 
+  /// 旧搜索页选项的兼容解析：只认 `&sort=` 前缀形态。
+  ///
+  /// 探索**不要**把裸稳定 ID 送进来 —— 用 [nhentaiSortFromOptionId]。
   static NhentaiSort fromValue(String value) {
     switch (value) {
       case "":
@@ -701,5 +928,65 @@ enum NhentaiSort {
       default:
         return NhentaiSort.recent;
     }
+  }
+}
+
+/// 探索使用的**裸稳定 option ID** → v2 API 的 sort 参数值。
+///
+/// 实现在纯 Dart 的 `nhentai_explore_options.dart`：这里只做转发，让纯层测试
+/// 不必 import 本文件（本文件依赖 Flutter）。
+String? nhentaiSortParamForOptionId(String optionId) =>
+    nhentaiSortOptionIdToParam[optionId.trim()];
+
+/// 裸稳定 option ID → [NhentaiSort]；未知返回 `null`（不静默回落）。
+NhentaiSort? nhentaiSortFromOptionId(String optionId) {
+  switch (optionId.trim()) {
+    case NhentaiSortOptionIds.recent:
+      return NhentaiSort.recent;
+    case NhentaiSortOptionIds.popularToday:
+      return NhentaiSort.popularToday;
+    case NhentaiSortOptionIds.popularWeek:
+      return NhentaiSort.popularWeek;
+    case NhentaiSortOptionIds.popularMonth:
+      return NhentaiSort.popularMonth;
+    case NhentaiSortOptionIds.popularAll:
+      return NhentaiSort.popularAll;
+    default:
+      return null;
+  }
+}
+
+/// [NhentaiSort] → v2 API 的 sort 查询参数值。
+String nhentaiSortParam(NhentaiSort sort) {
+  switch (sort) {
+    case NhentaiSort.recent:
+      return 'date';
+    case NhentaiSort.popularToday:
+      return 'popular-today';
+    case NhentaiSort.popularWeek:
+      return 'popular-week';
+    case NhentaiSort.popularMonth:
+      return 'popular-month';
+    case NhentaiSort.popularAll:
+      return 'popular';
+  }
+}
+
+/// NH 语言分类。**只允许这三种**，分别生成单个 `language:<tag>` 查询。
+enum NhentaiLanguage {
+  chinese(NhentaiLanguageIds.chinese, '中文'),
+  japanese(NhentaiLanguageIds.japanese, '日本語'),
+  english(NhentaiLanguageIds.english, 'English');
+
+  const NhentaiLanguage(this.tag, this.label);
+
+  final String tag;
+  final String label;
+
+  static NhentaiLanguage? tryFromId(String id) {
+    for (final language in NhentaiLanguage.values) {
+      if (language.name == id) return language;
+    }
+    return null;
   }
 }

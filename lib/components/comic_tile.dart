@@ -15,6 +15,8 @@ class DownloadedComicTile extends StatelessWidget {
     this.imageProvider,
     this.readingHistoryOverride,
     this.isFavoriteOverride,
+    this.favoriteTarget,
+    this.favoriteType,
     this.optimizeCoverDecode = false,
     this.maxTagRows,
     this.cardDisplayConfig,
@@ -33,6 +35,10 @@ class DownloadedComicTile extends StatelessWidget {
   final ImageProvider<Object>? imageProvider;
   final History? readingHistoryOverride;
   final bool? isFavoriteOverride;
+
+  /// Explicit online identity; titles are not stable favorite identifiers.
+  final String? favoriteTarget;
+  final FavoriteType? favoriteType;
   final bool optimizeCoverDecode;
 
   /// Limits the number of visual tag rows when set. Other callers keep the
@@ -48,8 +54,7 @@ class DownloadedComicTile extends StatelessWidget {
   final ComicTileDisplayConfig? cardDisplayConfig;
 
   /// 标签区最多渲染几行；不限行时为 null。
-  int? get effectiveMaxTagRows =>
-      cardDisplayConfig?.maxTagRows ?? maxTagRows;
+  int? get effectiveMaxTagRows => cardDisplayConfig?.maxTagRows ?? maxTagRows;
 
   /// 是否渲染标签区。
   bool get showTags => cardDisplayConfig?.showTags ?? true;
@@ -102,7 +107,8 @@ class DownloadedComicTile extends StatelessWidget {
 
   bool get showReadingPosition => appdata.settings[73] == '1';
 
-  History? get readingHistory => readingHistoryOverride ??
+  History? get readingHistory =>
+      readingHistoryOverride ??
       (comicID == null ? null : HistoryManager().findSync(comicID!));
 
   @override
@@ -118,8 +124,19 @@ class DownloadedComicTile extends StatelessWidget {
       child = _buildBriefMode(context);
     }
 
-    final isFavorite = showFavorite ? _resolveFavoriteState() : false;
+    if (!showFavorite) return child;
+    if (isFavoriteOverride != null) {
+      return _withFavoriteBadge(child, detailedMode, isFavoriteOverride!);
+    }
+    // Keep the expensive card content intact when only membership changes.
+    return StreamBuilder<List<FavGroup>>(
+      stream: LocalFavoritesManager().allFoldersStream,
+      builder: (context, snapshot) =>
+          _withFavoriteBadge(child, detailedMode, _resolveFavoriteState()),
+    );
+  }
 
+  Widget _withFavoriteBadge(Widget child, bool detailedMode, bool isFavorite) {
     if (!isFavorite) {
       return child;
     }
@@ -154,8 +171,14 @@ class DownloadedComicTile extends StatelessWidget {
     if (override != null) {
       return override;
     }
+    if (favoriteTarget != null && favoriteType != null) {
+      return LocalFavoritesManager()
+          .isComicFavorited(favoriteTarget!, favoriteType!);
+    }
     final target = comicID;
-    return target == null ? _checkFavorite() : LocalFavoritesManager().isExist(target);
+    return target == null
+        ? _checkFavorite()
+        : LocalFavoritesManager().isExist(target);
   }
 
   bool _checkFavorite() {
@@ -171,11 +194,9 @@ class DownloadedComicTile extends StatelessWidget {
         FavoriteType.copyManga,
         FavoriteType.komiic,
       ];
-      for (final folder in fav.folderNames) {
-        for (final ft in types) {
-          if (fav.comicExists(folder, name, ft.key)) {
-            return true;
-          }
+      for (final ft in types) {
+        if (fav.isComicFavorited(name, ft)) {
+          return true;
         }
       }
     } catch (_) {}
@@ -329,7 +350,9 @@ class DownloadedComicTile extends StatelessWidget {
   Widget _buildImage(BuildContext context) {
     final provider = imageProvider;
     final resolvedProvider = provider ??
-        (imagePath.path.isEmpty ? null : FileImage(imagePath) as ImageProvider<Object>);
+        (imagePath.path.isEmpty
+            ? null
+            : FileImage(imagePath) as ImageProvider<Object>);
     if (resolvedProvider == null) {
       return const Center(child: Icon(Icons.image_not_supported));
     }
@@ -416,80 +439,53 @@ class _ComicDescription extends StatelessWidget {
     if (maxTagRows != null) {
       return _buildLimitedLayout(context, visibleTags);
     }
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: <Widget>[
-        Text(
-          title,
-          style: const TextStyle(fontWeight: FontWeight.w500, fontSize: 14.0),
-          maxLines: maxLines,
-          overflow: TextOverflow.ellipsis,
-        ),
-        if (user.isNotEmpty)
-          Text(user, style: const TextStyle(fontSize: 10.0), maxLines: 1),
-        const SizedBox(height: 4),
-        if (visibleTags != null)
-          // 外面套 Align(heightFactor: 1)：Flexible 给的是 loose 约束，但 Wrap
-          // 在**有界高度**下会被拉满（实测每个标签之间被撑到 90+dp，表现为标签
-          // 之间出现巨大空隙、卡片内容整体溢出）。heightFactor: 1 让 Wrap 贴内容
-          // 高度收缩；项目里 `_buildLimitedLayout` 踩过同一个坑（那里选了"不套
-          // Align"，因为它需要被 maxHeight 裁剪，这里不需要）。
-          Flexible(
-            child: Align(
-              alignment: Alignment.topLeft,
-              heightFactor: 1,
-              child: Wrap(
-                runAlignment: WrapAlignment.start,
-                clipBehavior: Clip.antiAlias,
-                crossAxisAlignment: WrapCrossAlignment.end,
-                children: [
-                  for (var s in visibleTags)
-                    _LimitedTagChip(
-                      tag: s,
-                      maxWidth: 1e6,
-                      // 用户选了"不限"就配小字号（想多看点标签）；其余调用方
-                      // （网络收藏 / 搜索页）保持默认字号。
-                      fontSize: compactTags
-                          ? _tagChipCompactFontSize
-                          : _tagChipBaseFontSize,
-                    ),
-                ],
+    return _withBottomInfo(
+        context,
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            Text(
+              title,
+              style:
+                  const TextStyle(fontWeight: FontWeight.w500, fontSize: 14.0),
+              maxLines: maxLines,
+              overflow: TextOverflow.ellipsis,
+            ),
+            if (user.isNotEmpty)
+              Text(user, style: const TextStyle(fontSize: 10.0), maxLines: 1),
+            const SizedBox(height: 4),
+            if (visibleTags != null)
+              // 外面套 Align(heightFactor: 1)：Flexible 给的是 loose 约束，但 Wrap
+              // 在**有界高度**下会被拉满（实测每个标签之间被撑到 90+dp，表现为标签
+              // 之间出现巨大空隙、卡片内容整体溢出）。heightFactor: 1 让 Wrap 贴内容
+              // 高度收缩；项目里 `_buildLimitedLayout` 踩过同一个坑（那里选了"不套
+              // Align"，因为它需要被 maxHeight 裁剪，这里不需要）。
+              Flexible(
+                child: Align(
+                  alignment: Alignment.topLeft,
+                  heightFactor: 1,
+                  child: Wrap(
+                    runAlignment: WrapAlignment.start,
+                    clipBehavior: Clip.antiAlias,
+                    crossAxisAlignment: WrapCrossAlignment.end,
+                    children: [
+                      for (var s in visibleTags)
+                        _LimitedTagChip(
+                          tag: s,
+                          maxWidth: 1e6,
+                          // 用户选了"不限"就配小字号（想多看点标签）；其余调用方
+                          // （网络收藏 / 搜索页）保持默认字号。
+                          fontSize: compactTags
+                              ? _tagChipCompactFontSize
+                              : _tagChipBaseFontSize,
+                        ),
+                    ],
+                  ),
+                ),
               ),
-            ),
-          ),
-        // 附加行（来源标识号）恒在标签区**之下**：与有限布局保持同一位置契约
-        // （用户实测过"不限"档把它顶到标签上面，属位置错乱）。
-        if (descriptionLeading != null) ...[
-          const SizedBox(height: 2),
-          DefaultTextStyle.merge(
-            style: TextStyle(
-              fontSize: 12,
-              fontWeight: FontWeight.w500,
-              color: resolveComicTileIdColor(context, idColorKey),
-            ),
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            child: descriptionLeading!,
-          ),
-        ],
-        const SizedBox(height: 2),
-        Row(
-          crossAxisAlignment: CrossAxisAlignment.end,
-          children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  if (subDescription != null) subDescription!,
-                  Text(description, style: const TextStyle(fontSize: 12.0)),
-                ],
-              ),
-            ),
-            if (badge != null && badge!.isNotEmpty) _ComicBadge(text: badge!),
           ],
         ),
-      ],
-    );
+        limited: false);
   }
 
   Widget _buildLimitedLayout(
@@ -497,81 +493,88 @@ class _ComicDescription extends StatelessWidget {
     List<String>? visibleTags,
   ) {
     final hasTags = visibleTags != null && visibleTags.isNotEmpty;
+    return _withBottomInfo(
+        context,
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            // flex 2 : 3 —— 高度不够时**标题先让位**，标签区拿大头。
+            // 定高卡片里"标签实际显示几行"由可用高度决定（不是只看 tagRows 配置），
+            // 标题多占一行就等于标签少显示一行；实测用户样本：标题 2 行 + id 行会把
+            // 标签区压到只剩 1 行，于是"设 2 行/3 行都只显示 1 行"。
+            Flexible(
+              flex: 2,
+              fit: FlexFit.loose,
+              child: Text(
+                title,
+                style: const TextStyle(
+                    fontWeight: FontWeight.w500, fontSize: 14.0),
+                maxLines: maxLines,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            if (user.isNotEmpty)
+              Text(
+                user,
+                style: const TextStyle(fontSize: 10.0),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            if (hasTags) ...[
+              const SizedBox(height: 4),
+              // Keep the existing title/tag flex budget and row fitting inside the
+              // upper area. The footer has already reserved its own height.
+              Flexible(
+                flex: 3,
+                child: LayoutBuilder(
+                  builder: (context, constraints) {
+                    final maxTagWidth = math.max(
+                      0.0,
+                      constraints.maxWidth - _tagChipTrailingGap,
+                    );
+                    final textScaler = MediaQuery.textScalerOf(context);
+                    final textDirection = Directionality.of(context);
+                    final locale = Localizations.maybeLocaleOf(context);
+                    final tagStyle = DefaultTextStyle.of(context).style;
+
+                    final baseFontSize = tagChipBaseFontSizeFor(maxTagRows);
+                    // 自适应："显示不全就调小字号"——缩小字号本身就能让更多标签挤进
+                    // 同一空间，所以直接对**完整标签列表**求解，取"不减少可见标签数"
+                    // 前提下能放下的最小字号。
+                    final fontSize = _fitTagFontSize(
+                      tags: visibleTags,
+                      baseFontSize: baseFontSize,
+                      maxRows: maxTagRows!,
+                      maxWidth: constraints.maxWidth,
+                      maxHeight: constraints.maxHeight,
+                      maxTagWidth: maxTagWidth,
+                      tagStyle: tagStyle,
+                      textScaler: textScaler,
+                      textDirection: textDirection,
+                      locale: locale,
+                    );
+                    return _LimitedTagWrap(
+                      tags: visibleTags,
+                      maxRows: maxTagRows!,
+                      fontSize: fontSize,
+                    );
+                  },
+                ),
+              ),
+            ],
+          ],
+        ),
+        limited: true);
+  }
+
+  /// Reserve the footer's height first. The remaining space belongs to the
+  /// title/author/tags, so empty or hidden tags never pull the footer upward.
+  Widget _withBottomInfo(BuildContext context, Widget content,
+      {required bool limited}) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
-      children: <Widget>[
-        // flex 2 : 3 —— 高度不够时**标题先让位**，标签区拿大头。
-        // 定高卡片里"标签实际显示几行"由可用高度决定（不是只看 tagRows 配置），
-        // 标题多占一行就等于标签少显示一行；实测用户样本：标题 2 行 + id 行会把
-        // 标签区压到只剩 1 行，于是"设 2 行/3 行都只显示 1 行"。
-        Flexible(
-          flex: 2,
-          fit: FlexFit.loose,
-          child: Text(
-            title,
-            style: const TextStyle(fontWeight: FontWeight.w500, fontSize: 14.0),
-            maxLines: maxLines,
-            overflow: TextOverflow.ellipsis,
-          ),
-        ),
-        if (user.isNotEmpty)
-          Text(
-            user,
-            style: const TextStyle(fontSize: 10.0),
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-          ),
-        if (hasTags) ...[
-          const SizedBox(height: 4),
-          // Flexible 而非 Expanded：Expanded 会抢占全部剩余高度，把后面的
-          // SizedBox(2) + footer 挤出固定卡片高度（列表用 childMainAxisExtent
-          // 定死 164dp，超出部分落在卡片外）。
-          //
-          // 这里**不能**再套 Align：Align 未设 heightFactor 时会撑满父级给的
-          // 高度，等于把 Flexible 的收缩效果抵消掉（实测与 Expanded 完全同高）。
-          // 直接给 _LimitedTagWrap，它内部的 Wrap 自然会贴内容高度。
-          // 高度限制仍由 maxRows 与约束共同决定（maxHeight 有界时继续参与裁剪）。
-          Flexible(
-            flex: 3,
-            child: LayoutBuilder(
-              builder: (context, constraints) {
-                final maxTagWidth = math.max(
-                  0.0,
-                  constraints.maxWidth - _tagChipTrailingGap,
-                );
-                final textScaler = MediaQuery.textScalerOf(context);
-                final textDirection = Directionality.of(context);
-                final locale = Localizations.maybeLocaleOf(context);
-                final tagStyle = DefaultTextStyle.of(context).style;
-
-                final baseFontSize = tagChipBaseFontSizeFor(maxTagRows);
-                // 自适应："显示不全就调小字号"——缩小字号本身就能让更多标签挤进
-                // 同一空间，所以直接对**完整标签列表**求解，取"不减少可见标签数"
-                // 前提下能放下的最小字号。
-                final fontSize = _fitTagFontSize(
-                  tags: visibleTags,
-                  baseFontSize: baseFontSize,
-                  maxRows: maxTagRows!,
-                  maxWidth: constraints.maxWidth,
-                  maxHeight: constraints.maxHeight,
-                  maxTagWidth: maxTagWidth,
-                  tagStyle: tagStyle,
-                  textScaler: textScaler,
-                  textDirection: textDirection,
-                  locale: locale,
-                );
-                return _LimitedTagWrap(
-                  tags: visibleTags,
-                  maxRows: maxTagRows!,
-                  fontSize: fontSize,
-                );
-              },
-            ),
-          ),
-        ],
-        // 标签区之下、footer（日期/阅读位置）之上的一行：本地收藏的来源标识号。
-        // 放在标签区外而不是塞进 footer，是为了让它在标签被高度裁剪时**仍可见**
-        // —— footer 在 Column 末尾优先级最高，标签区才是被裁的那一段。
+      children: [
+        Expanded(child: content),
         if (descriptionLeading != null) ...[
           const SizedBox(height: 2),
           DefaultTextStyle.merge(
@@ -586,12 +589,12 @@ class _ComicDescription extends StatelessWidget {
           ),
         ],
         const SizedBox(height: 2),
-        _buildLimitedFooter(context),
+        _buildFooter(limited: limited),
       ],
     );
   }
 
-  Widget _buildLimitedFooter(BuildContext context) {
+  Widget _buildFooter({required bool limited}) {
     return Row(
       crossAxisAlignment: CrossAxisAlignment.end,
       children: [
@@ -603,8 +606,8 @@ class _ComicDescription extends StatelessWidget {
               Text(
                 description,
                 style: const TextStyle(fontSize: 12.0),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
+                maxLines: limited ? 1 : null,
+                overflow: limited ? TextOverflow.ellipsis : null,
               ),
             ],
           ),
@@ -843,6 +846,7 @@ List<String> _visibleTagPrefix({
   required TextScaler textScaler,
   required TextDirection textDirection,
   required Locale? locale,
+
   /// 覆盖芯片最大宽度（用于"按实际渲染宽度"复核；默认由 maxWidth 推导）。
   double? maxChipWidthOverride,
 }) {
@@ -854,8 +858,7 @@ List<String> _visibleTagPrefix({
   }
 
   // 复核时用"实际渲染宽度"（chips 外面还有 trailingGap），避免低估占位。
-  final maxChipWidth =
-      maxChipWidthOverride ?? (maxWidth - _tagChipTrailingGap);
+  final maxChipWidth = maxChipWidthOverride ?? (maxWidth - _tagChipTrailingGap);
   final maxTextWidth = math.max(
     0.0,
     maxChipWidth - _tagChipHorizontalPadding * 2,

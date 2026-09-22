@@ -2,8 +2,7 @@ import 'package:flutter/foundation.dart';
 
 import 'package:picakeep/comic_source/comic_source.dart';
 import 'package:picakeep/comic_source/favorite_data.dart';
-import 'package:picakeep/foundation/favorite_source_id.dart'
-    as source_id_rules;
+import 'package:picakeep/foundation/favorite_source_id.dart' as source_id_rules;
 import 'package:picakeep/network/base_comic.dart';
 import 'package:picakeep/network/jm_network/jm_network.dart';
 import 'package:picakeep/network/res.dart';
@@ -127,6 +126,18 @@ final ComicSource jm = ComicSource.named(
     },
   ),
   comicPageBuilder: (comic) => JmComicPageV2(comic.id),
+
+  // ── 封面请求头 ────────────────────────────────────────────────────────────
+  // JM 的图片 CDN（`settings[86]/media/albums/<id>_3x4.jpg`）会拒绝裸请求：
+  // 必须带 `Referer` + 专用 UA + `X-Requested-With`（原项目 `_JmComicTile`
+  // 就是这么传 `getImgHeaders()` 的）。
+  //
+  // 此前本项目把 jm 的 `imageHeadersBuilder` 留成 null → 封面走裸
+  // `NetworkImage` → 被 CDN 拒绝 → `comic_tile` 的 errorBuilder 画出
+  // "图片不可用"图标（用户真机截图确认）。返回非空 headers 后封面改走
+  // `StreamImageProvider`（`OnlineImageManager`），顺带获得磁盘缓存与
+  // in-flight 去重。搜索页与本探索页共用这个钩子，两处一起修好。
+  imageHeadersBuilder: (comic) => getJmImgHeaders(),
 
   // ── ID 直跳（纯数字 / jm前缀）──────────────────────────────────────────────
   idMatcher: RegExp(r'^(?:jm)?\d+$', caseSensitive: false),

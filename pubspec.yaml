@@ -1,7 +1,7 @@
 name: picakeep
 description: "PicaKeep - 本地漫画阅读器 / 收藏管理器"
 publish_to: 'none'
-version: 1.9.82+1
+version: 1.9.83+1
 
 environment:
   sdk: '>=3.3.0'
@@ -68,6 +68,8 @@ dependency_overrides:
 dev_dependencies:
   flutter_test:
     sdk: flutter
+  # 纯 Dart 探索契约层（无 Flutter 依赖）用 dart test 直接跑。
+  test: ^1.24.0
   flutter_lints: ^2.0.0
   path_provider_platform_interface: ^2.1.2
 

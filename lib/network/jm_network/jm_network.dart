@@ -4,7 +4,6 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
-import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:picakeep/base.dart';
 import 'package:picakeep/foundation/app.dart';
 import 'package:picakeep/foundation/log.dart';
@@ -14,11 +13,23 @@ import 'package:picakeep/network/res.dart';
 
 import 'jm_headers.dart';
 import 'jm_image.dart';
-import 'jm_models.dart';
+import 'jm_parsing.dart';
 
 export 'jm_headers.dart' show jmImgUA, getJmImgHeaders;
 export 'jm_image.dart';
 export 'jm_models.dart';
+// 纯层的解析实现整体再导出一次；只有 `parseJmListBriefRaw` 例外 —— 它在下面
+// 被包成带真实封面域的 `parseJmListBrief`（本模块既有的对外契约）。
+export 'jm_parsing.dart' hide parseJmListBriefRaw;
+
+/// 列表接口条目解析入口（**生产默认封面**）。
+///
+/// 为什么在本文件再包一层：纯层的 `parseJmListBrief` 不能读 `settings[86]`
+/// （封面域），因此把封面构造做成注入参数、默认返回空串。但"解析出的 brief 带
+/// 真实封面 URL"是本模块**既有对外契约**（既有回归测试直接断言封面含 id），
+/// 不能因为内部拆分而削弱。故这里对外暴露的仍是带真实封面域的版本。
+JmComicBrief parseJmListBrief(Map c, {bool withDesc = false}) =>
+    parseJmListBriefRaw(c, withDesc: withDesc, coverUrlBuilder: getJmCoverUrl);
 
 // 从 bytepluses 拉取加密域名清单用的两个节点（香港 + 新加坡）
 const List<String> _domainUrls = [
@@ -28,85 +39,38 @@ const List<String> _domainUrls = [
 
 // 域名清单解密 secret（与 API 数据 secret kJmSecret 完全不同，勿混用）
 const List<int> _domainSecret = [
-  100, 105, 111, 115, 102, 106, 99, 107, 119, 112, 113, 112,
-  100, 102, 106, 107, 118, 110, 113, 81, 106, 115, 105, 107,
+  100,
+  105,
+  111,
+  115,
+  102,
+  106,
+  99,
+  107,
+  119,
+  112,
+  113,
+  112,
+  100,
+  102,
+  106,
+  107,
+  118,
+  110,
+  113,
+  81,
+  106,
+  115,
+  105,
+  107,
 ];
 
 // ============================================================================
 // JM 列表接口条目解析
 // ============================================================================
 //
-// 提成顶层函数是为了让 `test/jm_list_tags_test.dart` 能不经网络直接跑到生产
-// 解析代码（类内私有方法测试文件访问不到）。生产链路只有 [_parseBrief]
-// 一个薄包装入口，见下方 JmNetwork。
-
-/// 列表接口（搜索 / 收藏 / 收藏夹）条目 → [JmComicBrief]。
-/// 三处入口共用，避免解析口径漂移（`id` 为 null 等畸形条目由调用方 catch 跳过）。
-/// [withDesc] 为 true 时额外读取 `description`（搜索接口有该字段，收藏接口没有）。
-@visibleForTesting
-JmComicBrief parseJmListBrief(Map c, {bool withDesc = false}) {
-  final id = c['id'].toString();
-  return JmComicBrief(
-    id: id,
-    title: c['name']?.toString() ?? '',
-    author: joinJmListField(c['author']),
-    tags: parseJmListTags(c),
-    coverUrl: getJmCoverUrl(id),
-    desc: withDesc ? (c['description']?.toString() ?? '') : '',
-  );
-}
-
-/// JM 列表接口的分类标签：`category.title` + `category_sub.title`。
-/// 与原项目 `comic["category"]/["category_sub"]` 取法一致（列表接口无 `tags` 名称数组）。
-/// 按「category 在前、category_sub 在后」输出并**去重**：两者同标题时只保留一个
-/// （原项目会重复显示成「同人 同人」，用户明确要求本项目只显示一个）。
-/// `c['tags']` 仅作兜底，且过滤纯数字项（那里出现的往往是分类 id 而非名称）。
-/// 绝不返回 null，绝不把 Map 或数字 toString 成标签。
-/// 入参为 dynamic：`related_list` 等来源的元素未必是 Map，非 Map 直接返回空列表
-/// （不能让畸形条目把整段详情/列表解析打挂）。
-@visibleForTesting
-List<String> parseJmListTags(dynamic c) {
-  if (c is! Map) return const [];
-  final tags = <String>[];
-  _addCategoryTitle(tags, c['category']);
-  _addCategoryTitle(tags, c['category_sub']);
-  if (tags.isEmpty) {
-    for (final t in parseJmStringList(c['tags'])) {
-      final s = t.trim();
-      if (s.isNotEmpty && int.tryParse(s) == null) _addTag(tags, s);
-    }
-  }
-  return tags;
-}
-
-/// 仅当 [v] 是 Map 且 `title` 为非空字符串时收录；`id` 缺失不影响收录。
-void _addCategoryTitle(List<String> out, dynamic v) {
-  if (v is! Map) return;
-  final title = v['title'];
-  if (title is String) _addTag(out, title);
-}
-
-/// 去重收录：[title] 裁掉首尾空白后非空、且未出现过时才加入。
-void _addTag(List<String> out, String title) {
-  final s = title.trim();
-  if (s.isEmpty || out.contains(s)) return;
-  out.add(s);
-}
-
-/// 列表接口的 author 字段（可能是数组或字符串）→ 单个展示字符串。
-@visibleForTesting
-String joinJmListField(dynamic v) {
-  if (v is List) return v.join(' / ');
-  return v?.toString() ?? '';
-}
-
-/// 兼容数组/单字符串的字符串列表解析（详情接口的 author / tags / works 等）。
-@visibleForTesting
-List<String> parseJmStringList(dynamic v) {
-  if (v is List) return v.map((e) => e.toString()).toList();
-  if (v is String && v.isNotEmpty) return [v];
-  return const [];
-}
+// 解析实现已下沉到纯 Dart 的 `jm_parsing.dart`：本文件依赖 Flutter 与 base.dart，
+// 解析留在本文件会让纯层测试无法用 `dart test` 运行。
 
 class JmNetwork {
   JmNetwork._();
@@ -158,7 +122,8 @@ class JmNetwork {
       final idx = i;
       futures.add(() async {
         try {
-          final res = await logDio(opts).post('https://$domain/login', data: '&');
+          final res =
+              await logDio(opts).post('https://$domain/login', data: '&');
           if (res.statusCode == 401 && picked == null) picked = idx;
         } catch (_) {}
       }());
@@ -314,7 +279,10 @@ class JmNetwork {
         }
         // 404 自愈：先重选活域名(selectDomain，便宜)，仍不行再拉新清单(getApiDomains)。
         // 仅非登录错误、且本 session 未自愈过。
-        if (status == 404 && !needsLogin && !isRetry && !_domainRefreshedThisSession) {
+        if (status == 404 &&
+            !needsLogin &&
+            !isRetry &&
+            !_domainRefreshedThisSession) {
           _domainRefreshedThisSession = true;
           LogManager.addLog(LogLevel.info, 'JmNetwork',
               '404 detected, re-selecting domain then refreshing if needed...');
@@ -331,13 +299,20 @@ class JmNetwork {
           return retry;
         }
         return Res.error(
-            errMsg ?? 'Invalid Status Code: $status. ${_statusText(status)}');
+          errMsg ?? 'Invalid Status Code: $status. ${_statusText(status)}',
+          // 只有"服务端明确说了要登录"才归 loginRequired；其余是传输/协议失败，
+          // 不把任意 403/404 猜成登录问题。
+          errorCode:
+              needsLogin ? ResErrorCode.loginRequired : ResErrorCode.network,
+          statusCode: status,
+        );
       }
       final bodyStr = utf8.decode(res.data ?? Uint8List(0));
       final json = jsonDecode(bodyStr) as Map;
       final raw = json['data'];
       if (raw == null || (raw is List && raw.isEmpty)) {
-        return const Res.error('Empty data');
+        // 200 但 data 空：响应形状不符合预期（正常无结果不会走这里）。
+        return const Res.error('Empty data', errorCode: ResErrorCode.parse);
       }
       final decrypted = convertJmData(
         raw is String ? raw : jsonEncode(raw),
@@ -345,10 +320,11 @@ class JmNetwork {
       );
       return Res<dynamic>(jsonDecode(decrypted));
     } on DioException catch (e) {
-      return Res.error(e.message ?? e.toString());
+      return Res.error(e.message ?? e.toString(),
+          errorCode: ResErrorCode.network, statusCode: e.response?.statusCode);
     } catch (e, s) {
       LogManager.addLog(LogLevel.error, 'JmNetwork', '$e\n$s');
-      return Res.error(e.toString());
+      return Res.error(e.toString(), errorCode: ResErrorCode.parse);
     }
   }
 
@@ -384,7 +360,13 @@ class JmNetwork {
           final reRes = await reLoginFromStored();
           if (reRes.success) return _post(url, body, isRetry: true);
         }
-        return Res.error(msg);
+        return Res.error(
+          msg,
+          errorCode: needsLogin
+              ? ResErrorCode.loginRequired
+              : ResErrorCode.accessDenied,
+          statusCode: 401,
+        );
       }
       final json = jsonDecode(bodyStr) as Map;
       // POST 的 200 静默降级兜底：服务端可能返回 200 但 body 含 status:fail + 登录错误文案。
@@ -404,10 +386,11 @@ class JmNetwork {
       );
       return Res<dynamic>(jsonDecode(decrypted));
     } on DioException catch (e) {
-      return Res.error(e.message ?? e.toString());
+      return Res.error(e.message ?? e.toString(),
+          errorCode: ResErrorCode.network, statusCode: e.response?.statusCode);
     } catch (e, s) {
       LogManager.addLog(LogLevel.error, 'JmNetwork', '$e\n$s');
-      return Res.error(e.toString());
+      return Res.error(e.toString(), errorCode: ResErrorCode.parse);
     }
   }
 
@@ -451,8 +434,7 @@ class JmNetwork {
 
   Future<Res<List<JmComicBrief>>> search(
       String keyword, String order, int page) async {
-    final encoded =
-        Uri.encodeComponent(keyword.trim()).replaceAll('%20', '+');
+    final encoded = Uri.encodeComponent(keyword.trim()).replaceAll('%20', '+');
     final url = page == 1
         ? '$_baseUrl/search?search_query=$encoded&o=$order'
         : '$_baseUrl/search?search_query=$encoded&o=$order&page=$page';
@@ -467,18 +449,191 @@ class JmNetwork {
           continue;
         }
       }
-      final total = _parseInt(res.data['total']);
-      final perPage = comics.isEmpty ? 1 : comics.length;
-      return Res(comics, subData: total == 0 ? 1 : (total / perPage).ceil());
+      // 分母用原始记录数（含坏项），否则末页短页会把总页数放大。
+      final rawContent = res.data['content'] as List;
+      return Res(
+        comics,
+        subData: jmPageCount(
+          total: _parseInt(res.data['total']),
+          rawCount: rawContent.length,
+          page: page,
+        ),
+      );
     } catch (e, s) {
       LogManager.addLog(LogLevel.error, 'JmNetwork', 'search: $e\n$s');
-      return Res.error(e.toString());
+      return Res.error(e.toString(), errorCode: ResErrorCode.parse);
+    }
+  }
+
+  // ── 探索：分类 / 推荐 / 最新 / 每周推荐 ────────────────────────────────────
+
+  /// 分类目录 `/categories`。
+  ///
+  /// 目录加载失败返回错误（含 `parse`），由调用方显示重试；**不伪造空目录成功**。
+  Future<Res<List<JmCategory>>> getCategories() async {
+    final res = await _get('$_baseUrl/categories');
+    if (res.error) return Res.fromErrorRes(res);
+    try {
+      return Res(parseJmCategories(res.data as Map));
+    } catch (e, s) {
+      LogManager.addLog(LogLevel.error, 'JmNetwork', 'getCategories: $e\n$s');
+      return Res.error('目录解析失败：$e', errorCode: ResErrorCode.parse);
+    }
+  }
+
+  /// 分类结果 `/categories/filter?o=&c=&page=`。
+  ///
+  /// [category] 是站点原始 slug（`0` 表示全部）。空主分类必须在调用方归一到
+  /// `0`，本方法不做"空 → 0"的静默兜底，避免把未知子分类错算成全部。
+  Future<Res<List<JmComicBrief>>> getCategoryComics(
+    String category,
+    JmComicsOrder order,
+    int page,
+  ) async {
+    final slug = category.trim();
+    if (slug.isEmpty) {
+      return const Res.error('分类 slug 为空',
+          errorCode: ResErrorCode.invalidArgument);
+    }
+    final url = '$_baseUrl/categories/filter'
+        '?o=${order.value}&c=${Uri.encodeComponent(slug)}&page=$page';
+    final res = await _get(url);
+    if (res.error) return Res.fromErrorRes(res);
+    try {
+      final data = res.data as Map;
+      final rawContent = data['content'];
+      if (rawContent is! List) {
+        return const Res.error('分类响应缺少 content 数组',
+            errorCode: ResErrorCode.parse);
+      }
+      final parsed = parseJmListItems(rawContent,
+          withDesc: true, coverUrlBuilder: getJmCoverUrl);
+      if (rawContent.isNotEmpty && parsed.parsed.isEmpty) {
+        return const Res.error('分类响应非空但无有效条目', errorCode: ResErrorCode.parse);
+      }
+      // 探索分类/榜单按累计原始条数判停，短末页不能反过来改变页容量。
+      return Res(parsed.parsed, subData: <String, int>{
+        'total': _parseInt(data['total']),
+        'rawCount': rawContent.length,
+      });
+    } catch (e, s) {
+      LogManager.addLog(
+          LogLevel.error, 'JmNetwork', 'getCategoryComics: $e\n$s');
+      return Res.error('分类解析失败：$e', errorCode: ResErrorCode.parse);
+    }
+  }
+
+  /// 首页概览 `/promote?page=0`。
+  Future<Res<List<JmPromoteSection>>> getPromoteSections() async {
+    final res = await _get('$_baseUrl/promote?page=0');
+    if (res.error) return Res.fromErrorRes(res);
+    try {
+      final sections = parseJmPromoteSections(
+        res.data,
+        coverUrlBuilder: getJmCoverUrl,
+      );
+      if (sections.isEmpty) {
+        return const Res.error('推荐概览为空', errorCode: ResErrorCode.parse);
+      }
+      return Res(sections);
+    } catch (e, s) {
+      LogManager.addLog(
+          LogLevel.error, 'JmNetwork', 'getPromoteSections: $e\n$s');
+      return Res.error('推荐概览解析失败：$e', errorCode: ResErrorCode.parse);
+    }
+  }
+
+  /// 概览分区「更多」：`/promote_list?id=&page=N`（0 起页）。
+  Future<Res<JmPromoteList>> getPromoteList(String id, int page) async {
+    final promoteId = id.trim();
+    if (promoteId.isEmpty) {
+      return const Res.error('推荐块 ID 为空',
+          errorCode: ResErrorCode.invalidArgument);
+    }
+    final res = await _get(
+        '$_baseUrl/promote_list?id=${Uri.encodeComponent(promoteId)}&page=$page');
+    if (res.error) return Res.fromErrorRes(res);
+    try {
+      return Res(parseJmPromoteList(
+        promoteId,
+        res.data as Map,
+        page: page,
+        coverUrlBuilder: getJmCoverUrl,
+      ));
+    } catch (e, s) {
+      LogManager.addLog(LogLevel.error, 'JmNetwork', 'getPromoteList: $e\n$s');
+      return Res.error('推荐列表解析失败：$e', errorCode: ResErrorCode.parse);
+    }
+  }
+
+  /// 最新 `/latest?page=N`。**独立路径**，不得与分类排序混用。
+  ///
+  /// 该接口不返回总数，也没有可靠页容量：不能编造假页数（原项目的 99999 不可
+  /// 复制）。返回 `subData: null` 表示"本页有内容、可继续追问"，遇真实空页时
+  /// `subData: 1` 明确终止。
+  Future<Res<List<JmComicBrief>>> getLatest(int page) async {
+    final res = await _get('$_baseUrl/latest?page=$page');
+    if (res.error) return Res.fromErrorRes(res);
+    try {
+      final raw = res.data;
+      if (raw is! List) {
+        return const Res.error('最新响应不是数组', errorCode: ResErrorCode.parse);
+      }
+      final parsed =
+          parseJmListItems(raw, withDesc: true, coverUrlBuilder: getJmCoverUrl);
+      if (raw.isNotEmpty && parsed.parsed.isEmpty) {
+        return const Res.error('最新响应非空但无有效条目', errorCode: ResErrorCode.parse);
+      }
+      return Res(parsed.parsed, subData: raw.isEmpty ? 1 : null);
+    } catch (e, s) {
+      LogManager.addLog(LogLevel.error, 'JmNetwork', 'getLatest: $e\n$s');
+      return Res.error('最新解析失败：$e', errorCode: ResErrorCode.parse);
+    }
+  }
+
+  /// 每周推荐期号 `/week`。
+  Future<Res<List<JmWeekPeriod>>> getWeekPeriods() async {
+    final res = await _get('$_baseUrl/week');
+    if (res.error) return Res.fromErrorRes(res);
+    try {
+      final periods = parseJmWeekPeriods(res.data as Map);
+      if (periods.isEmpty) {
+        return const Res.error('每周推荐期号为空', errorCode: ResErrorCode.parse);
+      }
+      return Res(periods);
+    } catch (e, s) {
+      LogManager.addLog(LogLevel.error, 'JmNetwork', 'getWeekPeriods: $e\n$s');
+      return Res.error('每周推荐期号解析失败：$e', errorCode: ResErrorCode.parse);
+    }
+  }
+
+  /// 每周推荐内容：`/week/filter?id=&page=0&type=`（每次只传一个类型，单页）。
+  Future<Res<List<JmComicBrief>>> getWeekComics(
+    String periodId,
+    JmWeekType type,
+  ) async {
+    final id = periodId.trim();
+    if (id.isEmpty) {
+      return const Res.error('期号为空', errorCode: ResErrorCode.invalidArgument);
+    }
+    final res = await _get('$_baseUrl/week/filter'
+        '?id=${Uri.encodeComponent(id)}&page=0&type=${type.value}');
+    if (res.error) return Res.fromErrorRes(res);
+    try {
+      return Res(parseJmWeekComics(
+        res.data as Map,
+        coverUrlBuilder: getJmCoverUrl,
+      ));
+    } catch (e, s) {
+      LogManager.addLog(LogLevel.error, 'JmNetwork', 'getWeekComics: $e\n$s');
+      return Res.error('每周推荐解析失败：$e', errorCode: ResErrorCode.parse);
     }
   }
 
   // ── 漫画详情 ──────────────────────────────────────────────────────────────
 
-  Future<Res<JmComicInfo>> getComicInfo(String id, {bool isRetry = false}) async {
+  Future<Res<JmComicInfo>> getComicInfo(String id,
+      {bool isRetry = false}) async {
     final res = await _get('$_baseUrl/album?id=$id');
     if (res.error) return Res.fromErrorRes(res);
     try {
@@ -587,50 +742,55 @@ class JmNetwork {
   }
 
   Future<Res<List<JmComicBrief>>> getFavorites(int page) async {
-    final res =
-        await _get('$_baseUrl/favorite?page=$page&folder_id=0&o=mr');
+    final res = await _get('$_baseUrl/favorite?page=$page&folder_id=0&o=mr');
     if (res.error) return Res.fromErrorRes(res);
     try {
+      final rawList = res.data['list'] as List? ?? [];
       final comics = <JmComicBrief>[];
-      for (final c in (res.data['list'] as List? ?? [])) {
+      for (final c in rawList) {
         try {
           comics.add(_parseBrief(c as Map));
         } catch (_) {
           continue;
         }
       }
-      final total = _parseInt(res.data['total']);
-      final perPage = comics.isEmpty ? 1 : comics.length;
       return Res(comics,
-          subData: total == 0 ? 1 : (total / perPage).ceil());
+          subData: jmPageCount(
+            total: _parseInt(res.data['total']),
+            rawCount: rawList.length,
+            page: page,
+          ));
     } catch (e, s) {
       LogManager.addLog(LogLevel.error, 'JmNetwork', 'getFavorites: $e\n$s');
-      return Res.error(e.toString());
+      return Res.error(e.toString(), errorCode: ResErrorCode.parse);
     }
   }
 
   Future<Res<List<JmComicBrief>>> getFolderComicsPage(
       String folderId, int page) async {
-    final res = await _get(
-        '$_baseUrl/favorite?page=$page&folder_id=$folderId&o=mr');
+    final res =
+        await _get('$_baseUrl/favorite?page=$page&folder_id=$folderId&o=mr');
     if (res.error) return Res.fromErrorRes(res);
     try {
+      final rawList = res.data['list'] as List? ?? [];
       final comics = <JmComicBrief>[];
-      for (final c in (res.data['list'] as List? ?? [])) {
+      for (final c in rawList) {
         try {
           comics.add(_parseBrief(c as Map));
         } catch (_) {
           continue;
         }
       }
-      final total = _parseInt(res.data['total']);
-      final perPage = comics.isEmpty ? 1 : comics.length;
       return Res(comics,
-          subData: total == 0 ? 1 : (total / perPage).ceil());
+          subData: jmPageCount(
+            total: _parseInt(res.data['total']),
+            rawCount: rawList.length,
+            page: page,
+          ));
     } catch (e, s) {
       LogManager.addLog(
           LogLevel.error, 'JmNetwork', 'getFolderComicsPage: $e\n$s');
-      return Res.error(e.toString());
+      return Res.error(e.toString(), errorCode: ResErrorCode.parse);
     }
   }
 
@@ -653,9 +813,10 @@ class JmNetwork {
   }
 
   /// 将已收藏漫画移动到指定收藏夹
-  Future<Res<bool>> moveFavoriteToFolder(String comicId, String folderId) async {
-    final res = await _post(
-        '$_baseUrl/favorite_folder', 'type=move&aid=$comicId&folder_id=$folderId');
+  Future<Res<bool>> moveFavoriteToFolder(
+      String comicId, String folderId) async {
+    final res = await _post('$_baseUrl/favorite_folder',
+        'type=move&aid=$comicId&folder_id=$folderId');
     if (res.error) return Res.fromErrorRes(res);
     return const Res(true);
   }
@@ -696,8 +857,7 @@ class JmNetwork {
       }
       final total = _parseInt(res.data['total']);
       final perPage = comments.isEmpty ? 1 : comments.length;
-      return Res(comments,
-          subData: total == 0 ? 1 : (total / perPage).ceil());
+      return Res(comments, subData: total == 0 ? 1 : (total / perPage).ceil());
     } catch (e, s) {
       LogManager.addLog(LogLevel.error, 'JmNetwork', 'getComments: $e\n$s');
       return Res.error(e.toString());
@@ -727,7 +887,7 @@ class JmNetwork {
         _ => 'Error',
       };
 
-  /// 列表接口条目解析入口（实现见顶层 [parseJmListBrief]）。
+  /// 列表接口条目解析入口（= 本文件的公开包装版，已带真实封面域）。
   static JmComicBrief _parseBrief(Map c, {bool withDesc = false}) =>
       parseJmListBrief(c, withDesc: withDesc);
 
@@ -740,7 +900,8 @@ class JmNetwork {
 
   /// 发送评论
   Future<Res<String>> comment(String aid, String content) async {
-    final body = 'comment=${Uri.encodeComponent(content)}&status=undefined&aid=$aid';
+    final body =
+        'comment=${Uri.encodeComponent(content)}&status=undefined&aid=$aid';
     final res = await _post('$_baseUrl/comment', body);
     if (res.error) return Res.fromErrorRes(res);
 
@@ -750,13 +911,15 @@ class JmNetwork {
       return Res.error(message);
     }
 
-    final message = res.data is Map ? (res.data['msg']?.toString() ?? '评论成功') : '评论成功';
+    final message =
+        res.data is Map ? (res.data['msg']?.toString() ?? '评论成功') : '评论成功';
     return Res(message);
   }
 
   /// 回复某条评论。[commentId] 为被回复评论的 ID（即 JmComment.id）。
   /// 尝试用 CID（大写）作为参数名，对齐 API 响应中的字段名。
-  Future<Res<String>> replyComment(String aid, String content, String commentId) async {
+  Future<Res<String>> replyComment(
+      String aid, String content, String commentId) async {
     final body =
         'comment=${Uri.encodeComponent(content)}&aid=$aid&CID=$commentId&is_reply=1&forum_subject=1';
     LogManager.addLog(LogLevel.info, 'JmNetwork',

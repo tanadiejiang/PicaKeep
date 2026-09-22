@@ -11,12 +11,18 @@ import 'package:picakeep/foundation/app.dart';
 import 'package:picakeep/foundation/log.dart';
 import 'package:picakeep/network/app_dio.dart';
 import 'package:picakeep/network/cookie_jar.dart';
+import 'package:picakeep/network/eh_network/eh_list_parsing.dart';
 import 'package:picakeep/network/eh_network/eh_models.dart';
 import 'package:picakeep/network/eh_network/eh_site.dart';
 import 'package:picakeep/network/eh_network/get_gallery_id.dart';
 import 'package:picakeep/network/eh_network/js.dart';
 import 'package:picakeep/network/res.dart';
 import 'package:picakeep/tools/extensions.dart';
+
+// 列表页解析与逐条校验已下沉到纯 Dart 的 `eh_list_parsing.dart`：本文件依赖
+// Flutter 与 base.dart，解析留在里面会让纯层测试无法用 `dart test` 运行。
+// 这里再导出一次，既有 import 点无需改动。
+export 'package:picakeep/network/eh_network/eh_list_parsing.dart';
 
 /// e-hentai / exhentai 站点的全部 HTTP 交互单例。
 ///
@@ -135,12 +141,13 @@ class EhNetwork {
   /// 相关请求绝不能传 useCache=true——EH 的 showKey/imgKey 有时效，缓存这类
   /// 页面会导致复用过期 key 而下载失败。key = 请求 URL，value = 响应体 +
   /// 写入时刻，TTL 5 分钟，容量上限 [_htmlCacheMaxSize]，超出按最旧淘汰。
-  final Map<String, ({DateTime at, String body})> _htmlCache = {};
+  final Map<String, ({DateTime at, String body, String finalUri})> _htmlCache =
+      {};
 
   static const Duration _htmlCacheTtl = Duration(minutes: 5);
   static const int _htmlCacheMaxSize = 64;
 
-  void _putHtmlCache(String url, String body) {
+  void _putHtmlCache(String url, String body, String finalUri) {
     if (_htmlCache.length >= _htmlCacheMaxSize &&
         !_htmlCache.containsKey(url)) {
       String? oldestKey;
@@ -155,7 +162,7 @@ class EhNetwork {
         _htmlCache.remove(oldestKey);
       }
     }
-    _htmlCache[url] = (at: DateTime.now(), body: body);
+    _htmlCache[url] = (at: DateTime.now(), body: body, finalUri: finalUri);
   }
 
   /// 共享下载 dio 的首次初始化参数（[sharedDownloadDio] 的 options 仅首次生效）。
@@ -181,11 +188,34 @@ class EhNetwork {
     bool setNW = true,
     bool useCache = false,
   }) async {
+    final wrapped = await requestWithUri(url,
+        headers: headers, setNW: setNW, useCache: useCache);
+    if (wrapped.error) return Res.fromErrorRes(wrapped);
+    return Res(wrapped.data.body);
+  }
+
+  /// 与 [request] 同源，但额外返回**本次最终响应地址**。
+  ///
+  /// 列表页的相对 `next` 游标必须按最终响应地址解析（重定向后 origin 可能不同），
+  /// 因此新增这个内部包装给列表请求使用；旧的 `request(): Res<String>` 继续
+  /// 委托它只取正文，调用点行为不变。
+  ///
+  /// 说明：这里**不**复用 `Res.subData` 承载 URL —— `subData` 在既有链路里已有
+  /// "收藏夹名 / 分页"语义，改语义会静默破坏老调用方。
+  Future<Res<EhHtmlResponse>> requestWithUri(
+    String url, {
+    Map<String, String>? headers,
+    bool setNW = true,
+    bool useCache = false,
+  }) async {
     if (useCache) {
       final cached = _htmlCache[url];
       if (cached != null &&
           DateTime.now().difference(cached.at) < _htmlCacheTtl) {
-        return Res(cached.body);
+        return Res(EhHtmlResponse(
+          body: cached.body,
+          finalUri: cached.finalUri,
+        ));
       }
     }
     await getCookies(setNW, url);
@@ -231,12 +261,15 @@ class EhNetwork {
       await getCookies(true);
       if (data.length >= 4 && data.substring(0, 4) == 'Your') {
         return const Res(null,
-            errorMessage: 'Your IP address has been temporarily banned');
+            errorMessage: 'Your IP address has been temporarily banned',
+            errorCode: ResErrorCode.accessDenied);
       }
+      final finalUri =
+          res.realUri.toString().isEmpty ? url : res.realUri.toString();
       if (useCache) {
-        _putHtmlCache(url, data);
+        _putHtmlCache(url, data, finalUri);
       }
-      return Res(data);
+      return Res(EhHtmlResponse(body: data, finalUri: finalUri));
     } on DioException catch (e) {
       String? message;
       if (e.type != DioExceptionType.unknown) {
@@ -244,7 +277,10 @@ class EhNetwork {
       } else {
         message = e.toString().split('\n').elementAtOrNull(1);
       }
-      return Res(null, errorMessage: message ?? 'Network Error');
+      return Res(null,
+          errorMessage: message ?? 'Network Error',
+          errorCode: ResErrorCode.network,
+          statusCode: e.response?.statusCode);
     } catch (e) {
       String? message;
       if (e.toString() != 'null') {
@@ -254,7 +290,11 @@ class EhNetwork {
         message = 'Redirect loop: No permission to view this page. \n'
             'Check your account and cookie.';
       }
-      return Res(null, errorMessage: message ?? 'Network Error');
+      final looksLogin = message?.contains('未登录') ?? false;
+      return Res(null,
+          errorMessage: message ?? 'Network Error',
+          errorCode:
+              looksLogin ? ResErrorCode.loginRequired : ResErrorCode.network);
     }
   }
 
@@ -433,180 +473,53 @@ class EhNetwork {
 
   /// 从一个列表页链接中获取所有画廊，同时获得下一页游标。
   ///
-  /// 支持四种排版：compact(gltc) / thumbnail(gl1t) / extended(glte) / minimal(gltm)。
+  /// 支持四种排版：compact(gltc) / thumbnail(gl1t) / extended(glte) / minimal(gltm)；
+  /// 榜单页（toplist）的 compact 表格多一列名次，由 [parseEhGalleryList] 处理。
   Future<Res<Galleries>> getGalleries(
     String url, {
     bool favoritePage = false,
+    bool leaderboard = false,
   }) async {
-    var res = await request(url);
+    var res = await requestWithUri(url);
     if (res.error) {
-      return Res(null, errorMessage: res.errorMessage);
+      return Res(null,
+          errorMessage: res.errorMessage,
+          errorCode: res.errorCode,
+          statusCode: res.statusCode);
     }
     try {
-      var document = parse(res.data);
-      var galleries = <EhGalleryBrief>[];
-
-      // compact mode
-      for (var item
-          in document.querySelectorAll('table.itg.gltc > tbody > tr')) {
-        try {
-          var type = item.children[0].children[0].text;
-          var time = item.children[1].children[2].children[0].text;
-          var stars = getStarsFromPosition(
-              item.children[1].children[2].children[1].attributes['style']!);
-          var cover = item.children[1].children[1].children[0].children[0]
-              .attributes['src'];
-          if (cover![0] == 'd') {
-            cover = item.children[1].children[1].children[0].children[0]
-                .attributes['data-src'];
-          }
-          var title = item.children[2].children[0].children[0].text;
-          var link = item.children[2].children[0].attributes['href'];
-          String uploader = '';
-          int? pages;
-          try {
-            uploader = item.children[3].children[0].children[0].text;
-            pages = int.parse(item.children[3].children[1].text.nums);
-          } catch (e) {
-            // 收藏夹页没有 uploader
-          }
-          var tags = <String>[];
-          for (var node in item.children[2].children[0].children[1].children) {
-            tags.add(node.attributes['title']!);
-          }
-
-          galleries.add(EhGalleryBrief(
-              title, type, time, uploader, cover!, stars, link!, tags,
-              pages: pages));
-        } catch (e) {
-          // 表格中存在空行或者被屏蔽
-          continue;
-        }
+      final parsed = parseEhGalleryList(
+        res.data.body,
+        responseUri: res.data.finalUri,
+        leaderboard: leaderboard,
+      );
+      // 解析故障必须**报错**，不能伪装成"空列表"：
+      // - 识别到数据行却全部失败（行结构变了）；
+      // - 页面里有列表容器却一行都没识别出来（布局不再匹配）。
+      // 早先这里无条件返回成功，界面因此只显示"没有内容"，把解析故障说成
+      // 空结果（用户真机反馈"EH 加载不出任何内容"）。
+      if (parsed.isParseFailure) {
+        LogManager.addLog(
+          LogLevel.warning,
+          'Data Analysis',
+          'EH 列表解析失败：rows=${parsed.rawRowCount} '
+              'failed=${parsed.failedRowCount} '
+              'containerFound=${parsed.containerFound} url=$url',
+        );
+        return const Res.error(
+          '画廊列表解析失败（页面结构可能已变化）',
+          errorCode: ResErrorCode.parse,
+        );
       }
-
-      // Thumbnail mode
-      for (var item in document.querySelectorAll('div.gl1t')) {
-        try {
-          final title = item.querySelector('a')?.text ?? 'Unknown';
-          final type =
-              item.querySelector('div.gl5t > div > div.cs')?.text ?? 'Unknown';
-          final time = item
-                  .querySelectorAll('div.gl5t > div > div')
-                  .firstWhereOrNull(
-                      (element) => DateTime.tryParse(element.text) != null)
-                  ?.text ??
-              'Unknown';
-          final coverPath = item.querySelector('img')?.attributes['src'] ?? '';
-          final stars = getStarsFromPosition(item
-                  .querySelector('div.gl5t > div > div.ir')
-                  ?.attributes['style'] ??
-              '');
-          final link = item.querySelector('a')?.attributes['href'] ?? '';
-          final pages = int.tryParse(item
-                  .querySelectorAll('div.gl5t > div > div')
-                  .firstWhereOrNull((element) => element.text.contains('pages'))
-                  ?.text
-                  .nums ??
-              '');
-          galleries.add(EhGalleryBrief(
-              title, type, time, '', coverPath, stars, link, [],
-              pages: pages));
-        } catch (e) {
-          // 忽视
-        }
-      }
-
-      // Extended mode
-      for (var item
-          in document.querySelectorAll('table.itg.glte > tbody > tr')) {
-        try {
-          final title =
-              item.querySelector('td.gl2e > div > a > div > div.glink')?.text ??
-                  'Unknown';
-          final type =
-              item.querySelector('td.gl2e > div > div.gl3e > div.cn')?.text ??
-                  'Unknown';
-          final time = item
-                  .querySelectorAll('td.gl2e > div > div.gl3e > div')
-                  .firstWhereOrNull(
-                      (element) => DateTime.tryParse(element.text) != null)
-                  ?.text ??
-              'Unknown';
-          final uploader =
-              item.querySelector('td.gl2e > div > div.gl3e > div > a')?.text ??
-                  'Unknown';
-          final coverPath = item
-                  .querySelector('td.gl1e > div > a > img')
-                  ?.attributes['src'] ??
-              '';
-          final stars = getStarsFromPosition(item
-                  .querySelector('td.gl2e > div > div.gl3e > div.ir')
-                  ?.attributes['style'] ??
-              '');
-          final link =
-              item.querySelector('td.gl1e > div > a')?.attributes['href'] ?? '';
-          final tags = item
-              .querySelectorAll('div.gt, div.gtl')
-              .map((e) => e.attributes['title'] ?? '')
-              .toList();
-          final pages = int.tryParse(item
-                  .querySelectorAll('td.gl2e > div > div.gl3e > div')
-                  .firstWhereOrNull((element) => element.text.contains('pages'))
-                  ?.text
-                  .nums ??
-              '');
-          galleries.add(EhGalleryBrief(
-              title, type, time, uploader, coverPath, stars, link, tags,
-              pages: pages));
-        } catch (e) {
-          // 忽视
-        }
-      }
-
-      // minimal mode
-      for (var item
-          in document.querySelectorAll('table.itg.gltm > tbody > tr')) {
-        try {
-          final title =
-              item.querySelector('td.gl3m > a > div.glink')?.text ?? 'Unknown';
-          final type =
-              item.querySelector('td.gl1m > div.cs')?.text ?? 'Unknown';
-          final time = item
-                  .querySelectorAll('td.gl2m > div')
-                  .firstWhereOrNull(
-                      (element) => DateTime.tryParse(element.text) != null)
-                  ?.text ??
-              'Unknown';
-          final uploader =
-              item.querySelector('td.gl5m > div > a')?.text ?? 'Unknown';
-          var coverPath = item
-              .querySelector('td.gl2m > div > div > img')
-              ?.attributes['src'];
-          final link =
-              item.querySelector('td.gl3m > a')?.attributes['href'] ?? '';
-          final stars = getStarsFromPosition(
-              item.querySelector('td.gl4m > div.ir')?.attributes['style'] ??
-                  '');
-          galleries.add(EhGalleryBrief(
-              title, type, time, uploader, coverPath ?? '', stars, link, []));
-        } catch (e) {
-          // 忽视
-        }
-      }
-
       var g = Galleries();
-      var nextButton = document.getElementById('dnext');
-      if (nextButton == null) {
-        g.next = null;
-      } else {
-        g.next = nextButton.attributes['href'];
-      }
-      g.galleries = galleries;
+      g.galleries = parsed.galleries;
+      g.next = parsed.next;
 
       // 获取收藏夹名称
       if (favoritePage && isLogin) {
         var names = <String>[];
         try {
+          var document = parse(res.data.body);
           var folderDivs = document.querySelectorAll('div.fp');
           for (var folderDiv in folderDivs) {
             var name = folderDiv.children.elementAtOrNull(2)?.text ??
@@ -632,7 +545,7 @@ class EhNetwork {
       return Res(g);
     } catch (e, s) {
       LogManager.addLog(LogLevel.error, 'Data Analysis', '$e\n$s');
-      return Res(null, errorMessage: e.toString());
+      return Res.error(e.toString(), errorCode: ResErrorCode.parse);
     }
   }
 
@@ -1342,6 +1255,9 @@ class EhNetwork {
   }
 
   /// 搜索 e-hentai / exhentai。
+  ///
+  /// [addToHistory] 默认 `true` 保持旧行为；探索 / 标签浏览必须传 `false`，
+  /// 否则点一个标签就会污染用户的手工搜索历史。
   Future<Res<Galleries>> search(
     String keyword, {
     int? fCats,
@@ -1349,8 +1265,9 @@ class EhNetwork {
     int? endPages,
     int? minStars,
     int? expunged,
+    bool addToHistory = true,
   }) async {
-    if (keyword != '') {
+    if (keyword != '' && addToHistory) {
       appdata.searchHistory.remove(keyword);
       appdata.searchHistory.add(keyword);
       appdata.writeHistory();
@@ -1396,6 +1313,52 @@ class EhNetwork {
     }
     return getGalleries(requestUrl);
   }
+
+  // ── 探索：主页 / 热门 / 榜单 / 分类 ───────────────────────────────────────
+
+  /// 站点主页列表（跟随当前选择的表站 / 里站）。
+  Future<Res<Galleries>> getHomeGalleries() => getGalleries(ehBaseUrl);
+
+  /// 站点热门 `/popular`。有无 next 由服务端决定，**不预设它必定多页**。
+  Future<Res<Galleries>> getPopularGalleries() =>
+      getGalleries('$ehBaseUrl/popular');
+
+  /// toplist 榜单。
+  ///
+  /// 站点固定为**表站** `https://e-hentai.org`（即使全局选里站）；页面需要向
+  /// 用户说明这一点。数据层第 1 页映射 `p=0`、第 2 页映射 `p=1` —— 原项目直接
+  /// 传 1-based page 与"首次不带 p"的老方法口径不一致，这里统一为 0 基。
+  Future<Res<Galleries>> getToplist(
+    EhToplistPeriod period, {
+    int page = 0,
+  }) async {
+    if (page < 0) {
+      return const Res.error('页码越界', errorCode: ResErrorCode.invalidArgument);
+    }
+    return getGalleries(
+      'https://e-hentai.org/toplist.php?tl=${period.value}&p=$page',
+      leaderboard: true,
+    );
+  }
+
+  /// 画廊类型分类列表（跟随当前选择的站点）。
+  ///
+  /// [category] 为 null 表示全部（`f_cats=0`）；否则用反码只保留该类型。
+  /// 复用 [search] 的 URL 构造，但**不写搜索历史**。
+  Future<Res<Galleries>> getCategoryGalleries(EhGalleryCategory? category) {
+    return search(
+      '',
+      fCats: category?.singleFCats ?? EhGalleryCategory.allFCats,
+      addToHistory: false,
+    );
+  }
+
+  /// 具名标签搜索（探索标签目录用；不写搜索历史）。
+  ///
+  /// [keyword] 已经是按 EH 查询语法组装好的词（含 `namespace:` 前缀与必要的
+  /// 引号 / `$` 精确匹配后缀），本方法只负责发请求。
+  Future<Res<Galleries>> searchTag(String keyword) =>
+      search(keyword, addToHistory: false);
 
   /// 评分。
   Future<bool> rateGallery(Map<String, String> auth, int rating) async {

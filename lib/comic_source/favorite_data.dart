@@ -1,8 +1,8 @@
 import 'package:picakeep/network/base_comic.dart';
 import 'package:picakeep/network/res.dart';
 
-typedef NetworkFavoriteLoader = Future<Res<List<BaseComic>>> Function(
-  int page, [String? folder]);
+typedef NetworkFavoriteLoader = Future<Res<List<BaseComic>>> Function(int page,
+    [String? folder]);
 
 typedef NetworkFavoriteAction = Future<Res<bool>> Function(
     BaseComic comic, bool isAdding);

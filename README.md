@@ -6,6 +6,8 @@
 
 - **原项目兼容** — 完全兼容 PicaComic 的下载内容和数据库，已有数据无缝迁移
 - **本地漫画管理** — 导入文件夹，自动识别封面
+- **四源在线浏览** — 内置 Picacg / 禁漫 / E-Hentai（含 ExHentai）/ NHentai 四个源，搜索、标签、账号与在线收藏齐备
+- **探索与榜单** — 底部「探索」按源提供推荐、榜单与分类：各源显示自己真实的榜期与分类目录，可直接翻页浏览
 - **加密压缩包** — 直接阅读加密 ZIP/CBZ，支持 AES 和 ZipCrypto
 - **服务端模式** — 同一二进制 `--server` 入口起 headless 服务端，局域网内其他设备远程阅览；能力与桌面版完全一致
 - **局域网发现** — mDNS 广播 + 网段扫描，自动发现服务端
@@ -115,7 +117,7 @@ flutter build windows --release
 # wrapper 放到 {app}\cli\，把该目录加进 PATH（见 .github/workflows/build.yml 的 Inno 脚本）
 ```
 
-> 详细打包步骤见 [`Z-plan/后续优化-第二轮/打包说明-Linux与Windows.md`](Z-plan/后续优化-第二轮/打包说明-Linux与Windows.md)。
+> 详细打包步骤见 [`.github/workflows/build.yml`](.github/workflows/build.yml) 与 [`.github/scripts/package_linux_deb.sh`](.github/scripts/package_linux_deb.sh)。
 > 注意：旧的 `dart build cli`（`bin/picakeep.dart`）是读不到资源的空壳服务端，**已弃用**，勿再使用。
 
 ### CI 自动构建
@@ -165,7 +167,11 @@ git push origin v1.0.0
 ```
 ├── lib/                    # Flutter 应用主体
 │   ├── pages/              # 页面
+│   │   ├── explore/        # 探索：四源推荐 / 榜单 / 分类
+│   │   └── online_common/  # 在线列表共用卡片
 │   ├── foundation/         # 基础库（加密、网络、存储）
+│   │   └── explore/        # 探索契约层与四源适配器
+│   ├── network/            # 各源网络层与解析
 │   ├── server/             # 服务端模式（--server 入口起 PicaKeepAdminServer）
 │   └── main.dart           # 入口：GUI / --server headless 双路径
 ├── assets/                 # 静态资源

@@ -1,79 +1,9 @@
 import 'package:picakeep/foundation/history.dart';
-import 'package:picakeep/network/base_comic.dart';
+import 'package:picakeep/network/eh_network/eh_brief_models.dart';
 
-/// ehentai 搜索结果 / 收藏列表用的轻量条目。
-///
-/// 接入 PicaKeep 的 [BaseComic] 抽象，使其能直接被在线列表通用组件渲染。
-/// 字段映射（公共契约）：id => link、cover => coverPath、subTitle => uploader。
-class EhGalleryBrief extends BaseComic {
-  @override
-  String title;
-  String type;
-  String time;
-  String uploader;
-  double stars; // 0-5
-  String coverPath;
-  String link;
-  @override
-  List<String> tags;
-  int? pages;
-
-  EhGalleryBrief(
-    this.title,
-    this.type,
-    this.time,
-    this.uploader,
-    this.coverPath,
-    this.stars,
-    this.link,
-    this.tags, {
-    this.pages,
-  });
-
-  @override
-  String get cover => coverPath;
-
-  @override
-  String get description => time;
-
-  /// 画廊完整 URL，即公共契约的唯一标识。
-  @override
-  String get id => link;
-
-  @override
-  String get subTitle => uploader;
-
-  @override
-  bool get enableTagsTranslation => true;
-}
-
-/// 一页搜索 / 收藏列表的结果集，附带下一页游标。
-///
-/// ehentai 用 [next] 游标翻页，而非纯页码。
-class Galleries {
-  List<EhGalleryBrief> galleries = [];
-
-  /// 下一页的链接（游标）；为 null 表示没有下一页。
-  String? next;
-
-  EhGalleryBrief operator [](int index) => galleries[index];
-
-  int get length => galleries.length;
-}
-
-/// 单条评论。
-class Comment {
-  String id;
-  String name;
-  String content;
-  String time;
-  int score;
-
-  /// true: up, false: down, null: 未投票
-  bool? voteUP;
-
-  Comment(this.id, this.name, this.content, this.time, this.score, this.voteUP);
-}
+// 列表条目 / 分页结果 / HTML 响应 / 分类榜期枚举已拆到纯 Dart 的
+// `eh_brief_models.dart`；这里再导出一次，既有 import 点无需改动。
+export 'package:picakeep/network/eh_network/eh_brief_models.dart';
 
 /// ehentai 画廊详情领域对象。
 ///
@@ -188,8 +118,9 @@ class Gallery {
         thumbnails = [],
         ext = json['ext'] ?? 'jpg',
         width = json['width'] ?? 100,
-        auth =
-            json['auth'] == null ? null : Map<String, String>.from(json['auth']),
+        auth = json['auth'] == null
+            ? null
+            : Map<String, String>.from(json['auth']),
         comments = [] {
     // 修复上游 bug：原项目此处误用字符串字面量 "key" 作为桶键，
     // 导致所有 namespace 的标签全部塌进单一名为 key 的桶。

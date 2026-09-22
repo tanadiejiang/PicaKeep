@@ -1,6 +1,7 @@
 import 'package:flutter/cupertino.dart';
 import 'package:picakeep/foundation/history.dart';
 import 'package:picakeep/network/base_comic.dart';
+import 'package:picakeep/network/res.dart';
 
 /// nhentai 列表项（搜索/收藏/推荐通用）。
 ///
@@ -22,7 +23,7 @@ class NhentaiComicBrief extends BaseComic {
       this.title, this.cover, this.id, this.lang, this.tags);
 
   @override
-  String get description => lang;
+  String get description => lang == 'Unknown' ? '' : lang;
 
   @override
   String get subTitle => id;
@@ -35,8 +36,11 @@ class NhentaiHomePageData {
   final List<NhentaiComicBrief> popular;
   List<NhentaiComicBrief> latest;
   int page = 1;
+  final Res<List<NhentaiComicBrief>>? popularError;
+  final Res<List<NhentaiComicBrief>>? latestError;
 
-  NhentaiHomePageData(this.popular, this.latest);
+  NhentaiHomePageData(this.popular, this.latest,
+      {this.popularError, this.latestError});
 }
 
 /// nhentai 画廊详情领域对象。

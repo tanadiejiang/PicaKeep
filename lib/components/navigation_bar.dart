@@ -227,8 +227,8 @@ class _NaviPaneState extends State<NaviPane>
                   // 隐藏效果一致），避免它悬浮在键盘上方占用空间。keyboardT
                   // 在"键盘关"（0）与"键盘开"（1）两端点间连续插值，逐帧
                   // 跟随键盘收起/弹出动画，不再有硬跳变。
-                  bottom: _lerpDouble(
-                      bottomBarHeight * (0 - value), -bottomBarHeight, keyboardT),
+                  bottom: _lerpDouble(bottomBarHeight * (0 - value),
+                      -bottomBarHeight, keyboardT),
                   child: buildBottom(),
                 ),
               if (value <= 1)
@@ -646,7 +646,9 @@ class _SingleBottomNaviWidgetState extends State<_SingleBottomNaviWidget>
 class NaviObserver extends NavigatorObserver implements Listenable {
   var routes = Queue<Route>();
 
-  int get pageCount => routes.length;
+  // Menus and dialogs are overlays, not a change of page. Counting them here
+  // hides the main bars and resizes the Navigator while its popup is opening.
+  int get pageCount => routes.whereType<PageRoute>().length;
 
   @override
   void didPop(Route route, Route? previousRoute) {

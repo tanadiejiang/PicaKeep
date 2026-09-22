@@ -108,6 +108,18 @@ final ComicSource picacg = ComicSource.named(
     },
   ),
   comicPageBuilder: (comic) => PicacgComicPageV2(comic.id),
+  // ── 封面请求头 ────────────────────────────────────────────────────────────
+  // 图片 CDN 与 API 不同域（thumb.fileServer），不能用 picacgHeaders 的签名头
+  // （签名绑定了 API 的 Host/path，对图片域无效）。这里只补 CDN 侧常见的最小
+  // 头：与 API 一致的 UA，以及站点 Referer。
+  //
+  // 返回非空 headers 会让封面走 `StreamImageProvider`（`OnlineImageManager`），
+  // 因而获得磁盘缓存与 in-flight 去重；此前是裸 `NetworkImage`，既无缓存也
+  // 在真机上表现为不加载（用户实测 Pica 卡片无封面）。
+  imageHeadersBuilder: (comic) => const {
+    'user-agent': 'okhttp/3.8.1',
+    'Referer': 'https://picaapi.picacomic.com/',
+  },
   data: <String, dynamic>{
     'appChannel': '3',
     'imageQuality': 'original',
