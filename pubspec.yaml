@@ -1,7 +1,28 @@
 name: picakeep
 description: "PicaKeep - 本地漫画阅读器 / 收藏管理器"
 publish_to: 'none'
-version: 1.9.84+1
+# `+N` 是 Android 的 versionCode。**N 必须单调不减**：Android 拒绝安装 versionCode
+# 低于设备上已有版本的包（INSTALL_FAILED_VERSION_DOWNGRADE），而 `flutter run` /
+# IDE 的 Run 在覆盖安装失败且应用已安装时会**无条件卸载重装**，应用私有目录
+# （含默认下载目录里的 download.db 与已下载漫画）一并被清空且不可恢复。
+# 实测已发生三次。
+#
+# **每次发版把 N 加一**，不要让它回退。
+#
+# ⚠️ 两个已经踩过的坑：
+#
+# 1. **分 ABI 会给 versionCode 加偏移**：`--split-per-abi` 打出的 arm64-v8a 包
+#    versionCode = N + 2000。于是同一次提交用不同方式构建会得到不同版本号，
+#    交替安装必然降级。项目统一走**非 split 单 ABI**
+#    （`flutter build apk --target-platform android-arm64`，47.0 MB），
+#    它与 IDE 的 `flutter run`（47.6 MB）versionCode 一致。
+#
+# 2. **`--target-platform` 必须配 clean**：增量构建会复用上一次三 ABI 的中间
+#    产物，体积仍是 111 MB，看起来像"该参数无效"。
+#
+# 本轮曾因误用 split 装出 4002，为覆盖它把基准临时抬到 4003；现已卸载重装，
+# 基准回到 1 重新开始。
+version: 1.9.85+2
 
 environment:
   sdk: '>=3.3.0'

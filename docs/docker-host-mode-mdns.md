@@ -78,7 +78,8 @@ DSM 部分版本的 GUI 未暴露 host 模式开关，需通过 **SSH + docker C
 
 ### 通过配置文件配置
 
-在 `picakeep_server.json` 中加入以下字段：
+在 `picakeep_server.data` 中加入以下字段（该文件内容仍是 JSON，只是扩展名从 1.9.26 起由
+`picakeep_server.json` 改为 `.data`，避免被无关程序/扫描器误扫）：
 
 ```json
 {
