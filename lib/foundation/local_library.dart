@@ -23,6 +23,7 @@ import 'local_data_source.dart';
 import 'local_favorites.dart';
 import 'local_library_settings.dart';
 import 'local_trash_store.dart';
+import 'pixiv_download_naming.dart';
 
 part 'local_library_manager_settings.dart';
 part 'local_library_query.dart';
@@ -1094,6 +1095,31 @@ class LocalLibraryManager {
     final dirPath = item.fileSystemPath ?? '';
     if (dirPath.isEmpty || !item.localStorageExists) {
       return null;
+    }
+    // 产物是**压缩包文件**（Pixiv 打包开关 `settings[154]`）时，封面在包里面：
+    // `cover.jpg` 是打包时写进去的第一个条目（与目录形态的产物一致），
+    // 下面那套"在目录下找 cover.*"与"列页取第一张"都拿不到它。
+    //
+    // 用 [ArchiveReadingService.extractCoverToCache] 落一份真实文件再返回：
+    // 调用方 [_ensureManagedDownloadCoverCache] 只认磁盘路径（它要读字节、
+    // 再拷进自己的托管封面缓存），返回 `archive://` URI 会让它读不到字节，
+    // 结果是封面被永久标记成"没有"。这也正是图集压缩包（`local_archive::`）
+    // 一直在走的那条链路。
+    if (isArchivePath(dirPath)) {
+      try {
+        final index = await ArchiveReadingService.instance.getIndex(dirPath);
+        final coverEntry = pickArchiveCoverEntry(index);
+        if (coverEntry == null) {
+          return null;
+        }
+        return await ArchiveReadingService.instance.extractCoverToCache(
+          dirPath,
+          coverEntry,
+        );
+      } catch (_) {
+        // 包损坏 / 无权限：按"没有封面"处理，不让列表整体报错。
+        return null;
+      }
     }
     for (final candidate in const [
       'cover.jpg',

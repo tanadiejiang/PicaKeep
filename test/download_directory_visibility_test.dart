@@ -9,11 +9,15 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider_platform_interface/path_provider_platform_interface.dart';
 import 'package:picakeep/base.dart';
 import 'package:picakeep/foundation/app.dart';
+import 'package:picakeep/foundation/archive/archive_models.dart';
+import 'package:picakeep/foundation/archive/archive_registry.dart';
 import 'package:picakeep/foundation/download_model.dart';
 import 'package:picakeep/foundation/local_data_source.dart';
 import 'package:picakeep/foundation/local_library.dart';
 import 'package:picakeep/foundation/local_library_settings.dart';
 import 'package:picakeep/foundation/local_trash_store.dart';
+import 'package:picakeep/foundation/online_download_manager.dart';
+import 'package:picakeep/foundation/pixiv_artifact.dart';
 import 'package:picakeep/pages/reader/comic_reading_page.dart';
 import 'package:sqlite3/open.dart';
 import 'package:sqlite3/sqlite3.dart';
@@ -530,5 +534,175 @@ void main() {
         expect(orphan?.eps, ['1']);
       });
     }
+  });
+
+  group('Pixiv 产物形态：压缩包 / 单图（settings[154]）', () {
+    // 28 号计划：开关打开后，一个作品的产物是**一个文件**，download.db 的
+    // `directory` 列里存的就是那个**文件名**（含扩展名）。
+    //
+    // 这一组盯的是"文件形态的记录会不会从列表里消失"：老的扫描逻辑只把
+    // **根下的目录名**当索引用，文件不在其中，记录会被判成"本地已删除"而整条
+    // 消失 —— 症状是**下载成功、但任何列表里都看不到**，不报错、最难排查。
+    // 同时也把"封面 / 页面 / 字节"这条完整阅读链路走一遍。
+    setUpAll(ArchiveRegistry.initDefaults);
+
+    /// 造一个"多图打包"产物：staging 目录 → store zip，staging 随即删掉
+    /// （与下载器里"校验通过才删原目录"的顺序一致）。
+    Future<String> archiveProduct(
+      String baseName, {
+      int pages = 3,
+      int coverWidth = 9,
+    }) async {
+      final staging =
+          await Directory(p.join(root.path, '$baseName.staging')).create();
+      await File(p.join(staging.path, 'cover.png')).writeAsBytes(png(coverWidth));
+      for (var i = 1; i <= pages; i++) {
+        await File(p.join(staging.path, '$i.png')).writeAsBytes(png(100 + i));
+      }
+      final zip = File(p.join(root.path, '$baseName.zip'));
+      await packagePixivDirectoryToStoreZip(sourceDir: staging, target: zip);
+      await staging.delete(recursive: true);
+      return zip.path;
+    }
+
+    Future<List<LocalLibraryComicItem>> loadFullScan() async {
+      await manager.refresh();
+      return manager.getAll();
+    }
+
+    /// 两条加载路径都要认文件形态：完整扫描（refresh）与"只看已下载元数据"。
+    Future<List<List<LocalLibraryComicItem>>> loadBothWays() async => [
+          await loadFullScan(),
+          await manager.getManagedDownloads(),
+        ];
+
+    test('压缩包产物：列表里可见，封面与逐页字节都能读出来', () async {
+      final zipPath = await archiveProduct('電瘋扇_シグニット_82074457_p3');
+      await record(p.basename(zipPath), id: 'pixiv-82074457');
+
+      for (final items in await loadBothWays()) {
+        final item = items.single;
+        expect(item.localStorageExists, isTrue);
+        expect(item.fileSystemPath, zipPath);
+
+        // 封面走"从包里取 cover 条目"这条路（包内的封面不在磁盘上）
+        final cover = await manager.resolveCoverPathForItem(item);
+        expect(cover, isNotNull);
+        expect(await File(cover!).readAsBytes(), png(9));
+
+        final data = LocalPathReadingData(
+          title: item.name,
+          id: item.id,
+          downloadId: item.id,
+          sourceKey: 'pixiv',
+          directoryPath: zipPath,
+          hasEp: item.hasMultipleEpisodes,
+          comicType: ComicType.pixiv,
+          episodeFiles: item.episodeFiles,
+          downloadedEpisodeIndexes: item.downloadedEps,
+        );
+        final pages = await data.loadEp(0);
+        expect(pages, hasLength(3));
+        for (var i = 0; i < pages.length; i++) {
+          expect(isArchiveUri(pages[i]), isTrue);
+          expect(
+            await data.loadImage(0, i, pages[i]).first,
+            png(101 + i),
+            reason: '第 ${i + 1} 页',
+          );
+        }
+      }
+    });
+
+    test('单图产物：列表里可见，封面与页面就是这个文件', () async {
+      final file = File(p.join(root.path, '電瘋扇_シグニット_82074457_p1.png'));
+      await file.writeAsBytes(png(21));
+      await record(p.basename(file.path), id: 'pixiv-single');
+
+      for (final items in await loadBothWays()) {
+        final item = items.single;
+        expect(item.localStorageExists, isTrue);
+        expect(item.fileSystemPath, file.path);
+
+        final cover = await manager.resolveCoverPathForItem(item);
+        expect(cover, isNotNull);
+        expect(await File(cover!).readAsBytes(), png(21));
+
+        final data = LocalPathReadingData(
+          title: item.name,
+          id: item.id,
+          downloadId: item.id,
+          sourceKey: 'pixiv',
+          directoryPath: file.path,
+          hasEp: item.hasMultipleEpisodes,
+          comicType: ComicType.pixiv,
+          episodeFiles: item.episodeFiles,
+          downloadedEpisodeIndexes: item.downloadedEps,
+        );
+        final pages = await data.loadEp(0);
+        expect(pages, <String>[file.path]);
+        expect(await data.loadImage(0, 0, pages.single).first, png(21));
+      }
+    });
+
+    test('两种形态能在同一个列表里共存（老目录 + 新 zip + 新单图）', () async {
+      await readableContent('old-dir', chapter: false);
+      await record('old-dir', id: 'e-1');
+      final zipPath = await archiveProduct('new-zip');
+      await record(p.basename(zipPath), id: 'pixiv-zip');
+      final single = File(p.join(root.path, 'new-single.png'));
+      await single.writeAsBytes(png(21));
+      await record('new-single.png', id: 'pixiv-single');
+
+      final items = await loadFullScan();
+
+      expect(
+        items.map((item) => item.originalId).toSet(),
+        <String>{'e-1', 'pixiv-zip', 'pixiv-single'},
+      );
+      expect(items.every((item) => item.localStorageExists), isTrue);
+    });
+
+    test('产物文件被删掉后记录不再可见（与现实一致，不做假阳性）', () async {
+      final zipPath = await archiveProduct('gone');
+      await record(p.basename(zipPath), id: 'pixiv-gone');
+      await File(zipPath).delete();
+
+      expect(await loadFullScan(), isEmpty);
+    });
+
+    test('压缩包产物：从条目自己的入口（createReadingPage）也能列页读页', () async {
+      // 上面那条测的是"手动构造 LocalPathReadingData"；
+      // 这一条走**条目自己的入口**（`LocalLibraryComicItem.createReadingPage`
+      // → `LocalPathReadingData`），也就是"我/已下载"点进去真正会走的那条路。
+      final zipPath = await archiveProduct('entry');
+      await record(p.basename(zipPath), id: 'pixiv-entry');
+      final item = (await loadFullScan()).single;
+
+      final data = (item.createReadingPage() as ComicReadingPage).readingData;
+      try {
+        final pages = await data.loadEp(0);
+        expect(pages, hasLength(3));
+        expect(await data.loadImage(0, 0, pages.first).first, png(101));
+      } finally {
+        StateController.find<ComicReadingPageLogic>().pageController.dispose();
+        StateController.remove<ComicReadingPageLogic>();
+      }
+    });
+
+    test('「修正已下载文件夹名」不会把文件产物的记录改成不存在的路径', () async {
+      // 这个工具是"把旧的纯 ID 文件夹改成标题名"，它按 `Directory(路径)` 判断存在性 ——
+      // 文件不是目录，压缩包/单图产物会掉进"源不存在就只改 DB"那条老分支，
+      // 记录被指到一个不存在的路径后**永远补不回来**（目录扫描不会补录文件产物）。
+      final zipPath = await archiveProduct('fixme');
+      final zipName = p.basename(zipPath);
+      await record(zipName, id: 'pixiv-fixme');
+
+      final result = await OnlineDownloadManager.instance.fixDirectoryNames();
+
+      expect(result.fixed, 0);
+      expect(rows().single['directory'], zipName);
+      expect((await loadFullScan()).single.fileSystemPath, zipPath);
+    });
   });
 }

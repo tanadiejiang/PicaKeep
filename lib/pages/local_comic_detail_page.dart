@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:photo_view/photo_view.dart';
 import 'package:picakeep/base.dart';
+import 'package:picakeep/comic_source/comic_source.dart';
 import 'package:picakeep/components/archive_password_dialog.dart';
 import 'package:picakeep/components/info_value_action.dart';
 import 'package:picakeep/components/scrollable.dart';
@@ -27,6 +28,7 @@ import 'package:picakeep/foundation/untranslated_tags/untranslated_tag_coordinat
 import 'package:picakeep/network/eh_network/eh_models.dart';
 import 'package:picakeep/network/jm_network/jm_network.dart';
 import 'package:picakeep/network/nhentai_network/nhentai_main_network.dart';
+import 'package:picakeep/network/base_comic.dart';
 import 'package:picakeep/network/picacg_network/picacg_network.dart';
 import 'package:picakeep/tools/read_history_helper.dart';
 import 'package:picakeep/pages/online_comic/eh_comic_page_v2.dart';
@@ -61,16 +63,139 @@ String? extractJmNumericId(String rawId) =>
 String? extractNhentaiNumericId(String rawId) =>
     source_id_rules.extractNhentaiNumericId(rawId);
 
-// 07号计划：菜单"更新信息"可见性条件必须与"在线详情"动作项共用同一判断，
-// 不重新发明一套条件（计划执行范围第1节明确要求）。提取为顶层纯函数便于
-// 单元测试覆盖，_buildComicInfo 的"在线详情"入口与 _showTitleActionsMenu
-// 的"更新信息"菜单项都调用这一个函数。
+// 07号计划：菜单"更新信息"的可见性条件提取为顶层纯函数便于单元测试覆盖，
+// `_showTitleActionsMenu` 的"更新信息"菜单项调用这一个函数。
+//
+// ⚠️ 18-31 号之后，「在线详情」动作项**不再**用本函数判断可见性（改用
+// `supportsVisitOnline`）：自定义源（Pixiv / Komiic）的 DownloadType 恒为
+// `other`，往这里加枚举值也命不中；而本函数同时控制"更新信息"，`_onUpdateInfo`
+// 又没有这两源的分支，放开只会得到一个"点了没反应"的死入口。
 bool supportsUpdateInfo(DownloadType type) {
   return type == DownloadType.jm ||
       type == DownloadType.picacg ||
       type == DownloadType.nhentai ||
       type == DownloadType.ehentai;
 }
+
+/// 还原条目对应的 [CustomDownloadedItem] 具体记录；不是自定义源条目时返回 null。
+///
+/// 为什么需要它：自定义源（Pixiv / Komiic / 拷贝漫画…）的 [DownloadType] 恒为
+/// `other`（见 `CustomDownloadedItem.type`），**类型上无法区分来源**。可靠的身份
+/// 只有数据自带的 `sourceKey`，而它在 managed 加载链路上藏在
+/// `LocalLibraryComicItem.sourceRowJson`（download.db 该行的原始 json）里，
+/// 必须先还原出具体子类才能读到 —— 与信息区的做法一致。
+CustomDownloadedItem? customDownloadedRecordOf(DownloadedItem comic) {
+  if (comic is CustomDownloadedItem) {
+    return comic;
+  }
+  if (comic is LocalLibraryComicItem) {
+    final restored = restoreConcreteDownloadedRecord(comic);
+    if (restored is CustomDownloadedItem) {
+      return restored;
+    }
+  }
+  return null;
+}
+
+/// 本地条目所属的**在线源**；不是自定义源、或该源没注册进 [ComicSource] 时返回 null。
+///
+/// 大小写必须容错：下载/历史/收藏侧把 Komiic 写作 `'Komiic'`，而 [ComicSource.key]
+/// 注册的是小写 `'komiic'`（见 `foundation/def.dart` 的 builtInSources 注释）。
+/// 只按原样查会静默找不到源，症状就是"入口不显示"——正是本次要修的现象之一。
+ComicSource? resolveLocalItemComicSource(DownloadedItem comic) {
+  final key = customDownloadedRecordOf(comic)?.sourceKey.trim() ?? '';
+  if (key.isEmpty) {
+    return null;
+  }
+  final candidates = <String>{
+    key,
+    key.toLowerCase(),
+    '${key[0].toUpperCase()}${key.substring(1)}',
+  };
+  for (final candidate in candidates) {
+    final source = ComicSource.find(candidate);
+    if (source != null) {
+      return source;
+    }
+  }
+  return null;
+}
+
+/// 自定义源条目在**源站**的 id（`comicPageBuilder` 唯一读取的字段）。
+///
+/// 优先用 `comicId`：下载器写入的就是源站 id（Pixiv = illustId、Komiic = 站内
+/// comic id），它同时是收藏/历史侧"来源标识（target）"的既有口径
+/// （见 `local_favorites.dart` 的 `_customFavoriteTarget`）。
+///
+/// 老记录可能没写 `comicId`，此时从下载 id 去源前缀（Pixiv 是 `pixiv{id}`、
+/// Komiic 是 `komiic{id}`，两个前缀由 `OnlineDownloadTask.taskId` 定义）。
+/// 两种都取不到则返回 null，调用方**必须拦截**，不能把空 id 打到服务端。
+String? resolveLocalItemComicSourceId(DownloadedItem comic) {
+  final record = customDownloadedRecordOf(comic);
+  if (record == null) {
+    return null;
+  }
+  final comicId = record.comicId.trim();
+  if (comicId.isNotEmpty) {
+    return comicId;
+  }
+  final rawId = record.id.trim();
+  if (rawId.isEmpty) {
+    return null;
+  }
+  final prefix = record.sourceKey.trim().toLowerCase();
+  if (prefix.isNotEmpty && rawId.toLowerCase().startsWith(prefix)) {
+    final stripped = rawId.substring(prefix.length).trim();
+    if (stripped.isNotEmpty) {
+      return stripped;
+    }
+  }
+  return rawId;
+}
+
+/// 自定义源条目的「在线详情」页；不可用时返回 null。
+///
+/// **统一走源注册的 [ComicSource.comicPageBuilder]**（见
+/// `online_common/online_comic_list_item.dart:221` 的同名约定）：Pixiv / Komiic
+/// 以及后续任何接入 [ComicSource] 的源都用这一条路，**不为每个源各写一套跳转**。
+///
+/// `comicPageBuilder` 只读 `BaseComic.id`，其余字段填空即可（与搜索页 ID 直跳的
+/// `_IdBaseComic` 同一契约），所以这里用一个只携带 id 的轻量实体。
+Widget? buildLocalItemOnlineComicPage(DownloadedItem comic) {
+  final source = resolveLocalItemComicSource(comic);
+  final builder = source?.comicPageBuilder;
+  if (source == null || builder == null) {
+    return null;
+  }
+  final id = resolveLocalItemComicSourceId(comic);
+  if (id == null || id.isEmpty) {
+    return null;
+  }
+  return builder(
+    CustomComic(
+      comic.name,
+      comic.subTitle,
+      comic.localCoverPath ?? '',
+      id,
+      comic.tags,
+      '',
+      source.key,
+    ),
+  );
+}
+
+/// 「在线详情」入口的可见性判据。
+///
+/// 四源沿用 07 号计划定的 [supportsUpdateInfo]；自定义源（Pixiv / Komiic…）另判
+/// ——它们的 `DownloadType` 恒为 `other`，加进 [supportsUpdateInfo] 也命不中，
+/// 而且那个函数**同时**控制"更新信息"菜单项，而 `_onUpdateInfo` 并没有
+/// Pixiv/Komiic 分支（放开会出现"点了没反应"的死入口）。
+/// 所以这里按"能不能真的造出在线详情页"来判断，与入口行为严格一致。
+bool supportsVisitOnline(DownloadedItem comic) {
+  return supportsUpdateInfo(comic.type) ||
+      buildLocalItemOnlineComicPage(comic) != null;
+}
+
 
 // 07号计划：信息区渲染需要 works/actors/chineseTeam/categories/categorizedTags
 // 这些具体子类字段，但 _comic 运行时大多是 LocalLibraryComicItem 包装层，其
@@ -2102,6 +2227,26 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
         return;
       }
       App.pushInner(() => EhentaiComicPageV2(link));
+    } else {
+      // 自定义源（Pixiv / Komiic / 后续接入 ComicSource 的源）：
+      // **统一走源注册的 `comicPageBuilder`**，不为每个源各写一套跳转
+      // （与 `online_common/online_comic_list_item.dart:221` 的既有约定同一口径）。
+      //
+      // 为什么四源分支没有被并进这一条：它们各自的 id 校验（JM/NH 的纯数字、
+      // EH 的链接白名单、picacg 的非空）与页面构造都已单独锁过测试，本条只**新增**
+      // 自定义源这条兜底路，不动既有四源的任何行为。
+      final page = buildLocalItemOnlineComicPage(comic);
+      if (page == null) {
+        LogManager.addLog(
+          LogLevel.warning,
+          'LocalComicDetailPage',
+          '_onVisitOnline: no online page for type=${comic.type} '
+          'id="${comic.id}" rawId="$rawId"',
+        );
+        _showMessage('该本地记录缺少有效的在线ID，无法查看在线详情'.tl);
+        return;
+      }
+      App.pushInner(() => page);
     }
   }
 
@@ -2667,7 +2812,7 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
             () => _onRead(ep: comic.eps.length > 1 ? 1 : 0),
           ),
           _buildActionItem('分享', Icons.share, () => _copyText(comic.name)),
-          if (supportsUpdateInfo(_comic.type))
+          if (supportsVisitOnline(_comic))
             _buildActionItem('在线详情', Icons.public, _onVisitOnline),
           if (comic is LocalLibraryComicItem &&
               comic.isArchiveItem &&

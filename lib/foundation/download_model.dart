@@ -1010,6 +1010,27 @@ class NhentaiDownloadedComic extends DownloadedItem {
   }
 }
 
+/// 自定义源（Pixiv / Komiic / 拷贝漫画等）条目在阅读器里的收藏类型。
+///
+/// 抽成顶层函数的原因：同一个条目会在**两条加载链路**上各造一次 ReadingData ——
+/// 老 `DownloadManager` 链路走 [CustomDownloadedItem.createReadingPage]，新
+/// `OnlineDownloadManager` 链路走 `OnlineDownloadedCustom.createReadingPage`。
+/// 收藏态各写一份迟早会出现"同一个作品在两条链路上收藏状态不一致"，
+/// 所以口径只能有一份。
+///
+/// 注意这里**不看 `DownloadType`**：自定义源的 `type` 恒为
+/// `DownloadType.other`，区分来源只能靠 `sourceKey`（与 21 号计划
+/// 「信数据自带的 sourceKey」同一结论）。
+FavoriteType customDownloadedFavoriteType(String sourceKey) {
+  if (sourceKey == 'copy_manga') {
+    return FavoriteType.copyManga;
+  }
+  if (sourceKey == 'Komiic') {
+    return FavoriteType.komiic;
+  }
+  return const FavoriteType(0);
+}
+
 class CustomDownloadedItem extends DownloadedItem {
   @override
   double? comicSize;
@@ -1045,6 +1066,19 @@ class CustomDownloadedItem extends DownloadedItem {
 
   final String cover;
 
+  /// 作品宽度 / 高度（像素）。**可空**，缺失一律 `null`。
+  ///
+  /// 用途：列表按真实比例预排版（瀑布流按比例算高度），避免"先按占位比例渲染、
+  /// 图片到位后再跳一下"。
+  ///
+  /// 为什么可空而不是默认 `0`：老记录没有这两个键；`0` 会被当成"比例为 0"算出
+  /// 错误高度（甚至除零），而 `null` 才能让消费侧明确走"比例未知"的占位分支。
+  ///
+  /// 目前只有 Pixiv 写入（`PixivComicInfo.width/height` 是作品级原图尺寸），
+  /// 其余来源留空 —— 它们没有现成的尺寸来源，要填得先解码图片。
+  final int? width;
+  final int? height;
+
   CustomDownloadedItem({
     this.comicSize,
     required this.downloadedEps,
@@ -1057,6 +1091,8 @@ class CustomDownloadedItem extends DownloadedItem {
     required this.sourceName,
     required this.cover,
     required this.comicId,
+    this.width,
+    this.height,
   });
 
   @override
@@ -1085,6 +1121,8 @@ class CustomDownloadedItem extends DownloadedItem {
         "sourceName": sourceName,
         "cover": cover,
         "comicId": comicId,
+        "width": width,
+        "height": height,
       };
 
   CustomDownloadedItem.fromJson(Map<String, dynamic> json)
@@ -1100,7 +1138,11 @@ class CustomDownloadedItem extends DownloadedItem {
         sourceKey = json["sourceKey"] ?? '',
         sourceName = json["sourceName"] ?? '',
         cover = json["cover"] ?? '',
-        comicId = json["comicId"] ?? '';
+        comicId = json["comicId"] ?? '',
+        // 老记录没有这两个键 → null（而不是 0）。
+        // 用 `as num?` 再 toInt：JSON 往返后整型可能退化成 double。
+        width = (json["width"] as num?)?.toInt(),
+        height = (json["height"] as num?)?.toInt();
 
   @override
   Widget createReadingPage({int? ep, int? page}) {
@@ -1110,14 +1152,7 @@ class CustomDownloadedItem extends DownloadedItem {
     } else {
       epsMap["1"] = "EP 1";
     }
-    FavoriteType favType;
-    if (sourceKey == 'copy_manga') {
-      favType = FavoriteType.copyManga;
-    } else if (sourceKey == 'Komiic') {
-      favType = FavoriteType.komiic;
-    } else {
-      favType = const FavoriteType(0);
-    }
+    final favType = customDownloadedFavoriteType(sourceKey);
     var data = LocalReadingData(
       title: name,
       id: id,

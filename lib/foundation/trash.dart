@@ -1,4 +1,4 @@
-﻿import 'dart:async';
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -418,10 +418,31 @@ Future<void> _privilegedMovePath(
   );
 }
 
+/// 该**来源**在**回收站两档分档**里是否归「图集」。
+///
+/// ⚠️ 这只管回收站的「漫画 / 图集」两档归属，**不是** `LocalLibraryComicItem.isAlbum`
+/// （那个决定"在本地库里算不算图集"，会影响库内分档、`albumCount` 计数与搜索）。
+/// 两者用途不同，**不要合并**：否则"回收站里归图集"会顺带把库内分档也改掉，
+/// 让 Pixiv 在本地库页/计数上变成半个图集，那是另一件事。
+///
+/// Pixiv 的下载内容是插画，用户明确希望它在回收站里落「图集」档；
+/// Komiic 下的是漫画，保持「漫画」档。
+bool trashItemIsAlbumForSource(String sourceLabel) {
+  return sourceLabel.trim().toLowerCase() == 'pixiv';
+}
+
 TrashItemKind _inferTrashItemKind(
   Map<String, dynamic> json, {
   required TrashItemScope scope,
 }) {
+  // **来源覆写必须放在最前。**
+  //
+  // 记录里的 `item_kind` 是**删除当时**算好写进 db 的，已经存在的 Pixiv 记录存的是
+  // `comic`。若只在写入侧改判据，用户得先把条目恢复、再重新删一次才能看到效果 ——
+  // 对"这条本来就在回收站里"的现状毫无帮助。这里按来源先判一次，新老记录都能立即生效。
+  if (trashItemIsAlbumForSource(json['sourceLabel'] as String? ?? '')) {
+    return TrashItemKind.album;
+  }
   final rawKind = (json['itemKind'] as String? ?? '').trim();
   if (rawKind == TrashItemKind.album.name) {
     return TrashItemKind.album;

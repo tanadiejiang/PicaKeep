@@ -1,8 +1,11 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:picakeep/base.dart';
 import 'package:picakeep/foundation/app.dart';
+import 'package:picakeep/foundation/app_runtime_mode.dart';
 import 'package:picakeep/foundation/remote_library_data_source.dart';
+import 'package:picakeep/foundation/service_data_source.dart';
 import 'package:picakeep/foundation/trash.dart';
 import 'package:picakeep/tools/translations.dart';
 
@@ -93,10 +96,21 @@ class _TrashPageState extends State<TrashPage> with WidgetsBindingObserver {
       );
       List<RemoteLibraryTrashItem> remoteItems =
           const <RemoteLibraryTrashItem>[];
-      try {
-        remoteItems = await TrashManager.instance.listRemoteItems();
-      } catch (_) {
-        remoteItems = const <RemoteLibraryTrashItem>[];
+      // **先探远程可用性，不可用就不发远程请求。**
+      //
+      // 这里原本是无条件 `await listRemoteItems()`。远程不可达时那个 await 可能
+      // **永不返回**，而外层 `catch` 只能接住"抛错"、接不住"卡住"，于是
+      // `_loadTask` 永不完成 → 整页一直转圈，**连本地档也打不开**。
+      // 真机已复现：断开远程后回收站立即恢复正常。
+      //
+      // 探活走的 `fetchSnapshot()` 自带 3s 超时，所以它本身不会卡；
+      // "配了远程地址但连不上"的最坏代价只是多等 3 秒。
+      if (await _checkRemoteAvailability()) {
+        try {
+          remoteItems = await TrashManager.instance.listRemoteItems();
+        } catch (_) {
+          remoteItems = const <RemoteLibraryTrashItem>[];
+        }
       }
       if (!mounted) {
         return;
@@ -114,6 +128,27 @@ class _TrashPageState extends State<TrashPage> with WidgetsBindingObserver {
       setState(() {
         _errorText = e.toString();
       });
+    }
+  }
+
+  /// 远程是否可用。
+  ///
+  /// 与 `main_favorites_page.dart` / `image_favorites.dart` /
+  /// `download_page_logic_loading.dart` / `local_library_page.dart` 里的同名方法
+  /// **同构** —— 回收站此前是唯一漏接这个判据的页面，结果本地档被远程请求拖死。
+  /// 再遇到"某页在远程不可达时整页转圈"，先查它有没有接这个判据。
+  Future<bool> _checkRemoteAvailability() async {
+    final normalizedAddress = normalizeRemoteServerAddressValue(
+      appdata.settings[remoteServerAddressSettingIndex],
+    );
+    if (normalizedAddress.isEmpty) {
+      return false;
+    }
+    try {
+      final snapshot = await RemoteRuntimeServiceDataSource().fetchSnapshot();
+      return snapshot.connectionState == ServiceConnectionState.online;
+    } catch (_) {
+      return false;
     }
   }
 

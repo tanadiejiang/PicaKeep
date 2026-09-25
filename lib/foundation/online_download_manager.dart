@@ -17,7 +17,10 @@ import 'package:picakeep/foundation/download_model.dart';
 import 'package:picakeep/foundation/download_author_resolver.dart';
 import 'package:picakeep/foundation/image_loader/jm_image_recombine.dart';
 import 'package:picakeep/foundation/local_favorites.dart';
+import 'package:picakeep/foundation/local_library.dart';
 import 'package:picakeep/foundation/log.dart';
+import 'package:picakeep/foundation/pixiv_artifact.dart';
+import 'package:picakeep/foundation/pixiv_download_naming.dart';
 import 'package:picakeep/foundation/untranslated_tags/untranslated_tag_coordinator.dart';
 import 'package:picakeep/network/app_dio.dart';
 import 'package:picakeep/network/eh_network/eh_main_network.dart';
@@ -295,11 +298,7 @@ class OnlineDownloadManager {
   bool isDownloading(String id) => _tasks.containsKey(id);
 
   Future<List<DownloadedItem>> loadCompletedDownloads() async {
-    final roots = <String>{await _defaultOnlineDownloadRoot()};
-    final configured = appdata.settings[22].trim();
-    if (configured.isNotEmpty) {
-      roots.add(configured);
-    }
+    final roots = await _effectiveDownloadRoots();
     final items = <DownloadedItem>[];
     for (final root in roots) {
       final dbPath = '$root${Platform.pathSeparator}download.db';
@@ -355,6 +354,22 @@ class OnlineDownloadManager {
                   directoryName: directory,
                 ),
               );
+            } else if (parsed is CustomDownloadedItem) {
+              // 自定义源（Pixiv / Komiic / 后续注册的第三方源）。
+              //
+              // 与上面四个分支是**并列的具体类**（都直接 extends DownloadedItem），
+              // 互不命中，顺序不影响结果；可读性上放最后是因为它是"兜底那一类"。
+              //
+              // 之前这里**一个分支都没有**：自定义源条目根本进不了 online 列表，
+              // 只能落到老 DownloadManager 的 `CustomDownloadedItem`
+              // （阅读数据没有目录路径）→ 症状是"列表看得见、点进去打不开"。
+              items.add(
+                OnlineDownloadedCustom.fromCustomDownloadedItem(
+                  parsed,
+                  rootPath: root,
+                  directoryName: directory,
+                ),
+              );
             }
           }
         } finally {
@@ -369,7 +384,28 @@ class OnlineDownloadManager {
       }
     }
     await _observeUntranslatedTags(items, context: 'local');
-    return items;
+    return dedupeDownloadItemsById(items);
+  }
+
+  /// 按 [DownloadedItem.id] 去重、**保留先出现的那个**。
+  ///
+  /// 为什么需要：同一个 id 可能同时出现在两个下载根里 —— 用户把 Pixiv 专属目录
+  /// 指到已有数据，或两个根各有一份同名记录。不去重的话列表里会出现"两本一模一样
+  /// 的漫画"，而用户无法分辨该删哪一个。
+  ///
+  /// 抽成 static 纯函数是为了能直接单测（`loadCompletedDownloads` 本身要真实
+  /// sqlite 与 path_provider，成本高）。
+  static List<DownloadedItem> dedupeDownloadItemsById(
+    List<DownloadedItem> items,
+  ) {
+    final seen = <String>{};
+    final deduped = <DownloadedItem>[];
+    for (final item in items) {
+      if (seen.add(item.id)) {
+        deduped.add(item);
+      }
+    }
+    return deduped;
   }
 
   Future<void> _observeUntranslatedTags(
@@ -1300,8 +1336,28 @@ class OnlineDownloadManager {
     task.startSpeedTimer(_notify);
     final comic = task._pixivInfo!;
     try {
-      final downloadRoot = await _resolveOnlineDownloadRoot();
-      final safeDirectory = _safeName(comic.title);
+      final downloadRoot = await _resolveOnlineDownloadRoot(
+        overrideRoot: appdata.settings[pixivDownloadDirSettingIndex],
+      );
+      // 目录名走模板渲染（`settings[153]`，空值由函数兜底成 `{title}`）。
+      //
+      // 为什么不用 `_safeName`：那个函数按 **240 字节**截断（留去重后缀余量），
+      // 而 `renderPixivDirectoryName` 内部是 **255 字节**（ext4/f2fs 单段上限），
+      // 且额外处理 rune 边界（不劈开 emoji）与结尾点。Pixiv 这一个来源走模板函数、
+      // 其余来源仍走 `_safeName`，两条上限不必也不该强行统一。
+      //
+      // ⚠️ 目录名一旦写进 download.db 就是记录的一部分：改模板**只影响新下载**，
+      // 绝不回头重命名已有目录 —— 重命名会让老记录找不到自己的内容。
+      final safeDirectory = renderPixivDirectoryName(
+        template: appdata.settings[pixivDirNameTemplateSettingIndex],
+        title: comic.title,
+        author: comic.author,
+        id: comic.id,
+        // 作品页数：`{pages}` 渲染成 `p3`。此处的目录名同时是**目录形态的目录名**
+        // 与**压缩包/单图形态的文件名基名**，两种形态共用一个名字。
+        pages: comic.pageCount,
+        fallback: comic.id,
+      );
       final root =
           Directory('$downloadRoot${Platform.pathSeparator}$safeDirectory');
       await root.create(recursive: true);
@@ -1379,6 +1435,35 @@ class OnlineDownloadManager {
             errors.isNotEmpty ? errors.first : 'No page downloaded');
       }
 
+      // ── 产物形态（`settings[154]`，默认关）─────────────────────────────
+      //
+      // 开着时：多图 → 根目录下一个 **store 模式 zip**（仅存储不加密），
+      // 单图 → 根目录下一个图片文件。关着时**什么都不做**，产物与改动前逐字节一致。
+      //
+      // 判定用**作品页数**，不用"下载到的文件数"：某一页下载失败会把多图误判成单图，
+      // 那等于把内容截掉。`pageCount` 解析不出来时（0）退回本次页列表长度 ——
+      // 那也是"计划的页数"，与某一页下载成功与否无关，不会误判。
+      final artifactForm = resolvePixivArtifactForm(
+        zipEnabled: pixivMultiPageZipEnabled(
+          appdata.settings[pixivMultiPageZipSettingIndex],
+        ),
+        pageCount: comic.pageCount > 0 ? comic.pageCount : pages.length,
+      );
+      var artifactDirectory = safeDirectory;
+      var artifactSizeMb = _directoryMb(root);
+      if (artifactForm != PixivArtifactForm.directory) {
+        final finalized = await _finalizePixivArtifact(
+          form: artifactForm,
+          sourceDir: root,
+          downloadRoot: downloadRoot,
+          baseName: safeDirectory,
+        );
+        if (finalized != null) {
+          artifactDirectory = finalized.directoryName;
+          artifactSizeMb = finalized.sizeMb;
+        }
+      }
+
       final item = CustomDownloadedItem(
         id: task.id,
         name: comic.title,
@@ -1389,14 +1474,26 @@ class OnlineDownloadManager {
         cover: comic.coverUrl,
         comicId: comic.id,
         downloadedEps: const <int>[0],
-        comicSize: _directoryMb(root),
+        comicSize: artifactSizeMb,
+        // 作品级原图尺寸，直接来自详情响应，**不需要解码任何图片**。
+        //
+        // 语义说明：`PixivComicInfo.width/height` 是**作品级**（首图）尺寸，
+        // 逐页尺寸在 `/ajax/illust/{id}/pages` 的 `PixivPage.width/height`。
+        // 列表按真实比例排版只需要一个作品级比例，故存这个；
+        // **不要**为了"更准"改成逐页存储 —— 多页作品各页尺寸通常一致，
+        // 而逐页存会把 `json` 撑大且消费侧还得决定用哪一页。
+        width: comic.width,
+        height: comic.height,
       )
-        ..directory = safeDirectory
+        ..directory = artifactDirectory
         ..time = DateTime.now();
       await _upsertDownloadRecord(
         rootPath: downloadRoot,
         item: item,
-        directory: safeDirectory,
+        // 落库的 `directory` 就是产物的名字：目录形态是目录名，压缩包/单图形态是
+        // **文件名**（含扩展名）。读取侧靠它拼出绝对路径，写错了症状是
+        // "下载成功但列表里看不到内容"。
+        directory: artifactDirectory,
       );
       task.completed = true;
       App.notifyLocalDataChanged();
@@ -1412,6 +1509,119 @@ class OnlineDownloadManager {
       unawaited(_saveQueue());
       _notify();
       _scheduleNext();
+    }
+  }
+
+  /// 把刚下载好的 Pixiv 图片目录整理成 [form] 指定的产物形态。
+  ///
+  /// 返回 null = **降级**：产物保持目录形态，调用方按目录名落库。
+  ///
+  /// ## 两条不能破的规矩
+  ///
+  /// 1. **顺序**：先确认 zip 写成功（`packagePixivDirectoryToStoreZip` 内部会用
+  ///    `ArchiveReadingService.getIndex` 打开校验），**再**删原图片目录。反过来的话，
+  ///    写失败就等于把用户刚下载的内容删了 —— 这是本功能唯一会丢数据的地方。
+  /// 2. **降级而非失败**：打包异常（磁盘写满、无权限、包写坏…）一律吞掉并保留目录
+  ///    形态，绝不让"整理产物"把一次已经成功的下载变成失败。真实数据都还在原目录里，
+  ///    用户最多是没拿到压缩包。
+  ///
+  /// 关于**磁盘空间**：没有做"打包前预检剩余空间" —— Dart 没有跨平台的空闲空间 API，
+  /// 为此加平台通道/新依赖不值得。空间不足会以 `FileSystemException` 的形式在写入时
+  /// 抛出，被下面的 catch 接住，效果与"预检发现不够"完全相同：放弃打包、保留目录。
+  Future<({String directoryName, double sizeMb})?> _finalizePixivArtifact({
+    required PixivArtifactForm form,
+    required Directory sourceDir,
+    required String downloadRoot,
+    required String baseName,
+  }) async {
+    try {
+      switch (form) {
+        case PixivArtifactForm.archive:
+          final fileName = pixivArtifactFileName(
+            form: form,
+            baseName: baseName,
+          )!;
+          final zipFile = File(
+            '$downloadRoot${Platform.pathSeparator}$fileName',
+          );
+          await packagePixivDirectoryToStoreZip(
+            sourceDir: sourceDir,
+            target: zipFile,
+          );
+          // 走到这里 = zip 已落地并**校验通过**：**从这一刻起产物就是这个包**，
+          // 下面的删目录只是清理。清理失败（权限等）不算打包失败 ——
+          // 包是完整的，记录就该指向包；最坏情况只是磁盘上多留一份原目录。
+          await _deletePixivSourceDir(sourceDir);
+          return (
+            directoryName: fileName,
+            sizeMb: await _fileMb(zipFile),
+          );
+        case PixivArtifactForm.singleImage:
+          final pages = await listPixivPageFiles(sourceDir);
+          // 只留一个文件的前提是**目录里确实只有一页**。页数来源（作品详情响应）
+          // 与实际下载结果万一不一致，多出来的页会被这一步直接丢掉 ——
+          // 宁可退回目录形态，也不能悄悄少给用户几页。
+          if (pages.length != 1) {
+            return null;
+          }
+          final page = pages.single;
+          final fileName = pixivArtifactFileName(
+            form: form,
+            baseName: baseName,
+            imageExtension: pixivExtensionOf(page.path),
+          )!;
+          final target = File(
+            '$downloadRoot${Platform.pathSeparator}$fileName',
+          );
+          // 用"复制 + 校验 + 删目录"而不是 `rename`：`rename` 在"删掉目标 → 改名"
+          // 之间有一段**目标不存在**的窗口（此时旧记录会指向一个不存在的路径），
+          // 复制则是新文件先完整落地，任何时刻都至少有一份完整数据。
+          await page.copy(target.path);
+          if (await target.length() != await page.length()) {
+            throw StateError('single image artifact size mismatch');
+          }
+          await _deletePixivSourceDir(sourceDir);
+          return (
+            directoryName: fileName,
+            sizeMb: await _fileMb(target),
+          );
+        case PixivArtifactForm.directory:
+          return null;
+      }
+    } catch (error, stackTrace) {
+      // 降级路径：不抛、不删原目录，只留一条日志。
+      LogManager.addLog(
+        LogLevel.warning,
+        'OnlineDownload',
+        'pixiv artifact packaging skipped, keeping directory form: '
+            '$error\n$stackTrace',
+      );
+      return null;
+    }
+  }
+
+  /// 产物已经校验通过之后清理原图片目录。
+  ///
+  /// **删不掉不算失败**：包/文件已经完整且会被记进数据库，原目录只是多余副本。
+  /// 把它降级成"打包失败"反而会让记录指回目录，把一份已验证的好产物白白丢掉。
+  Future<void> _deletePixivSourceDir(Directory sourceDir) async {
+    try {
+      await sourceDir.delete(recursive: true);
+    } catch (error, stackTrace) {
+      LogManager.addLog(
+        LogLevel.warning,
+        'OnlineDownload',
+        'pixiv source directory cleanup failed (artifact kept): '
+            '$error\n$stackTrace',
+      );
+    }
+  }
+
+  Future<double> _fileMb(File file) async {
+    try {
+      return await file.length() / 1024 / 1024;
+    } catch (_) {
+      return 0;
     }
   }
 
@@ -2062,10 +2272,17 @@ class OnlineDownloadManager {
     version.value++;
   }
 
-  Future<String> _resolveOnlineDownloadRoot() async {
+  /// 解析在线下载根。
+  ///
+  /// [overrideRoot] 非空时**优先**尝试它，探活失败再回退到常规候选 —— Pixiv 用它接
+  /// `settings[152]`（专属下载目录）。选择"回退"而不是"直接抛错"，是为了让
+  /// "用户填了一个当前不可写的路径"不至于把下载整个卡死：会落到主根并在日志留痕。
+  Future<String> _resolveOnlineDownloadRoot({String? overrideRoot}) async {
     final configured = appdata.settings[22].trim();
     final fallbackRoot = await _defaultOnlineDownloadRoot();
     final candidates = <String>[
+      if (overrideRoot != null && overrideRoot.trim().isNotEmpty)
+        overrideRoot.trim(),
       if (configured.isNotEmpty) configured,
       fallbackRoot,
     ];
@@ -2095,6 +2312,43 @@ class OnlineDownloadManager {
   Future<String> _defaultOnlineDownloadRoot() async {
     return '${(await getApplicationSupportDirectory()).path}'
         '${Platform.pathSeparator}download';
+  }
+
+  /// 所有参与"已下载"读取的在线下载根。
+  ///
+  /// 之前这里是**两处各自内联**拼 `{_defaultOnlineDownloadRoot(), settings[22]}`；
+  /// 加入 Pixiv 专属目录（`settings[152]`）后必须集中到一处 —— 否则下次再添一个根
+  /// 还会漏，而"漏"的表现是**下载成功、但列表里一条都看不到**，不报错、最难排查。
+  ///
+  /// [settings[152]] 为空时不额外加根，Pixiv 自动跟随 `settings[22]` / 默认根。
+  Future<Set<String>> _effectiveDownloadRoots() async {
+    return effectiveDownloadRootsFrom(
+      defaultRoot: await _defaultOnlineDownloadRoot(),
+      configuredRoot: appdata.settings[22],
+      pixivRoot: appdata.settings[pixivDownloadDirSettingIndex],
+    );
+  }
+
+  /// [_effectiveDownloadRoots] 的**纯函数内核**：把"读设置"与"算集合"分开，
+  /// 让根集合的取舍规则可以直接单测，不必构造 path_provider 与真实目录。
+  ///
+  /// 规则：默认根**恒在**；`settings[22]` 与 `settings[152]` 非空（去空白后）才加入；
+  /// 重复值由 Set 天然合并（三个根指向同一目录是合法配置，不该产生重复条目）。
+  static Set<String> effectiveDownloadRootsFrom({
+    required String defaultRoot,
+    required String configuredRoot,
+    required String pixivRoot,
+  }) {
+    final roots = <String>{defaultRoot};
+    final configured = configuredRoot.trim();
+    if (configured.isNotEmpty) {
+      roots.add(configured);
+    }
+    final pixiv = pixivRoot.trim();
+    if (pixiv.isNotEmpty) {
+      roots.add(pixiv);
+    }
+    return roots;
   }
 
   Future<void> _upsertDownloadRecord({
@@ -2326,9 +2580,7 @@ class OnlineDownloadManager {
   /// 返回 (fixed, failed, skipped) 三元组。
   Future<({int fixed, int failed, int skipped})> fixDirectoryNames() async {
     int fixed = 0, failed = 0, skipped = 0;
-    final roots = <String>{await _defaultOnlineDownloadRoot()};
-    final configured = appdata.settings[22].trim();
-    if (configured.isNotEmpty) roots.add(configured);
+    final roots = await _effectiveDownloadRoots();
 
     for (final root in roots) {
       final dbPath = '$root${Platform.pathSeparator}download.db';
@@ -2355,7 +2607,21 @@ class OnlineDownloadManager {
           final newPath =
               Directory('$root${Platform.pathSeparator}$expectedDir');
           if (!oldPath.existsSync()) {
-            // 源目录不存在，只更新 DB（可能已手动改过）
+            // 源目录不存在时**必须确认目标目录真的在**才允许改 DB。
+            //
+            // 这一层保护的场景：产物是**一个文件**（Pixiv 打包开关
+            // `settings[154]`：zip / 单图，`directory` 列里存的是文件名）。
+            // 文件不是目录，`Directory(文件).existsSync()` 恒为 false，
+            // 于是会掉进这里；若照旧直接改 DB，记录就被指到一个**不存在的路径**上 ——
+            // 而文件产物不会被目录扫描补录回来，等于那个包**永久从库里消失**
+            // （内容还在磁盘上，但应用里再也看不到，比报错更难发现）。
+            //
+            // 目标目录存在 = "用户手动改过名"，那才是这个工具本来的用途，
+            // 行为与以前完全一致。
+            if (!newPath.existsSync()) {
+              skipped++;
+              continue;
+            }
             try {
               db.execute(
                 'update download set directory = ? where id = ?',
@@ -2775,6 +3041,150 @@ class OnlineDownloadedNhentai extends NhentaiDownloadedComic {
       page ?? 1,
       ep ?? 1,
     );
+  }
+}
+
+/// 自定义源（Pixiv / Komiic / 后续注册进源表、走在线下载的第三方源）条目的本地
+/// 包装：提供磁盘路径、封面、阅读页。
+///
+/// 与 OnlineDownloadedComic / OnlineDownloadedJmComic / OnlineDownloadedGallery /
+/// OnlineDownloadedNhentai **平行**，补的是 [OnlineDownloadManager.loadCompletedDownloads]
+/// 里唯一缺失的那一个包装类。
+///
+/// ## 为什么必须有它
+///
+/// 自定义源的元数据由 [CustomDownloadedItem] 承载，而它自带的 `createReadingPage`
+/// 造的是老体系的 `LocalReadingData` —— 那个类**没有目录路径**，`loadEp` 只能回头
+/// 问 `DownloadManager` 的章节长度，而这条下载走的是 `OnlineDownloadManager` +
+/// download.db，**根本不在那套体系里** → 退化成 `List.filled(1, "")`
+/// （1 页、路径为空）→ 症状是「已下载页里列表显示正常、点进去打不开」。
+///
+/// ## 为什么用 [LocalPathReadingData] 而不是 [OnlineLocalReadingData]
+///
+/// [OnlineLocalReadingData] 只认「`rootDirectoryPath` 下按 `1.jpg`… 平铺」这一种
+/// 产物形态，两处硬伤：
+/// 1. 它的 `loadEpNetwork` 直接列目录，**不剔除 `cover.jpg`**，而 `_imageIndex`
+///    把非数字文件名当 0 —— 封面会排到第 1 页、整本后移一页。Pixiv 的目录形态
+///    产物恰好把 `cover.jpg` 与页图**平铺在同一个目录**里（见 `_runPixivTask`）。
+/// 2. 它**不认文件产物**：Pixiv 的 zip / 单图形态（`settings[154]`）在这里会拿到
+///    一个 `Directory(zip 路径)`，不存在 → 空列表 → 又变成打不开。
+///
+/// [LocalPathReadingData] 走的是 `_buildDownloadedEpisodeFilesForEp` —— 28 号计划
+/// 落地的**唯一形态分岔口**（目录 / 压缩包 / 单图三种都认，且与目录形态同口径剔
+/// 封面），也正是 managed 模式下 `LocalLibraryComicItem` 走的那条路。用它才能让
+/// "仅本应用下载目录"档与其它档**读到同一批页**。
+class OnlineDownloadedCustom extends CustomDownloadedItem {
+  OnlineDownloadedCustom({
+    required this.rootPath,
+    required this.directoryName,
+    required super.downloadedEps,
+    super.chapters,
+    required super.id,
+    required super.name,
+    required super.subTitle,
+    required super.tags,
+    required super.sourceKey,
+    required super.sourceName,
+    required super.cover,
+    required super.comicId,
+    super.comicSize,
+    super.width,
+    super.height,
+  });
+
+  factory OnlineDownloadedCustom.fromCustomDownloadedItem(
+    CustomDownloadedItem item, {
+    required String rootPath,
+    required String directoryName,
+  }) {
+    return OnlineDownloadedCustom(
+      rootPath: rootPath,
+      directoryName: directoryName,
+      downloadedEps: item.downloadedEps,
+      chapters: item.chapters,
+      id: item.id,
+      name: item.name,
+      subTitle: item.subTitle,
+      tags: item.tags,
+      sourceKey: item.sourceKey,
+      sourceName: item.sourceName,
+      cover: item.cover,
+      comicId: item.comicId,
+      comicSize: item.comicSize,
+      width: item.width,
+      height: item.height,
+    )
+      ..time = item.time
+      ..directory = directoryName;
+  }
+
+  final String rootPath;
+  final String directoryName;
+
+  /// 作品在磁盘上的绝对路径。
+  ///
+  /// ⚠️ **不保证是目录**：28 号之后 Pixiv 的产物可能是一个 zip 或一个图片文件，
+  /// 此时 `directoryName` 带扩展名、这里指向那个文件。所有消费侧都必须按
+  /// "路径"而不是"目录"来对待它（`_buildDownloadedEpisodeFilesForEp` 已同口径）。
+  String get rootDirectoryPath =>
+      '$rootPath${Platform.pathSeparator}$directoryName';
+
+  @override
+  String? get fileSystemPath => rootDirectoryPath;
+
+  /// 本地封面：与其它 Online* 类**同口径**（作品目录下的 `cover.*`）。
+  ///
+  /// 为什么不直接沿用 [CustomDownloadedItem.localCoverPath]：那个读的是 `cover`
+  /// 字段，而自定义源的该字段存的是**网络 URL**（Pixiv 的 `i.pximg.net` 链接），
+  /// `File(url).existsSync()` 恒为 false → 新包装类会让列表封面变空。所以先按本地
+  /// 路径找，找不到才回退父类（父类能处理"cover 字段本身就是本地路径"的老记录）。
+  @override
+  String? get localCoverPath {
+    for (final name in const ['cover.jpg', 'cover.webp', 'cover.png']) {
+      final path = '$rootDirectoryPath${Platform.pathSeparator}$name';
+      if (File(path).existsSync()) {
+        return path;
+      }
+    }
+    return super.localCoverPath;
+  }
+
+  /// 与其它 Online* 类一致：这些条目由 `OnlineDownloadManager` 管理，
+  /// **删除必须走它自己的链路**，条目级的"删除下载"在旧的 DownloadManager 里
+  /// 找不到对应目录（下载根本不在那儿），放开会得到"删不掉"或删错东西。
+  @override
+  bool get canDelete => false;
+
+  @override
+  Widget createReadingPage({int? ep, int? page}) {
+    // eps / hasEp 的算法与 [CustomDownloadedItem.createReadingPage] **逐字一致**：
+    // 只换 ReadingData 的实现并补上目录路径，其余（章节名、收藏类型、ep 语义）
+    // 一个字都不改 —— 换包装类不该顺带改变阅读器里看得见的东西。
+    final epsMap = <String, String>{};
+    if (chapters != null) {
+      epsMap.addAll(chapters!);
+    } else {
+      epsMap['1'] = 'EP 1';
+    }
+    final data = LocalPathReadingData(
+      title: name,
+      id: id,
+      downloadId: id,
+      sourceKey: sourceKey,
+      directoryPath: rootDirectoryPath,
+      hasEp: epsMap.isNotEmpty,
+      eps: epsMap,
+      comicType: comicTypeForDownloadType(type),
+      favoriteType: customDownloadedFavoriteType(sourceKey),
+      tagFlatTags: tags,
+      // 空 episodeFiles = 让 `loadEp` 每次都按 `directoryPath` 现场列页
+      // （目录 / 压缩包 / 单图三形态的唯一分岔口在那里）。
+      episodeFiles: const <int, List<String>>{},
+      downloadedEpisodeIndexes: downloadedEps,
+      // 自定义源没有"本地图集按时间/名称排序"这套设置，关掉以免读设置项。
+      supportsImageSort: false,
+    );
+    return ComicReadingPage(data, page ?? 1, ep ?? 1);
   }
 }
 

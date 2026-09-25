@@ -6,6 +6,20 @@ extension LocalLibrarySettings on LocalLibraryManager {
     return path.isEmpty ? null : path;
   }
 
+  /// Pixiv 专属下载目录（`settings[152]`）；未设置时返回 `null`。
+  ///
+  /// 它与 [configuredOriginalDownloadPath] **对称**：都是一个"额外的下载根"，
+  /// 各自成为一个 `LocalLibrarySourceKind.currentDownload` 源，
+  /// 从而让"已下载列表"能列出落在里面的内容。
+  ///
+  /// ⚠️ 这是读取侧的一半；写入侧在 `online_download_manager._runPixivTask`
+  /// （按同一个设置决定 Pixiv 的落盘根）。两边少接任一处，症状都是
+  /// **"下载成功、但列表里看不到"**。
+  String? get configuredPixivDownloadPath {
+    final path = appdata.settings[pixivDownloadDirSettingIndex].trim();
+    return path.isEmpty ? null : path;
+  }
+
   List<String> get configuredLocalComicPaths =>
       decodeLocalComicPathList(appdata.settings[localComicPathsSettingIndex]);
 

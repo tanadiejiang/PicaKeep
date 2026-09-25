@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:picakeep/foundation/archive/archive_models.dart';
 import 'package:picakeep/foundation/download.dart';
 import 'package:picakeep/foundation/download_model.dart';
 import 'package:picakeep/foundation/history.dart';
@@ -130,6 +131,25 @@ Future<void> ensureHistoryBeforeRead(DownloadedItem comic,
   }
   if (cover.isEmpty) {
     cover = resolveLocalComicCoverPath(comic, legacyTargets: legacyTargets);
+  }
+  // 压缩包产物（Pixiv 打包开关 `settings[154]`）的封面**不在磁盘上**，而在包里：
+  // 上面那条链是**同步**的，只认磁盘路径（`File(...).existsSync()`），
+  // 对 `archive://` 与包内的 `cover.jpg` 都看不见。
+  //
+  // 所以这里只给"路径是压缩包"的情况补一次异步解析 ——
+  // `resolveCoverPathForItem` 已经实现为"压缩包 → 解出封面落到缓存再返回"。
+  // 少了这一步，从「已下载」直接开读时历史记录会没有封面（只有占位图）。
+  // 判定收紧到压缩包，是为了让目录形态与其它来源的行为**一个字都不变**。
+  if (cover.isEmpty &&
+      comic is LocalLibraryComicItem &&
+      isArchivePath(comic.fileSystemPath ?? '')) {
+    try {
+      final resolved =
+          await LocalLibraryManager().resolveCoverPathForItem(comic);
+      if (resolved != null && resolved.trim().isNotEmpty) {
+        cover = resolved;
+      }
+    } catch (_) {}
   }
   await History.ensureForLocalRead(
     target: comic.id,

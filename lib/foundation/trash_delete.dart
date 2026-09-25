@@ -611,7 +611,10 @@ extension TrashManagerDelete on TrashManager {
     return TrashItemRecord(
       id: id,
       scope: TrashItemScope.local,
-      itemKind: item is LocalLibraryComicItem && item.isAlbum
+      // 与读取侧的 `_inferTrashItemKind` 保持同一口径：
+      // 库内算图集 **或** 来源属于插画类（Pixiv）→ 落「图集」档。
+      itemKind: (item is LocalLibraryComicItem && item.isAlbum) ||
+              trashItemIsAlbumForSource(item.sourceDisplayName)
           ? TrashItemKind.album
           : TrashItemKind.comic,
       itemId: snapshot.itemId,

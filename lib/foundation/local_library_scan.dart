@@ -88,6 +88,35 @@ extension LocalLibraryScan on LocalLibraryManager {
     final currentPath = await resolveCurrentDownloadPath();
     final originalPath = configuredOriginalDownloadPath;
 
+    // Pixiv 专属下载目录（`settings[152]`）作为**第二个"本应用下载"源**接入。
+    //
+    // 为什么单独成源、而不是并进 `currentPath`：`resolveCurrentDownloadPath()` 是
+    // **单值**语义，被多处当作"主下载根"使用，改成集合会波及很广；而"原应用下载目录"
+    // 已经给出了对称的先例 —— 多个根 = 多个源，各自有 id 与标题。
+    //
+    // 复用 `currentDownload` 类型而非新增枚举值：这样列表渲染、打开详情、删除、
+    // 回收站等既有链路全部直接可用，不必逐个补 case。
+    //
+    // 只在"本应用下载目录参与"的模式下添加：`managedDataSourceModeOriginalOnly`
+    // 表示用户只要原应用目录，而 Pixiv 的下载属于本应用，此时不该出现。
+    void addPixivSourceIfConfigured() {
+      final pixivPath = configuredPixivDownloadPath;
+      if (pixivPath == null || pixivPath.isEmpty) {
+        return;
+      }
+      if (pixivPath == currentPath || pixivPath == originalPath) {
+        return;
+      }
+      sources.add(
+        LocalLibrarySource(
+          id: 'pixiv_download',
+          title: 'Pixiv 下载目录',
+          path: pixivPath,
+          kind: LocalLibrarySourceKind.currentDownload,
+        ),
+      );
+    }
+
     switch (normalizeManagedDataSourceMode(managedDataSourceMode)) {
       case managedDataSourceModeCurrentAndOriginal:
         sources.add(
@@ -98,6 +127,7 @@ extension LocalLibraryScan on LocalLibraryManager {
             kind: LocalLibrarySourceKind.currentDownload,
           ),
         );
+        addPixivSourceIfConfigured();
         if (originalPath != null && originalPath != currentPath) {
           sources.add(
             LocalLibrarySource(
@@ -131,6 +161,7 @@ extension LocalLibraryScan on LocalLibraryManager {
             kind: LocalLibrarySourceKind.currentDownload,
           ),
         );
+        addPixivSourceIfConfigured();
         break;
     }
 
@@ -171,8 +202,13 @@ extension LocalLibraryScan on LocalLibraryManager {
 
     final cache = await _loadSourceCache(source);
     final hiddenIndex = await LocalTrashStore.instance.hiddenIndex();
-    final sourceDirectoryNames = (await _listDirectoryEntries(source.path))
-        .where((entry) => entry.isDirectory)
+    // ⚠️ 收的是**根下直接子项的名字**（文件与目录都要），不是"目录名"。
+    //
+    // Pixiv 的打包开关（settings[154]）会把一个作品落成**一个 zip 文件**，
+    // download.db 的 `directory` 列里存的就是那个**文件名**。这里只收目录的话，
+    // 这类记录会被判成"本地已删除"而从列表里消失 —— 症状是
+    // **"下载成功、但任何列表里都看不到"**，不报错、最难排查。
+    final sourceChildNames = (await _listDirectoryEntries(source.path))
         .where((entry) => entry.name != _localTrashDirectoryName)
         .map((entry) =>
             Platform.isWindows ? entry.name.toLowerCase() : entry.name)
@@ -231,7 +267,7 @@ extension LocalLibraryScan on LocalLibraryManager {
               rawId,
               rawDirectory,
               baseItem,
-              sourceDirectoryNames,
+              sourceChildNames,
               trustStorageFromDatabase: trustStorageFromDatabase,
             );
             final localItemId = 'local_download::${source.id}::$rawId';
@@ -260,7 +296,7 @@ extension LocalLibraryScan on LocalLibraryManager {
                 : List<int>.generate(eps.length, (index) => index);
             final cachedItem = cache.itemFor(rawId, itemDirectory);
             // trustStorageFromDatabase=true（root 模式）时：
-            // 不再一律标 true，而是用加载开头已经列出的 sourceDirectoryNames
+            // 不再一律标 true，而是用加载开头已经列出的 sourceChildNames
             // 做纯内存匹配——目录名在 set 里的才是真正有本地内容的项，不在的
             // 是 db 有记录但本地已删除/不存在的，标为 false 使其只显示不走通道。
             // 这个检查不走 root 通道（纯字符串比对），零额外 I/O。
@@ -268,12 +304,12 @@ extension LocalLibraryScan on LocalLibraryManager {
                 ? _managedDownloadDirectoryExistsInIndex(
                     source.path,
                     itemDirectory,
-                    sourceDirectoryNames,
+                    sourceChildNames,
                   )
                 : await _managedDownloadDirectoryExists(
                     source.path,
                     itemDirectory,
-                    sourceDirectoryNames,
+                    sourceChildNames,
                   );
             if (!localStorageExists && !showAllDatabaseRecords) {
               continue;
@@ -394,8 +430,10 @@ extension LocalLibraryScan on LocalLibraryManager {
         await _shouldUsePrivilegedFallbackForDirectory(source.path);
     final cache = await _loadSourceCache(source);
     final hiddenIndex = await LocalTrashStore.instance.hiddenIndex();
-    final sourceDirectoryNames = (await _listDirectoryEntries(source.path))
-        .where((entry) => entry.isDirectory)
+    // 同 [_loadManagedDownloadSourceMetadata]：文件与目录都要收，
+    // 打包开关（settings[154]）产出的 zip 是一个**文件**，它的名字就在
+    // download.db 的 `directory` 列里。
+    final sourceChildNames = (await _listDirectoryEntries(source.path))
         .where((entry) => entry.name != _localTrashDirectoryName)
         .map((entry) =>
             Platform.isWindows ? entry.name.toLowerCase() : entry.name)
@@ -452,7 +490,7 @@ extension LocalLibraryScan on LocalLibraryManager {
           rawId,
           rawDirectory,
           baseItem,
-          sourceDirectoryNames,
+          sourceChildNames,
           trustStorageFromDatabase: trustStorageFromDatabase,
         );
         final localItemId = 'local_download::${source.id}::$rawId';
@@ -484,12 +522,12 @@ extension LocalLibraryScan on LocalLibraryManager {
             ? _managedDownloadDirectoryExistsInIndex(
                 source.path,
                 itemDirectory,
-                sourceDirectoryNames,
+                sourceChildNames,
               )
             : await _managedDownloadDirectoryExists(
                 source.path,
                 itemDirectory,
-                sourceDirectoryNames,
+                sourceChildNames,
               );
         if (!localStorageExists && !showAllDatabaseRecords) {
           continue;

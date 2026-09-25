@@ -220,6 +220,15 @@ Future<List<String>> _buildDownloadedEpisodeFilesForEp(
   String itemDirectory,
   int ep,
 ) async {
+  // 产物可能**不是目录**：Pixiv 的"多图打包、单图直放"（`settings[154]`）会把一个
+  // 作品落成**一个 zip 文件**或**一个图片文件**，此时 `itemDirectory` 指向文件。
+  // 判断放在最前面，既省掉对文件路径白做一次目录枚举，也让"这不是文件产物"的
+  // 情况**原样落回下面的目录逻辑** —— 老内容（目录形态）与图集等路径的行为不变。
+  final fileArtifact = await _buildFileArtifactEpisodeFiles(itemDirectory, ep);
+  if (fileArtifact != null) {
+    return fileArtifact;
+  }
+
   final entries = await _listDirectoryEntries(itemDirectory);
   final childDirs = entries.where((entry) => entry.isDirectory).toList()
     ..sort((a, b) => _naturalCompare(a.name, b.name));
@@ -249,6 +258,92 @@ Future<List<String>> _buildDownloadedEpisodeFilesForEp(
     );
   }
   return const <String>[];
+}
+
+/// [itemDirectory] 是**文件产物**（压缩包 / 单图）时按页列页。
+///
+/// 返回 `null` 表示"这不是文件产物" —— 调用方必须落回原来的目录逻辑。
+/// 三种情况返回空列表而不是 `null`：路径确实是文件产物、但页号取不到内容。
+Future<List<String>?> _buildFileArtifactEpisodeFiles(
+  String itemDirectory,
+  int ep,
+) async {
+  final isArchive = isArchivePath(itemDirectory);
+  if (!isArchive && !_isVisibleImagePath(itemDirectory)) {
+    return null;
+  }
+  // 只看 dart:io：`PrivilegedStorageAccess` 的 exists 对文件与目录都返回 true，
+  // 用它就无法区分"这是个 zip"和"这是个同名目录"，会把老内容判错。
+  bool isFile;
+  try {
+    isFile = File(itemDirectory).existsSync();
+  } catch (_) {
+    isFile = false;
+  }
+  if (!isFile) {
+    return null;
+  }
+  if (!isArchive) {
+    // 单图产物：整个作品就是这一个文件（目录形态里的 `1.jpg` 已被改名成它）。
+    return (ep == 0 || ep == 1) ? <String>[itemDirectory] : const <String>[];
+  }
+  return _buildArchiveEpisodeFilesForEp(itemDirectory, ep);
+}
+
+/// 压缩包产物按页列页。
+///
+/// 条目名就是打包时写进去的 `1.jpg`、`2.jpg`…，所以复用阅读侧既有的
+/// [buildArchiveEpisodes]（分组 + 自然排序）即可，不必自己再排一遍 ——
+/// 两处各排一份的话，zip 阅读顺序迟早与目录形态对不上。
+///
+/// ⚠️ 必须**剔除封面**：打包时 `cover.jpg` 也写进了 zip（与目录形态的产物一致），
+/// 不剔除它会混进页面列表，整本页序从第一页起就错位。目录形态由
+/// `_sortedImageFilesForPath` 做同一件事，这里保持同口径。
+Future<List<String>> _buildArchiveEpisodeFilesForEp(
+  String archivePath,
+  int ep,
+) async {
+  final ArchiveIndex index;
+  try {
+    index = await ArchiveReadingService.instance.getIndex(archivePath);
+  } catch (_) {
+    // 打不开（损坏 / 无权限）就当没有内容：调用方渲染空白，而不是抛到阅读页。
+    return const <String>[];
+  }
+  final episodes = buildArchiveEpisodes(index).episodeFiles;
+  if (episodes.isEmpty) {
+    return const <String>[];
+  }
+  final exact = episodes[ep];
+  if (exact != null && exact.isNotEmpty) {
+    return _withoutArchiveCoverEntries(exact);
+  }
+  if (episodes.length == 1 && (ep == 0 || ep == 1)) {
+    return _withoutArchiveCoverEntries(episodes.values.first);
+  }
+  if (ep == 0 || ep == 1) {
+    final keys = episodes.keys.toList()..sort();
+    for (final key in keys) {
+      final files = episodes[key];
+      if (files != null && files.isNotEmpty) {
+        return _withoutArchiveCoverEntries(files);
+      }
+    }
+  }
+  return const <String>[];
+}
+
+/// 从 archive URI 列表里剔除封面条目。
+///
+/// 与 [_sortedImageFilesForPath] 同口径：**全被剔光时回退到原列表** ——
+/// 一个"只有 cover.jpg"的包该显示那一页，而不是变成打不开的空列表。
+List<String> _withoutArchiveCoverEntries(List<String> archiveUris) {
+  final visible = archiveUris
+      .where(
+        (uri) => !_isCoverLikePath(parseArchiveUri(uri)?.entryPath ?? uri),
+      )
+      .toList();
+  return visible.isNotEmpty ? visible : List<String>.from(archiveUris);
 }
 
 List<String> _buildLocalEpisodeNames(int episodeCount) {

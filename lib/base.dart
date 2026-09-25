@@ -11,6 +11,7 @@ import 'foundation/app_runtime_mode.dart';
 import 'foundation/local_data_source.dart';
 import 'foundation/local_library_settings.dart';
 import 'foundation/log.dart';
+import 'foundation/pixiv_download_naming.dart';
 import 'foundation/history.dart';
 import 'foundation/local_favorites.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -183,7 +184,8 @@ class Appdata {
     '{}', //150 comicTileDisplayConfig 卡片信息显示配置 JSON，结构 {"local":{...},"online":{...},"search":{"<源key>":{...}}}，每个节点 {"tagRows":2,"showTags":true,"showId":true}（tagRows 0=不限行）；读写见 foundation/comic_tile_display_config.dart
     '0', //151 originalDirUsageMode 原应用下载目录的使用方式：0=直接使用（原地读取，默认，不占额外空间）；1=复制到本应用下载目录后再使用（摆脱对原目录与权限的依赖，但占用双倍空间）
     '', //152 pixivDownloadDir Pixiv 专属下载目录；空=跟随「本应用下载目录」（settings[22]）。Pixiv 是单图作品，与漫画混在一个目录里不好翻，所以允许单独指定
-    '{title}', //153 pixivDirNameTemplate Pixiv 下载的目录名模板，支持 {title} / {author} / {id}；默认 {title} 与改动前行为一致。渲染见 foundation/pixiv_download_naming.dart
+    '{title}', //153 pixivDirNameTemplate Pixiv 下载的目录名模板，支持 {title} / {author} / {id} / {pages}；默认 {title} 与改动前行为一致。渲染见 foundation/pixiv_download_naming.dart
+    '0', //154 pixivMultiPageZip Pixiv 多图打包：1=多图打成一个 zip（仅存储不加密）、单图直接放图片文件；0=一个作品一个目录（默认，与改动前逐字节一致）。读取侧必须同时认两种形态，见 local_library_static.dart
   ];
 
   List<String> implicitData = [
@@ -316,6 +318,10 @@ class Appdata {
     settings[externalToolVisibilitySettingIndex] =
         normalizeExternalToolVisibilitySetting(
             settings[externalToolVisibilitySettingIndex]);
+    // Pixiv 多图打包开关（`settings[154]`）：值不是 '1' 就落回 '0'（关）——
+    // 产物形态是兼容性变更，默认保持现状最安全。
+    settings[pixivMultiPageZipSettingIndex] =
+        normalizePixivMultiPageZip(settings[pixivMultiPageZipSettingIndex]);
     setManagedDataSourceMode(settings[managedDataSourceModeSettingIndex]);
     _syncArchiveRuntimeSettings();
     var settingsChanged = hadMissingSettings;
@@ -495,6 +501,15 @@ class Appdata {
       settings[externalToolVisibilitySettingIndex] =
           normalizeExternalToolVisibilitySetting(
               settings[externalToolVisibilitySettingIndex]);
+      // Pixiv 下载设置：目录去掉首尾空白（空串 = 跟随 settings[22]）；
+      // 模板空值回落到默认 `{title}`，避免设置数组里留空白串。
+      settings[pixivDownloadDirSettingIndex] =
+          settings[pixivDownloadDirSettingIndex].trim();
+      settings[pixivDirNameTemplateSettingIndex] =
+          normalizePixivDirNameTemplate(
+              settings[pixivDirNameTemplateSettingIndex]);
+      settings[pixivMultiPageZipSettingIndex] =
+          normalizePixivMultiPageZip(settings[pixivMultiPageZipSettingIndex]);
       setManagedDataSourceMode(settings[managedDataSourceModeSettingIndex]);
       settings[22] = downloadPath;
       settings[13] = authRequired;
