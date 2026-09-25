@@ -84,6 +84,26 @@ class PicaKeepShizukuFileService() : IPicaKeepShizukuFileService.Stub() {
         throw IllegalStateException(lastError ?: "文件写入失败")
     }
 
+    override fun createDirectory(path: String) {
+        var lastError: String? = null
+        for (candidate in candidatePathsForShizuku(path)) {
+            val directory = File(candidate)
+            // 幂等：已存在同名目录视为创建成功，便于调用方重试。
+            if (directory.isDirectory) {
+                return
+            }
+            if (directory.exists()) {
+                lastError = "同名文件已存在，无法创建目录"
+                continue
+            }
+            if (directory.mkdirs()) {
+                return
+            }
+            lastError = "创建目录失败"
+        }
+        throw IllegalStateException(lastError ?: "创建目录失败")
+    }
+
     override fun deletePath(path: String) {
         var lastError: String? = null
         for (candidate in candidatePathsForShizuku(path)) {

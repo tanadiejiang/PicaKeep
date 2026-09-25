@@ -156,7 +156,10 @@ class _ExplorePageState extends State<ExplorePage>
             for (final source in sources)
               Tab(
                   height: 42,
-                  text: source.loggedIn
+                  // 「（未登录）」只在**该源确实需要登录才有内容**时才加。
+                  // `requiresLogin == false` 的源（Pixiv / Komiic）游客也能浏览
+                  // 推荐与榜单，打上"未登录"会让人以为页签点进去是空的。
+                  text: (source.loggedIn || !source.descriptor.requiresLogin)
                       ? source.descriptor.name
                       : '${source.descriptor.name}（未登录）')
           ],

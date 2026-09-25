@@ -12,6 +12,8 @@ import 'package:picakeep/foundation/download_model.dart';
 import 'package:picakeep/foundation/history.dart';
 import 'package:picakeep/foundation/local_library.dart';
 import 'package:picakeep/foundation/remote_library_data_source.dart';
+import 'package:picakeep/pages/online_common/online_comic_list_item.dart';
+import 'package:picakeep/tools/history_cover.dart';
 import 'package:picakeep/tools/read_history_helper.dart';
 import 'package:picakeep/tools/translations.dart';
 
@@ -136,7 +138,13 @@ class _HistoryPageState extends State<HistoryPage> {
   ImageProvider<Object>? _coverImageProvider(History item) {
     final cover = item.cover.trim();
     if (cover.startsWith('http://') || cover.startsWith('https://')) {
-      return NetworkImage(cover);
+      // 必须按源补鉴权头并走 OnlineImageManager 缓存：Pixiv 的 i.pximg.net
+      // 缺 Referer 会直接 403（真机表现为只有占位图），而裸 NetworkImage
+      // 既没有请求头也没有磁盘缓存。见 tools/history_cover.dart。
+      return onlineCoverProvider(
+        url: cover,
+        headers: historyCoverHeaders(item),
+      );
     }
     if (cover.isNotEmpty && (cover.startsWith('/') || cover.contains(':\\'))) {
       return FileImage(File(cover));

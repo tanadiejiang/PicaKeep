@@ -60,6 +60,33 @@ ImageProvider _cachedCoverProvider(String key, ImageProvider Function() build) {
   return provider;
 }
 
+/// 按 URL + 鉴权头构造封面 imageProvider（带实例缓存）。
+///
+/// - [headers] 为空 → 裸 `NetworkImage`；
+/// - [headers] 非空 → 带 header 的 `StreamImageProvider`（走 `OnlineImageManager`
+///   的**磁盘缓存**与 in-flight 去重）。
+///
+/// 单独抽出来是给"手上只有一个封面 URL 和一组鉴权头"的调用方用的，
+/// 例如历史记录页：「我」页面的历史卡片与 `HistoryPage` 都只有 `History` 条目，
+/// 拿不到 `BaseComic`，但同样需要 Pixiv 这类有防盗链的源的 headers ——
+/// 否则封面会直接 403，只剩占位图。
+ImageProvider onlineCoverProvider({
+  required String url,
+  Map<String, String> headers = const <String, String>{},
+}) {
+  if (headers.isEmpty) {
+    return _cachedCoverProvider('plain|$url', () => NetworkImage(url));
+  }
+  final key = 'auth|$url|${_headersKey(headers)}';
+  return _cachedCoverProvider(
+    key,
+    () => StreamImageProvider.withProgress(
+      () => OnlineImageManager.instance.getImage(url, headers: headers),
+      url,
+    ),
+  );
+}
+
 /// 封面 imageProvider 构造（带实例缓存）。
 ///
 /// - 源未提供 [ComicSource.imageHeadersBuilder] → 裸 `NetworkImage`；
@@ -75,18 +102,8 @@ ImageProvider onlineComicCoverProvider({
 }) {
   final url = comic.cover;
   final builder = source.imageHeadersBuilder;
-  final headers = builder?.call(comic);
-  if (headers == null || headers.isEmpty) {
-    return _cachedCoverProvider('plain|$url', () => NetworkImage(url));
-  }
-  final key = 'auth|$url|${_headersKey(headers)}';
-  return _cachedCoverProvider(
-    key,
-    () => StreamImageProvider.withProgress(
-      () => OnlineImageManager.instance.getImage(url, headers: headers),
-      url,
-    ),
-  );
+  final headers = builder?.call(comic) ?? const <String, String>{};
+  return onlineCoverProvider(url: url, headers: headers);
 }
 
 /// 在线列表条目卡片。搜索页与探索页共用同一实现，保证两处观感与跳转一致。
@@ -153,6 +170,10 @@ class OnlineComicListItem extends StatelessWidget {
         'jm' => FavoriteType.jm,
         'ehentai' => FavoriteType.ehentai,
         'nhentai' => FavoriteType.nhentai,
+        // 第十八轮新增源：命中专属 FavoriteType，避免落到 hashCode 兜底
+        // 后与本地收藏里真实写入的 key 对不上（表现为卡片永远不显示已收藏）。
+        'pixiv' => FavoriteType.pixiv,
+        'komiic' => FavoriteType.komiic,
         _ => FavoriteType(source.key.hashCode),
       },
       cardDisplayConfig: cardConfig,

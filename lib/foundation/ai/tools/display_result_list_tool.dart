@@ -49,8 +49,11 @@ class DisplayResultListTool extends AiTool {
                     aiSourceJm,
                     aiSourceEhentai,
                     aiSourceNhentai,
+                    aiSourcePixiv,
+                    aiSourceKomiic,
                   ],
-                  'description': '来源：picacg / jm / ehentai / nhentai',
+                  'description':
+                      '来源：picacg / jm / ehentai / nhentai / pixiv / komiic',
                 },
                 'tags': {
                   'type': 'array',

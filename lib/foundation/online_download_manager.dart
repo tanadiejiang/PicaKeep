@@ -24,8 +24,11 @@ import 'package:picakeep/network/eh_network/eh_main_network.dart';
 import 'package:picakeep/network/eh_network/eh_models.dart';
 import 'package:picakeep/network/eh_network/get_gallery_id.dart';
 import 'package:picakeep/network/jm_network/jm_network.dart';
+// 第十八轮新增源的下载载体与网络层。
+import 'package:picakeep/network/komiic_network/komiic_network.dart';
 import 'package:picakeep/network/nhentai_network/nhentai_main_network.dart';
 import 'package:picakeep/network/picacg_network/picacg_network.dart';
+import 'package:picakeep/network/pixiv_network/pixiv_network.dart';
 import 'package:picakeep/network/res.dart';
 import 'package:picakeep/pages/reader/comic_reading_page.dart';
 import 'package:picakeep/tools/tags_translation.dart';
@@ -37,6 +40,8 @@ class OnlineDownloadTask {
         _jmInfo = jmInfo,
         _gallery = null,
         _nhentaiComic = null,
+        _pixivInfo = null,
+        _komiicInfo = null,
         sourceKey = 'jm';
 
   OnlineDownloadTask.picacg({required PicacgComicItem comic})
@@ -44,6 +49,8 @@ class OnlineDownloadTask {
         _jmInfo = null,
         _gallery = null,
         _nhentaiComic = null,
+        _pixivInfo = null,
+        _komiicInfo = null,
         sourceKey = 'picacg';
 
   OnlineDownloadTask.ehentai({required Gallery gallery})
@@ -51,6 +58,8 @@ class OnlineDownloadTask {
         _jmInfo = null,
         _gallery = gallery,
         _nhentaiComic = null,
+        _pixivInfo = null,
+        _komiicInfo = null,
         sourceKey = 'ehentai';
 
   OnlineDownloadTask.nhentai({required NhentaiComic nhentaiComic})
@@ -58,12 +67,42 @@ class OnlineDownloadTask {
         _jmInfo = null,
         _gallery = null,
         _nhentaiComic = nhentaiComic,
+        _pixivInfo = null,
+        _komiicInfo = null,
         sourceKey = 'nhentai';
+
+  /// 第十八轮：Pixiv（**单本多图、无章节**，与 nhentai 同形态）。
+  OnlineDownloadTask.pixiv({required PixivComicInfo pixivInfo})
+      : _comic = null,
+        _jmInfo = null,
+        _gallery = null,
+        _nhentaiComic = null,
+        _pixivInfo = pixivInfo,
+        _komiicInfo = null,
+        sourceKey = 'pixiv';
+
+  /// 第十八轮：Komiic（**有章节**，与 jm 同形态）。
+  ///
+  /// sourceKey 用**大写 `'Komiic'`**：这是本项目下载/历史/收藏侧对该源的既有
+  /// 约定（见 `download_model.dart` 的 `DownloadType.komiic → 'Komiic'`、
+  /// `history.dart` 的 `_legacyCustomHistorySourceKeys`、`local_favorites.dart` 的
+  /// `_preferredCustomFavoriteSourceKey`）。用错大小写会让已下载条目与本地收藏
+  /// 静默命不中（表现为"下载完仍是未下载"）。
+  OnlineDownloadTask.komiic({required KomiicComicInfo komiicInfo})
+      : _comic = null,
+        _jmInfo = null,
+        _gallery = null,
+        _nhentaiComic = null,
+        _pixivInfo = null,
+        _komiicInfo = komiicInfo,
+        sourceKey = 'Komiic';
 
   final PicacgComicItem? _comic;
   final JmComicInfo? _jmInfo;
   final Gallery? _gallery;
   final NhentaiComic? _nhentaiComic;
+  final PixivComicInfo? _pixivInfo;
+  final KomiicComicInfo? _komiicInfo;
   final String sourceKey;
 
   // 向前兼容的 comic getter（仅 picacg 任务有效）
@@ -75,6 +114,12 @@ class OnlineDownloadTask {
   /// nhentai 画廊载体（仅 nhentai 任务有效）。
   NhentaiComic get nhentaiComic => _nhentaiComic!;
 
+  /// Pixiv 作品载体（仅 pixiv 任务有效）。
+  PixivComicInfo get pixivInfo => _pixivInfo!;
+
+  /// Komiic 作品载体（仅 Komiic 任务有效）。
+  KomiicComicInfo get komiicInfo => _komiicInfo!;
+
   /// 通用 display getters
   String get taskId {
     switch (sourceKey) {
@@ -84,6 +129,15 @@ class OnlineDownloadTask {
         return getGalleryId(_gallery!.link); // 无前缀，与 DownloadedGallery.id 一致
       case 'nhentai':
         return 'nhentai${_nhentaiComic!.id}';
+      // 必须与 PixivReadingData.downloadId 一致（`pixiv{id}`），
+      // 否则下载完成后 ReadingData.downloaded 恒为 false。
+      case 'pixiv':
+        return 'pixiv${_pixivInfo!.id}';
+      // 必须与 KomiicReadingData.downloadId 一致（`komiic{id}`，**小写前缀**）。
+      // 注意本 case 与上面 sourceKey 的大小写不同：sourceKey 侧用 `'Komiic'`
+      // 对齐历史/收藏约定，而 downloadId 前缀用小写对齐阅读器。
+      case 'Komiic':
+        return 'komiic${_komiicInfo!.id}';
       default:
         return _comic!.id;
     }
@@ -97,6 +151,10 @@ class OnlineDownloadTask {
         return _gallery!.title;
       case 'nhentai':
         return _nhentaiComic!.title;
+      case 'pixiv':
+        return _pixivInfo!.title;
+      case 'Komiic':
+        return _komiicInfo!.title;
       default:
         return _comic!.title;
     }
@@ -110,8 +168,44 @@ class OnlineDownloadTask {
         return _gallery!.coverPath;
       case 'nhentai':
         return _nhentaiComic!.cover;
+      case 'pixiv':
+        return _pixivInfo!.coverUrl;
+      case 'Komiic':
+        return _komiicInfo!.coverUrl;
       default:
         return _comic!.cover;
+    }
+  }
+
+  /// [taskCover] 对应的请求头，**必须按源给**。
+  ///
+  /// 下载管理器展示的是**在线封面 URL**（不是本地文件），而 `i.pximg.net`
+  /// 与 Komiic 的 `/api/image/` 都校验 Referer：缺了直接 403，界面上只剩破图。
+  /// 没有防盗链的源看起来一切正常 —— 这正是"只有某些源的封面不显示"的原因。
+  Map<String, String> get taskCoverHeaders {
+    switch (sourceKey) {
+      case 'jm':
+        return getJmImgHeaders();
+      case 'ehentai':
+        return {
+          'Cookie': EhNetwork().cookiesStr,
+          'User-Agent': EhNetwork.ehUA,
+          'Referer': EhNetwork().ehBaseUrl,
+        };
+      case 'nhentai':
+        return const {'Referer': 'https://nhentai.net/'};
+      case 'pixiv':
+        return const {
+          'Referer': 'https://www.pixiv.net/',
+          'User-Agent': PixivNetwork.pixivWebUA,
+        };
+      case 'Komiic':
+        return const {
+          'Referer': 'https://komiic.com/',
+          'User-Agent': KomiicNetwork.komiicUA,
+        };
+      default:
+        return const <String, String>{};
     }
   }
 
@@ -482,6 +576,39 @@ class OnlineDownloadManager {
     return const Res(true);
   }
 
+  /// 入队一个 Pixiv 作品（**单本多图、无章节**）。供详情页下载按钮调用。
+  ///
+  /// 去重：同 `pixiv{illustId}` 标识不重复入队。totalEps 恒为 1；
+  /// totalPages 先从详情页的 `pageCount` 预估，下载时以真实 pages 数为准。
+  Future<Res<bool>> enqueuePixiv(PixivComicInfo comic) async {
+    final key = 'pixiv${comic.id}';
+    if (_tasks.containsKey(key)) return const Res(true);
+    final task = OnlineDownloadTask.pixiv(pixivInfo: comic)
+      ..totalEps = 1
+      ..totalPages = comic.pageCount;
+    _tasks[task.id] = task;
+    _notify();
+    unawaited(_saveQueue());
+    _scheduleNext();
+    return const Res(true);
+  }
+
+  /// 入队一个 Komiic 作品（**有章节**）。供详情页下载按钮调用。
+  ///
+  /// 去重：同 `komiic{comicId}` 标识不重复入队。totalEps = 章节数；
+  /// totalPages 逐章刷新（章节页数只能逐章查）。
+  Future<Res<bool>> enqueueKomiic(KomiicComicInfo comic) async {
+    final key = 'komiic${comic.id}';
+    if (_tasks.containsKey(key)) return const Res(true);
+    final task = OnlineDownloadTask.komiic(komiicInfo: comic)
+      ..totalEps = comic.chapters.length;
+    _tasks[task.id] = task;
+    _notify();
+    unawaited(_saveQueue());
+    _scheduleNext();
+    return const Res(true);
+  }
+
   /// 找队列里第一个待下载的任务启动（若已有任务在跑则跳过）
   void _scheduleNext() {
     if (_running) return;
@@ -503,6 +630,10 @@ class OnlineDownloadManager {
       await _runEhentaiTask(task);
     } else if (task.sourceKey == 'nhentai') {
       await _runNhentaiTask(task);
+    } else if (task.sourceKey == 'pixiv') {
+      await _runPixivTask(task);
+    } else if (task.sourceKey == 'Komiic') {
+      await _runKomiicTask(task);
     } else {
       await _runPicacgTask(task);
     }
@@ -1154,6 +1285,310 @@ class OnlineDownloadManager {
     }
   }
 
+  /// Pixiv 下载执行体（**单本多图、无章节**，与 nhentai 同形态）。
+  ///
+  /// 数据源是 `/ajax/illust/{id}/pages` 一次返回的完整 URL 列表，故无需逐页
+  /// 解密。写盘到根目录 `1.{ext}…N.{ext}`，完成后写 [CustomDownloadedItem]
+  /// 落库（Komiic 的历史/收藏类型表已含 `komiic`，Pixiv 走通用的
+  /// `CustomDownloadedItem` + `sourceKey='pixiv'`，无需新增模型）。
+  ///
+  /// 图片使用 `regular` 档而非 `original`：原图体积可达数十 MB/页，整套作品
+  /// 下载会成倍放大；`regular` 已是 Pixiv 网页默认展示档。
+  Future<void> _runPixivTask(OnlineDownloadTask task) async {
+    if (_running) return;
+    _running = true;
+    task.startSpeedTimer(_notify);
+    final comic = task._pixivInfo!;
+    try {
+      final downloadRoot = await _resolveOnlineDownloadRoot();
+      final safeDirectory = _safeName(comic.title);
+      final root =
+          Directory('$downloadRoot${Platform.pathSeparator}$safeDirectory');
+      await root.create(recursive: true);
+
+      // Pixiv 图片 CDN 有严格 Referer 防盗链，缺 Referer 会 403。
+      const headers = {
+        'Referer': 'https://www.pixiv.net/',
+        'User-Agent': PixivNetwork.pixivWebUA,
+      };
+
+      // 封面（失败不阻断正文）。
+      if (comic.coverUrl.isNotEmpty) {
+        try {
+          await _downloadFile(
+            task,
+            comic.coverUrl,
+            File('${root.path}${Platform.pathSeparator}cover.jpg'),
+            headers: headers,
+          );
+        } catch (e) {
+          LogManager.addLog(
+              LogLevel.warning, 'OnlineDownload', 'pixiv cover failed: $e');
+        }
+      }
+
+      final pagesRes = await PixivNetwork().getComicPages(comic.id);
+      if (pagesRes.error) {
+        throw Exception(pagesRes.errorMessageWithoutNull);
+      }
+      final pages = pagesRes.data;
+      if (pages.isEmpty) {
+        throw Exception('No page found');
+      }
+
+      task.currentEp = 1;
+      task.currentEpName = comic.title;
+      task.currentPage = 0;
+      task.totalPages = pages.length;
+      _notify();
+
+      var completedPages = 0;
+      final concurrency = int.tryParse(appdata.settings[79]) ?? 6;
+      final semaphore = _Semaphore(concurrency);
+      final errors = <String>[];
+      final futures = <Future<void>>[];
+      for (var pageIndex = 0; pageIndex < pages.length; pageIndex++) {
+        _throwIfCancelled(task);
+        // 档位回退：regular 为空的老作品退到 small / thumbMini，
+        // 避免个别页拿不到 regular 时整页缺失。
+        final url = _pixivPageUrl(pages[pageIndex]);
+        if (url.isEmpty) {
+          errors.add('page ${pageIndex + 1}: empty url');
+          continue;
+        }
+        final file = File(
+          '${root.path}${Platform.pathSeparator}${pageIndex + 1}${_imageExtension(url)}',
+        );
+        futures.add(semaphore.run(() async {
+          _throwIfCancelled(task);
+          try {
+            await _downloadFile(task, url, file, headers: headers);
+          } catch (e) {
+            errors.add('page ${pageIndex + 1}: $e');
+            return;
+          }
+          completedPages++;
+          task.currentPage = completedPages;
+          _notify();
+        }));
+      }
+      await Future.wait(futures);
+      _throwIfCancelled(task);
+      if (completedPages == 0) {
+        throw Exception(
+            errors.isNotEmpty ? errors.first : 'No page downloaded');
+      }
+
+      final item = CustomDownloadedItem(
+        id: task.id,
+        name: comic.title,
+        subTitle: comic.author,
+        tags: comic.tags,
+        sourceKey: 'pixiv',
+        sourceName: 'Pixiv',
+        cover: comic.coverUrl,
+        comicId: comic.id,
+        downloadedEps: const <int>[0],
+        comicSize: _directoryMb(root),
+      )
+        ..directory = safeDirectory
+        ..time = DateTime.now();
+      await _upsertDownloadRecord(
+        rootPath: downloadRoot,
+        item: item,
+        directory: safeDirectory,
+      );
+      task.completed = true;
+      App.notifyLocalDataChanged();
+    } on _OnlineDownloadCancelled catch (_) {
+      if (!task.paused) task.cancelled = true;
+    } catch (error, stackTrace) {
+      task.error = error.toString();
+      LogManager.addLog(
+          LogLevel.error, 'OnlineDownload', '$error\n$stackTrace');
+    } finally {
+      _running = false;
+      task.stopSpeedTimer();
+      unawaited(_saveQueue());
+      _notify();
+      _scheduleNext();
+    }
+  }
+
+  /// Pixiv 单页取 URL：`regular` 优先，空则退 `small` → `thumbMini`。
+  ///
+  /// 抽成顶层语义的私有方法是为了让"档位回退"只有一处定义 —— 阅读器侧
+  /// （PixivReadingData）有同样的回退链，两处口径必须一致。
+  String _pixivPageUrl(PixivPage page) {
+    for (final candidate in <String>[
+      page.regular,
+      page.small,
+      page.thumbMini,
+    ]) {
+      if (candidate.trim().isNotEmpty) return candidate;
+    }
+    return '';
+  }
+
+  /// Komiic 下载执行体（**有章节**，与 jm 同形态）。
+  ///
+  /// 逐章 `getImages(chapterId)` 取该章全部图片 URL，写到每章独立的数字目录
+  /// `1/`、`2/`…（与 jm 的目录约定一致，便于 `LocalReadingData` 按 ep 定位）。
+  /// 完成后写 [CustomDownloadedItem]，`sourceKey` 用**大写 `'Komiic'`**
+  /// 以对齐历史/收藏侧的既有约定。
+  Future<void> _runKomiicTask(OnlineDownloadTask task) async {
+    if (_running) return;
+    _running = true;
+    task.startSpeedTimer(_notify);
+    final comic = task._komiicInfo!;
+    try {
+      final downloadRoot = await _resolveOnlineDownloadRoot();
+      final safeDirectory = _safeName(comic.title);
+      final root =
+          Directory('$downloadRoot${Platform.pathSeparator}$safeDirectory');
+      await root.create(recursive: true);
+
+      final token = KomiicNetwork().token;
+      final baseHeaders = <String, String>{
+        'User-Agent': KomiicNetwork.komiicUA,
+        if (token.isNotEmpty) 'Authorization': 'Bearer $token',
+      };
+
+      // 封面（失败不阻断正文；封面用站点根 Referer）。
+      if (comic.coverUrl.isNotEmpty) {
+        try {
+          await _downloadFile(
+            task,
+            comic.coverUrl,
+            File('${root.path}${Platform.pathSeparator}cover.jpg'),
+            headers: <String, String>{
+              ...baseHeaders,
+              'Referer': 'https://komiic.com/',
+            },
+          );
+        } catch (e) {
+          LogManager.addLog(
+              LogLevel.warning, 'OnlineDownload', 'komiic cover failed: $e');
+        }
+      }
+
+      final chapters = comic.chapters;
+      if (chapters.isEmpty) {
+        throw Exception('No chapter found');
+      }
+
+      final downloadedEps = <int>[];
+      final chapterNames = <String, String>{};
+      for (var i = 0; i < chapters.length; i++) {
+        final chapter = chapters[i];
+        final epKey = i + 1;
+        chapterNames['$epKey'] = chapter.displayName;
+        task.currentEp = epKey;
+        task.currentEpName = chapter.displayName;
+        task.currentPage = 0;
+        task.totalPages = 0;
+        _notify();
+
+        final imagesRes = await KomiicNetwork().getImages(chapter.id);
+        if (imagesRes.error) {
+          throw Exception(imagesRes.errorMessageWithoutNull);
+        }
+        final urls = imagesRes.data;
+        if (urls.isEmpty) {
+          LogManager.addLog(LogLevel.warning, 'OnlineDownload',
+              'komiic chapter ${chapter.id} has no image, skipped');
+          continue;
+        }
+
+        // 章节内图片的 Referer 必须带具体 comic/chapter 路径，
+        // 与 KomiicReadingData.loadImageNetwork 的口径保持一致。
+        final headers = <String, String>{
+          ...baseHeaders,
+          'Referer':
+              'https://komiic.com/comic/${comic.id}/chapter/${chapter.id}/images/all',
+        };
+
+        final epDir = Directory('${root.path}${Platform.pathSeparator}$epKey');
+        await epDir.create(recursive: true);
+        task.totalPages = urls.length;
+
+        var completedPages = 0;
+        final concurrency = int.tryParse(appdata.settings[79]) ?? 6;
+        final semaphore = _Semaphore(concurrency);
+        final errors = <String>[];
+        final futures = <Future<void>>[];
+        for (var pi = 0; pi < urls.length; pi++) {
+          _throwIfCancelled(task);
+          final url = urls[pi];
+          final file = File(
+            '${epDir.path}${Platform.pathSeparator}'
+            '${pi + 1}${_imageExtension(url)}',
+          );
+          futures.add(semaphore.run(() async {
+            _throwIfCancelled(task);
+            try {
+              await _downloadFile(task, url, file, headers: headers);
+            } catch (e) {
+              errors.add('chapter ${chapter.id} page ${pi + 1}: $e');
+              return;
+            }
+            completedPages++;
+            task.currentPage = completedPages;
+            _notify();
+          }));
+        }
+        await Future.wait(futures);
+        _throwIfCancelled(task);
+        if (completedPages == 0) {
+          throw Exception(
+              errors.isNotEmpty ? errors.first : 'No page downloaded');
+        }
+
+        downloadedEps.add(i);
+        unawaited(_saveQueue());
+      }
+
+      if (downloadedEps.isEmpty) {
+        throw Exception('No chapter downloaded');
+      }
+
+      final item = CustomDownloadedItem(
+        id: task.id,
+        name: comic.title,
+        subTitle: comic.authors.join(', '),
+        tags: comic.tags,
+        sourceKey: 'Komiic',
+        sourceName: 'Komiic',
+        cover: comic.coverUrl,
+        comicId: comic.id,
+        chapters: chapterNames,
+        downloadedEps: downloadedEps,
+        comicSize: _directoryMb(root),
+      )
+        ..directory = safeDirectory
+        ..time = DateTime.now();
+      await _upsertDownloadRecord(
+        rootPath: downloadRoot,
+        item: item,
+        directory: safeDirectory,
+      );
+      task.completed = true;
+      App.notifyLocalDataChanged();
+    } on _OnlineDownloadCancelled catch (_) {
+      if (!task.paused) task.cancelled = true;
+    } catch (error, stackTrace) {
+      task.error = error.toString();
+      LogManager.addLog(
+          LogLevel.error, 'OnlineDownload', '$error\n$stackTrace');
+    } finally {
+      _running = false;
+      task.stopSpeedTimer();
+      unawaited(_saveQueue());
+      _notify();
+      _scheduleNext();
+    }
+  }
+
   /// jm 专用下载：下载字节 → 图块重组 → 写盘
   /// [basePath] 不含扩展名；最终扩展名由重组结果决定（重组→.png，不重组→原始）
   /// [allowRecombine] false 时直接存原始字节，不重组（封面用）
@@ -1490,6 +1925,22 @@ class OnlineDownloadManager {
             'currentPage': t.currentPage,
             'paused': t.paused,
           };
+        } else if (t.sourceKey == 'pixiv') {
+          // Pixiv：无章节，只需页码游标。
+          return {
+            'sourceKey': 'pixiv',
+            'pixivJson': _pixivInfoToQueueJson(t._pixivInfo!),
+            'currentPage': t.currentPage,
+            'paused': t.paused,
+          };
+        } else if (t.sourceKey == 'Komiic') {
+          // Komiic：有章节，需要章节游标（与 jm 同形态）。
+          return {
+            'sourceKey': 'Komiic',
+            'komiicJson': _komiicInfoToQueueJson(t._komiicInfo!),
+            'currentEp': t.currentEp,
+            'paused': t.paused,
+          };
         } else {
           return {
             'sourceKey': 'picacg',
@@ -1559,6 +2010,29 @@ class OnlineDownloadManager {
             final task = OnlineDownloadTask.nhentai(nhentaiComic: comic)
               ..totalEps = 1
               ..currentPage = (item['currentPage'] as int?) ?? 0
+              ..paused = true;
+            _tasks[task.id] = task;
+          } else if (sourceKey == 'pixiv') {
+            final pixivJson = (item['pixivJson'] as Map)
+                .map((k, v) => MapEntry(k.toString(), v));
+            final info = _pixivInfoFromQueueJson(pixivJson);
+            final key = 'pixiv${info.id}';
+            if (_tasks.containsKey(key)) continue;
+            final task = OnlineDownloadTask.pixiv(pixivInfo: info)
+              ..totalEps = 1
+              ..totalPages = info.pageCount
+              ..currentPage = (item['currentPage'] as int?) ?? 0
+              ..paused = true;
+            _tasks[task.id] = task;
+          } else if (sourceKey == 'Komiic') {
+            final komiicJson = (item['komiicJson'] as Map)
+                .map((k, v) => MapEntry(k.toString(), v));
+            final info = _komiicInfoFromQueueJson(komiicJson);
+            final key = 'komiic${info.id}';
+            if (_tasks.containsKey(key)) continue;
+            final task = OnlineDownloadTask.komiic(komiicInfo: info)
+              ..totalEps = info.chapters.length
+              ..currentEp = (item['currentEp'] as int?) ?? 0
               ..paused = true;
             _tasks[task.id] = task;
           } else {
@@ -1756,6 +2230,95 @@ class OnlineDownloadManager {
       isLiked: false,
       coverUrl: json['coverUrl']?.toString() ?? '',
       relatedComics: const [],
+    );
+  }
+
+  /// Pixiv 队列序列化：只保留恢复下载所需的字段。
+  ///
+  /// 不存 `description` / `isOriginal` / 时间等展示字段 —— 队列文件只用于
+  /// 「重启后续传」，详情页会重新拉完整信息。
+  static Map<String, dynamic> _pixivInfoToQueueJson(PixivComicInfo info) => {
+        'id': info.id,
+        'title': info.title,
+        'author': info.author,
+        'authorId': info.authorId,
+        'coverUrl': info.coverUrl,
+        'tags': info.tags,
+        'pageCount': info.pageCount,
+        'illustType': info.illustType,
+      };
+
+  static PixivComicInfo _pixivInfoFromQueueJson(Map json) {
+    return PixivComicInfo(
+      id: json['id']?.toString() ?? '',
+      title: json['title']?.toString() ?? '',
+      author: json['author']?.toString() ?? '',
+      authorId: json['authorId']?.toString() ?? '',
+      coverUrl: json['coverUrl']?.toString() ?? '',
+      tags: (json['tags'] as List?)?.map((e) => e.toString()).toList() ??
+          const <String>[],
+      description: '',
+      pageCount: (json['pageCount'] as num?)?.toInt() ?? 0,
+      illustType: (json['illustType'] as num?)?.toInt() ?? 0,
+      likeCount: 0,
+      viewCount: 0,
+      width: 0,
+      height: 0,
+      isOriginal: false,
+      createDate: '',
+      uploadDate: '',
+      userId: json['authorId']?.toString() ?? '',
+    );
+  }
+
+  /// Komiic 队列序列化：**必须保留 chapters**（有章节源靠它恢复逐章续传）。
+  static Map<String, dynamic> _komiicInfoToQueueJson(KomiicComicInfo info) => {
+        'id': info.id,
+        'title': info.title,
+        'coverUrl': info.coverUrl,
+        'authors': info.authors,
+        'tags': info.tags,
+        'chapters': info.chapters
+            .map((chapter) => <String, dynamic>{
+                  'id': chapter.id,
+                  'serial': chapter.serial,
+                  'type': chapter.type,
+                  'size': chapter.size,
+                  'dateUpdated': chapter.dateUpdated,
+                })
+            .toList(),
+      };
+
+  static KomiicComicInfo _komiicInfoFromQueueJson(Map json) {
+    final rawChapters = (json['chapters'] as List?) ?? const <dynamic>[];
+    final chapters = <KomiicChapter>[];
+    for (final raw in rawChapters) {
+      if (raw is! Map) continue;
+      chapters.add(KomiicChapter(
+        id: raw['id']?.toString() ?? '',
+        serial: raw['serial']?.toString() ?? '',
+        type: raw['type']?.toString() ?? 'chapter',
+        size: (raw['size'] as num?)?.toInt(),
+        dateUpdated: raw['dateUpdated']?.toString() ?? '',
+      ));
+    }
+    return KomiicComicInfo(
+      id: json['id']?.toString() ?? '',
+      title: json['title']?.toString() ?? '',
+      coverUrl: json['coverUrl']?.toString() ?? '',
+      authors: (json['authors'] as List?)?.map((e) => e.toString()).toList() ??
+          const <String>[],
+      tags: (json['tags'] as List?)?.map((e) => e.toString()).toList() ??
+          const [],
+      description: '',
+      status: '',
+      year: '',
+      updateTime: '',
+      views: 0,
+      monthViews: 0,
+      favoriteCount: 0,
+      chapters: chapters,
+      recommendations: const [],
     );
   }
 

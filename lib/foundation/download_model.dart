@@ -24,6 +24,10 @@ ComicType comicTypeForDownloadType(DownloadType type) {
       return ComicType.nhentai;
     case DownloadType.copyManga:
     case DownloadType.komiic:
+      return ComicType.other;
+    case DownloadType.pixiv:
+      // 第十八轮：pixiv 有专属 ComicType，不再归入 other（other 是纯兜底）。
+      return ComicType.pixiv;
     case DownloadType.other:
     case DownloadType.favorite:
       return ComicType.other;
@@ -48,6 +52,8 @@ String downloadTypeDisplayName(DownloadType type) {
       return '拷贝漫画';
     case DownloadType.komiic:
       return 'Komiic';
+    case DownloadType.pixiv:
+      return 'Pixiv';
     case DownloadType.favorite:
       return '收藏';
     case DownloadType.other:
@@ -64,6 +70,8 @@ enum DownloadType {
   nhentai,
   copyManga,
   komiic,
+  // 第十八轮新增：Pixiv 下载类型。
+  pixiv,
   other,
   favorite;
 }
@@ -151,7 +159,17 @@ DownloadedItem? parseDownloadedItemRecordData(
   }
 
   try {
-    if (isEhentaiGalleryId(normalizedId) &&
+    // **优先信数据自带的 `sourceKey`**，它只由 `CustomDownloadedItem.toJson` 写入
+    // （其余类的 toJson 都不写这个键，已逐个核对），所以命中即自定义源条目。
+    //
+    // 为什么不靠下面的 id 前缀枚举：那是"猜"，新源加入时必须记得回来补一个分支
+    // —— Pixiv 的 `pixiv123` 与 Komiic 的 `komiic123` 就是这么漏掉的，一路落到
+    // 最后的 `ScannedDownloadedComic`（"扫描到的本地漫画"），于是源标签错、
+    // 大小显示"未知"、作者不显示：那个类根本不读 `sourceName` / `comicSize`，
+    // 而数据里明明都有。
+    if (data.containsKey('sourceKey')) {
+      comic = CustomDownloadedItem.fromJson(data);
+    } else if (isEhentaiGalleryId(normalizedId) &&
         (data.containsKey('galleryTitle') || data.containsKey('gallery'))) {
       comic = DownloadedGallery.fromJson(data);
     } else if (normalizedId.contains('-')) {

@@ -11,11 +11,15 @@ import 'package:picakeep/comic_source/comic_source.dart';
 import 'package:picakeep/foundation/explore/explore_registry.dart';
 import 'package:picakeep/foundation/explore/providers/eh_explore_provider.dart';
 import 'package:picakeep/foundation/explore/providers/jm_explore_provider.dart';
+import 'package:picakeep/foundation/explore/providers/komiic_explore_provider.dart';
 import 'package:picakeep/foundation/explore/providers/nhentai_explore_provider.dart';
 import 'package:picakeep/foundation/explore/providers/picacg_explore_provider.dart';
+import 'package:picakeep/foundation/explore/providers/pixiv_explore_provider.dart';
 import 'package:picakeep/network/eh_network/eh_main_network.dart';
+import 'package:picakeep/network/komiic_network/komiic_network.dart';
 import 'package:picakeep/network/nhentai_network/nhentai_main_network.dart';
 import 'package:picakeep/network/picacg_network/picacg_network.dart';
+import 'package:picakeep/network/pixiv_network/pixiv_network.dart';
 import 'package:picakeep/network/jm_network/jm_network.dart';
 
 /// 应用级探索注册表（进程内单例，在 `_initializeOnlineFoundation` 组装）。
@@ -77,6 +81,17 @@ class ExploreBindings {
         isLoggedInGetter: () => _sourceLoggedIn('nhentai'),
         contextFingerprintGetter: () => _nhFingerprint(),
         network: NhentaiNetwork(),
+      ))
+      ..register(KomiicExploreProvider(
+        isLoggedInGetter: () => _sourceLoggedIn('komiic'),
+        contextFingerprintGetter: () => _komiicFingerprint(),
+        network: KomiicNetwork(),
+      ))
+      // 第十八轮：Pixiv（推荐 / 我的收藏 / 排行榜）。
+      ..register(PixivExploreProvider(
+        isLoggedInGetter: () => _sourceLoggedIn('pixiv'),
+        contextFingerprintGetter: () => _pixivFingerprint(),
+        network: PixivNetwork(),
       ));
     final bindings = ExploreBindings._(target, target.contextFingerprints());
     _instance = bindings;
@@ -155,6 +170,38 @@ class ExploreBindings {
     final token = source.data['token']?.toString() ?? '';
     final name = source.data['name']?.toString() ?? '';
     return '$token|$name';
+  }
+
+  /// Komiic：Bearer token 是否存在 + 账号标记。
+  ///
+  /// 站点是单域名（`https://komiic.com`），没有"换站点"这一维，故指纹只由身份
+  /// 构成。**未登录不是"缺失"**：Komiic 允许匿名浏览，因此源缺失与未登录都返回
+  /// 稳定值（`loggedOut`），避免探索页把匿名状态误判成上下文变化而反复重载。
+  static String _komiicFingerprint() {
+    final source = ComicSource.find('komiic');
+    if (source == null) return 'loggedOut';
+    final token = source.data['token']?.toString() ?? '';
+    if (token.isEmpty) return 'loggedOut';
+    final name = source.data['name']?.toString() ?? '';
+    return '${token.hashCode}|$name';
+  }
+
+  /// Pixiv：PHPSESSID 是否存在 + userId + 账号标记。
+  ///
+  /// **`userId` 必须进指纹**：Pixiv 的「我的收藏」按 `userId` 取数，
+  /// 换账号后若指纹不变，探索页会继续展示上一个账号的收藏（串号）。
+  /// token 只存 hashCode，不把凭据写进指纹（指纹会参与日志与公开 ID 比较）。
+  ///
+  /// 与 Komiic 同理，**未登录不是"缺失"**：Pixiv 允许匿名浏览推荐与榜单，
+  /// 源缺失与未登录都返回稳定值 `loggedOut`，避免匿名态被误判成上下文变化。
+  static String _pixivFingerprint() {
+    final source = ComicSource.find('pixiv');
+    if (source == null) return 'loggedOut';
+    final token = source.data['token']?.toString() ?? '';
+    if (token.isEmpty) return 'loggedOut';
+    final userId = source.data['userId']?.toString() ?? '';
+    final name = source.data['name']?.toString() ?? '';
+    return '${token.hashCode}|$userId|$name';
   }
 
   /// 读取 settings 的容错版本（越界/未初始化返回空串）。

@@ -23,6 +23,10 @@ const aiPromptSourceTagToSource = <String, String>{
   '搜jm': 'jm',
   '搜eh': 'ehentai',
   '搜nh': 'nhentai',
+  // 第十八轮新增来源标签。标签订阅与硬拦截都读这份映射，
+  // 加在这里即可获得「来源标签 + schema 过滤 + dispatch 硬拦截」全套行为。
+  '搜pixiv': 'pixiv',
+  '搜komiic': 'komiic',
 };
 
 /// 固定、只读的范围标签名：仅查本地设备库与已连接的远程库快照，不联网。

@@ -16,6 +16,8 @@ import 'package:picakeep/foundation/remote_library_data_source.dart';
 import 'package:picakeep/foundation/service_data_source.dart';
 import 'package:picakeep/tools/translations.dart';
 import 'package:picakeep/tools/read_history_helper.dart';
+import 'package:picakeep/tools/history_cover.dart';
+import 'package:picakeep/pages/online_common/online_comic_list_item.dart';
 import 'package:picakeep/foundation/image_favorites.dart';
 import 'package:picakeep/foundation/online_download_manager.dart';
 import 'accounts/account_page_route.dart';
@@ -48,6 +50,7 @@ class _MePageCachedState {
     required this.localLibraryCount,
     required this.imageFavoriteCount,
     required this.historyItems,
+    required this.historyTotal,
     required this.historyLoaded,
     required this.localLibraryCountLoaded,
     required this.remoteSummaryResolved,
@@ -58,6 +61,10 @@ class _MePageCachedState {
   final int? localLibraryCount;
   final int? imageFavoriteCount;
   final List<History> historyItems;
+
+  /// 历史记录**全量**条数（[historyItems] 只是最多 20 条的前缀）。
+  final int historyTotal;
+
   final bool historyLoaded;
   final bool localLibraryCountLoaded;
   final bool remoteSummaryResolved;
@@ -82,6 +89,12 @@ class _MePageState extends State<MePage> {
   int? _localLibraryCount;
   int? _imageFavoriteCount;
   List<History> _historyItems = const <History>[];
+
+  /// 历史记录**全量**条数。
+  ///
+  /// 不能用 `_historyItems.length` 代替：那个列表只保留最近
+  /// [HistoryManager.recentLimit] 条用于卡片预览，计数会卡在 20。
+  int _historyTotal = 0;
   bool _historyLoaded = false;
   bool _loadingDownloadCount = false;
   bool _localLibraryCountLoaded = false;
@@ -149,6 +162,7 @@ class _MePageState extends State<MePage> {
     _localLibraryCount = cached.localLibraryCount;
     _imageFavoriteCount = cached.imageFavoriteCount;
     _historyItems = List<History>.of(cached.historyItems);
+    _historyTotal = cached.historyTotal;
     _historyLoaded = cached.historyLoaded;
     _localLibraryCountLoaded = cached.localLibraryCountLoaded;
     _remoteSummaryResolved = cached.remoteSummaryResolved;
@@ -161,6 +175,7 @@ class _MePageState extends State<MePage> {
       localLibraryCount: _localLibraryCount,
       imageFavoriteCount: _imageFavoriteCount,
       historyItems: List<History>.of(_historyItems),
+      historyTotal: _historyTotal,
       historyLoaded: _historyLoaded,
       localLibraryCountLoaded: _localLibraryCountLoaded,
       remoteSummaryResolved: _remoteSummaryResolved,
@@ -259,12 +274,13 @@ class _MePageState extends State<MePage> {
       if (!manager.isInitialized) {
         await manager.init();
       }
-      final history = manager.getRecent();
+      final snapshot = manager.getRecentWithTotal();
       if (!mounted) {
         return;
       }
       setState(() {
-        _historyItems = history;
+        _historyItems = snapshot.recent;
+        _historyTotal = snapshot.total;
         _historyLoaded = true;
       });
       _cacheCurrentState();
@@ -274,6 +290,7 @@ class _MePageState extends State<MePage> {
         setState(() {
           _historyLoaded = true;
           _historyItems = const <History>[];
+          _historyTotal = 0;
         });
         _cacheCurrentState();
       }
@@ -640,11 +657,11 @@ class _MePageState extends State<MePage> {
     );
   }
 
-  String _historyTitle(int recentCount) {
+  String _historyTitle(int total) {
     if (!_historyLoaded) {
       return "历史记录".tl;
     }
-    return "${"历史记录".tl}($recentCount)";
+    return "${"历史记录".tl}($total)";
   }
 
   Widget _historyPlaceholder(BuildContext context) {
@@ -788,7 +805,12 @@ class _MePageState extends State<MePage> {
   ImageProvider<Object>? _coverImageProvider(History item) {
     final cover = item.cover.trim();
     if (cover.startsWith('http://') || cover.startsWith('https://')) {
-      return NetworkImage(cover);
+      // 同 HistoryPage：按源补鉴权头并走 OnlineImageManager 缓存，
+      // 否则 Pixiv 这类有防盗链的源只会显示占位图。
+      return onlineCoverProvider(
+        url: cover,
+        headers: historyCoverHeaders(item),
+      );
     }
     if (cover.isNotEmpty && (cover.startsWith('/') || cover.contains(':\\'))) {
       return FileImage(File(cover));
@@ -909,7 +931,7 @@ class _MePageState extends State<MePage> {
             children: [
               ListTile(
                 leading: const Icon(Icons.history),
-                title: Text(_historyTitle(history.length)),
+                title: Text(_historyTitle(_historyTotal)),
                 trailing: const Icon(Icons.chevron_right),
                 mouseCursor: SystemMouseCursors.click,
               ),

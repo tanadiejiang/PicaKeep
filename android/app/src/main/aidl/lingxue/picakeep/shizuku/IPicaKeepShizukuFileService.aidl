@@ -7,6 +7,7 @@ interface IPicaKeepShizukuFileService {
     boolean fileExists(String path);
     byte[] readFile(String path);
     void writeFile(String path, in byte[] bytes);
+    void createDirectory(String path);
     void deletePath(String path);
     void movePath(String sourcePath, String targetPath);
 }

@@ -96,6 +96,7 @@ String? _favoriteSourceDisplayName(int type) {
   const builtInNames = <int, String>{
     7: '拷贝漫画',
     8: 'Komiic',
+    9: 'Pixiv',
   };
   if (builtInNames.containsKey(type)) {
     return builtInNames[type];
@@ -163,6 +164,11 @@ List<String> _buildFavoriteDownloadIdCandidates(String target, int type) {
       _addCandidate(
           candidates, target.startsWith('nhentai') ? target : 'nhentai$target');
       break;
+    case 9:
+      // Pixiv：下载记录 id 形如 `pixiv{illustId}`（见 PixivReadingData.downloadId），
+      // 因此候选里同时放裸 ID 与带前缀形式，兼容历史/收藏 target 只存数字 id 的情况。
+      _addCandidate(candidates, target.startsWith('pixiv') ? target : 'pixiv$target');
+      break;
     default:
       _addCustomFavoriteCandidates(
           candidates, target, _preferredCustomFavoriteSourceKey(type));
@@ -186,6 +192,12 @@ final class FavoriteType {
   static FavoriteType get copyManga => const FavoriteType(7);
   static FavoriteType get komiic => const FavoriteType(8);
 
+  /// 第十八轮新增：Pixiv 本地收藏类型。
+  ///
+  /// key=9 是紧接 Komiic(8) 之后的下一个空闲值 —— 0~8 已被 picacg/ehentai/jm/
+  /// hitomi/htManga/(5 空)/nhentai/copyManga/Komiic 占用，不可复用。
+  static FavoriteType get pixiv => const FavoriteType(9);
+
   String get name {
     const nameMap = {
       0: "Picacg",
@@ -196,6 +208,7 @@ final class FavoriteType {
       6: "NHentai",
       7: "拷贝漫画",
       8: "Komiic",
+      9: "Pixiv",
     };
     return nameMap[key] ?? _favoriteSourceDisplayName(key) ?? "Other";
   }
@@ -286,6 +299,15 @@ class FavoriteItem {
             ? explicitFavoriteTarget
             : _stripKnownPrefix(_stripLocalDownloadPrefix(comic.id), 'nhentai');
         type = FavoriteType.nhentai;
+        break;
+      case DownloadType.pixiv:
+        // Pixiv 的 illustId 只存在于下载 id 的 `pixiv{id}` 前缀里，
+        // 故走 _stripKnownPrefix 去掉前缀，与 jm/nhentai 的既有口径一致。
+        target = explicitFavoriteTarget != null &&
+                explicitFavoriteTarget.isNotEmpty
+            ? explicitFavoriteTarget
+            : _stripKnownPrefix(_stripLocalDownloadPrefix(comic.id), 'pixiv');
+        type = FavoriteType.pixiv;
         break;
       case DownloadType.copyManga:
         target = _customFavoriteTarget(comic);

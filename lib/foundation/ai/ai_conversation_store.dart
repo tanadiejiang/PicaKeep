@@ -374,6 +374,11 @@ class AiConversationStore {
       aiSourceJm,
       aiSourceEhentai,
       aiSourceNhentai,
+      // 第十八轮新增源：漏加的后果是「长期来源限定」里选了 pixiv/komiic 时
+      // 序列化后集合为空 → `_serializeAllowedSources` 返回 null →
+      // 长期来源限制被静默清空（表现为"设了限定却没生效"）。
+      aiSourcePixiv,
+      aiSourceKomiic,
     ];
     final normalized =
         sources.map(normalizeAiSource).whereType<String>().toSet();

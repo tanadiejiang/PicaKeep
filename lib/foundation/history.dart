@@ -126,6 +126,9 @@ final class HistoryType {
   static HistoryType get other => const HistoryType(6);
   static HistoryType get localAlbum => const HistoryType(7);
 
+  /// 第十八轮新增：Pixiv 阅读历史类型（key=8 紧接图集之后）。
+  static HistoryType get pixiv => const HistoryType(8);
+
   final int value;
 
   String get name {
@@ -138,6 +141,7 @@ final class HistoryType {
       5: "nhentai",
       6: "other",
       7: "图集",
+      8: "pixiv",
     };
     return nameMap[value] ?? _preferredCustomHistorySourceKey(value) ?? "other";
   }
@@ -728,13 +732,23 @@ class HistoryManager {
     return items;
   }
 
-  List<History> getRecent() {
+  /// 「我」页面历史卡片最多展示的条数。
+  static const int recentLimit = 20;
+
+  /// 最近记录 **+ 全量条数**，一次 [getAll] 同时给出两者。
+  ///
+  /// 之所以要一起返回：`getRecent()` 的列表被截断在 [recentLimit]，
+  /// 拿它的 `length` 当总数显示，数字会**永远停在 20**；而历史页用的是
+  /// [getAll]，两处数字会对不上。分两次调用又会白跑一遍全量查询。
+  ({List<History> recent, int total}) getRecentWithTotal() {
     final items = getAll();
-    if (items.length <= 20) {
-      return items;
-    }
-    return items.sublist(0, 20);
+    final recent = items.length <= recentLimit
+        ? items
+        : items.sublist(0, recentLimit);
+    return (recent: recent, total: items.length);
   }
+
+  List<History> getRecent() => getRecentWithTotal().recent;
 
   int count() {
     return getAll().length;

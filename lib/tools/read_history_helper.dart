@@ -28,6 +28,13 @@ HistoryType _historyTypeForDownload(DownloadedItem c) {
       return HistoryType.nhentai;
     case DownloadType.copyManga:
     case DownloadType.komiic:
+      if (c is CustomDownloadedItem && c.sourceKey.isNotEmpty) {
+        return HistoryType(c.sourceKey.hashCode);
+      }
+      return HistoryType.other;
+    case DownloadType.pixiv:
+      // 第十八轮：pixiv 有专属 HistoryType，不走「自定义源 hashCode」兜底。
+      return HistoryType.pixiv;
     case DownloadType.other:
     case DownloadType.favorite:
       if (c is CustomDownloadedItem && c.sourceKey.isNotEmpty) {

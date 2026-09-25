@@ -111,6 +111,42 @@ String _directoryNameFromPath(String path) {
   return segments.isEmpty ? '/' : segments.last;
 }
 
+/// 校验“新建文件夹”的输入名称。
+///
+/// 合法时返回 `null`，否则返回可直接展示给用户的错误文案。
+///
+/// 只做与文件系统语义相关的必要校验：空名、路径分隔符、`.`/`..`、控制字符
+/// 以及单个路径段的字节上限。重名与“同名文件”由调用方结合当前目录列表判断，
+/// 因为那需要一次目录枚举，放在这里会导致弹窗与列表状态不同步。
+String? validateNewDirectoryName(String name) {
+  final trimmed = name.trim();
+  if (trimmed.isEmpty) {
+    return '文件夹名称不能为空';
+  }
+  if (trimmed == '.' || trimmed == '..') {
+    return '文件夹名称不能是 . 或 ..';
+  }
+  if (trimmed.contains('/') || trimmed.contains('\\')) {
+    return '文件夹名称不能包含 / 或 \\';
+  }
+  if (trimmed.codeUnits.any((unit) => unit < 0x20 || unit == 0x7f)) {
+    return '文件夹名称不能包含控制字符';
+  }
+  // ext4 / f2fs 的单个路径段上限是 255 字节，中文按 UTF-8 算 3 字节。
+  if (utf8.encode(trimmed).length > 255) {
+    return '文件夹名称过长';
+  }
+  return null;
+}
+
+/// 在 [parentPath] 下拼接新建文件夹的完整路径。
+String resolveNewDirectoryPath(String parentPath, String name) {
+  return _joinDirectoryPath(
+    _normalizeDirectoryPath(parentPath),
+    name.trim(),
+  );
+}
+
 Future<List<_DirectoryBrowserEntry>> _listEntriesWithDartIo(String path) async {
   final directory = Directory(path);
   if (!await directory.exists()) {
@@ -163,7 +199,8 @@ Future<List<_DirectoryBrowserEntry>> _listEntriesWithRoot(String path) async {
       .toList(growable: false);
 }
 
-Future<List<_DirectoryBrowserEntry>> _listEntriesWithShizuku(String path) async {
+Future<List<_DirectoryBrowserEntry>> _listEntriesWithShizuku(
+    String path) async {
   final normalizedPath = _normalizeDirectoryPath(path);
   final controller = _AndroidStorageAccessController.instance;
   List<Map<String, String>> items;
@@ -200,10 +237,10 @@ Future<String?> openInternalDirectoryBrowser(
   final controller = _AndroidStorageAccessController.instance;
   final hasAllFilesAccess = await controller.hasManageAllFilesAccess();
   final preferManageAllFiles = _prefersManageAllFilesMode(initialPath);
-  final hasShizukuAccess = !preferManageAllFiles &&
-          _isAndroidShizukuModeEnabled()
-      ? await controller.hasShizukuPermission()
-      : false;
+  final hasShizukuAccess =
+      !preferManageAllFiles && _isAndroidShizukuModeEnabled()
+          ? await controller.hasShizukuPermission()
+          : false;
   final hasRootAccess = !preferManageAllFiles && _isAndroidRootModeEnabled()
       ? await _requestAndroidRootAccess()
       : false;
@@ -236,6 +273,236 @@ Future<String?> openInternalDirectoryBrowser(
       ),
     ),
   );
+}
+
+/// “新建文件夹”输入弹窗。
+///
+/// 只负责收集名称、做格式校验与提交中状态；真正的创建（重名判断 + 落盘）
+/// 由 [onSubmit] 回调完成，成功后弹窗 pop 出新建目录的完整路径。
+class _CreateFolderDialog extends StatefulWidget {
+  const _CreateFolderDialog({
+    required this.parentPath,
+    required this.onSubmit,
+  });
+
+  final String parentPath;
+
+  /// 返回 `null` 表示创建成功，否则返回给用户看的错误文案。
+  final Future<String?> Function(String name) onSubmit;
+
+  @override
+  State<_CreateFolderDialog> createState() => _CreateFolderDialogState();
+}
+
+class _CreateFolderDialogState extends State<_CreateFolderDialog> {
+  late final TextEditingController _controller;
+  String? _errorText;
+  bool _submitting = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = TextEditingController();
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    if (_submitting) {
+      return;
+    }
+    final name = _controller.text.trim();
+    final validationError = validateNewDirectoryName(name);
+    if (validationError != null) {
+      setState(() => _errorText = validationError.tl);
+      return;
+    }
+    setState(() {
+      _submitting = true;
+      _errorText = null;
+    });
+    final error = await widget.onSubmit(name);
+    if (!mounted) {
+      return;
+    }
+    if (error != null) {
+      setState(() {
+        _submitting = false;
+        _errorText = error;
+      });
+      return;
+    }
+    Navigator.of(context).pop(resolveNewDirectoryPath(widget.parentPath, name));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return AlertDialog(
+      title: Text('新建文件夹'.tl),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          TextField(
+            controller: _controller,
+            autofocus: true,
+            enabled: !_submitting,
+            textInputAction: TextInputAction.done,
+            onSubmitted: (_) => _submit(),
+            decoration: InputDecoration(
+              labelText: '文件夹名称'.tl,
+              hintText: '例如 PicaKeep',
+              errorText: _errorText,
+              border: const OutlineInputBorder(),
+            ),
+          ),
+          const SizedBox(height: 12),
+          Text(
+            '创建位置：${_normalizeDirectoryPath(widget.parentPath)}',
+            maxLines: 3,
+            overflow: TextOverflow.ellipsis,
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: _submitting ? null : () => Navigator.of(context).pop(),
+          child: Text('取消'.tl),
+        ),
+        FilledButton(
+          onPressed: _submitting ? null : _submit,
+          child: _submitting
+              ? const SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : Text('创建'.tl),
+        ),
+      ],
+    );
+  }
+}
+
+/// 文件夹浏览页底部的三个操作按钮：展开预设路径 / 新建文件夹 / 选择当前文件夹。
+///
+/// 单独抽成公开组件，是因为**这一行在窄屏上极易挤到换行**：三个按钮的文案、
+/// 字号与内边距共同决定放不放得下。集中在一处才好调，也才能把它单独渲染出来
+/// 量实际宽度、出预览图（见 `test/ui_preview/directory_browser_actions_preview_test.dart`），
+/// 不必每次都装到手机上用眼睛判断。
+class DirectoryBrowserActionRow extends StatelessWidget {
+  const DirectoryBrowserActionRow({
+    super.key,
+    required this.showPresetRoots,
+    required this.actionsEnabled,
+    required this.onTogglePresetRoots,
+    required this.onCreateFolder,
+    required this.onSelectCurrentFolder,
+  });
+
+  /// 预设路径是否已展开（决定第一个按钮的图标与文案）。
+  final bool showPresetRoots;
+
+  /// 目录尚未加载完时禁用"新建"与"选择"。
+  final bool actionsEnabled;
+
+  final VoidCallback onTogglePresetRoots;
+  final VoidCallback onCreateFolder;
+  final VoidCallback onSelectCurrentFolder;
+
+  /// 按钮统一高度：三个按钮等高，换行后两行间距才整齐。
+  static const double buttonHeight = 48;
+
+  /// 按钮之间的间隔（水平与垂直共用）。
+  static const double buttonSpacing = 8;
+
+  @override
+  Widget build(BuildContext context) {
+    return Wrap(
+      spacing: buttonSpacing,
+      runSpacing: buttonSpacing,
+      alignment: WrapAlignment.spaceBetween,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: [
+        _buildTogglePresetButton(),
+        _buildCreateFolderButton(),
+        _buildSelectCurrentFolderButton(),
+      ],
+    );
+  }
+
+  Widget _buildTogglePresetButton() {
+    // 文案从「展开预设路径」收到「预设路径」：展开/收起由图标表达，
+    // 状态语义不丢，但省下的两个字是这一行能不能单行放下的关键。
+    return SizedBox(
+      height: buttonHeight,
+      child: Tooltip(
+        message: (showPresetRoots ? '收起预设路径' : '展开预设路径').tl,
+        child: ActionChip(
+          avatar: Icon(
+            showPresetRoots ? Icons.expand_less : Icons.expand_more,
+            size: 16,
+          ),
+          label: Text(
+            '预设路径'.tl,
+            style: const TextStyle(fontSize: 11),
+          ),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          onPressed: onTogglePresetRoots,
+          visualDensity: VisualDensity.compact,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildCreateFolderButton() {
+    return SizedBox(
+      height: buttonHeight,
+      child: Tooltip(
+        message: '新建文件夹'.tl,
+        child: ActionChip(
+          avatar: const Icon(Icons.create_new_folder_outlined, size: 16),
+          label: Text(
+            '新建'.tl,
+            style: const TextStyle(fontSize: 11),
+          ),
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
+          onPressed: actionsEnabled ? onCreateFolder : null,
+          visualDensity: VisualDensity.compact,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSelectCurrentFolderButton() {
+    // 外层 SizedBox 是必要的：`visualDensity: compact` 会把
+    // `minimumSize` 的高度抵消掉 8 dp（实测 48 → 40），
+    // 按钮会比另外两个矮一截。这里统一钉到 buttonHeight。
+    return SizedBox(
+      height: buttonHeight,
+      child: Tooltip(
+        message: '选择当前文件夹'.tl,
+        child: FilledButton.tonalIcon(
+          onPressed: onSelectCurrentFolder,
+          icon: const Icon(Icons.check, size: 18),
+          label: Text('选择文件夹'.tl),
+          style: FilledButton.styleFrom(
+            visualDensity: VisualDensity.compact,
+            minimumSize: const Size(0, buttonHeight),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 class _InternalDirectoryBrowserPage extends StatefulWidget {
@@ -436,9 +703,8 @@ class _InternalDirectoryBrowserPageState
       return children;
     }
 
-    final existingPaths = children
-        .map((entry) => _normalizeDirectoryPath(entry.path))
-        .toSet();
+    final existingPaths =
+        children.map((entry) => _normalizeDirectoryPath(entry.path)).toSet();
     final injected = <_DirectoryBrowserEntry>[];
 
     for (final candidatePath in _androidPresetRoots) {
@@ -533,6 +799,82 @@ class _InternalDirectoryBrowserPageState
     _setCurrentPath(parent);
   }
 
+  /// 在当前目录下新建文件夹，成功后进入该目录。
+  Future<void> _showCreateFolderDialog() async {
+    final createdPath = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => _CreateFolderDialog(
+        parentPath: _currentPath,
+        onSubmit: _submitNewDirectory,
+      ),
+    );
+    if (createdPath == null || !mounted) {
+      return;
+    }
+    // 弹窗已经关闭，此时提示才不会被对话框盖住。
+    _setCurrentPath(createdPath);
+    _showSettingMessage(
+        context, '已创建文件夹 ${_directoryNameFromPath(createdPath)}');
+  }
+
+  /// 返回 `null` 表示创建成功，否则返回展示给用户的错误文案。
+  Future<String?> _submitNewDirectory(String name) async {
+    final validationError = validateNewDirectoryName(name);
+    if (validationError != null) {
+      return validationError.tl;
+    }
+    final trimmed = name.trim();
+    // 先用已枚举的列表拦截重名，避免把底层 "File exists" 直接抛给用户。
+    for (final child in _children) {
+      if (child.name == trimmed) {
+        return (child.isDirectory ? '该文件夹已存在' : '同名文件已存在').tl;
+      }
+    }
+    final targetPath = resolveNewDirectoryPath(_currentPath, trimmed);
+    try {
+      await _createDirectoryAt(targetPath);
+    } catch (e) {
+      final message = e.toString().replaceFirst('Exception: ', '').trim();
+      return message.isEmpty ? '创建文件夹失败'.tl : message;
+    }
+    return null;
+  }
+
+  /// 按当前浏览模式选择落盘方式。
+  ///
+  /// 优先用 dart:io：在「全部文件访问权限」模式下这样建出来的目录属主是应用
+  /// 自己，后续下载走 dart:io 写入不会碰到属主/权限问题。只有在 dart:io
+  /// 明确不可用时（`/data` 等受限路径）才回退到 Root / Shizuku 通道。
+  ///
+  /// 注意两者失败信息不同源：dart:io 抛的是 `FileSystemException`，
+  /// 特权通道抛的是原生的中文文案，调用方统一按"展示 message"处理。
+  Future<void> _createDirectoryAt(String path) async {
+    try {
+      final directory = Directory(path);
+      if (await directory.exists()) {
+        return;
+      }
+      await directory.create(recursive: true);
+      // scoped storage 下 dart:io 存在"调用成功但实际被静默拦截"的情况
+      // （见 PrivilegedStorageAccess 的同类处理），回查一次确认。
+      // 误判也无害：特权通道对已存在的目录是幂等成功的。
+      if (await directory.exists()) {
+        return;
+      }
+    } catch (_) {
+      // 交给下面的特权通道。
+    }
+    final controller = _AndroidStorageAccessController.instance;
+    switch (_browseMode) {
+      case _AndroidDirectoryBrowseMode.root:
+        await controller.createDirectoryWithRoot(path);
+      case _AndroidDirectoryBrowseMode.shizuku:
+        await controller.createDirectoryWithShizuku(path);
+      case _AndroidDirectoryBrowseMode.manageAllFiles:
+        throw Exception('当前目录不可写，请先授予安卓全部文件访问权限'.tl);
+    }
+  }
+
   IconData get _browseModeIcon => switch (_browseMode) {
         _AndroidDirectoryBrowseMode.root => Icons.bolt,
         _AndroidDirectoryBrowseMode.shizuku => Icons.bolt,
@@ -585,9 +927,8 @@ class _InternalDirectoryBrowserPageState
           children: [
             for (var i = 0; i < _pathSegments.length; i++) ...[
               ActionChip(
-                avatar: i == 0
-                    ? const Icon(Icons.home_outlined, size: 16)
-                    : null,
+                avatar:
+                    i == 0 ? const Icon(Icons.home_outlined, size: 16) : null,
                 label: Text(_pathSegments[i]),
                 visualDensity: VisualDensity.compact,
                 onPressed: () => _setCurrentPath(_pathForSegmentIndex(i)),
@@ -694,15 +1035,18 @@ class _InternalDirectoryBrowserPageState
               Text('当前模式：仅 Shizuku 授权（uid=2000 shell）。'.tl),
               const SizedBox(height: 12),
               Text(
-                '/storage/emulated/0/Android/data 在 MIUI FUSE 下被过滤，dirent 与 java.io.File.listFiles() 都拿不到完整列表。'.tl,
+                '/storage/emulated/0/Android/data 在 MIUI FUSE 下被过滤，dirent 与 java.io.File.listFiles() 都拿不到完整列表。'
+                    .tl,
               ),
               const SizedBox(height: 12),
               Text(
-                '已通过 IPackageManager.getInstalledPackages 与 dirent 做并集回退，能补回绝大多数包名目录。'.tl,
+                '已通过 IPackageManager.getInstalledPackages 与 dirent 做并集回退，能补回绝大多数包名目录。'
+                    .tl,
               ),
               const SizedBox(height: 12),
               Text(
-                '剩余 1-2 项通常是：getInstalledPackages 不会返回的孤儿包目录，以及 Android/data/.nomedia 这类非包名顶层文件。'.tl,
+                '剩余 1-2 项通常是：getInstalledPackages 不会返回的孤儿包目录，以及 Android/data/.nomedia 这类非包名顶层文件。'
+                    .tl,
               ),
               const SizedBox(height: 12),
               Text(
@@ -808,42 +1152,6 @@ class _InternalDirectoryBrowserPageState
     );
   }
 
-  Widget _buildSelectCurrentFolderButton() {
-    return FilledButton.tonalIcon(
-      onPressed: () => Navigator.of(context).pop(_currentPath),
-      icon: const Icon(Icons.check, size: 18),
-      label: Text('选择当前文件夹'.tl),
-      style: FilledButton.styleFrom(
-        visualDensity: VisualDensity.compact,
-        minimumSize: const Size(0, 48),
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-      ),
-    );
-  }
-
-  Widget _buildTogglePresetButton() {
-    return SizedBox(
-      height: 48,
-      child: ActionChip(
-        avatar: Icon(
-          _showPresetRoots ? Icons.expand_less : Icons.expand_more,
-          size: 16,
-        ),
-        label: Text(
-          _showPresetRoots ? '收起预设路径'.tl : '展开预设路径'.tl,
-          style: const TextStyle(fontSize: 11),
-        ),
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-        onPressed: () {
-          setState(() {
-            _showPresetRoots = !_showPresetRoots;
-          });
-        },
-        visualDensity: VisualDensity.compact,
-      ),
-    );
-  }
-
   Widget _buildEntryTile(
     BuildContext context, {
     required IconData icon,
@@ -931,7 +1239,9 @@ class _InternalDirectoryBrowserPageState
                 ),
                 const SizedBox(width: 8),
                 Icon(
-                  tappable ? Icons.chevron_right : Icons.insert_drive_file_outlined,
+                  tappable
+                      ? Icons.chevron_right
+                      : Icons.insert_drive_file_outlined,
                   color: theme.colorScheme.onSurfaceVariant,
                 ),
               ],
@@ -1038,12 +1348,17 @@ class _InternalDirectoryBrowserPageState
                 _buildQuickPaths(),
                 _buildPresetRoots(),
                 const SizedBox(height: 6),
-                Row(
-                  children: [
-                    _buildTogglePresetButton(),
-                    const Spacer(),
-                    _buildSelectCurrentFolderButton(),
-                  ],
+                DirectoryBrowserActionRow(
+                  showPresetRoots: _showPresetRoots,
+                  actionsEnabled: !_loading,
+                  onTogglePresetRoots: () {
+                    setState(() {
+                      _showPresetRoots = !_showPresetRoots;
+                    });
+                  },
+                  onCreateFolder: _showCreateFolderDialog,
+                  onSelectCurrentFolder: () =>
+                      Navigator.of(context).pop(_currentPath),
                 ),
               ],
             ),

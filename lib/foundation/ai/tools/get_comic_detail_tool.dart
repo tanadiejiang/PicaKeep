@@ -4,8 +4,10 @@ import 'package:picakeep/network/eh_network/eh_main_network.dart';
 import 'package:picakeep/network/eh_network/eh_models.dart';
 import 'package:picakeep/network/eh_network/get_gallery_id.dart';
 import 'package:picakeep/network/jm_network/jm_network.dart';
+import 'package:picakeep/network/komiic_network/komiic_network.dart';
 import 'package:picakeep/network/nhentai_network/nhentai_main_network.dart';
 import 'package:picakeep/network/picacg_network/picacg_network.dart';
+import 'package:picakeep/network/pixiv_network/pixiv_network.dart';
 
 import '../ai_sources.dart';
 import '../ai_tool.dart';
@@ -35,7 +37,9 @@ class GetComicDetailTool extends AiTool {
               aiSourcePicacg,
               aiSourceJm,
               aiSourceEhentai,
-              aiSourceNhentai
+              aiSourceNhentai,
+              aiSourcePixiv,
+              aiSourceKomiic
             ],
           },
           'id': {'type': 'string', 'description': '漫画/画廊ID或ehentai完整链接'},
@@ -98,6 +102,18 @@ class GetComicDetailTool extends AiTool {
           operationId: context.operationId,
         ));
         return AiToolResult.success(_nhentaiJson(res.data));
+      case aiSourcePixiv:
+        final normalizedId = id.replaceFirst(
+          RegExp(r'^pixiv', caseSensitive: false),
+          '',
+        );
+        final res = await PixivNetwork().getComicInfo(normalizedId);
+        if (res.error) return AiToolResult.failure(res.errorMessageWithoutNull);
+        return AiToolResult.success(_pixivJson(res.data));
+      case aiSourceKomiic:
+        final res = await KomiicNetwork().getComicInfo(id);
+        if (res.error) return AiToolResult.failure(res.errorMessageWithoutNull);
+        return AiToolResult.success(_komiicJson(res.data));
     }
     return const AiToolResult.failure('unsupported source');
   }
@@ -175,6 +191,50 @@ class GetComicDetailTool extends AiTool {
         'author': resolveNhentaiAuthors(comic.tags),
         'tags': flattenEhTags(comic.tags),
         'pageCount': comic.thumbnails.length,
+      };
+
+  /// Pixiv 详情。`illustType == 2` 表示 Ugoira 动图（首版仅静态帧）。
+  Map<String, Object?> _pixivJson(PixivComicInfo comic) => {
+        'source': aiSourcePixiv,
+        'id': comic.id,
+        'title': comic.title,
+        'author': comic.author,
+        'authorId': comic.authorId,
+        'coverUrl': comic.coverUrl,
+        'tags': comic.tags,
+        'description': comic.description,
+        'pageCount': comic.pageCount,
+        'illustType': comic.illustType,
+        'isUgoira': comic.illustType == pixivIllustTypeUgoira,
+        'likeCount': comic.likeCount,
+        'viewCount': comic.viewCount,
+        'width': comic.width,
+        'height': comic.height,
+        'updateTime': comic.uploadDate,
+      };
+
+  /// Komiic 详情。注意本源是**章节制**，没有总页数，改报章节数。
+  Map<String, Object?> _komiicJson(KomiicComicInfo comic) => {
+        'source': aiSourceKomiic,
+        'id': comic.id,
+        'title': comic.title,
+        'author': comic.authors.join(', '),
+        'coverUrl': comic.coverUrl,
+        'tags': comic.tags,
+        'description': comic.description,
+        'status': comic.status,
+        'year': comic.year,
+        'chapterCount': comic.chapters.length,
+        'chapters': comic.chapters
+            .map((chapter) => {
+                  'id': chapter.id,
+                  'name': chapter.displayName,
+                  'isBook': chapter.isBook,
+                })
+            .toList(),
+        'views': comic.views,
+        'favoriteCount': comic.favoriteCount,
+        'updateTime': comic.updateTime,
       };
 }
 

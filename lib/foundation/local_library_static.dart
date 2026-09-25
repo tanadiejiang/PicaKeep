@@ -846,6 +846,42 @@ DownloadedItem? _downloadedItemFromDbRow(
   if (rawId.isEmpty) {
     return null;
   }
+
+  // **优先解析 db 的 `json` 列。**
+  //
+  // 注意 `download` 表**有 7 列**：`id / title / subtitle / time / directory /
+  // size / json`（建表语句见 online_download_manager.dart:2173-2183 与
+  // local_library_static.dart:88-98），调用方的查询也是
+  // `select rowid as __rowid__, * from download`（local_library_scan.dart:186-188、
+  // :408-410），所以这些列**都是可读的**。
+  //
+  // 之所以仍要优先读 `json`：**完整字段只写进 `json` 列** —— `sourceKey` /
+  // `sourceName` / `tags` / `cover` / `chapters` / `comicId` 在表里没有对应列，
+  // 靠下面按列名猜永远拿不回来，只能构造出 `ScannedDownloadedComic`（"扫描到的
+  // 本地漫画"）；而那个类不读 `sourceName` / `comicSize`，源标签于是显示成
+  // "本地扫描"、大小显示"未知"。真机上 Pixiv 的下载项正是这个样子（而它的 json 里
+  // sourceName / comicSize 明明都有）。
+  //
+  // 本函数是**兜底**：调用方先试 `_parseDownloadedItem`（它已直接委托唯一权威实现
+  // `parseDownloadedItemRecordJson`），只有返回 null 时才走到这里。
+  //
+  // ⚠️ 本条注释曾写作"download 表的列只有 `id / json / time / directory`，按列名猜
+  // 一律取不到值"——那个说法**不成立**（表有 7 列、列也都选得到），真实原因如上。
+  // 教训：判断"某列不存在"必须回读建表语句，不要从"取值取不到"反推。
+  final rawJson = row['json']?.toString() ?? '';
+  if (rawJson.isNotEmpty) {
+    final parsed = parseDownloadedItemRecordJson(
+      rawId,
+      rawJson,
+      time: time,
+      directory: directory,
+    );
+    if (parsed != null) {
+      return parsed;
+    }
+  }
+
+  // 兜底：老式行没有可解析的 json，只能按列名猜（保持原行为）。
   final title = _downloadRowText(row, const [
         'title',
         'name',
@@ -1083,6 +1119,9 @@ String? _favoriteTargetForDownloaded(DownloadedItem comic, String rawId) {
       return rawId;
     case DownloadType.nhentai:
       return rawId.startsWith('nhentai') ? rawId.substring(7) : rawId;
+    case DownloadType.pixiv:
+      // Pixiv 下载 id 形如 `pixiv{illustId}`，取裸 illustId 作为来源标识号。
+      return rawId.startsWith('pixiv') ? rawId.substring(5) : rawId;
     case DownloadType.other:
     case DownloadType.copyManga:
     case DownloadType.komiic:
@@ -1111,6 +1150,8 @@ String _sourceKeyForDownloadType(DownloadType type) {
       return 'copy_manga';
     case DownloadType.komiic:
       return 'Komiic';
+    case DownloadType.pixiv:
+      return 'pixiv';
     case DownloadType.favorite:
       return 'local_album';
     case DownloadType.other:
@@ -1136,6 +1177,8 @@ FavoriteType _favoriteTypeForDownloadType(DownloadType type) {
       return FavoriteType.copyManga;
     case DownloadType.komiic:
       return FavoriteType.komiic;
+    case DownloadType.pixiv:
+      return FavoriteType.pixiv;
     case DownloadType.favorite:
     case DownloadType.other:
       return const FavoriteType(0);

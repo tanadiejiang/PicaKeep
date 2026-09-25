@@ -29,6 +29,8 @@ import 'package:picakeep/pages/online_comic/eh_comic_page_v2.dart';
 import 'package:picakeep/pages/online_comic/jm_comic_page_v2.dart';
 import 'package:picakeep/pages/online_comic/nhentai_comic_page_v2.dart';
 import 'package:picakeep/pages/online_comic/picacg_comic_page_v2.dart';
+import 'package:picakeep/pages/online_comic/pixiv_comic_page_v2.dart';
+import 'package:picakeep/pages/online_comic/komiic_comic_page_v2.dart';
 import 'package:picakeep/tools/translations.dart';
 
 const _promptTagBoundaryPattern = r'''[\s#，。；、,.!?;！：:（）()\[\]{}<>《》“”"'`~～]''';
@@ -3610,6 +3612,12 @@ class _CompactResultCardRow extends StatelessWidget {
         page = NhentaiComicPageV2(item.id);
       case aiSourceEhentai:
         page = EhentaiComicPageV2(item.id);
+      // 第十八轮新增源：不补这两支会走 default，点击会**静默跳回列表页**
+      // 而不是详情页（无报错），表现为"点了详情却没进去"。
+      case aiSourcePixiv:
+        page = PixivComicPageV2(item.id);
+      case aiSourceKomiic:
+        page = KomiicComicPageV2(item.id);
       default:
         _openList(context);
         return;

@@ -291,6 +291,8 @@ class _LocalSearchPageState extends State<LocalSearchPage> {
         return '拷贝漫画 · 下载';
       case DownloadType.komiic:
         return 'Komiic · 下载';
+      case DownloadType.pixiv:
+        return 'Pixiv · 下载';
       default:
         return '下载';
     }

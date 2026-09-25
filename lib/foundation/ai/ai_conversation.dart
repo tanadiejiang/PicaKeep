@@ -266,6 +266,10 @@ const _orderedAiSources = <String>[
   aiSourceJm,
   aiSourceEhentai,
   aiSourceNhentai,
+  // 第十八轮新增源。这份顺序决定来源标签在多来源状态下的展示次序，
+  // 漏加会让「#搜pixiv / #搜komiic」选中的来源在气泡回显里丢失。
+  aiSourcePixiv,
+  aiSourceKomiic,
 ];
 
 /// 查询本地设备库/已连接远程库快照的工具名单。`#搜本地`/仅在线范围限定据此过滤。
@@ -481,6 +485,7 @@ class AiConversationController extends ChangeNotifier {
   /// 当前进行中的 LLM 请求的取消令牌；null 表示当前无进行中请求。
   /// 每次 _runLoop 开始前新建，请求完成（无论成功/失败/取消）后置 null。
   CancelToken? _llmCancelToken;
+
   /// OCR 进行中用户主动停止的意图标志。
   /// send() 入口每次清零；stopGeneration() 在 OCR 阶段（_llmCancelToken == null）置 true；
   /// OCR 循环每次 await 返回后检查，命中则中止本轮并复位 isLoading。
@@ -814,7 +819,9 @@ class AiConversationController extends ChangeNotifier {
     // 任一触发即置位；搜图路径图片只给工具用，完全绕开 OCR/视觉通道。
     // 命令语义只作用于当轮，不进任何持久化链路。
     final searchByImageRequested = searchByImage || parsed.searchByImage;
-    if (attachmentPaths.isNotEmpty && !visionEnabled && !searchByImageRequested) {
+    if (attachmentPaths.isNotEmpty &&
+        !visionEnabled &&
+        !searchByImageRequested) {
       final ocrConfig = AiOcrConfig.fromSettings();
       if (!ocrConfig.usable) {
         const message = '当前模型未声明支持图片识别，且 OCR 接口未启用或未配置完整，无法发送图片。'
@@ -963,7 +970,9 @@ class AiConversationController extends ChangeNotifier {
       _buildTurnUserContent(userQuery),
       // 决策C：仅视觉开且非搜图时图片进模型；OCR 路径模型只看到文字；
       // 搜图路径图片只流向工具层，不注入模型（Bug 2 修复）。
-      imagePaths: (visionEnabled && !searchByImageRequested) ? attachmentPaths : const [],
+      imagePaths: (visionEnabled && !searchByImageRequested)
+          ? attachmentPaths
+          : const [],
     ));
 
     isLoading = true;

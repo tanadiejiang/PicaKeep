@@ -622,6 +622,30 @@ class _AndroidStorageAccessController {
     }
   }
 
+  /// 在 Root 权限下创建目录（含缺失的父目录）。目录已存在时视为成功。
+  Future<void> createDirectoryWithRoot(String path) async {
+    if (!App.isAndroid) {
+      return;
+    }
+    await _invokeCreateDirectory('createDirectoryWithRoot', path);
+  }
+
+  /// 在 Shizuku 权限下创建目录（含缺失的父目录）。目录已存在时视为成功。
+  Future<void> createDirectoryWithShizuku(String path) async {
+    if (!App.isAndroid) {
+      return;
+    }
+    await _invokeCreateDirectory('createDirectoryWithShizuku', path);
+  }
+
+  Future<void> _invokeCreateDirectory(String method, String path) async {
+    try {
+      await _channel.invokeMethod<void>(method, {'path': path});
+    } on PlatformException catch (e) {
+      throw Exception((e.message ?? e.code).trim());
+    }
+  }
+
   Future<bool> existsWithRoot(String path) async {
     if (!App.isAndroid) {
       return false;
@@ -1152,6 +1176,8 @@ Widget buildAppSettings(double width, BuildContext context) {
     ),
     SettingsTitle('存储位置'.tl),
     const _DownloadDirTile(),
+    const _LowStorageMigrationTile(),
+    const _PendingDownloadMigrationTile(),
     const _OriginalDownloadDirTile(),
     const _LocalComicPathsTile(),
     SettingsTitle('数据管理'.tl),
@@ -1168,6 +1194,7 @@ Widget buildAppSettings(double width, BuildContext context) {
       onTap: () => _rescanLocalComics(context),
     ),
     const _DeleteBehaviorTile(),
+    const _UserDataTransferTiles(),
     if (App.isAndroid) const _AndroidPermissionSectionTitle(),
     if (App.isAndroid) const _AndroidManageAllFilesAccessTile(),
     if (App.isAndroid) const _AndroidShizukuModeTile(),
@@ -1617,7 +1644,7 @@ class _ManagedDataSourceModeTileState
   }
 }
 
-class _DirectoryPathDialog extends StatelessWidget {
+class _DirectoryPathDialog extends StatefulWidget {
   const _DirectoryPathDialog({
     required this.title,
     required this.hintText,
@@ -1628,6 +1655,9 @@ class _DirectoryPathDialog extends StatelessWidget {
     required this.onConfirm,
     required this.onCancel,
     required this.onOpenCurrentDirectory,
+    required this.initialPath,
+    required this.hasExistingDownloads,
+    this.extraSectionBuilder,
   });
 
   final String title;
@@ -1636,15 +1666,90 @@ class _DirectoryPathDialog extends StatelessWidget {
   final TextEditingController controller;
   final Future<void> Function() onBrowse;
   final Future<void> Function() onLongPressBrowse;
-  final Future<void> Function() onConfirm;
+  final Future<void> Function(bool migrateDownloads) onConfirm;
   final VoidCallback onCancel;
   final VoidCallback onOpenCurrentDirectory;
+
+  /// 打开弹窗时的下载目录配置值，用于判断路径是否真的被改动。
+  final String initialPath;
+
+  /// 当前下载目录里是否有可迁移的内容（漫画或 download.db）。
+  final bool hasExistingDownloads;
+
+  /// 额外插入的自定义区块（例如「原应用下载目录」的使用方式选择）。
+  ///
+  /// 之所以是 builder 而不是直接传 Widget：弹窗是**独立路由**，外层的
+  /// `setState` 不会重建它。builder 拿到的 `setState` 属于弹窗内部，
+  /// 区块里的开关/单选改动时用它刷新，外层只需持有取值。
+  final Widget Function(BuildContext context, StateSetter setState)?
+      extraSectionBuilder;
+
+  @override
+  State<_DirectoryPathDialog> createState() => _DirectoryPathDialogState();
+}
+
+class _DirectoryPathDialogState extends State<_DirectoryPathDialog> {
+  /// 默认不勾选：转移是有副作用的写操作，必须由用户主动选择。
+  bool _migrateDownloads = false;
 
   bool get _isDesktop =>
       Platform.isWindows || Platform.isMacOS || Platform.isLinux;
 
+  /// 路径没变就没什么可转移的，此时不出现这个选项。
+  bool get _pathChanged =>
+      widget.controller.text.trim() != widget.initialPath.trim();
+
+  bool get _showMigrateOption => widget.hasExistingDownloads && _pathChanged;
+
+  @override
+  void initState() {
+    super.initState();
+    // 路径由输入框和「浏览」共同改写，勾选项的显隐要跟着实时变。
+    widget.controller.addListener(_handlePathChanged);
+  }
+
+  @override
+  void dispose() {
+    widget.controller.removeListener(_handlePathChanged);
+    super.dispose();
+  }
+
+  void _handlePathChanged() {
+    if (mounted) {
+      setState(() {});
+    }
+  }
+
+  Widget _buildMigrateOption(BuildContext context) {
+    return InkWell(
+      borderRadius: BorderRadius.circular(8),
+      onTap: () => setState(() => _migrateDownloads = !_migrateDownloads),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Checkbox(
+              value: _migrateDownloads,
+              onChanged: (value) =>
+                  setState(() => _migrateDownloads = value ?? false),
+              materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              visualDensity: VisualDensity.compact,
+            ),
+            const SizedBox(width: 4),
+            Text(
+              '转移已下载的数据'.tl,
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    final controller = widget.controller;
     final screenWidth = MediaQuery.sizeOf(context).width;
     final browseButtonWidth = screenWidth < 420 ? 96.0 : 120.0;
     return Dialog(
@@ -1657,7 +1762,8 @@ class _DirectoryPathDialog extends StatelessWidget {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Text(title, style: Theme.of(context).textTheme.headlineSmall),
+              Text(widget.title,
+                  style: Theme.of(context).textTheme.headlineSmall),
               const SizedBox(height: 20),
               Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -1667,23 +1773,23 @@ class _DirectoryPathDialog extends StatelessWidget {
                       controller: controller,
                       textInputAction: TextInputAction.done,
                       decoration: InputDecoration(
-                        hintText: hintText,
+                        hintText: widget.hintText,
                         border: const OutlineInputBorder(),
                       ),
-                      onSubmitted: (_) => onConfirm(),
+                      onSubmitted: (_) => widget.onConfirm(_migrateDownloads),
                     ),
                   ),
                   const SizedBox(width: 8),
                   SizedBox(
                     width: browseButtonWidth,
                     child: GestureDetector(
-                      onLongPress: onLongPressBrowse,
+                      onLongPress: widget.onLongPressBrowse,
                       child: OutlinedButton.icon(
                         style: OutlinedButton.styleFrom(
                           minimumSize: const Size(0, 56),
                           padding: const EdgeInsets.symmetric(horizontal: 10),
                         ),
-                        onPressed: onBrowse,
+                        onPressed: widget.onBrowse,
                         icon: const Icon(Icons.folder_open, size: 18),
                         label: Text('浏览'.tl),
                       ),
@@ -1693,9 +1799,13 @@ class _DirectoryPathDialog extends StatelessWidget {
               ),
               const SizedBox(height: 10),
               Text(
-                helperText,
+                widget.helperText,
                 style: Theme.of(context).textTheme.bodySmall,
               ),
+              if (widget.extraSectionBuilder != null) ...[
+                const SizedBox(height: 12),
+                widget.extraSectionBuilder!(context, setState),
+              ],
               if (_isDesktop) ...[
                 const SizedBox(height: 12),
                 ValueListenableBuilder<TextEditingValue>(
@@ -1706,8 +1816,9 @@ class _DirectoryPathDialog extends StatelessWidget {
                       style: OutlinedButton.styleFrom(
                         minimumSize: const Size(double.infinity, 48),
                       ),
-                      onPressed:
-                          currentPath.isEmpty ? null : onOpenCurrentDirectory,
+                      onPressed: currentPath.isEmpty
+                          ? null
+                          : widget.onOpenCurrentDirectory,
                       icon: const Icon(Icons.launch, size: 18),
                       label: Text('打开当前目录'.tl),
                     );
@@ -1715,17 +1826,21 @@ class _DirectoryPathDialog extends StatelessWidget {
                 ),
               ],
               const SizedBox(height: 20),
-              OverflowBar(
-                alignment: MainAxisAlignment.end,
+              // 勾选项与「取消 / 确定」同一行，位于按钮左侧；用 Wrap 保证
+              // 窄屏（勾选项文案 + 两个按钮）放不下时能换行而不是溢出。
+              Wrap(
+                alignment: WrapAlignment.end,
+                crossAxisAlignment: WrapCrossAlignment.center,
                 spacing: 8,
-                overflowSpacing: 8,
+                runSpacing: 4,
                 children: [
+                  if (_showMigrateOption) _buildMigrateOption(context),
                   TextButton(
-                    onPressed: onCancel,
+                    onPressed: widget.onCancel,
                     child: Text('取消'.tl),
                   ),
                   TextButton(
-                    onPressed: onConfirm,
+                    onPressed: () => widget.onConfirm(_migrateDownloads),
                     child: Text('确定'.tl),
                   ),
                 ],
@@ -1734,6 +1849,504 @@ class _DirectoryPathDialog extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+/// 进度文案里的阶段名。
+String _migrationPhaseLabel(DownloadMigrationPhase phase) => switch (phase) {
+      DownloadMigrationPhase.copying => '正在复制'.tl,
+      DownloadMigrationPhase.cleaningUp => '正在清理旧目录'.tl,
+      DownloadMigrationPhase.moving => '正在转移'.tl,
+    };
+
+/// 迁移进度弹窗：显示"一本本搬"的进度，可退到后台继续。
+///
+/// 对话框只是进度的一层皮：真正的任务由 [DownloadMigrationController] 持有，
+/// 所以点「后台运行」关掉它不会中断搬移。
+class _MigrationProgressDialog extends StatefulWidget {
+  const _MigrationProgressDialog({
+    required this.task,
+    this.title = '正在转移下载数据',
+    this.hint = '新目录已经可以使用，没搬完的部分之后可以继续。',
+  });
+
+  /// 正在跑的迁移任务；null 表示已有任务在跑（不会并发搬同一批文件）。
+  final Future<DownloadMigrationResult?>? task;
+
+  /// 弹窗标题；复制场景与迁移场景用词不同，所以做成参数。
+  final String title;
+
+  /// 标题下方的一句说明。
+  final String hint;
+
+  @override
+  State<_MigrationProgressDialog> createState() =>
+      _MigrationProgressDialogState();
+}
+
+class _MigrationProgressDialogState extends State<_MigrationProgressDialog> {
+  @override
+  void initState() {
+    super.initState();
+    // 任务结束后自动收起进度框。用户若已点过「后台运行」，这里已经 unmounted。
+    widget.task?.whenComplete(() {
+      if (mounted) {
+        Navigator.of(context).pop();
+      }
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return PopScope(
+      canPop: false,
+      child: AlertDialog(
+        title: Row(
+          children: [
+            Icon(
+              Icons.drive_file_move_outline,
+              color: theme.colorScheme.primary,
+            ),
+            const SizedBox(width: 12),
+            Expanded(child: Text(widget.title.tl)),
+          ],
+        ),
+        content: AnimatedBuilder(
+          animation: DownloadMigrationController.instance,
+          builder: (context, _) {
+            final progress = DownloadMigrationController.instance.progress;
+            return Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(6),
+                  child: LinearProgressIndicator(
+                    value: progress?.fraction,
+                    minHeight: 8,
+                    backgroundColor: theme.colorScheme.surfaceContainerHighest,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  progress == null
+                      ? '正在准备...'.tl
+                      : '${_migrationPhaseLabel(progress.phase)} '
+                          '${progress.completed} / ${progress.total} 项 · '
+                          '${(progress.fraction * 100).round()}%',
+                  style: theme.textTheme.bodyMedium,
+                ),
+                if (progress != null && progress.currentEntry.isNotEmpty) ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    progress.currentEntry,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ],
+                const SizedBox(height: 12),
+                Text(
+                  widget.hint.tl,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ],
+            );
+          },
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: Text('后台运行'.tl),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// 打开进度框并等待这一轮搬完；点「后台运行」只是关掉 UI，任务继续跑。
+///
+/// 抽成顶层函数是为了让「继续转移」入口（设置页里的独立条目）也能复用，
+/// 而不必把整套对话框逻辑挂在某一个 tile 的 State 上。
+Future<void> _startDownloadMigrationTask(
+  BuildContext context, {
+  required String from,
+  required String to,
+}) async {
+  final controller = DownloadMigrationController.instance;
+  final task = controller.start(from: from, to: to);
+  await showDialog<void>(
+    context: context,
+    barrierDismissible: false,
+    builder: (_) => _MigrationProgressDialog(task: task),
+  );
+  final result = await task;
+  if (!context.mounted || result == null) {
+    return;
+  }
+  // 漫画是这一轮才落到新目录里的，重扫一次下载页才能立刻看到。
+  await _runRescanLocalComics(context);
+  if (!context.mounted) {
+    return;
+  }
+  await _reportDownloadMigrationResult(context, result, from: from, to: to);
+}
+
+Future<void> _reportDownloadMigrationResult(
+  BuildContext context,
+  DownloadMigrationResult result, {
+  required String from,
+  required String to,
+}) async {
+  // 以文件系统的实际状态为准：旧目录还有东西就是没搬完。
+  final remaining = await hasPendingDownloadEntries(from);
+  if (!context.mounted) {
+    return;
+  }
+  if (!remaining) {
+    _showSettingMessage(
+      context,
+      result.movedEntries > 0
+          ? '已转移 ${result.movedEntries} 项数据到新目录'
+          : '下载数据已全部在新目录',
+    );
+    return;
+  }
+  await _showDownloadMigrationIncomplete(context, result, from: from, to: to);
+}
+
+Future<void> _showDownloadMigrationIncomplete(
+  BuildContext context,
+  DownloadMigrationResult result, {
+  required String from,
+  required String to,
+}) async {
+  final lines = <String>['旧目录里还有未转移的内容。'];
+  if (result.movedEntries > 0) {
+    lines.add('本次已转移 ${result.movedEntries} 项。');
+  }
+  if (result.skippedEntries > 0) {
+    lines.add('另有 ${result.skippedEntries} 项此前已经转移。');
+  }
+  if (result.failures.isNotEmpty) {
+    lines.add('');
+    lines.add('以下条目转移失败（仍保留在旧目录）：');
+    for (final failure in result.failures.take(5)) {
+      lines.add('· $failure');
+    }
+    if (result.failures.length > 5) {
+      lines.add('· …以及另外 ${result.failures.length - 5} 项');
+    }
+  }
+  lines.add('');
+  lines.add('新目录已经在用，可以稍后继续搬剩下的部分。');
+
+  final again = await showDialog<bool>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: Text('转移未完成'.tl),
+      content: SingleChildScrollView(child: Text(lines.join('\n').tl)),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(ctx).pop(false),
+          child: Text('稍后继续'.tl),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.of(ctx).pop(true),
+          child: Text('继续转移'.tl),
+        ),
+      ],
+    ),
+  );
+  if (again == true && context.mounted) {
+    await _startDownloadMigrationTask(context, from: from, to: to);
+  }
+}
+
+/// 「存储紧张时的迁移」开关：只影响迁移方式，其余行为一概不变。
+class _LowStorageMigrationTile extends StatefulWidget {
+  const _LowStorageMigrationTile();
+
+  @override
+  State<_LowStorageMigrationTile> createState() =>
+      _LowStorageMigrationTileState();
+}
+
+class _LowStorageMigrationTileState extends State<_LowStorageMigrationTile> {
+  @override
+  void initState() {
+    super.initState();
+    unawaited(DownloadMigrationController.instance.loadPreferences());
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final controller = DownloadMigrationController.instance;
+    return AnimatedBuilder(
+      animation: controller,
+      builder: (context, _) => SwitchListTile(
+        secondary: const Icon(Icons.sd_storage_outlined),
+        title: Text('存储紧张时的迁移'.tl),
+        subtitle: Text(
+          controller.lowStorageMode
+              ? '搬一本删一本，峰值占用最小；转移过程中旧目录会逐步变空'.tl
+              : '先把全部内容复制过去，确认没失败后再清理旧目录'.tl,
+        ),
+        value: controller.lowStorageMode,
+        onChanged: controller.setLowStorageMode,
+      ),
+    );
+  }
+}
+
+/// 用户数据导入 / 导出，**格式与原项目 PicaComic 的 `.picadata` 互通**。
+///
+/// 导出走系统分享（与日志导出同一套做法），用户可存到任意位置；导入用系统文件
+/// 选择器挑包。范围是**设置 + 账号 + 历史 + 本地收藏**，不含下载数据 ——
+/// 下载库实测几百 MB，且体积与内容都不适合塞进这个包。
+class _UserDataTransferTiles extends StatefulWidget {
+  const _UserDataTransferTiles();
+
+  @override
+  State<_UserDataTransferTiles> createState() => _UserDataTransferTilesState();
+}
+
+class _UserDataTransferTilesState extends State<_UserDataTransferTiles> {
+  bool _busy = false;
+
+  Future<void> _showDetails(String title, UserDataTransferResult result) {
+    return showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(title.tl),
+        content: SingleChildScrollView(
+          child: Text(
+            '${result.message}\n\n${result.details.join('\n')}',
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: Text('知道了'.tl),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _export() async {
+    if (_busy) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('导出用户数据'.tl),
+        content: Text(
+          '将导出设置、账号（含登录状态）、历史记录与本地收藏。\n\n'
+                  '不含已下载的漫画与下载记录。导出的文件可以被原项目导入，反之亦然。'
+              .tl,
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: Text('取消'.tl),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: Text('导出'.tl),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    setState(() => _busy = true);
+    try {
+      // 先落到缓存目录，再交给系统分享 —— 用户可以把文件存到任意位置。
+      final out = '${App.cachePath}${Platform.pathSeparator}'
+          '$kUserDataDefaultFileName';
+      final result = await UserDataTransfer.export(outFile: out);
+      if (!mounted) return;
+      if (!result.ok) {
+        await _showDetails('导出失败', result);
+        return;
+      }
+      await Share.shareXFiles(
+        [XFile(out)],
+        text: 'PicaKeep 用户数据',
+      );
+    } catch (e) {
+      if (mounted) {
+        _showSettingMessage(context, '导出失败：$e');
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _busy = false);
+      }
+    }
+  }
+
+  Future<void> _import() async {
+    if (_busy) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('导入用户数据'.tl),
+        content: Text(
+          '将导入设置、账号（含登录状态）、历史记录与本地收藏。\n\n'
+                  '· 设置与账号：**以后导入包为准**（设置只覆盖与原项目一致的部分，'
+                  '本应用新增的选项保持不动）；\n'
+                  '· 历史与本地收藏：**合并**，本应用已有的记录不会被删除。\n\n'
+                  '导入完成后需要重启应用才会生效。'
+              .tl,
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: Text('取消'.tl),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: Text('选择文件'.tl),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    FilePickerResult? picked;
+    try {
+      picked = await FilePicker.platform.pickFiles();
+    } catch (e) {
+      if (mounted) {
+        _showSettingMessage(context, '打开文件选择器失败：$e');
+      }
+      return;
+    }
+    final path = picked?.files.singleOrNull?.path;
+    if (path == null || !mounted) return;
+
+    setState(() => _busy = true);
+    try {
+      final result = await UserDataTransfer.import(path);
+      if (!mounted) return;
+      if (result.ok) {
+        await _showDetails('导入完成', result);
+        if (!mounted) return;
+        _showSettingMessage(context, '导入完成，重启应用后生效');
+      } else {
+        await _showDetails('导入失败', result);
+      }
+    } catch (e) {
+      if (mounted) {
+        _showSettingMessage(context, '导入失败：$e');
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _busy = false);
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        ListTile(
+          leading: const Icon(Icons.sim_card_download),
+          title: Text('导出用户数据'.tl),
+          subtitle: Text('设置、账号、历史与本地收藏（不含下载数据）'.tl),
+          trailing: _busy
+              ? const SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Icon(Icons.arrow_right),
+          onTap: _busy ? null : _export,
+        ),
+        ListTile(
+          leading: const Icon(Icons.data_object),
+          title: Text('导入用户数据'.tl),
+          subtitle: Text('从原项目导出的数据包或本应用的备份导入'.tl),
+          trailing: const Icon(Icons.arrow_right),
+          onTap: _busy ? null : _import,
+        ),
+      ],
+    );
+  }
+}
+
+/// 未完成的迁移入口。没有待续任务时整条不渲染。
+class _PendingDownloadMigrationTile extends StatefulWidget {
+  const _PendingDownloadMigrationTile();
+
+  @override
+  State<_PendingDownloadMigrationTile> createState() =>
+      _PendingDownloadMigrationTileState();
+}
+
+class _PendingDownloadMigrationTileState
+    extends State<_PendingDownloadMigrationTile> {
+  PendingDownloadMigration? _pending;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_refresh());
+  }
+
+  Future<void> _refresh() async {
+    final controller = DownloadMigrationController.instance;
+    final pending = await controller.loadPending();
+    if (pending == null) {
+      if (mounted) {
+        setState(() => _pending = null);
+      }
+      return;
+    }
+    // 记录可能已经过期（用户自己把旧目录内容搬走/删了），以文件系统为准。
+    final stillPending = await hasPendingDownloadEntries(pending.from);
+    if (!mounted) {
+      return;
+    }
+    setState(() => _pending = stillPending ? pending : null);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final pending = _pending;
+    if (pending == null) {
+      return const SizedBox.shrink();
+    }
+    return ListTile(
+      leading: Icon(
+        Icons.drive_file_move_outline,
+        color: Theme.of(context).colorScheme.primary,
+      ),
+      title: Text('继续转移下载数据'.tl),
+      subtitle: Text(
+        '上次没搬完，旧目录：${pending.from}'.tl,
+        maxLines: 2,
+        overflow: TextOverflow.ellipsis,
+      ),
+      trailing: const Icon(Icons.arrow_right),
+      onTap: () async {
+        await _startDownloadMigrationTask(
+          context,
+          from: pending.from,
+          to: pending.to,
+        );
+        if (mounted) {
+          await _refresh();
+        }
+      },
     );
   }
 }
@@ -1764,9 +2377,20 @@ class _DownloadDirTileState extends State<_DownloadDirTile> {
     }
   }
 
-  void _showBrowseDialog() {
-    final controller = TextEditingController(text: appdata.settings[22]);
-    showDialog<void>(
+  /// 当前下载根目录的解析见文件末尾的顶层函数 [_resolveCurrentDownloadRoot]。
+  /// 提到顶层是因为「原应用下载目录 → 复制到本应用」也要用同一个结果。
+
+  Future<void> _showBrowseDialog() async {
+    final configuredPath = appdata.settings[22];
+    final currentRoot = await _resolveCurrentDownloadRoot();
+    final hasExistingDownloads = currentRoot == null
+        ? false
+        : await hasMigratableDownloadContent(currentRoot);
+    if (!mounted) {
+      return;
+    }
+    final controller = TextEditingController(text: configuredPath);
+    await showDialog<void>(
       context: context,
       builder: (ctx) => _DirectoryPathDialog(
         title: '设置本应用下载目录'.tl,
@@ -1775,6 +2399,8 @@ class _DownloadDirTileState extends State<_DownloadDirTile> {
             '提示：点按“浏览”调用系统目录选择；长按“浏览”打开内置文件夹浏览，支持安卓全部文件访问权限、Shizuku 授权或 Root 模式。'
                 .tl,
         controller: controller,
+        initialPath: configuredPath,
+        hasExistingDownloads: hasExistingDownloads,
         onBrowse: () async {
           final picked = await _pickFolder();
           if (picked != null) {
@@ -1791,35 +2417,210 @@ class _DownloadDirTileState extends State<_DownloadDirTile> {
           if (!mounted || browsed == null) {
             return;
           }
-          controller.text = browsed;
-          appdata.settings[22] = browsed;
-          await appdata.updateSettings();
-          if (!mounted) {
-            return;
-          }
-          setState(() {});
-          await _runRescanLocalComics(context);
+          // 长按浏览是"浏览即应用"的入口，这里同样要经过转移确认，
+          // 否则这条路径会绕过上面的勾选框静默切换目录。
+          await _applyBrowsedDownloadPath(
+            browsed,
+            currentRoot: currentRoot,
+            hasExistingDownloads: hasExistingDownloads,
+          );
         },
         onOpenCurrentDirectory: () {
           _openCurrentDirectory(controller.text.trim());
         },
         onCancel: () => Navigator.of(ctx).pop(),
-        onConfirm: () async {
-          final newPath = controller.text.trim();
-          final changed = newPath != appdata.settings[22];
-          appdata.settings[22] = newPath;
-          await appdata.updateSettings();
-          if (!ctx.mounted || !mounted) {
-            return;
-          }
-          Navigator.of(ctx).pop();
-          setState(() {});
-          if (changed) {
-            await _runRescanLocalComics(context);
-          }
-        },
+        onConfirm: (migrateDownloads) => _applyDownloadPathChange(
+          dialogContext: ctx,
+          newConfiguredPath: controller.text.trim(),
+          currentRoot: currentRoot,
+          hasExistingDownloads: hasExistingDownloads,
+          migrateDownloads: migrateDownloads,
+        ),
       ),
     );
+  }
+
+  /// 「确定」按钮：按是否勾选转移走不同分支。
+  Future<void> _applyDownloadPathChange({
+    required BuildContext dialogContext,
+    required String newConfiguredPath,
+    required String? currentRoot,
+    required bool hasExistingDownloads,
+    required bool migrateDownloads,
+  }) async {
+    if (newConfiguredPath == appdata.settings[22].trim()) {
+      // 路径没变，直接关掉；不重扫、不动数据。
+      if (dialogContext.mounted) {
+        Navigator.of(dialogContext).pop();
+      }
+      return;
+    }
+
+    if (migrateDownloads && currentRoot != null) {
+      if (dialogContext.mounted) {
+        Navigator.of(dialogContext).pop();
+      }
+      await _runDownloadMigration(from: currentRoot, to: newConfiguredPath);
+      return;
+    }
+
+    // 没勾选：旧目录还有数据时先说清楚"数据不会跟着走"。
+    if (hasExistingDownloads) {
+      final proceed = await _confirmSwitchWithoutMigration();
+      if (!proceed || !mounted) {
+        return;
+      }
+    }
+    if (dialogContext.mounted) {
+      Navigator.of(dialogContext).pop();
+    }
+    await _setDownloadPath(newConfiguredPath);
+  }
+
+  /// 长按浏览选完目录后的应用逻辑，与勾选框路径保持一致。
+  Future<void> _applyBrowsedDownloadPath(
+    String browsedPath, {
+    required String? currentRoot,
+    required bool hasExistingDownloads,
+  }) async {
+    final newPath = browsedPath.trim();
+    if (newPath.isEmpty || newPath == appdata.settings[22].trim()) {
+      return;
+    }
+    if (hasExistingDownloads && currentRoot != null) {
+      final migrate = await _askMigrateDownloads();
+      if (migrate == null || !mounted) {
+        return;
+      }
+      if (migrate) {
+        await _runDownloadMigration(from: currentRoot, to: newPath);
+        return;
+      }
+    }
+    await _setDownloadPath(newPath);
+  }
+
+  /// 长按浏览时的三选一：转移 / 不转移 / 取消。返回 null 表示取消。
+  Future<bool?> _askMigrateDownloads() {
+    return showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('转移已下载的数据'.tl),
+        content: Text(
+          '新目录与当前目录不同。是否把已下载的漫画与记录一起转移到新目录？\n\n'
+                  '选择“不转移”：新目录里不会出现这些内容，旧目录的数据仍然完整保留在原位置。'
+              .tl,
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: Text('取消'.tl),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: Text('不转移'.tl),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: Text('转移'.tl),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 未勾选转移时的提示。返回 true 表示用户确认继续切换。
+  Future<bool> _confirmSwitchWithoutMigration() async {
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('已下载的数据不会转移'.tl),
+        content: Text(
+          '新目录里不会出现旧目录中已下载的漫画和记录，需要重新下载。\n\n'
+                  '旧目录里的数据不会被删除，仍然保留在原位置，之后可以手动搬过去。'
+              .tl,
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: Text('返回'.tl),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: Text('仍要切换'.tl),
+          ),
+        ],
+      ),
+    );
+    return result ?? false;
+  }
+
+  /// 勾选转移后的完整流程：**先让新目录可用，再搬旧数据**。
+  ///
+  /// 1. 复制 `download.db` 到新目录（源库保留一份）；
+  /// 2. 立刻把下载目录切到新路径 —— 记录已经在新目录里，它马上就可用；
+  /// 3. 逐个把旧目录的漫画搬过去，带进度、可中断、可续。
+  ///
+  /// 这样安排的好处：即使第 3 步整体失败或被系统杀掉，**记录不会丢**，
+  /// 新目录也始终是一个能用的下载目录，剩下的只是"有些漫画还没搬过来"。
+  Future<void> _runDownloadMigration({
+    required String from,
+    required String to,
+  }) async {
+    try {
+      await seedDownloadDatabase(from: from, to: to);
+    } catch (e) {
+      if (!mounted) {
+        return;
+      }
+      await _showMessageDialog(
+        context,
+        '无法转移下载记录',
+        '复制下载记录到新目录失败，下载目录保持不变。\n\n${_describeError(e)}',
+      );
+      return;
+    }
+    final switched = await _setDownloadPath(to);
+    if (!switched || !mounted) {
+      return;
+    }
+    await _startDownloadMigrationTask(context, from: from, to: to);
+  }
+
+  String _describeError(Object error) {
+    if (error is DownloadMigrationException) {
+      return error.message;
+    }
+    return error.toString().trim();
+  }
+
+  /// 切换下载目录：先更新配置，再让下载库切到新目录，最后重扫。
+  /// 顺序不能反 —— 反了会拿旧库去扫新目录。返回是否切换成功。
+  Future<bool> _setDownloadPath(String newPath) async {
+    final previousPath = appdata.settings[22];
+    appdata.settings[22] = newPath;
+    await appdata.updateSettings();
+    try {
+      await downloadManager.init();
+    } catch (_) {
+      // 新目录打不开就退回原设置，别让应用停在一个不可用的下载目录上。
+      appdata.settings[22] = previousPath;
+      await appdata.updateSettings();
+      try {
+        await downloadManager.init();
+      } catch (_) {}
+      if (mounted) {
+        setState(() {});
+        _showSettingMessage(context, '下载目录不可用，已恢复原设置'.tl);
+      }
+      return false;
+    }
+    if (!mounted) {
+      return true;
+    }
+    setState(() {});
+    await _runRescanLocalComics(context);
+    return true;
   }
 
   Widget _buildPathDisplay(BuildContext context, String display) {
@@ -1868,12 +2669,105 @@ class _OriginalDownloadDirTile extends StatefulWidget {
 }
 
 class _OriginalDownloadDirTileState extends State<_OriginalDownloadDirTile> {
+  /// 使用方式：`true` = 复制一份到本应用，`false` = 直接原地读取（默认）。
+  ///
+  /// 弹窗是独立路由，这份状态由本 State 持有，弹窗内靠 `setSectionState` 刷新。
+  bool _copyMode =
+      appdata.settings[originalDirUsageModeSettingIndex] ==
+          originalDirUsageModeCopy;
+
   Future<String?> _pickFolder() async {
     try {
       return await FilePicker.platform.getDirectoryPath();
     } catch (_) {
       return null;
     }
+  }
+
+  /// 弹窗里的「使用方式」区块。
+  Widget _buildUsageModeSection(StateSetter setSectionState) {
+    final theme = Theme.of(context);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Divider(height: 1),
+        const SizedBox(height: 8),
+        Text('使用方式'.tl, style: theme.textTheme.titleSmall),
+        SwitchListTile(
+          contentPadding: EdgeInsets.zero,
+          dense: true,
+          value: _copyMode,
+          title: Text('复制到本应用'.tl),
+          subtitle: Text(
+            _copyMode
+                ? '会把原目录内容复制进本应用下载目录，之后不再依赖原目录与权限；'
+                    '同一份漫画会占双倍空间。只复制、不动原应用的数据。'
+                    .tl
+                : '直接原地读取，不复制文件、不占额外空间。原应用目录在它自己的'
+                    '私有存储里，读取需要 Shizuku 或 Root 授权。'.tl,
+          ),
+          onChanged: (value) {
+            setSectionState(() {});
+            _copyMode = value;
+          },
+        ),
+      ],
+    );
+  }
+
+  /// 把原应用下载目录的内容复制一份到本应用下载目录。
+  ///
+  /// 复用下载目录迁移那套进度广播与「后台运行」按钮；关键区别是
+  /// [DownloadMigrationController.startCopy] **绝不删除源** —— 那是原应用的数据。
+  /// 重复执行是安全的：目标已存在同名条目会被跳过。
+  Future<void> _copyOriginalDirIntoApp(String from) async {
+    final target = await _resolveCurrentDownloadRoot();
+    if (!mounted) {
+      return;
+    }
+    if (target == null) {
+      _showSettingMessage(context, '无法确定本应用下载目录，已取消复制'.tl);
+      return;
+    }
+    if (target == from) {
+      _showSettingMessage(context, '两边指向同一个目录，无需复制'.tl);
+      return;
+    }
+
+    final controller = DownloadMigrationController.instance;
+    final task = controller.startCopy(from: from, to: target);
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => _MigrationProgressDialog(
+        task: task,
+        title: '正在复制原应用数据',
+        hint: '只复制、不删除原应用的文件；中断后重新执行会跳过已复制的内容。',
+      ),
+    );
+    final result = await task;
+    if (!mounted || result == null) {
+      return;
+    }
+    if (result.failures.isNotEmpty) {
+      await _showMessageDialog(
+        context,
+        '复制未完成',
+        '已复制 ${result.movedEntries} 项，跳过 ${result.skippedEntries} 项。\n\n'
+            '以下条目失败：\n${result.failures.take(5).join('\n')}',
+      );
+    } else {
+      _showSettingMessage(
+        context,
+        result.movedEntries > 0
+            ? '已复制 ${result.movedEntries} 项到本应用下载目录'
+            : '没有需要复制的内容',
+      );
+    }
+    if (!mounted) {
+      return;
+    }
+    await _runRescanLocalComics(context);
   }
 
   void _openCurrentDirectory(String path) {
@@ -1898,6 +2792,12 @@ class _OriginalDownloadDirTileState extends State<_OriginalDownloadDirTile> {
             '提示：点按“浏览”调用系统目录选择；长按“浏览”打开内置文件夹浏览，支持安卓全部文件访问权限、Shizuku 授权或 Root 模式。'
                 .tl,
         controller: controller,
+        // 「原应用下载目录」只是扫描来源，不是本应用的下载目的地，
+        // 换它不涉及搬数据，因此不出现下载转移选项。
+        initialPath: appdata.settings[originalDownloadDirSettingIndex],
+        hasExistingDownloads: false,
+        extraSectionBuilder: (_, setSectionState) =>
+            _buildUsageModeSection(setSectionState),
         onBrowse: () async {
           final picked = await _pickFolder();
           if (picked != null) {
@@ -1927,18 +2827,33 @@ class _OriginalDownloadDirTileState extends State<_OriginalDownloadDirTile> {
           _openCurrentDirectory(controller.text.trim());
         },
         onCancel: () => Navigator.of(ctx).pop(),
-        onConfirm: () async {
+        onConfirm: (migrateDownloads) async {
           final newPath = controller.text.trim();
-          final changed =
-              newPath != appdata.settings[originalDownloadDirSettingIndex];
+          final oldPath = appdata.settings[originalDownloadDirSettingIndex];
+          final pathChanged = newPath != oldPath;
+          final wasCopyMode =
+              appdata.settings[originalDirUsageModeSettingIndex] ==
+                  originalDirUsageModeCopy;
+          final modeChanged = _copyMode != wasCopyMode;
+
           appdata.settings[originalDownloadDirSettingIndex] = newPath;
+          appdata.settings[originalDirUsageModeSettingIndex] = _copyMode
+              ? originalDirUsageModeCopy
+              : originalDirUsageModeDirect;
           await appdata.updateSettings();
           if (!ctx.mounted || !mounted) {
             return;
           }
           Navigator.of(ctx).pop();
           setState(() {});
-          if (changed) {
+
+          // 选了"复制到本应用"、且目录非空时执行一次复制。
+          // 重复执行安全：目标已存在同名条目会被跳过。
+          if (_copyMode && newPath.isNotEmpty && (pathChanged || modeChanged)) {
+            await _copyOriginalDirIntoApp(newPath);
+            return;
+          }
+          if (pathChanged) {
             await _runRescanLocalComics(context);
           }
         },
@@ -2122,4 +3037,52 @@ class _PermissionSettingState extends State<PermissionSetting> {
       ),
     );
   }
+}
+
+
+/// 一个只有「知道了」按钮的提示弹窗。
+///
+/// 提到顶层是因为"下载目录迁移"与"原应用数据复制"两处都要用；留在某个 tile 的
+/// State 里，另一个 State 就调不到（私有成员是库级可见，但 State 的方法是实例方法）。
+Future<void> _showMessageDialog(
+  BuildContext context,
+  String title,
+  String message,
+) {
+  return showDialog<void>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: Text(title.tl),
+      content: SingleChildScrollView(child: Text(message.tl)),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(ctx).pop(),
+          child: Text('知道了'.tl),
+        ),
+      ],
+    ),
+  );
+}
+
+/// 当前下载根目录（配置为空时解析为应用私有默认目录）。
+///
+/// 直接采用 DownloadManager 解析后的 path，避免在设置页里重复一份"默认目录"
+/// 规则 —— 两处规则一旦漂移，就会把数据搬到错误的目录。
+/// 解析失败（例如当前路径不可访问）返回 null，调用方据此跳过相关操作。
+///
+/// 提到顶层而不是留在某个 tile 的 State 里：下载目录迁移与「原应用下载目录
+/// 复制到本应用」都要用同一个结果。
+Future<String?> _resolveCurrentDownloadRoot() async {
+  final manager = DownloadManager();
+  try {
+    await manager.init();
+  } catch (_) {
+    return null;
+  }
+  final resolved = manager.path?.trim() ?? '';
+  if (resolved.isNotEmpty) {
+    return resolved;
+  }
+  final configured = appdata.settings[22].trim();
+  return configured.isEmpty ? null : configured;
 }

@@ -289,6 +289,10 @@ class _DownloadingTile extends StatelessWidget {
               child: Image.network(
                 task.taskCover,
                 fit: BoxFit.cover,
+                // 这里展示的是**在线封面 URL**，必须带该源的请求头：
+                // Pixiv 的 i.pximg.net 与 Komiic 的 /api/image/ 都校验 Referer，
+                // 裸加载会 403，界面上只剩破图图标。
+                headers: task.taskCoverHeaders,
                 errorBuilder: (_, __, ___) =>
                     const Center(child: Icon(Icons.broken_image_outlined)),
               ),

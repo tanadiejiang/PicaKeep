@@ -218,8 +218,17 @@ abstract class BaseOnlineComicPage<T> extends StatelessWidget {
   /// 章节区标题下方的说明文案。
   String? get episodesSubtitle => null;
 
-  /// 在标签区之后、章节区之前插入的自定义区块（可选）。
+  /// 在标签区之后、简介区之前插入的自定义区块（可选）。
   Widget? buildCustomSection(BuildContext context, T data) => null;
+
+  /// 在**简介区之后**、章节区之前插入的自定义区块（可选）。
+  ///
+  /// 与 [buildCustomSection] 的区别只在于插入位置：有些源的内容（例如 Pixiv 的
+  /// 「作品页面预览」缩略图墙）体量大、偏"附属内容"，放在简介之后更符合阅读顺序——
+  /// 先看信息与简介，再看逐页预览。
+  ///
+  /// 默认返回 null，对既有源零行为变化。
+  Widget? buildSectionAfterDescription(BuildContext context, T data) => null;
 
   /// 替换默认 [OnlineComicTagsSection] 的自定义标签区（可选）。
   ///
@@ -365,6 +374,7 @@ abstract class BaseOnlineComicPage<T> extends StatelessWidget {
     });
 
     final custom = buildCustomSection(context, data);
+    final afterDescription = buildSectionAfterDescription(context, data);
     final tags = extractTags(data);
     final description = extractDescription(data);
     final episodes = extractEpisodes(data);
@@ -408,6 +418,12 @@ abstract class BaseOnlineComicPage<T> extends StatelessWidget {
                   const SizedBox(height: 8),
                   Text(description,
                       style: Theme.of(context).textTheme.bodyMedium),
+                  const SizedBox(height: 16),
+                  const Divider(),
+                ],
+                if (afterDescription != null) ...[
+                  const SizedBox(height: 12),
+                  afterDescription,
                   const SizedBox(height: 16),
                   const Divider(),
                 ],
@@ -664,8 +680,7 @@ abstract class BaseOnlineComicPage<T> extends StatelessWidget {
                                 ),
                               );
                               if (confirm == true && context.mounted) {
-                                final candidates =
-                                    downloadCandidateIds(data);
+                                final candidates = downloadCandidateIds(data);
                                 if (candidates != null) {
                                   await logic.deleteDownload(candidates);
                                 }

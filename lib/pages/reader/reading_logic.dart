@@ -48,6 +48,17 @@ class ComicReadingPageLogic extends StateController {
   int? loadingOrder;
   int? previousImageCacheMaximumSizeBytes;
   int? previousImageCacheMaximumSize;
+
+  /// 进入阅读器时若按来源临时覆盖了翻页方式（`settings[9]`），这里存原值。
+  ///
+  /// 为什么需要它：翻页方式被十几处直接读 `appdata.settings[9]`
+  /// （image_view / tool_bar / touch_control …），逐一改成"按来源解析"既容易漏，
+  /// 也会让各处判断不一致。所以改为**临时改那一个值**，退出时还原 ——
+  /// 期间所有读取点自动一致，且不动用户的全局设置。
+  ///
+  /// `null` 表示本次没有覆盖过。
+  String? overriddenPageMode;
+
   final imageAbortSignal = StreamImageAbortSignal();
 
   void configureReaderCacheLimits() {

@@ -36,6 +36,9 @@ import 'package:picakeep/network/eh_network/eh_main_network.dart';
 import 'package:picakeep/network/eh_network/eh_models.dart';
 import 'package:picakeep/network/eh_network/get_gallery_id.dart';
 import 'package:picakeep/network/nhentai_network/nhentai_main_network.dart';
+// 第十八轮新增：Pixiv / Komiic 在线阅读数据所需的网络层与模型。
+import 'package:picakeep/network/pixiv_network/pixiv_network.dart';
+import 'package:picakeep/network/komiic_network/komiic_network.dart';
 import 'package:picakeep/foundation/image_loader/jm_image_recombine.dart';
 import 'package:picakeep/tools/save_image.dart';
 import 'package:picakeep/tools/time.dart';
@@ -68,6 +71,9 @@ part '../online_comic/picacg_reading_data.dart';
 part '../online_comic/jm_reading_data.dart';
 part '../online_comic/eh_reading_data.dart';
 part '../online_comic/nhentai_reading_data.dart';
+// 第十八轮新增源：Pixiv（单本多图，无章节）/ Komiic（有章节）。
+part '../online_comic/pixiv_reading_data.dart';
+part '../online_comic/komiic_reading_data.dart';
 
 SystemUiOverlayStyle _readerOverlayStyle(bool useDarkBackground) {
   final isDark = useDarkBackground;
@@ -125,13 +131,52 @@ class ComicReadingPage extends StatelessWidget {
 
   ComicReadingPage(this.readingData, this.initialPage, this.initialEp,
       {super.key}) {
-    StateController.put(ComicReadingPageLogic(
+    final logic = ComicReadingPageLogic(
         initialEp,
         readingData,
         initialPage,
         () => _updateHistory(
-            StateController.find<ComicReadingPageLogic>(), false)));
+            StateController.find<ComicReadingPageLogic>(), false));
+    StateController.put(logic);
+    _applyDefaultPageModeForSource(logic);
     unawaited(_observeUntranslatedTagsForReader());
+  }
+
+  /// 让 Pixiv 与本地/图集类作品**默认以单页打开**。
+  ///
+  /// 理由：Pixiv 是单图或少量图的作品，本地图集也没有固定版式，"从上至下（连续）"
+  /// 或"双页"用在它们身上都别扭。命中时**临时**覆盖 `settings[9]`，原值记在
+  /// [ComicReadingPageLogic.overriddenPageMode] 上，退出阅读器时还原
+  /// （见 `_restoreOverriddenPageMode`）—— 所以**不改动用户的全局设置**，
+  /// 用户在阅读器里手动切换也照常生效。
+  void _applyDefaultPageModeForSource(ComicReadingPageLogic logic) {
+    final type = readingData.comicType;
+    final preferSinglePage = type == ComicType.pixiv || type == ComicType.other;
+    if (!preferSinglePage) {
+      return;
+    }
+    final current = appdata.settings[9];
+    // '1' / '2' 本就是单页（从左向右 / 从右向左），没什么可覆盖的。
+    if (current == '1' || current == '2') {
+      return;
+    }
+    logic.overriddenPageMode = current;
+    appdata.settings[9] = '1';
+  }
+
+  /// 还原 [_applyDefaultPageModeForSource] 的临时覆盖。
+  ///
+  /// 判据是"`settings[9]` 是否仍等于我们设的 `'1'`"：若用户中途在阅读器里手动
+  /// 调过，值就不是 `'1'` 了，那说明他确实想用新的 —— 此时保留用户的选择，不还原。
+  void _restoreOverriddenPageMode(ComicReadingPageLogic logic) {
+    final previous = logic.overriddenPageMode;
+    if (previous == null) {
+      return;
+    }
+    logic.overriddenPageMode = null;
+    if (appdata.settings[9] == '1') {
+      appdata.settings[9] = previous;
+    }
   }
 
   Future<void> _observeUntranslatedTagsForReader() async {
@@ -265,6 +310,8 @@ class ComicReadingPage extends StatelessWidget {
       }
       logic.runningAutoPageTurning = false;
       ComicImage.clear();
+      // 还原按来源做的翻页方式临时覆盖（用户在阅读中手动调过则保留其选择）。
+      _restoreOverriddenPageMode(logic);
       StateController.remove<ComicReadingPageLogic>();
       // 更新本地收藏
       LocalFavoritesManager()

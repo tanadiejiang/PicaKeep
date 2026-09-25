@@ -14,6 +14,8 @@ import '../online_comic/picacg_comic_page_v2.dart';
 import '../online_comic/jm_comic_page_v2.dart';
 import '../online_comic/nhentai_comic_page_v2.dart';
 import '../online_comic/eh_comic_page_v2.dart';
+import '../online_comic/pixiv_comic_page_v2.dart';
+import '../online_comic/komiic_comic_page_v2.dart';
 import 'ai_download_list_page.dart';
 
 class AiItemListPage extends StatefulWidget {
@@ -82,6 +84,12 @@ class _AiItemListPageState extends State<AiItemListPage> {
         page = NhentaiComicPageV2(item.id);
       case aiSourceEhentai:
         page = EhentaiComicPageV2(item.id);
+      // 第十八轮新增源：不补这两支会走 default，点击清单卡会**静默回落**到
+      // 占位 sheet（无报错），表现为"点了没反应"。
+      case aiSourcePixiv:
+        page = PixivComicPageV2(item.id);
+      case aiSourceKomiic:
+        page = KomiicComicPageV2(item.id);
       default:
         _showFallbackSheet(item);
         return;

@@ -181,6 +181,9 @@ class Appdata {
     '0', //148 aiPersistentCardDismissed 已了解长期状态卡片（1=永久隐藏）
     '0', //149 aiAutoDownloadEnabled AI自动下载（0=关闭=工具不暴露给AI；1=允许AI自行入队）
     '{}', //150 comicTileDisplayConfig 卡片信息显示配置 JSON，结构 {"local":{...},"online":{...},"search":{"<源key>":{...}}}，每个节点 {"tagRows":2,"showTags":true,"showId":true}（tagRows 0=不限行）；读写见 foundation/comic_tile_display_config.dart
+    '0', //151 originalDirUsageMode 原应用下载目录的使用方式：0=直接使用（原地读取，默认，不占额外空间）；1=复制到本应用下载目录后再使用（摆脱对原目录与权限的依赖，但占用双倍空间）
+    '', //152 pixivDownloadDir Pixiv 专属下载目录；空=跟随「本应用下载目录」（settings[22]）。Pixiv 是单图作品，与漫画混在一个目录里不好翻，所以允许单独指定
+    '{title}', //153 pixivDirNameTemplate Pixiv 下载的目录名模板，支持 {title} / {author} / {id}；默认 {title} 与改动前行为一致。渲染见 foundation/pixiv_download_naming.dart
   ];
 
   List<String> implicitData = [

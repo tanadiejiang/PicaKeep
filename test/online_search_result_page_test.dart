@@ -1345,6 +1345,18 @@ void main() {
         final data = source.searchPageData;
         expect(data, isNotNull, reason: '${source.key} 缺少搜索声明');
         final values = data!.searchOptions.map((e) => e.value).toList();
+        if (values.isEmpty) {
+          // 无排序选项的源（第十八轮的 Komiic：其搜索 GraphQL 不接受排序参数）
+          // 必须把默认值留空。这里断言"不留悬空默认值"——
+          // 若给它配一个不在选项集里的值，UI 会隐藏排序行，但请求里仍带着
+          // 一个用户看不见、也无法更改的隐式参数。
+          expect(
+            data.defaultOption,
+            isEmpty,
+            reason: '${source.key} 没有任何选项，默认值必须为空',
+          );
+          continue;
+        }
         expect(
           values,
           contains(data.defaultOption),

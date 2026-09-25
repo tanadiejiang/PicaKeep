@@ -503,6 +503,22 @@ class MainActivity : FlutterActivity() {
                         null
                     }
                 }
+                "createDirectoryWithRoot" -> {
+                    val path = call.argument<String>("path")
+                    if (path.isNullOrBlank()) {
+                        result.error("invalid_path", "path is required", null)
+                        return@setMethodCallHandler
+                    }
+                    val targetPath = path.trim()
+                    runStorageTask(
+                        result,
+                        "root_create_directory_failed",
+                        "Root 模式创建目录失败",
+                    ) {
+                        createDirectoryWithRoot(targetPath)
+                        null
+                    }
+                }
                 "existsWithRoot" -> {
                     val path = call.argument<String>("path")
                     if (path.isNullOrBlank()) {
@@ -617,6 +633,22 @@ class MainActivity : FlutterActivity() {
                         "Shizuku file write failed",
                     ) {
                         writeFileWithShizuku(targetPath, bytes)
+                        null
+                    }
+                }
+                "createDirectoryWithShizuku" -> {
+                    val path = call.argument<String>("path")
+                    if (path.isNullOrBlank()) {
+                        result.error("invalid_path", "path is required", null)
+                        return@setMethodCallHandler
+                    }
+                    val targetPath = path.trim()
+                    runStorageTask(
+                        result,
+                        "shizuku_create_directory_failed",
+                        "Shizuku 模式创建目录失败",
+                    ) {
+                        createDirectoryWithShizuku(targetPath)
                         null
                     }
                 }
@@ -1031,6 +1063,12 @@ class MainActivity : FlutterActivity() {
         }
     }
 
+    private fun createDirectoryWithRoot(path: String) {
+        createDirectoryWithCandidates(path, ::rootCandidatePaths) { command ->
+            Runtime.getRuntime().exec(arrayOf("su", "-c", command))
+        }
+    }
+
     private fun existsWithRoot(path: String): Boolean {
         if (false) {
             return false
@@ -1089,6 +1127,20 @@ class MainActivity : FlutterActivity() {
         }.getOrElse { error ->
             Log.w(TAG, "Shizuku UserService file write failed for $path", error)
             writeFileWithShizukuShell(path, bytes)
+        }
+    }
+
+    private fun createDirectoryWithShizuku(path: String) {
+        if (!hasShizukuPermission()) {
+            throw IllegalStateException("Shizuku 未授权")
+        }
+        runCatching {
+            withShizukuUserService { service ->
+                service.createDirectory(path)
+            }
+        }.getOrElse { error ->
+            Log.w(TAG, "Shizuku UserService create directory failed for $path", error)
+            createDirectoryWithShizukuShell(path)
         }
     }
 
@@ -1166,6 +1218,12 @@ class MainActivity : FlutterActivity() {
 
     private fun writeFileWithShizukuShell(path: String, bytes: ByteArray) {
         writeFileWithCandidates(path, bytes) { command ->
+            newShizukuProcess(arrayOf("sh", "-c", command), null, null)
+        }
+    }
+
+    private fun createDirectoryWithShizukuShell(path: String) {
+        createDirectoryWithCandidates(path) { command ->
             newShizukuProcess(arrayOf("sh", "-c", command), null, null)
         }
     }
@@ -1400,6 +1458,34 @@ class MainActivity : FlutterActivity() {
             lastError = if (completed.stderr.isNotBlank()) completed.stderr else "File write failed"
         }
         throw IllegalStateException(lastError ?: "File write failed")
+    }
+
+    private fun createDirectoryWithCandidates(
+        path: String,
+        candidatePathProvider: (String) -> LinkedHashSet<String> = ::candidatePaths,
+        startProcess: (String) -> Process,
+    ) {
+        var lastError: String? = null
+        for (candidate in candidatePathProvider(path)) {
+            val target = shellEscape(candidate)
+            // 已是目录直接成功（幂等）；已存在但是文件则明确报错，避免 mkdir 的
+            // "File exists" 被当成无权限而误导用户。
+            val command =
+                "if [ -d $target ]; then exit 0; " +
+                    "elif [ -e $target ]; then echo __PICAKKEEP_PATH_EXISTS__ 1>&2; exit 3; " +
+                    "else mkdir -p $target; fi"
+            val completed = executeTextProcess(startProcess(command))
+            if (completed.exitCode == 0) {
+                return
+            }
+            lastError =
+                if (completed.stderr.contains("__PICAKKEEP_PATH_EXISTS__")) {
+                    "同名文件已存在，无法创建目录"
+                } else {
+                    buildPrivilegedError(completed.stderr, "目录创建失败", "目录创建失败")
+                }
+        }
+        throw IllegalStateException(lastError ?: "目录创建失败")
     }
 
     private fun movePathWithCandidates(

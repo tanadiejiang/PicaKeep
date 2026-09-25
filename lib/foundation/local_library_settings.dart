@@ -1,6 +1,23 @@
 import 'dart:convert';
 
 const originalDownloadDirSettingIndex = 90;
+
+/// 原应用下载目录的**使用方式**。
+///
+/// - `'0'`（默认）：**直接使用** —— 原地读取该目录，不复制任何文件。
+///   省空间，也不改动原应用的数据；代价是读取要依赖 Shizuku/Root 权限
+///   （原应用目录在它自己的私有存储里）。
+/// - `'1'`：**复制到本应用** —— 把内容复制进本应用下载目录后再使用。
+///   之后不再依赖原目录与权限，但同一份漫画会占双倍空间。
+///
+/// 默认取"直接使用"，是因为它已经是既有行为（`PrivilegedStorageAccess`
+/// 原地读，见 local_library_static.dart），且用户的漫画库可能很大
+/// （实测某设备原应用下载目录 507 MB）。
+const originalDirUsageModeSettingIndex = 151;
+
+/// [originalDirUsageModeSettingIndex] 的取值。
+const String originalDirUsageModeDirect = '0';
+const String originalDirUsageModeCopy = '1';
 const localComicPathsSettingIndex = 91;
 const localAlbumImageSortSettingIndex = 92;
 const localLibraryListSortSettingIndex = 93;

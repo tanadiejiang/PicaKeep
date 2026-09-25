@@ -202,6 +202,7 @@ class DownloadExportDescriptorFactory {
         return DownloadExportSourceKind.htmanga;
       case DownloadType.copyManga:
       case DownloadType.komiic:
+      case DownloadType.pixiv:
       case DownloadType.favorite:
       case DownloadType.other:
         return DownloadExportSourceKind.other;

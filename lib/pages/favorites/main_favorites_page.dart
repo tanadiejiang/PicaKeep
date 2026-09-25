@@ -783,43 +783,46 @@ class _MainFavoritesPageState extends State<MainFavoritesPage> {
                 SliverToBoxAdapter(
                   child: Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 12),
-                    child: Wrap(
-                      spacing: 8,
-                      runSpacing: 8,
-                      children: [
+                    child: FavoritesActionRow(
+                      actions: [
                         if (!_isRemoteView) ...[
-                          _ActionItem(
+                          FavoritesActionItem(
                             icon: Icons.create_new_folder_outlined,
                             label: '新建'.tl,
                             onTap: _createFolder,
                           ),
-                          _ActionItem(
+                          FavoritesActionItem(
                             icon: Icons.search,
                             label: '搜索收藏'.tl,
                             onTap: _openFavoritesSearch,
                           ),
-                          _ActionItem(
+                          FavoritesActionItem(
                             icon: Icons.manage_search,
                             label: '搜索全部'.tl,
                             onTap: _openDownloadedSearch,
                           ),
-                          _ActionItem(
+                          FavoritesActionItem(
                             icon: Icons.reorder,
                             label: '排序'.tl,
                             onTap: _openReorderPage,
                           ),
-                          _ActionItem(
+                          FavoritesActionItem(
                             icon: Icons.cloud_sync_outlined,
-                            label: '更新卡片信息'.tl,
+                            // 五个条目均分后每个只有 60 dp 左右，6 个字的
+                            // 「更新卡片信息」（12 dp 字号要 72 dp）会折成两行，
+                            // 图标与同排其它按钮错位；收成 4 个字后单行放得下，
+                            // 完整语义由 tooltip 兜底。
+                            label: '更新信息'.tl,
+                            tooltip: '更新卡片信息'.tl,
                             onTap: _updateCardInfo,
                           ),
                         ] else ...[
-                          _ActionItem(
+                          FavoritesActionItem(
                             icon: Icons.create_new_folder_outlined,
                             label: '新建'.tl,
                             onTap: _createFolder,
                           ),
-                          _ActionItem(
+                          FavoritesActionItem(
                             icon: Icons.refresh,
                             label: '重新加载'.tl,
                             onTap: _triggerManualRemoteRefresh,
@@ -832,7 +835,16 @@ class _MainFavoritesPageState extends State<MainFavoritesPage> {
                 const SliverToBoxAdapter(child: SizedBox(height: 8)),
 
                 // ── 本地/远程文件夹格子 ─────────────────────────────────────
-                if (_loadIssue != null)
+                // 加载中只让**这一块**转圈：抽屉上方的操作区（新建/搜索/排序/
+                // 更新信息）与页面顶栏必须保持可用，否则远程库不响应时整页没法操作。
+                if (_loading)
+                  const SliverToBoxAdapter(
+                    child: Padding(
+                      padding: EdgeInsets.symmetric(vertical: 40),
+                      child: Center(child: CircularProgressIndicator()),
+                    ),
+                  )
+                else if (_loadIssue != null)
                   SliverFillRemaining(
                     hasScrollBody: false,
                     child: Center(
@@ -894,6 +906,12 @@ class _MainFavoritesPageState extends State<MainFavoritesPage> {
   }
 
   Widget _buildContent() {
+    // 收藏夹列表还没回来时，内容区没有可展示的收藏夹内容 —— 只有这一块转圈，
+    // 顶栏与操作区照常可用可点。
+    if (_loading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
     // 网络收藏视图
     final networkSource = _selectedNetworkSource;
     if (networkSource != null) {
@@ -934,10 +952,13 @@ class _MainFavoritesPageState extends State<MainFavoritesPage> {
 
   @override
   Widget build(BuildContext context) {
-    if (_loading) {
-      return const Center(child: CircularProgressIndicator());
-    }
-
+    // **不要**因为 _loading 就替换整页。
+    //
+    // _loading 的语义是"正在加载收藏夹列表"（只在切换本地/远程视图与手动刷新
+    // 远程时置位），所以它只该影响**内容区与收藏夹区域**。早先这里是
+    // `if (_loading) return Center(CircularProgressIndicator())`，于是远程库响应慢
+    // 时整页变成一个转圈：顶栏、本地/远程切换、操作区全部不可用，网络一直不返回
+    // 就永远转下去，用户只能断开连接 —— 真机反馈正是这个现象。
     return LayoutBuilder(
       builder: (context, constraints) {
         final drawerHeight = constraints.maxHeight > _kSecondaryTopBarHeight
@@ -1174,39 +1195,103 @@ class _NetworkSourceTile extends StatelessWidget {
   }
 }
 
-class _ActionItem extends StatelessWidget {
-  const _ActionItem({
+/// 收藏页操作区的一排按钮（本地视图 5 个、远程视图 2 个共用）。
+///
+/// 抽成公开组件是为了能被单独渲染后按手机逻辑宽度量一次：这一行**会在窄屏
+/// 挤到换行**（真机反馈「更新卡片信息」掉到第二行），而换行与否取决于条目
+/// 宽度与可用宽度的算术关系，靠看代码估宽度不可靠（见
+/// `test/favorites_action_row_layout_test.dart`）。
+class FavoritesActionRow extends StatelessWidget {
+  const FavoritesActionRow({super.key, required this.actions});
+
+  final List<FavoritesActionItem> actions;
+
+  /// 条目之间的间隔（水平与垂直共用）。
+  static const double spacing = 8;
+
+  /// 条目统一高度：等高排在一行才整齐。
+  static const double itemHeight = 82;
+
+  /// 条目宽度上限（原来写死的宽度）。
+  static const double itemMaxWidth = 72;
+
+  /// 条目宽度下限：宽度也是触控区域的一边（高度固定 82 dp），
+  /// 52 dp 保证可点区域仍远大于 40 dp 的可用下限。
+  static const double itemMinWidth = 52;
+
+  @override
+  Widget build(BuildContext context) {
+    if (actions.isEmpty) {
+      return const SizedBox.shrink();
+    }
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        // 换行的真正原因不是文案长，而是条目宽度写死 72 dp：5 个条目固定要
+        // 5×72+4×8=392 dp 内容宽，加上页面左右各 12 dp 内边距就是 416 dp，
+        // 而主流手机只有 360~414 dp —— 第 5 个必然被挤到第二行。
+        // 所以这里按可用宽度均分条目：宽度以 itemMaxWidth 封顶（远程视图只有
+        // 2 个条目，不该被拉宽），向下取整以留出余量（刚好卡住时浮点误差会把
+        // 最后一个挤下去）。
+        final available = constraints.maxWidth - spacing * (actions.length - 1);
+        final itemWidth = (available / actions.length)
+            .clamp(itemMinWidth, itemMaxWidth)
+            .floorToDouble();
+        return Wrap(
+          spacing: spacing,
+          runSpacing: spacing,
+          children: [
+            for (final action in actions)
+              SizedBox(
+                width: itemWidth,
+                height: itemHeight,
+                child: action,
+              ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+/// 操作区里的一个按钮：图标在上、文字在下。
+///
+/// 宽度由 [FavoritesActionRow] 按可用宽度分配，这里只描述内容。
+class FavoritesActionItem extends StatelessWidget {
+  const FavoritesActionItem({
+    super.key,
     required this.icon,
     required this.label,
     required this.onTap,
+    this.tooltip,
   });
 
   final IconData icon;
   final String label;
   final VoidCallback onTap;
 
+  /// 文案为放下一行而被缩短时，用完整语义兜底（长按/悬停可见）。
+  final String? tooltip;
+
   @override
   Widget build(BuildContext context) {
-    return InkWell(
+    final item = InkWell(
       borderRadius: BorderRadius.circular(12),
       onTap: onTap,
-      child: SizedBox(
-        width: 72,
-        height: 82,
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(
-              icon,
-              size: 28,
-              color: Theme.of(context).colorScheme.primary,
-            ),
-            const SizedBox(height: 10),
-            Text(label, style: const TextStyle(fontSize: 12)),
-          ],
-        ),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(
+            icon,
+            size: 28,
+            color: Theme.of(context).colorScheme.primary,
+          ),
+          const SizedBox(height: 10),
+          Text(label, style: const TextStyle(fontSize: 12)),
+        ],
       ),
     );
+    final tip = tooltip;
+    return tip == null ? item : Tooltip(message: tip, child: item);
   }
 }
 

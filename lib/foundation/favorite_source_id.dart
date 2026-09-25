@@ -32,6 +32,46 @@ String? extractNhentaiNumericId(String rawId) {
   return numericId;
 }
 
+/// 从 Pixiv 的 target / 下载 id / 链接里提取纯数字 illust ID。
+///
+/// 支持形态：
+/// - `12345678`（裸 ID）
+/// - `pixiv12345678`（下载 id 前缀形态）
+/// - `https://www.pixiv.net/artworks/12345678`（作品页链接）
+/// - `https://www.pixiv.net/en/artworks/12345678`（带语言段的链接）
+/// - `https://www.pixiv.net/artworks/12345678#1`（带页锚点）
+/// 返回 null 表示提取不到。
+///
+/// 与 [extractJmNumericId] / [extractNhentaiNumericId] 的差别：Pixiv 的本地
+/// 条目既可能是裸 id，也可能是从 Web 复制来的**完整作品链接**（用户分享链接、
+/// 浏览器收藏等），因此这里比另外两个多一条"链接里挖 artworks/id"的规则。
+String? extractPixivNumericId(String? target) {
+  final text = target?.trim() ?? '';
+  if (text.isEmpty) return null;
+
+  // 整体形态：裸 id 或 `pixiv` 前缀的下载 id。大小写不敏感，
+  // 因为下载 id 由不同入口生成，出现过 `Pixiv123` 这样的写法。
+  final bare =
+      RegExp(r'^(?:pixiv)?(\d+)$', caseSensitive: false).firstMatch(text);
+  if (bare != null) return bare.group(1);
+
+  // 链接形态：`artworks/{数字}`。不锚定路径首段——Pixiv 会在语言段
+  // （`/en/artworks/...`）后再拼路径，锚首段会漏掉这类链接。
+  final inPath =
+      RegExp(r'artworks/(\d+)', caseSensitive: false).firstMatch(text);
+  if (inPath != null) return inPath.group(1);
+
+  // 锚点形态：`...#1`（阅读器页锚点）会挡住上面的匹配吗？不会——正则本身
+  // 不锚定结尾。这里再兜一次是因为 `#` 之后**也可能**跟着 artworks 片段
+  // （少见但合法），去掉锚点后重跑上面两条规则。
+  final hashIndex = text.indexOf('#');
+  if (hashIndex > 0) {
+    return extractPixivNumericId(text.substring(0, hashIndex));
+  }
+
+  return null;
+}
+
 /// 校验一个字符串是不是合法的 E-Hentai / ExHentai 画廊链接。
 ///
 /// 合法则原样返回（去掉首尾空白），否则返回 null。

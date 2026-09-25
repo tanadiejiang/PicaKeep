@@ -13,6 +13,9 @@ import 'built_in/picacg.dart';
 import 'built_in/jm.dart';
 import 'built_in/ehentai.dart';
 import 'built_in/nhentai.dart';
+// 第十八轮新增在线源。
+import 'built_in/pixiv.dart';
+import 'built_in/komiic.dart';
 
 typedef LoginHandler = Future<Res<bool>> Function(
   String username,
@@ -54,7 +57,7 @@ class ComicSource {
   static final List<ComicSource> sources = <ComicSource>[];
 
   static List<ComicSource> get builtIn =>
-      <ComicSource>[picacg, jm, ehentai, nhentai];
+      <ComicSource>[picacg, jm, ehentai, nhentai, pixiv, komiic];
 
   static Future<void> init() async {
     sources
