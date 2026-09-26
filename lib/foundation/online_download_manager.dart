@@ -21,6 +21,7 @@ import 'package:picakeep/foundation/local_library.dart';
 import 'package:picakeep/foundation/log.dart';
 import 'package:picakeep/foundation/pixiv_artifact.dart';
 import 'package:picakeep/foundation/pixiv_download_naming.dart';
+import 'package:picakeep/foundation/pixiv_download_root.dart';
 import 'package:picakeep/foundation/untranslated_tags/untranslated_tag_coordinator.dart';
 import 'package:picakeep/network/app_dio.dart';
 import 'package:picakeep/network/eh_network/eh_main_network.dart';
@@ -1336,8 +1337,12 @@ class OnlineDownloadManager {
     task.startSpeedTimer(_notify);
     final comic = task._pixivInfo!;
     try {
+      // 36 号起 Pixiv 有自己的默认根（`<数据目录>/download_pixiv`，与 `download`
+      // 同级），解析统一走 `effectivePixivDownloadRoot()` ——
+      // **不要在这里直接读 `settings[152]`**：那样"空值"会被当成"没配置"而回落到
+      // 默认下载根，Pixiv 内容又会混进 `download` 里。
       final downloadRoot = await _resolveOnlineDownloadRoot(
-        overrideRoot: appdata.settings[pixivDownloadDirSettingIndex],
+        overrideRoot: effectivePixivDownloadRoot(),
       );
       // 目录名走模板渲染（`settings[153]`，空值由函数兜底成 `{title}`）。
       //
@@ -2320,12 +2325,13 @@ class OnlineDownloadManager {
   /// 加入 Pixiv 专属目录（`settings[152]`）后必须集中到一处 —— 否则下次再添一个根
   /// 还会漏，而"漏"的表现是**下载成功、但列表里一条都看不到**，不报错、最难排查。
   ///
-  /// [settings[152]] 为空时不额外加根，Pixiv 自动跟随 `settings[22]` / 默认根。
+  /// `settings[152]` 为空时**不再**让 Pixiv 跟随默认根：36 号起它有自己的默认位置
+  /// （`<数据目录>/download_pixiv`），见 `effectivePixivDownloadRoot()`。
   Future<Set<String>> _effectiveDownloadRoots() async {
     return effectiveDownloadRootsFrom(
       defaultRoot: await _defaultOnlineDownloadRoot(),
       configuredRoot: appdata.settings[22],
-      pixivRoot: appdata.settings[pixivDownloadDirSettingIndex],
+      pixivRoot: effectivePixivDownloadRoot(),
     );
   }
 

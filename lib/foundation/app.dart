@@ -57,6 +57,23 @@ class App {
 
   static final ValueNotifier<int> toolDisplayConfigVersion = ValueNotifier(0);
 
+  /// **纯显示类**设置（卡片底部信息、瀑布流列数、悬浮按钮位置…）发生变化。
+  ///
+  /// ## 为什么需要一条独立信号（32 号踩到的坑）
+  ///
+  /// 设置页是从侧栏以**非 opaque 路由**推出的一层，下面的页面**不会**因为路由
+  /// 弹出而重建（实测：push 前后与被 pop 之后，下面那页的 `build` 计数都是 1）。
+  /// 所以"在设置里改了卡片显示什么、返回后却还是老样子"不是错觉，
+  /// 而是页面压根没重建。
+  ///
+  /// 为什么**不复用** [localDataVersion]：那条信号会触发本地库**重扫**
+  /// （`_load(forceLocalRefresh: true)`）。改一个"卡片上显示哪些字段"不该让
+  /// 几百个作品重新扫描一遍磁盘。这里只要一次重建。
+  ///
+  /// 使用方式：写设置的一方调 [notifyDisplaySettingsChanged]，
+  /// 页面在 `initState` 里监听、`dispose` 里移除，收到就 `setState`。
+  static final ValueNotifier<int> displaySettingsVersion = ValueNotifier(0);
+
   static final ValueNotifier<bool> isReadingActive = ValueNotifier(false);
 
   static void notifyLocalDataChanged() {
@@ -66,6 +83,10 @@ class App {
       () => StateController.findOrNull<SimpleController>(tag: 'me_page')
           ?.update(),
     );
+  }
+
+  static void notifyDisplaySettingsChanged() {
+    displaySettingsVersion.value++;
   }
 
   static void notifyServiceConfigChanged() {

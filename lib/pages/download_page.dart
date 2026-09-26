@@ -33,6 +33,7 @@ import 'downloading/downloading_page.dart';
 import 'package:picakeep/components/comic_tile.dart';
 import 'package:picakeep/components/scrollable.dart';
 import 'package:picakeep/components/layout.dart';
+import 'package:picakeep/components/library_view_selector.dart';
 import 'package:picakeep/components/components.dart';
 import 'package:picakeep/components/archive_password_dialog.dart';
 import 'package:picakeep/components/window_frame.dart';
@@ -375,6 +376,19 @@ String _downloadedLibraryViewLabel(_DownloadedLibraryView view) {
   }
 }
 
+/// 档位图标（36 号）：与图集页的三个图标**逐字相同**，
+/// 让"文件夹=本地 / 层叠=聚合 / 云=远程"在全应用是同一套视觉语言。
+IconData _downloadedLibraryViewIcon(_DownloadedLibraryView view) {
+  switch (view) {
+    case _DownloadedLibraryView.local:
+      return Icons.folder_outlined;
+    case _DownloadedLibraryView.aggregate:
+      return Icons.layers_outlined;
+    case _DownloadedLibraryView.remote:
+      return Icons.cloud_outlined;
+  }
+}
+
 _DownloadedLibraryView _downloadedLibraryViewFromSetting(String value) {
   switch (normalizeDownloadedLibraryView(value)) {
     case 'aggregate':
@@ -696,8 +710,9 @@ class _DownloadPageState extends State<DownloadPage>
                   : MediaQuery.of(context).size.height,
               slivers: [
                 _buildAppbar(context, logic),
-                if (logic.showSourceSelector)
-                  _buildSourceSelector(context, logic),
+                // 36 号：档位选择从内容区顶部挪到了工具栏
+                // （`_buildActions` 里的 `LibraryViewSelectorAction`），
+                // 所以这里不再有那一行 `SegmentedButton`。
                 _buildComics(context, logic)
               ],
             ),
@@ -1327,36 +1342,31 @@ class _DownloadPageState extends State<DownloadPage>
     );
   }
 
-  Widget _buildSourceSelector(BuildContext context, DownloadPageLogic logic) {
-    return SliverToBoxAdapter(
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
-        child: Align(
-          alignment: Alignment.centerLeft,
-          child: SegmentedButton<_DownloadedLibraryView>(
-            showSelectedIcon: false,
-            segments: [
-              for (final view in _DownloadedLibraryView.values)
-                ButtonSegment<_DownloadedLibraryView>(
-                  value: view,
-                  label: Text(_downloadedLibraryViewLabel(view).tl),
-                ),
-            ],
-            selected: {logic._view},
-            onSelectionChanged: (selection) {
-              if (selection.isEmpty) {
-                return;
-              }
-              unawaited(logic._setView(selection.first));
-            },
-          ),
-        ),
-      ),
-    );
-  }
-
   List<Widget> _buildActions(BuildContext context, DownloadPageLogic logic) {
     return [
+      // 档位（本地已下载 / 聚合 / 远程 · 已下载）——36 号从内容区顶部那行
+      // `SegmentedButton` 挪到工具栏，改用与图集页同一套的圆角面板选择器
+      // （`components/library_view_selector.dart`）。
+      //
+      // 显示条件沿用既有的 `showSourceSelector`（配了远程地址、且不是远程根子页面）；
+      // 需要远程的两档在远程不可用时**置灰并写明原因**，而不是从面板里消失。
+      if (logic.showSourceSelector)
+        LibraryViewSelectorAction<_DownloadedLibraryView>(
+          title: '已下载 · 档位',
+          entries: <LibraryViewSelectorEntry<_DownloadedLibraryView>>[
+            for (final view in _DownloadedLibraryView.values)
+              LibraryViewSelectorEntry<_DownloadedLibraryView>(
+                value: view,
+                label: _downloadedLibraryViewLabel(view),
+                icon: _downloadedLibraryViewIcon(view),
+                enabled:
+                    view == _DownloadedLibraryView.local || logic.remoteAvailable,
+                disabledReason: '远程服务不可用',
+              ),
+          ],
+          selected: logic._view,
+          onSelected: (view) => unawaited(logic._setView(view)),
+        ),
       if (logic.showManualRemoteRefreshButton)
         Tooltip(
           message: '刷新远程'.tl,

@@ -59,6 +59,70 @@ List<String> resolveDownloadedAuthorsFromRecord(
   return const <String>[];
 }
 
+/// 托管下载行要显示的**作者文本**（列表卡片的 `subTitle` 位）。
+///
+/// ## 三条来源与优先级（从高到低）
+///
+/// 1. **自定义源（`CustomDownloadedItem` 系）→ 直取 `subTitle`。**
+///    这类记录的 `subTitle` **本身就是作者**：Pixiv 写的是 `comic.author`
+///    （单作者），Komiic 写的是 `comic.authors.join(', ')`
+///    （见 `online_download_manager.dart:1470` 与 `:1768`）。21 号真机实测的
+///    `電瘋扇` / `久蒼穹` / `LightRia` 就是它。
+/// 2. json 里能解析出源自身的作者元数据 → 用它（EH 的 `artist:` 标签、
+///    NH 的 `Artists` 分类，13 号轮建立）。
+/// 3. EH/NH 拿不到 → **空串**（既有铁律：宁可不显示，也不用 uploader 冒充作者）。
+///
+/// ## 为什么自定义源必须**绕开**第 2、3 步那条链
+///
+/// 那条链是为 EH/NH 的**分类元数据**建的，而 Pixiv/Komiic 的 json 里根本没有
+/// 那些字段（第一步必然为空）；它们的 `type` 又是 `DownloadType.other`，
+/// 躲过了那句 `return ''`，于是落到最后一步 [resolveDownloadedAuthors] ——
+/// 而它**刻意**对 `CustomDownloadedItem` 返回空（见该函数 37-39 行：
+/// "自定义记录没有源安全的作者契约"）。两处都为空 → 作者被**静默丢掉**：
+/// `subTitle` 为空 → 卡片侧 `buildIllustCardInfoSpans` 对空值跳过 → 作者不显示。
+/// （33 号真机反馈"已下载的插画没有作者字段"，根因就是这里绕错了链。）
+///
+/// ## 为什么只认类型、不再看 `sourceKey`
+///
+/// `parseDownloadedItemRecordJson` 只在两种情况下产出 `CustomDownloadedItem`：
+/// json 里带 `sourceKey`，或 id 含 `-`。而 `subTitle` 这个**驼峰键**只由
+/// `CustomDownloadedItem.toJson` 写入（其余类的 toJson 写的是小写 `subtitle`
+/// 列名，两者不同键），所以"是 `CustomDownloadedItem` 且 `subTitle` 非空"
+/// 等价于"这条记录确实是自定义源写下的"。
+///
+/// 反过来，**真实 EH/NH 记录永远不会在这里被截走**：它们的 json 带
+/// `galleryTitle` 之类字段，被解析成 `DownloadedGallery` / `NhentaiDownloadedComic`，
+/// 走第 2、3 步，行为与改动前逐字一致。唯一会落到本分支的 EH 形态是
+/// "id 含 `-` 且 json 坏到没有 `galleryTitle`"——那种 json 里也不会出现驼峰
+/// `subTitle`，返回值仍是空串，与原行为相同。
+///
+/// ## 空值是合法结果
+///
+/// `subTitle` 为空时**原样返回空串**（不兜底成"未知"之类的占位文案）：
+/// 卡片侧对空值的"整项跳过、连分隔符一起不产出"是**有意的**，见
+/// `illust_card_info_config.dart:255-257`。
+String resolveDownloadedRowAuthor({
+  required String rawJson,
+  required DownloadedItem fallback,
+}) {
+  if (fallback is CustomDownloadedItem) {
+    return fallback.subTitle.trim();
+  }
+  final resolved = resolveDownloadedAuthorsFromRecord(
+    fallback.id,
+    rawJson,
+    fallback: fallback,
+  );
+  if (resolved.isNotEmpty) {
+    return resolved.join(', ');
+  }
+  if (fallback.type == DownloadType.ehentai ||
+      fallback.type == DownloadType.nhentai) {
+    return '';
+  }
+  return resolveDownloadedAuthors(fallback).join(', ');
+}
+
 List<String> resolveEhAuthorsFromFlatTags(Iterable<String> tags) {
   final result = <String>[];
   for (final raw in tags) {

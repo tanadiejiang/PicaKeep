@@ -16,6 +16,8 @@
 /// 默认模板 `{title}`，与引入本功能之前的行为一致（那时目录名固定取标题）。
 library;
 
+import 'package:picakeep/foundation/template_field_order.dart';
+
 /// `settings[]` 下标：Pixiv 专属下载目录。
 ///
 /// 空串 = 跟随「本应用下载目录」（`settings[22]`）。
@@ -98,19 +100,16 @@ String pixivDirNameTemplatePreview(List<String> fields, String separator) {
 /// "**移除该项之前**的目标位置"，所以**向下拖时必须减一**，否则每次都会差一位。
 /// 这是该控件最常见的坑，抽成纯函数才有测试守得住 —— 编辑器的 `onReorder`
 /// 必须走这里，不要自己写 `removeAt` / `insert`。
+///
+/// 实现已挪到 [reorderTemplateFieldOrder]：32 号给插画卡片底部信息加了**同一套**
+/// 勾选 + 排序交互，算法必须与这里逐字一致，所以留一份共用实现。
+/// 本函数保留原名与签名（27 号计划的测试与调用点都不用改），只是转调。
 List<String> reorderPixivDirNameFieldOrder(
   List<String> order,
   int oldIndex,
   int newIndex,
 ) {
-  final next = <String>[...order];
-  var target = newIndex;
-  if (target > oldIndex) {
-    target -= 1;
-  }
-  final moved = next.removeAt(oldIndex);
-  next.insert(target, moved);
-  return next;
+  return reorderTemplateFieldOrder(order, oldIndex, newIndex);
 }
 
 /// 默认模板：与改动前的行为一致。
@@ -220,6 +219,31 @@ String buildPixivDirNameTemplate(List<String> fields, String separator) {
 /// 就会超限。超限时系统报错很难懂，这里主动截断。
 const int _kMaxSegmentBytes = 255;
 
+/// **页数 → 后缀**的唯一实现（下载目录名模板与插画卡片「页数」字段共用）。
+///
+/// - `1` 页（单图）→ `p0`；
+/// - `n > 1` 页 → `p{n}`；
+/// - 未知（`0` / `null` / 负数）→ **空串**（调用方据空串跳过这一项）。
+///
+/// 为什么单图是 `p0` 而不是 `p1`：这是**用户明确要求的产物命名约定**（真机反馈，
+/// 单图产物形如 `..._p0.jpg`）。两套记号刻意不统一 —— `p0` 表示"这一本只有第 0 页"，
+/// `p{n}` 表示"共 n 页"。**不要"顺手统一"成 `p$pages`**，那会让单图与用户既有命名不符。
+///
+/// 为什么未知页数给空串而不是 `p0`：那种情况本来就分不出单图还是多图，瞎猜会让
+/// "未知"看起来像"确实是单图"；空串还会顺手把模板里 `{pages}` 前后的那段分隔符
+/// 一起吃掉（见 [_joinPixivNameChunks]），避免留下 `作者_标题_id_.zip` 这种尾巴。
+///
+/// 为什么抽成公共函数：33 号要求插画卡片把 `1 页` 改成同口径的 `p{N}`。
+/// 这个三分支是**用户拍板的约定**，两处各写一份的话，改一处漏一处就会让
+/// "卡片显示的页数"和"下载目录名里的页数"对不上，而且不会报错。
+String pixivPagesSuffix(int? pages) {
+  final pageCount = pages ?? 0;
+  if (pageCount <= 0) {
+    return '';
+  }
+  return pageCount == 1 ? 'p0' : 'p$pageCount';
+}
+
 /// 按 [template] 渲染 Pixiv 下载的目录名（也是产物文件名的**基名**）。
 ///
 /// 渲染顺序：**先替换变量（单遍），再做安全化**。
@@ -257,18 +281,13 @@ String renderPixivDirectoryName({
   if (pattern.isEmpty) {
     pattern = kDefaultPixivDirNameTemplate;
   }
-  // 页数 → 后缀：1 页（单图）给 `p0`，多页给 `p{页数}`，未知给空串。
-  //
-  // 这个三分支是用户拍板的命名约定，**不要合并成 `p$pages`** ——
-  // 那会把单图变成 `p1`，与用户既有的 `_p0.jpg` 不符。
-  final pageCount = pages ?? 0;
+  // 页数 → 后缀。三分支本体抽到 [pixivPagesSuffix]：插画卡片的「页数」字段
+  // （33 号改成同一口径）也调它，两处共用一份，不会分叉。
   final values = <String, String>{
     'title': title.trim(),
     'author': author.trim(),
     'id': id.trim(),
-    'pages': pageCount <= 0
-        ? ''
-        : (pageCount == 1 ? 'p0' : 'p$pageCount'),
+    'pages': pixivPagesSuffix(pages),
   };
   // **单遍替换**：一次正则扫描把 `{变量}` 全部换掉。
   //

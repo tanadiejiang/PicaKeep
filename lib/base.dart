@@ -8,7 +8,9 @@ import 'foundation/archive/archive_password_store.dart';
 import 'foundation/ai/ai_prompt_tags.dart';
 import 'foundation/app.dart';
 import 'foundation/app_runtime_mode.dart';
+import 'foundation/illust_card_info_config.dart';
 import 'foundation/local_data_source.dart';
+import 'foundation/local_library_illust_view.dart';
 import 'foundation/local_library_settings.dart';
 import 'foundation/log.dart';
 import 'foundation/pixiv_download_naming.dart';
@@ -186,6 +188,10 @@ class Appdata {
     '', //152 pixivDownloadDir Pixiv 专属下载目录；空=跟随「本应用下载目录」（settings[22]）。Pixiv 是单图作品，与漫画混在一个目录里不好翻，所以允许单独指定
     '{title}', //153 pixivDirNameTemplate Pixiv 下载的目录名模板，支持 {title} / {author} / {id} / {pages}；默认 {title} 与改动前行为一致。渲染见 foundation/pixiv_download_naming.dart
     '0', //154 pixivMultiPageZip Pixiv 多图打包：1=多图打成一个 zip（仅存储不加密）、单图直接放图片文件；0=一个作品一个目录（默认，与改动前逐字节一致）。读取侧必须同时认两种形态，见 local_library_static.dart
+    'album', //155 illustLibraryView 图集页当前视图：album=图集（默认，与改动前一致）／illust=Pixiv 插画瀑布流。与三档来源（settings[104]）**正交**，见 foundation/local_library_illust_view.dart
+    '3', //156 illustWaterfallColumns 插画瀑布流列数（2 或 3）
+    'right', //157 illustViewSwitcherPosition 视图切换悬浮按钮位置：right（默认，与既有 FAB 一致）／left
+    '{title}\n{author}', //158 illustCardInfo 插画卡片底部信息模板，支持 {title} / {author} / {pages} / {size}；默认 `{title}`+换行+`{author}`，与改动前"标题、作者各占一行"逐字一致（分隔符默认是换行，见 foundation/illust_card_info_config.dart）
   ];
 
   List<String> implicitData = [
@@ -322,6 +328,21 @@ class Appdata {
     // 产物形态是兼容性变更，默认保持现状最安全。
     settings[pixivMultiPageZipSettingIndex] =
         normalizePixivMultiPageZip(settings[pixivMultiPageZipSettingIndex]);
+    // 图集页「图集 / 插画」视图维度（settings[155..157]）。
+    // 全部走归一化：这三个值是**页面级 UI 状态**，脏值会让图集页落到
+    // "不认识的视图"或"0 列瀑布流"这类难排查的状态。
+    settings[illustLibraryViewSettingIndex] =
+        normalizeIllustLibraryView(settings[illustLibraryViewSettingIndex]);
+    settings[illustWaterfallColumnsSettingIndex] =
+        normalizeIllustWaterfallColumnsSetting(
+            settings[illustWaterfallColumnsSettingIndex]);
+    settings[illustViewSwitcherPositionSettingIndex] =
+        normalizeIllustViewSwitcherPosition(
+            settings[illustViewSwitcherPositionSettingIndex]);
+    // 插画卡片底部信息模板（settings[158]）：空白（含未设置）回落到默认
+    // `{title}\n{author}` —— 与改动前写死的"标题 + 作者"观感一致。
+    settings[illustCardInfoSettingIndex] =
+        normalizeIllustCardInfoTemplate(settings[illustCardInfoSettingIndex]);
     setManagedDataSourceMode(settings[managedDataSourceModeSettingIndex]);
     _syncArchiveRuntimeSettings();
     var settingsChanged = hadMissingSettings;
@@ -510,6 +531,16 @@ class Appdata {
               settings[pixivDirNameTemplateSettingIndex]);
       settings[pixivMultiPageZipSettingIndex] =
           normalizePixivMultiPageZip(settings[pixivMultiPageZipSettingIndex]);
+      settings[illustLibraryViewSettingIndex] =
+          normalizeIllustLibraryView(settings[illustLibraryViewSettingIndex]);
+      settings[illustWaterfallColumnsSettingIndex] =
+          normalizeIllustWaterfallColumnsSetting(
+              settings[illustWaterfallColumnsSettingIndex]);
+      settings[illustViewSwitcherPositionSettingIndex] =
+          normalizeIllustViewSwitcherPosition(
+              settings[illustViewSwitcherPositionSettingIndex]);
+      settings[illustCardInfoSettingIndex] = normalizeIllustCardInfoTemplate(
+          settings[illustCardInfoSettingIndex]);
       setManagedDataSourceMode(settings[managedDataSourceModeSettingIndex]);
       settings[22] = downloadPath;
       settings[13] = authRequired;

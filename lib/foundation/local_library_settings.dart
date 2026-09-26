@@ -135,6 +135,80 @@ String normalizeLocalLibraryView(String? value) {
   }
 }
 
+/// 「资源库显示设置」面板里**该出现哪些区块**（33 号，36 号改语义）。
+///
+/// ## 为什么抽成纯函数
+///
+/// 与 `shouldShowIllustViewSwitcher`（`local_library_illust_view.dart`）同一个理由：
+/// "哪一项在什么条件下出现"是**用户可见的行为契约**，也是日后最容易被
+/// "顺手放宽一点"的地方。放在这里可以被单测直接钉住，不必去渲染整页图集页
+/// （`local_library_page.dart` 的档位判据依赖 `_remoteAvailable`，而它要靠
+/// 客户端模式 + 远程服务在线才会为真，widget 测试里根本造不出来）。
+class LocalLibraryViewScopeMenu {
+  const LocalLibraryViewScopeMenu({
+    required this.tiersApplicable,
+    required this.tiersEnabled,
+    required this.showDisplaySettings,
+  });
+
+  /// 本页是否存在"档位"这个概念：**不在本地根 / 远程根子页面上**。
+  ///
+  /// 子页面（点进某个图集目录、或某个远程根内部）里"切档位"没有意义 ——
+  /// 那一页本身就是某个根的内部，所以整个档位折叠区都不出现。
+  ///
+  /// 这就是 24 号以来那条判据的"前半截"（页面里原叫 `_showSourceSelector`）。
+  final bool tiersApplicable;
+
+  /// 档位是否可以**真正切换**：远程服务当前可用。
+  ///
+  /// ## 为假时是"置灰"而不是"隐藏"（36 号改的就是这一点）
+  ///
+  /// 33 号曾把远程不可用时的档位整块隐藏（沿用 24 号的 `_showSourceSelector`）。
+  /// 真机反馈证明这个选择是错的：用户在远程不可用的状态下**根本找不到档位**，
+  /// 于是问"本地-聚合-远程 的档位切换按钮呢"。
+  ///
+  /// 现在的口径：**位置固定可见（挂在「资源库显示设置」面板里），
+  /// 需要远程的那两档置灰并写明原因**。用户找得到、也知道为什么现在切不了；
+  /// 换成"藏起来"就等于这个功能不存在。
+  ///
+  /// ⚠️ 但**不要**把这条放宽成"三档一律可选"：那会让用户切到一个必然空白的
+  /// 档位，还以为是自己点错了。
+  final bool tiersEnabled;
+
+  /// 是否列出「资源库显示设置」这个入口本身（32 号加的页内设置入口）。
+  final bool showDisplaySettings;
+
+  /// 某一档现在能不能选。[needsRemote] 为真的档位（聚合 / 远程）需要远程可用。
+  bool tierAvailable({required bool needsRemote}) =>
+      !needsRemote || tiersEnabled;
+
+  /// 面板整体为空时不该挂那颗按钮（理论上不会发生：两条判据不会同时为假）。
+  bool get isEmpty => !tiersApplicable && !showDisplaySettings;
+}
+
+/// 按 [LocalLibraryViewScopeMenu] 的契约算出各区块的可见性。
+///
+/// [remoteAvailable] = 远程服务当前可用（`_remoteAvailable`）；
+/// [isLocalRootPage] / [isRemoteRootPage] = 本页是本地根 / 远程根**子页面**；
+/// [pageAlbumOnly] = 构造本页时传的 `widget.albumOnly`；
+/// [albumOnly] = 生效的"仅显示图集"（`widget.albumOnly || settings[94] != '0'`）。
+LocalLibraryViewScopeMenu localLibraryViewScopeMenu({
+  required bool remoteAvailable,
+  required bool isLocalRootPage,
+  required bool isRemoteRootPage,
+  required bool pageAlbumOnly,
+  required bool albumOnly,
+}) {
+  return LocalLibraryViewScopeMenu(
+    // 档位有没有意义：只看"是不是子页面"，**与远程是否可用无关**（见字段注释）。
+    tiersApplicable: !isLocalRootPage && !isRemoteRootPage,
+    // 能不能切：只有远程可用时才允许切到"聚合 / 远程"。
+    tiersEnabled: remoteAvailable,
+    // 与 32 号那个 `if (!widget.albumOnly || _isAlbumOnly)` 逐字一致。
+    showDisplaySettings: !pageAlbumOnly || albumOnly,
+  );
+}
+
 String normalizeTwoWayLibraryView(String? value) {
   return value == 'remote' ? 'remote' : 'local';
 }

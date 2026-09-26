@@ -84,7 +84,15 @@ extension DownloadPageLogicLoading on DownloadPageLogic {
       forceRemoteRefresh: forceRemoteRefresh,
     );
     final loadMs = reloadSw.elapsedMilliseconds - availMs;
-    final loadedComics = List<DownloadedItem>.from(loadResult.items);
+    // 36 号：已下载页不再显示 Pixiv 的下载内容（用户要求）。
+    //
+    // 过滤放在**三个档位的公共出口**，而不是各分支内部 —— 这样"本地 / 聚合 /
+    // 远程"口径一致，用户切档时不会突然冒出一批 Pixiv 记录。
+    // 判据见 [isPixivDownloadedItem]。
+    final loadedComics = <DownloadedItem>[
+      for (final item in loadResult.items)
+        if (!isPixivDownloadedItem(item)) item,
+    ];
     _loadIssue = loadedComics.isEmpty ? loadResult.issue : null;
     final visibleIds = loadedComics.map((item) => item.id).toSet();
     _coverImageProviders.removeWhere((key, _) => !visibleIds.contains(key));

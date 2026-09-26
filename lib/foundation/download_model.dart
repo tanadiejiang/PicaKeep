@@ -1031,6 +1031,51 @@ FavoriteType customDownloadedFavoriteType(String sourceKey) {
   return const FavoriteType(0);
 }
 
+/// 来源标识（`sourceKey` / `sourceName`）是不是 Pixiv。
+///
+/// 大小写与空白不敏感：来源标识不是枚举，写入侧可能带脏值。
+bool isPixivSourceLabel(String value) =>
+    value.trim().toLowerCase() == 'pixiv';
+
+/// 下载记录 id 是否带 Pixiv 前缀（`pixiv150034783`）。
+///
+/// 只用于**兜底**：老式行没有可解析的 `json` 时拿不到 `sourceKey`，
+/// 只能靠 id 前缀认出来。正常路径请用 [isPixivDownloadedItem]。
+bool isPixivDownloadId(String id) =>
+    id.trim().toLowerCase().startsWith('pixiv');
+
+/// 这条下载记录是否来自 **Pixiv**（36 号）。
+///
+/// ## 用途
+///
+/// 用户要求「Pixiv 的已下载内容就不用显示在这里了」——
+/// 「已下载」页（`pages/download_page.dart`）的所有档位都不再列出 Pixiv 内容。
+/// 理由：Pixiv 的下载有自己的入口（图集页的「插画」视图），混在通用下载列表里
+/// 既重复，那里的列表封面也常常解析不出来（打包/单文件形态的封面在归档内部）。
+///
+/// 另外 `foundation/pixiv_download_migration.dart` 也用它**挑出要搬迁的记录**。
+///
+/// ## 判据为什么是两条
+///
+/// 1. **`sourceKey` / `sourceName`**（首选）：`CustomDownloadedItem` 从 db 的
+///    `json` 列读出来，Pixiv 记录里这两个字段都是 `pixiv`（真机取证见 33 号）。
+/// 2. **`id` 前缀兜底**：老式行没有可解析的 `json` 时会被构造成
+///    `ScannedDownloadedComic`（见 `local_library_static.dart` 的
+///    `_downloadedItemFromDbRow`），那个类**没有** `sourceKey` 字段。
+///    只认第 1 条会让这类记录漏网，用户就会看到"过滤没生效"。
+///
+/// ⚠️ 不要把它写成"id 以 pixiv 开头"这一条 —— id 前缀是**写入侧的实现细节**，
+/// 真正表达来源的是 `sourceKey`；前缀只用来兜住拿不到 `sourceKey` 的老行。
+bool isPixivDownloadedItem(DownloadedItem item) {
+  if (item is CustomDownloadedItem) {
+    if (isPixivSourceLabel(item.sourceKey) ||
+        isPixivSourceLabel(item.sourceName)) {
+      return true;
+    }
+  }
+  return isPixivDownloadId(item.id);
+}
+
 class CustomDownloadedItem extends DownloadedItem {
   @override
   double? comicSize;

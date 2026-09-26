@@ -23,7 +23,7 @@ import 'local_data_source.dart';
 import 'local_favorites.dart';
 import 'local_library_settings.dart';
 import 'local_trash_store.dart';
-import 'pixiv_download_naming.dart';
+import 'pixiv_download_root.dart';
 
 part 'local_library_manager_settings.dart';
 part 'local_library_query.dart';

@@ -5,6 +5,7 @@ import 'package:picakeep/base.dart';
 import 'package:picakeep/foundation/app.dart';
 import 'package:picakeep/foundation/app_runtime_mode.dart';
 import 'package:picakeep/foundation/remote_library_data_source.dart';
+import 'package:picakeep/components/library_view_selector.dart';
 import 'package:picakeep/foundation/service_data_source.dart';
 import 'package:picakeep/foundation/trash.dart';
 import 'package:picakeep/tools/translations.dart';
@@ -17,6 +18,49 @@ enum _TrashPageView {
 enum _TrashItemKindView {
   comic,
   album,
+}
+
+/// 来源档位文案（36 号：原来内联在 `SegmentedButton` 的 segment 里）。
+String _trashPageViewLabel(_TrashPageView view) {
+  switch (view) {
+    case _TrashPageView.local:
+      return '本地';
+    case _TrashPageView.remote:
+      return '远程';
+  }
+}
+
+/// 来源档位图标：与图集页 / 已下载页 / 图片收藏页 / 图库页**逐字相同**。
+IconData _trashPageViewIcon(_TrashPageView view) {
+  switch (view) {
+    case _TrashPageView.local:
+      return Icons.folder_outlined;
+    case _TrashPageView.remote:
+      return Icons.cloud_outlined;
+  }
+}
+
+/// 内容类型筛选文案。
+String _trashItemKindViewLabel(_TrashItemKindView view) {
+  switch (view) {
+    case _TrashItemKindView.comic:
+      return '漫画';
+    case _TrashItemKindView.album:
+      return '图集';
+  }
+}
+
+/// 内容类型筛选图标。
+///
+/// 刻意**不与档位图标重复**：用户在 AppBar 上要能一眼分辨"哪个按钮管来源、
+/// 哪个管类型"。书籍 / 相册是一组天然对立且不与文件夹、云混淆的图标。
+IconData _trashItemKindViewIcon(_TrashItemKindView view) {
+  switch (view) {
+    case _TrashItemKindView.comic:
+      return Icons.menu_book_outlined;
+    case _TrashItemKindView.album:
+      return Icons.photo_library_outlined;
+  }
 }
 
 class TrashPage extends StatefulWidget {
@@ -589,7 +633,52 @@ class _TrashPageState extends State<TrashPage> with WidgetsBindingObserver {
                 ),
               ]
             : [
+                // 36 号：档位与内容类型筛选从内容区那两行 `SegmentedButton`
+                // 挪到这里，改用与图集页同一套的圆角面板选择器。
+                //
+                // 两个按钮都保留：**来源档位**（本地 / 远程）与**内容类型**
+                // （漫画 / 图集）是两个正交维度，合成一个面板反而会让用户
+                // 以为"选了远程就不能看图集"。图标不同、面板标题不同。
+                LibraryViewSelectorAction<_TrashPageView>(
+                  title: '回收站 · 来源',
+                  entries: <LibraryViewSelectorEntry<_TrashPageView>>[
+                    for (final view in _TrashPageView.values)
+                      LibraryViewSelectorEntry<_TrashPageView>(
+                        value: view,
+                        label: _trashPageViewLabel(view),
+                        icon: _trashPageViewIcon(view),
+                      ),
+                  ],
+                  selected: _view,
+                  onSelected: (view) {
+                    setState(() {
+                      _view = view;
+                      _clearSelectionState();
+                      _loadTask = _reload();
+                    });
+                  },
+                ),
+                LibraryViewSelectorAction<_TrashItemKindView>(
+                  title: '回收站 · 内容类型',
+                  entries: <LibraryViewSelectorEntry<_TrashItemKindView>>[
+                    for (final view in _TrashItemKindView.values)
+                      LibraryViewSelectorEntry<_TrashItemKindView>(
+                        value: view,
+                        label: _trashItemKindViewLabel(view),
+                        icon: _trashItemKindViewIcon(view),
+                      ),
+                  ],
+                  selected: _kindView,
+                  onSelected: (view) {
+                    setState(() {
+                      _kindView = view;
+                      _clearSelectionState();
+                      _loadTask = _reload();
+                    });
+                  },
+                ),
                 IconButton(
+                  tooltip: '刷新'.tl,
                   onPressed: () {
                     setState(() {
                       _loadTask = _reload();
@@ -610,67 +699,9 @@ class _TrashPageState extends State<TrashPage> with WidgetsBindingObserver {
           }
           return Column(
             children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
-                child: Align(
-                  alignment: Alignment.centerLeft,
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      SegmentedButton<_TrashPageView>(
-                        showSelectedIcon: false,
-                        segments: [
-                          ButtonSegment<_TrashPageView>(
-                            value: _TrashPageView.local,
-                            label: Text('本地'.tl),
-                          ),
-                          ButtonSegment<_TrashPageView>(
-                            value: _TrashPageView.remote,
-                            label: Text('远程'.tl),
-                          ),
-                        ],
-                        selected: {_view},
-                        onSelectionChanged: (selection) {
-                          if (selection.isEmpty) {
-                            return;
-                          }
-                          final nextView = selection.first;
-                          setState(() {
-                            _view = nextView;
-                            _clearSelectionState();
-                            _loadTask = _reload();
-                          });
-                        },
-                      ),
-                      const SizedBox(height: 8),
-                      SegmentedButton<_TrashItemKindView>(
-                        showSelectedIcon: false,
-                        segments: [
-                          ButtonSegment<_TrashItemKindView>(
-                            value: _TrashItemKindView.comic,
-                            label: Text('漫画'.tl),
-                          ),
-                          ButtonSegment<_TrashItemKindView>(
-                            value: _TrashItemKindView.album,
-                            label: Text('图集'.tl),
-                          ),
-                        ],
-                        selected: {_kindView},
-                        onSelectionChanged: (selection) {
-                          if (selection.isEmpty) {
-                            return;
-                          }
-                          setState(() {
-                            _kindView = selection.first;
-                            _clearSelectionState();
-                            _loadTask = _reload();
-                          });
-                        },
-                      ),
-                    ],
-                  ),
-                ),
-              ),
+              // 36 号：原来这里有两行 `SegmentedButton`（来源档位 + 内容类型），
+              // 现在都挪到了 AppBar 的 actions 上（见上面的
+              // `LibraryViewSelectorAction`），内容区不再占用高度。
               Expanded(
                 child: _errorText != null
                     ? Center(child: Text(_errorText!))

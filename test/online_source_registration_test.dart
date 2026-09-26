@@ -46,6 +46,9 @@ void main() {
     // （搜索页会并排给出四个「打开漫画」chip，用户在 UI 上自行区分）。
     // Komiic 的 ID 形态实测为纯数字（站点 URL 形如 komiic.com/comic/1），
     // 用户已确认「能打开详情页就保留」，故保留纯数字匹配。
+    // 第十八轮 34 号补充：Pixiv 在这四个「打开漫画」chip 之外**另外**并排一个
+    // 「打开作者页」chip（纯数字无法区分作品 id 与作者 uid，由用户自己选）；
+    // 其余三个源的 chip 数量与显示条件不变。
     expect(
       hits('123456'),
       containsAll(<String>['jm', 'nhentai', 'pixiv', 'komiic']),

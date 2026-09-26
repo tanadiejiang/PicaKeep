@@ -5,21 +5,29 @@ part of 'settings_page.dart';
 
 Widget buildExploreSettings(double width, BuildContext context) {
   return buildTwoColumnLayout(width, [
-        // 按「设置生效的页面」分区，而不是按控件类型或数据源分组。
-        SettingsTitle('启动与列表'.tl),
+        // 分区依据 = **该设置实际改变页面上的哪一块**（用户第 4 点：「按实际功能
+        // 区块分区」）。所以「浏览列表 / 布局」「卡片显示」「插画瀑布流」是三个
+        // 独立分区，而不是笼统的"漫画卡片"。
+        //
+        // ⚠️ 历史沿革：本页原来只有 6 个分区（启动与列表 / 漫画卡片 / 在线浏览 /
+        // 阅读器 / 内容过滤 / 其它）。本轮重新分区**只动分区标题的归属**，
+        // 不增删任何设置项，也不改变各设置项的 `settingsIndex`
+        // （移动设置项位置会改变用户已习惯的入口，24 号计划决策 4 明确禁止）。
+        SettingsTitle('启动与运行'.tl),
         SelectSetting(
           title: "初始页面".tl,
           settingsIndex: 23,
           values: const ["0", "1"],
           titles: ["我".tl, "收藏".tl],
         ),
+        SettingsTitle('列表与视图'.tl),
         SelectSetting(
           title: "漫画列表显示方式".tl,
           settingsIndex: 25,
           values: const ["0", "1"],
           titles: ["连续".tl, "分页".tl],
         ),
-        SettingsTitle('漫画卡片'.tl),
+        SettingsTitle('卡片显示'.tl),
         SelectSetting(
           title: "漫画块显示模式".tl,
           settingsIndex: 44,
@@ -51,6 +59,29 @@ Widget buildExploreSettings(double width, BuildContext context) {
           title: "卡片信息显示".tl,
           page: const ComicCardDisplaySetting(),
         ),
+        // 插画视图（图集页的「插画」并列视图）专属：瀑布流列数与悬浮切换按钮位置。
+        // 与「卡片显示」分开，是因为它们只作用于插画瀑布流，不作用于漫画卡片。
+        SettingsTitle('插画列表'.tl),
+        SelectSetting(
+          title: "瀑布流列数".tl,
+          settingsIndex: illustWaterfallColumnsSettingIndex,
+          values: const ["2", "3"],
+          titles: const ["2", "3"],
+          onChanged: (_) => App.notifyDisplaySettingsChanged(),
+        ),
+        SelectSetting(
+          title: "视图切换按钮位置".tl,
+          settingsIndex: illustViewSwitcherPositionSettingIndex,
+          values: const [illustViewSwitcherRight, illustViewSwitcherLeft],
+          titles: ["靠右".tl, "靠左".tl],
+          // 按钮位置现在由 `Scaffold.floatingActionButtonLocation` 决定，
+          // 而它在图集页的 `build` 里读 —— 设置页 pop 回去不重建那一页，
+          // 不通知就会出现"选了靠左、返回后还在右边"。
+          onChanged: (_) => App.notifyDisplaySettingsChanged(),
+        ),
+        // 卡片底部显示哪些信息（`settings[158]`）。交互形态与「下载目录名模板」
+        // 一致（勾选 + 拖拽排序 + 预览），用户明确要求"和下载命名一样可以自由选择"。
+        const _IllustCardInfoTile(),
         SettingsTitle('在线浏览'.tl),
         SelectSetting(
           title: "浏览时远程图片并发".tl,

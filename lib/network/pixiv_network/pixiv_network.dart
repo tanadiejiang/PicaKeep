@@ -372,11 +372,47 @@ class PixivNetwork {
     }
   }
 
+  /// 把一次失败的**可诊断特征**拼成一句话：步骤 + HTTP 状态码 + Content-Type +
+  /// 正文片段。
+  ///
+  /// 为什么必须带上这些：作者页三步链路里第 3 步
+  /// （`profile/illusts` 的 `ids[]` 复数 GET）**只在 PixivFE v3.0.3 的实现里被
+  /// 证实过，尚未真机验证**。真机一旦失败，日志里若只有"加载失败"，
+  /// 就分不清是"端点换了（404/405/HTML 风控页）"还是"只读接口被限流"，
+  /// 也看不出该换 POST 还是换 `/touch/ajax/illust/details/many`。
+  ///
+  /// 只记**响应正文片段**（不含请求头/Cookie），符合项目"凭据绝不进日志"的约定。
+  String _httpDiagnostics({
+    required String? step,
+    required int? statusCode,
+    required Map<String, List<String>> headers,
+    required String raw,
+  }) {
+    if (step == null) return '';
+    final contentType = headers['content-type']?.join(', ') ?? '无';
+    return '（$step；HTTP ${statusCode ?? '无'}；Content-Type: $contentType；'
+        '正文片段: ${_clipBodyForLog(raw)}）';
+  }
+
+  /// 正文片段（折叠空白、截断），仅用于错误文案。
+  String _clipBodyForLog(String raw, [int max = 200]) {
+    final normalized = raw.replaceAll(RegExp(r'\s+'), ' ').trim();
+    if (normalized.isEmpty) return '<空>';
+    return normalized.length <= max
+        ? normalized
+        : '${normalized.substring(0, max)}…';
+  }
+
   /// 统一的 JSON GET。
   ///
   /// [retrying] 是**内部重试标记**：空响应/非 JSON（典型的风控拦截或半截响应）
   /// 属于可自愈的瞬时失败，这里最多再试一次；重试时置 true 以避免无限重试。
   /// 外部调用方不应传该参数。
+  ///
+  /// [step] 是**可选的失败诊断标签**（例如 `作者作品详情 GET /ajax/user/1/profile/illusts`）。
+  /// 传了它，所有失败分支都会附上 HTTP 状态码 / Content-Type / 正文片段
+  /// （见 [_httpDiagnostics]）；不传则文案与本参数引入前**完全一致**，
+  /// 已有调用点（搜索 / 收藏 / 详情 / 榜单 / 推荐）的行为不受影响。
   ///
   /// 错误分层（都不抛异常，全部收敛成 [Res.error]）：
   /// - 空响应 → [ResErrorCode.parse]；
@@ -388,6 +424,7 @@ class PixivNetwork {
     String url, {
     bool requireAuth = false,
     bool retrying = false,
+    String? step,
   }) async {
     if (requireAuth && !isLoggedIn) {
       return const Res.error(
@@ -413,12 +450,18 @@ class PixivNetwork {
 
       final statusCode = response.statusCode;
       final raw = response.data ?? '';
+      final diagnostics = _httpDiagnostics(
+        step: step,
+        statusCode: statusCode,
+        headers: response.headers.map,
+        raw: raw,
+      );
 
       // 401/403 优先按登录问题归类：即便响应体是 HTML 也要给出"需要登录"，
       // 否则用户看到的是含糊的解析失败。
       if (statusCode == 401 || statusCode == 403) {
         return Res.error(
-          '需要登录',
+          '需要登录$diagnostics',
           errorCode: ResErrorCode.loginRequired,
           statusCode: statusCode,
         );
@@ -426,10 +469,15 @@ class PixivNetwork {
 
       if (raw.trim().isEmpty) {
         if (!retrying) {
-          return _getJson(url, requireAuth: requireAuth, retrying: true);
+          return _getJson(
+            url,
+            requireAuth: requireAuth,
+            retrying: true,
+            step: step,
+          );
         }
         return Res.error(
-          'Empty response',
+          'Empty response$diagnostics',
           errorCode: ResErrorCode.parse,
           statusCode: statusCode,
         );
@@ -440,17 +488,24 @@ class PixivNetwork {
         decoded = jsonDecode(raw);
       } catch (_) {
         if (!retrying) {
-          return _getJson(url, requireAuth: requireAuth, retrying: true);
+          return _getJson(
+            url,
+            requireAuth: requireAuth,
+            retrying: true,
+            step: step,
+          );
         }
         return Res.error(
-          'Pixiv 返回非 JSON（可能触发风控），请稍后重试或检查网络/登录状态',
+          'Pixiv 返回非 JSON（可能触发风控），请稍后重试或检查网络/登录状态'
+          '$diagnostics',
           errorCode: ResErrorCode.parse,
           statusCode: statusCode,
         );
       }
       if (decoded is! Map) {
         return Res.error(
-          'Pixiv 返回非 JSON（可能触发风控），请稍后重试或检查网络/登录状态',
+          'Pixiv 返回非 JSON（可能触发风控），请稍后重试或检查网络/登录状态'
+          '（实际类型 ${describePixivJsonShape(decoded)}）$diagnostics',
           errorCode: ResErrorCode.parse,
           statusCode: statusCode,
         );
@@ -460,7 +515,8 @@ class PixivNetwork {
       if (json['error'] == true) {
         final message = json['message']?.toString();
         return Res.error(
-          (message == null || message.isEmpty) ? 'Pixiv 接口返回错误' : message,
+          '${(message == null || message.isEmpty) ? 'Pixiv 接口返回错误' : message}'
+          '$diagnostics',
           errorCode: _errorCodeForStatus(statusCode),
           statusCode: statusCode,
         );
@@ -469,13 +525,14 @@ class PixivNetwork {
       return Res<Map<String, dynamic>>(json);
     } on DioException catch (e) {
       return Res.error(
-        e.message ?? '网络请求失败',
+        '${e.message ?? '网络请求失败'}'
+        '${step == null ? '' : '（$step；HTTP ${e.response?.statusCode ?? '无'}）'}',
         errorCode: ResErrorCode.network,
         statusCode: e.response?.statusCode,
       );
     } catch (e) {
       return Res.error(
-        e.toString(),
+        '${e.toString()}${step == null ? '' : '（$step）'}',
         errorCode: ResErrorCode.network,
       );
     } finally {
@@ -762,11 +819,26 @@ class PixivNetwork {
     // 搜索接口的 Referer 必须是站点根（不带具体路径），否则 Pixiv 视为跨站请求。
     final res = await _getJson(url);
     if (res.error) return Res.fromErrorRes(res);
+    // **必须先把 `body` 取出来再解析**：[_getJson] 交回的是**整个响应**
+    // （`{error, message, body}`），搜索结果在 `body` 之下。把顶层直接喂给
+    // [parsePixivSearchItems] 会让 `body['illustManga']` 恒为 null，
+    // 表现为"搜索永远 0 条结果"，而且**不报任何错**——比报错难查得多。
+    // 同一文件里 [getComicInfo] / [getBookmarks] 都是这个取值口径。
+    final body = res.data['body'];
+    if (body is! Map) {
+      return Res.error(
+        '搜索响应缺少 body'
+        '（body 实际 ${describePixivJsonShape(res.data['body'])}；'
+        '顶层键: ${describePixivJsonShape(res.data)}）',
+        errorCode: ResErrorCode.parse,
+      );
+    }
+    final map = body.map((key, value) => MapEntry(key.toString(), value));
     try {
-      final items = parsePixivSearchItems(res.data);
+      final items = parsePixivSearchItems(map);
       return Res<List<PixivComicBrief>>(
         items,
-        subData: parsePixivSearchMaxPage(res.data),
+        subData: parsePixivSearchMaxPage(map),
       );
     } catch (e) {
       return Res.error('搜索解析失败：$e', errorCode: ResErrorCode.parse);
@@ -778,17 +850,23 @@ class PixivNetwork {
   /// 该接口与其他 Ajax 接口不同：走 `ranking.php` 且返回顶层 `contents` 数组，
   /// 因此不能用 `_getJson` 的 `body` 约定，这里单独请求后交给
   /// [parsePixivRankingItems]（字段是下划线风格）。
+  ///
+  /// [content] 传空（默认）时按 [mode] 自动推导，见 [rankingContentForMode]：
+  /// 三档"综合榜"必须用 `all`，否则 404。显式传入则原样使用（留给未来加漫画榜）。
   Future<Res<List<PixivComicBrief>>> getRanking({
     String mode = 'daily',
-    String content = 'illust',
+    String? content,
     int page = 1,
   }) async {
     final safePage = page <= 0 ? 1 : page;
+    final requested = content?.trim() ?? '';
+    final effectiveContent =
+        requested.isEmpty ? rankingContentForMode(mode) : requested;
     final url = Uri.parse('$pixivWebBase/ranking.php').replace(
       queryParameters: <String, String>{
         'format': 'json',
         'mode': mode,
-        'content': content,
+        'content': effectiveContent,
         'p': safePage.toString(),
       },
     ).toString();
@@ -804,36 +882,94 @@ class PixivNetwork {
   /// 榜单每页条数（`ranking.php` 固定每页 50）。
   static const rankingPageSize = 50;
 
+  /// 只提供"综合榜"、**不接受 `content=illust`** 的榜期。
+  ///
+  /// 实测（2026-09，宿主机直连）：
+  /// - `original`（原创）/ `male`（男性向）/ `female`（女性向）带
+  ///   `content=illust` 一律 **404**，正文是
+  ///   `{"error":"ランキングが見つかりませんでした"}`（带 `lang=zh` 时变成
+  ///   「抱歉，您现在无法当面访问pixiv的排行榜」——两句都不点明真实原因）；
+  ///   改成 `content=all` 立刻 200 且仍是 50 条/页。
+  /// - `daily` / `weekly` / `monthly` / `rookie` 四档相反：`content=illust` 正常，
+  ///   所以**不能一刀切全用 `all`**。
+  ///
+  /// `content=all` 的榜单会混入漫画（`illust_type=1`），实测 50 条里 22 插画 +
+  /// 28 漫画、且**每条都带 `illust_id`**（小说不进这个接口），因此
+  /// [parsePixivRankingItems] 的"id 非数字则跳过"不会误伤，分页判停用的
+  /// "满 50 条即还有下一页"也仍然成立。
+  static const pixivRankingAllContentModes = <String>{
+    'original',
+    'male',
+    'female',
+  };
+
+  /// 按榜期推导该用哪个 `content`：综合榜用 `all`，其余用 `illust`。
+  static String rankingContentForMode(String mode) =>
+      pixivRankingAllContentModes.contains(mode.trim()) ? 'all' : 'illust';
+
+  /// 推荐端点使用的 `mode` 值。
+  ///
+  /// 实测 `illust/discovery` **只接受 `all`**：缺参或换成别的值（`rookie` /
+  /// `original` / `illust` / `manga` …）一律 400 +「不正确的请求。」
+  /// （不带 `lang=zh` 时是日文「不正なリクエストです。」）。
+  /// 既然只有一个合法值，就不做成参数——省得调用方传一个必然失败的值。
+  static const pixivDiscoveryMode = 'all';
+
+  /// 推荐请求 URL。
+  ///
+  /// 单独抽成静态方法，是为了让"端点还活着吗"这件事**至少能被单测守住**：
+  /// Pixiv 下线一个 Ajax 端点时不会有任何公告，只表现为 404，
+  /// 而代码里看不出区别（见 [getRecommended] 的端点变更记录）。
+  ///
+  /// `lang=zh` 不只是文案偏好：**Pixiv 的 Ajax 错误消息跟随这个参数**。
+  /// 不带时 404 正文是「リクエストされたページが見つかりませんでした」、
+  /// 400 是「不正なリクエストです。」，会**原样显示在界面上**；
+  /// 带上后分别是「无法找到您所请求的页面」/「不正确的请求。」。
+  static String recommendedUrl() => Uri.parse(
+        '$pixivWebBase/ajax/illust/discovery',
+      ).replace(
+        queryParameters: <String, String>{
+          'mode': pixivDiscoveryMode,
+          'lang': 'zh',
+        },
+      ).toString();
+
   /// 推荐（首页插画推荐）。
   ///
-  /// 走 `illust/recommended-nologin`（**游客版**）而不是需要登录的
-  /// `illust/recommended`：本源自用场景优先保证未登录也能看到内容，
-  /// 拿到的是公开推荐池；带 PHPSESSID 时服务端会返回更贴合账号的结果。
+  /// ## 端点变更记录（2026-09，宿主机直连 + 真机复现）
   ///
-  /// `content_type=illust` 只取插画（不含 manga），与「推荐」入口的语义一致。
-  /// 该接口无可靠的分页契约，故不暴露 page 参数，调用方按单页处理。
+  /// 原用的 `illust/recommended-nologin` **已被 Pixiv 下线**：任何参数组合都返回
+  /// `404` + `{"error":true,"message":"リクエストされたページが見つかりませんでした","body":[]}`，
+  /// 而 [_getJson] 会把服务端 `message` 原样带上来，于是探索页「推荐」分区
+  /// 只剩这一句日文错误（用户看到的正是它）。需登录版的 `illust/recommended`
+  /// 同样 404。这两个端点都已不可用，**不要改回去**。
+  ///
+  /// 现在走站点首页推荐位实际使用的 `illust/discovery?mode=all`，实测结论：
+  /// - **游客可用**（不带任何 Cookie 也 200），符合本源自用场景；
+  /// - 固定返回 **10 条**，`p` / `page` / `offset` / `limit` 传了也被忽略；
+  /// - 每次请求返回的 10 条**内容不同**（推荐池滚动），所以"重新加载"有意义；
+  /// - 响应只有 `body.illusts` 一个键，**没有游标也没有总数** → 不建立续页
+  ///   （伪造分页会让用户以为"还有更多"却永远翻不到新内容）。
+  ///
+  /// 封面是 `360x360` 方图缩略图（`..._square1200.jpg`），比旧端点的 240x480
+  /// 竖图更矮；探索页列表项按固定比例裁切显示，不受影响。
   Future<Res<List<PixivComicBrief>>> getRecommended() async {
-    final url = Uri.parse(
-      '$pixivWebBase/ajax/illust/recommended-nologin',
-    ).replace(
-      queryParameters: <String, String>{
-        'content_type': 'illust',
-        'include_ranking_label': 'true',
-      },
-    ).toString();
-    final res = await _getJson(url);
+    final res = await _getJson(recommendedUrl());
     if (res.error) return Res.fromErrorRes(res);
     final body = res.data['body'];
     if (body is! Map) {
-      return const Res.error('推荐响应结构异常', errorCode: ResErrorCode.parse);
+      return Res.error(
+        '推荐响应缺少 body'
+        '（body 实际 ${describePixivJsonShape(res.data['body'])}；'
+        '顶层键: ${describePixivJsonShape(res.data)}）',
+        errorCode: ResErrorCode.parse,
+      );
     }
     try {
       return Res<List<PixivComicBrief>>(
-        parsePixivSearchItems(<String, dynamic>{
-          'illust': <String, dynamic>{
-            'data': (body['illusts'] as List?) ?? const <dynamic>[],
-          },
-        }),
+        parsePixivDiscoveryItems(
+          body.map((key, value) => MapEntry(key.toString(), value)),
+        ),
       );
     } catch (e) {
       return Res.error('推荐解析失败：$e', errorCode: ResErrorCode.parse);
@@ -1072,5 +1208,226 @@ class PixivNetwork {
       return Res.fromErrorRes(res);
     }
     return const Res<bool>(true);
+  }
+
+  // ═════════════════════════════════════════════════════════════════════════
+  //  作者页（App 内）三步链路
+  //
+  //  为什么是三步而不是一步：Pixiv **没有**"给我这个作者的作品列表"这种一次到位的
+  //  读接口。活跃实现（PixivFE v3.0.3 的 core/user.go）的做法就是：
+  //  取作者资料 → 取全部作品 id → 按 id 批量取作品详情。本实现照抄该链路。
+  //
+  //  ⚠️→✅ 三步链路的验证状态（已更新）：**已用真实请求逐条验证通过**
+  //  （2026-09，宿主机直连 www.pixiv.net，游客态，无 Cookie）：
+  //  - 第 1 步 200，`body` 带 `userId` / `name` / `following` / `comment` / `image`；
+  //  - 第 2 步 200，`body.illusts` 是 `{id: null}` 的 **map**；**没有漫画的作者**
+  //    回来的是 `body.manga = []`（空**数组**而不是 map）——所以
+  //    [isPixivWorkIdContainer] 必须同时认 Map 与 List，否则"这个作者没画漫画"
+  //    会被误报成"形状不符"；
+  //  - 第 3 步 200，`body.works` 是 `{id: 作品对象}` 的 **map**，单项字段与搜索项
+  //    同构（`_parseBriefItem` 可直接吃）。
+  //  当初标为"未验证"是因为当时开发沙箱访问不了 www.pixiv.net，该限制现已不存在。
+  //  各失败分支仍保留可诊断特征（步骤名 + HTTP 状态码 + Content-Type + 正文片段 +
+  //  实际形状），端点若再变可据此直接判断"换 POST 还是换 /touch/ajax/illust/details/many"。
+  // ═════════════════════════════════════════════════════════════════════════
+
+  /// 作者作品列表每页条数。
+  ///
+  /// 取 30 与 PixivFE 的 `userWorksPageSize` 一致：该值决定"一次 `ids[]` 请求带
+  /// 多少个 id"，太大容易被服务端截断/拒（URL 也会变长），太小则请求数翻倍。
+  static const authorWorksPageSize = 30;
+
+  /// 作者资料 URL（`GET /ajax/user/{uid}?full=1&lang=zh`）。
+  ///
+  /// `full=1` 才会带简介/关注数等作者页要展示的字段（不带时是精简形态）。
+  /// 端点依据：PixivFE `core/endpoints.go` 的 `GetUserInformationURL`；
+  /// 字段依据：pixiv-ajax-api-docs 的 `9153585_full_1.json` 样例响应
+  /// （外加 2026-09 的真实请求复核）。
+  ///
+  /// `lang=zh` 的作用见 [recommendedUrl]：**Pixiv 的 Ajax 错误消息跟着它走**，
+  /// 不带时失败信息是日文，会原样显示给用户。
+  static String authorInfoUrl(String uid) =>
+      '$pixivWebBase/ajax/user/$uid?full=1&lang=zh';
+
+  /// 作者全部作品 id 的 URL（`GET /ajax/user/{uid}/profile/all`）。
+  ///
+  /// 端点依据：PixivFE 的 `GetUserWorksURL`；响应形状依据同名样例响应以及
+  /// 2026-09 的真实请求复核（`body.illusts` / `body.manga` 是 `{id: null}` 的 map，
+  /// 其中**没有作品的那一类可能是空数组 `[]`**，[parsePixivUserWorkIds] 两种都吃）。
+  /// `lang=zh` 同上，只为让失败文案是中文。
+  static String authorWorkIdsUrl(String uid) =>
+      '$pixivWebBase/ajax/user/$uid/profile/all?lang=zh';
+
+  /// 按 id 批量取作品详情的 URL
+  /// （`GET /ajax/user/{uid}/profile/illusts?work_category=illustManga&is_first_page=0
+  /// &lang=zh&ids[]=…`）。
+  ///
+  /// - `work_category=illustManga`：**插画与漫画一起取**。作者页应当显示"全部作品"，
+  ///   分类下钻不在本轮范围内（与搜索列表"两类合并"的既有决策一致）；
+  /// - `is_first_page=0`：这不是作者页首屏那次请求（首屏语义归 PixivFE 的前端），
+  ///   我们只按 id 取详情，置 0 与 PixivFE 的 `GetUserFullArtworkURL` 相同；
+  /// - `ids[]` 必须**重复出现**，不能写成逗号拼接——用 `queryParameters` 表达不了
+  ///   重复键，故这里手工拼串；id 已在调用前校验为纯数字，无需转义。
+  static String authorWorksUrl(String uid, List<String> ids) {
+    final buffer = StringBuffer(
+      '$pixivWebBase/ajax/user/$uid/profile/illusts'
+      '?work_category=illustManga&is_first_page=0&lang=zh',
+    );
+    for (final id in ids) {
+      buffer.write('&ids[]=$id');
+    }
+    return buffer.toString();
+  }
+
+  /// 取作者资料（链路第 1 步）。
+  ///
+  /// 不要求登录：公开作者资料游客可见，而 ID 直跳区的 chip 也不以登录为前提
+  /// （搜索页只要源已注册就会给出 chip）。
+  Future<Res<PixivAuthor>> getAuthorInfo(String uid) async {
+    final id = uid.trim();
+    if (id.isEmpty || int.tryParse(id) == null) {
+      return const Res.error(
+        '作者 uid 无效（应为纯数字）',
+        errorCode: ResErrorCode.invalidArgument,
+      );
+    }
+    const stepLabel = '作者信息';
+    final res = await _getJson(
+      authorInfoUrl(id),
+      step: '$stepLabel GET ${authorInfoUrl(id)}',
+    );
+    if (res.error) return Res.fromErrorRes(res);
+    final body = res.data['body'];
+    if (body is! Map) {
+      return Res.error(
+        '$stepLabel响应缺少 body'
+        '（body 实际 ${describePixivJsonShape(res.data['body'])}；'
+        '顶层键: ${describePixivJsonShape(res.data)}）',
+        errorCode: ResErrorCode.parse,
+      );
+    }
+    try {
+      return Res<PixivAuthor>(
+        parsePixivAuthorInfo(body.map((k, v) => MapEntry(k.toString(), v))),
+      );
+    } catch (e) {
+      return Res.error(
+        '$stepLabel解析失败：$e（body 键: '
+        '${body.keys.map((k) => k.toString()).take(12).join(', ')}）',
+        errorCode: ResErrorCode.parse,
+      );
+    }
+  }
+
+  /// 取作者全部作品 id（链路第 2 步）。
+  ///
+  /// 单独暴露成私有方法只为一件事：**让失败能归因到具体步骤**。
+  /// 第 3 步的报错文案里会带上"id 列表已拿到 N 个"，从而区分
+  /// "取不到 id（第 2 步问题）"与"取详情失败（第 3 步问题）"。
+  Future<Res<List<String>>> _fetchAuthorWorkIds(String uid) async {
+    const stepLabel = '作者作品 id 列表';
+    final url = authorWorkIdsUrl(uid);
+    final res = await _getJson(url, step: '$stepLabel GET $url');
+    if (res.error) return Res.fromErrorRes(res);
+    final body = res.data['body'];
+    if (body is! Map) {
+      return Res.error(
+        '$stepLabel响应缺少 body'
+        '（body 实际 ${describePixivJsonShape(res.data['body'])}；'
+        '顶层键: ${describePixivJsonShape(res.data)}）',
+        errorCode: ResErrorCode.parse,
+      );
+    }
+    final map = body.map((k, v) => MapEntry(k.toString(), v));
+    // 形状不符时如实报出**实际类型/键名**，不静默当成"没有作品"。
+    if (!isPixivWorkIdContainer(map['illusts']) ||
+        !isPixivWorkIdContainer(map['manga'])) {
+      return Res.error(
+        '$stepLabel形状不符：期望 illusts/manga 为 {id: null} 的 map，实际 '
+        'illusts=${describePixivJsonShape(map['illusts'])}, '
+        'manga=${describePixivJsonShape(map['manga'])}'
+        '（body 键: ${map.keys.take(12).join(', ')}）',
+        errorCode: ResErrorCode.parse,
+      );
+    }
+    return Res<List<String>>(parsePixivUserWorkIds(map));
+  }
+
+  /// 取作者作品列表的某一页（链路第 2 + 3 步）。
+  ///
+  /// 分页语义：**先拿全部 id（数值倒序 = 新作在前），再按 [authorWorksPageSize]
+  /// 切片**，然后用切片里的 id 批量取详情。因此"第 N 页"是稳定且可枚举的，
+  /// 不像偏移量分页那样在作者发布新作时整体错位。
+  ///
+  /// [Res.subData] 放**总页数**（`ids.length / pageSize` 向上取整），
+  /// 调用方据此判停；`0` 表示该作者没有任何公开作品。
+  Future<Res<List<PixivComicBrief>>> getAuthorWorks(
+    String uid, {
+    int page = 1,
+    int pageSize = authorWorksPageSize,
+  }) async {
+    final id = uid.trim();
+    if (id.isEmpty || int.tryParse(id) == null) {
+      return const Res.error(
+        '作者 uid 无效（应为纯数字）',
+        errorCode: ResErrorCode.invalidArgument,
+      );
+    }
+    final safePage = page <= 0 ? 1 : page;
+    final safePageSize = pageSize <= 0 ? authorWorksPageSize : pageSize;
+
+    final idsRes = await _fetchAuthorWorkIds(id);
+    if (idsRes.error) return Res.fromErrorRes(idsRes);
+    final ids = idsRes.data;
+    final totalPages =
+        ids.isEmpty ? 0 : ((ids.length + safePageSize - 1) ~/ safePageSize);
+
+    // 越界（含"作者没有作品"）返回空列表 + 总页数，让 UI 正常判停：
+    // 这里不是错误，报错会让"翻到底"显示成故障。
+    if (ids.isEmpty || safePage > totalPages) {
+      return Res<List<PixivComicBrief>>(
+        const <PixivComicBrief>[],
+        subData: totalPages,
+      );
+    }
+
+    final start = (safePage - 1) * safePageSize;
+    final end = start + safePageSize > ids.length
+        ? ids.length
+        : start + safePageSize;
+    final slice = ids.sublist(start, end);
+
+    const stepLabel = '作者作品详情';
+    final url = authorWorksUrl(id, slice);
+    final res = await _getJson(
+      url,
+      step: '$stepLabel GET /ajax/user/$id/profile/illusts'
+          '(work_category=illustManga, ids=${slice.length} 个, 第 $safePage/$totalPages 页)',
+    );
+    if (res.error) return Res.fromErrorRes(res);
+    final body = res.data['body'];
+    if (body is! Map) {
+      return Res.error(
+        '$stepLabel响应缺少 body'
+        '（body 实际 ${describePixivJsonShape(res.data['body'])}；'
+        '顶层键: ${describePixivJsonShape(res.data)}）',
+        errorCode: ResErrorCode.parse,
+      );
+    }
+    final map = body.map((k, v) => MapEntry(k.toString(), v));
+    final works = parsePixivUserWorks(map);
+    if (works.isEmpty) {
+      // 200 但一条都没解析出来：**必须报出来**，不能当成"没有作品"——
+      // 请求带了 ${slice.length} 个 id，正常至少能回一部分。
+      // 文案里给出实际形状，真机一失败就能判断是形状变了还是这些 id 全不可见。
+      return Res.error(
+        '$stepLabel一条都没解析出来（请求了 ${slice.length} 个 id）'
+        '：期望 body.works 为 {id: 作品} 的 map，实际 '
+        '${describePixivJsonShape(map['works'])}'
+        '（body 键: ${map.keys.take(12).join(', ')}）',
+        errorCode: ResErrorCode.parse,
+      );
+    }
+    return Res<List<PixivComicBrief>>(works, subData: totalPages);
   }
 }

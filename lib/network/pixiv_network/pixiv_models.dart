@@ -69,6 +69,37 @@ class PixivComicBrief extends BaseComic {
   String get description => '';
 }
 
+/// Pixiv 作者（用户）资料（`/ajax/user/{uid}?full=1` 的 `body`）。
+///
+/// 只保留作者页真正要展示的字段：展示名、头像、简介、关注数。
+/// 不可变：所有字段 `final`，构造为 `const`（理由同本文件头部注释：
+/// 本文件必须能在纯 `dart test` 下被解析层 import）。
+class PixivAuthor {
+  const PixivAuthor({
+    required this.id,
+    required this.name,
+    required this.avatar,
+    required this.comment,
+    required this.following,
+  });
+
+  /// 作者 uid（`userId`）。
+  final String id;
+
+  /// 展示名（`name`）。
+  final String name;
+
+  /// 头像 URL（`imageBig` 优先，回退 `image`）。
+  final String avatar;
+
+  /// 简介。取响应里的**纯文本** `comment`；它为空时才回退 `commentHtml`
+  /// （HTML 形态，需 [stripPixivHtml] 清洗）——否则会把 `<br />` 当正文显示。
+  final String comment;
+
+  /// 关注数（`following`）；字段缺失时为 0（不显示该行）。
+  final int following;
+}
+
 /// Pixiv 作品详情（`/ajax/illust/{id}` 的 `body` 对象）。
 ///
 /// 这是普通数据类（不继承 [BaseComic]）：详情页需要的字段远多于列表项，

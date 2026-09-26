@@ -4,18 +4,23 @@ import 'dart:math' as math;
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show ScrollDirection;
 import 'package:flutter/services.dart';
 import 'package:picakeep/base.dart';
 import 'package:picakeep/components/comic_tile.dart';
 import 'package:picakeep/components/components.dart';
 import 'package:picakeep/components/layout.dart';
+import 'package:picakeep/components/library_view_selector.dart';
 import 'package:picakeep/components/scrollable.dart';
 import 'package:picakeep/foundation/app.dart';
 import 'package:picakeep/foundation/app_runtime_mode.dart';
 import 'package:picakeep/foundation/archive/archive_password_store.dart';
 import 'package:picakeep/foundation/download_model.dart';
 import 'package:picakeep/foundation/download_author_resolver.dart';
+import 'package:picakeep/foundation/illust_card_info_config.dart';
+import 'package:picakeep/foundation/illust_cover_size.dart';
 import 'package:picakeep/foundation/local_library.dart';
+import 'package:picakeep/foundation/local_library_illust_view.dart';
 import 'package:picakeep/foundation/local_library_settings.dart';
 import 'package:picakeep/foundation/remote_library_event_channel.dart';
 import 'package:picakeep/foundation/remote_library_data_source.dart';
@@ -30,6 +35,9 @@ import 'download_page.dart' show DownloadedComicInfoView, DownloadPageLogic;
 import 'package:picakeep/components/archive_password_dialog.dart';
 import 'package:picakeep/components/side_bar.dart' show showSideBar;
 import 'local_comic_detail_page.dart';
+import 'local_library_illust_card.dart';
+import 'local_library_illust_switcher.dart';
+import 'local_library_illust_view.dart';
 
 String _formatLocalLibrarySize(double sizeMb) {
   if (sizeMb >= 1024) {
@@ -641,6 +649,15 @@ String _localLibraryViewLabel(_LocalLibraryView view,
   }
 }
 
+/// 紧凑选择器上用的**短文案**（完整文案见 [_localLibraryViewLabel]）。
+///
+/// ⚠️ 33 号起没有再保留的必要，已随内容区顶部那行紧凑 `SegmentedButton` 一起删除：
+/// 档位改挂到工具栏的弹出菜单上，菜单项要的是**完整文案**（菜单宽度不受限，
+/// 没有"紧凑"的必要）。用户要的是"一个按钮 + 菜单"，不是"更短的分段按钮"。
+/// 需要短文案的场合若将来再次出现，从 [_localLibraryViewLabel] 派生即可 ——
+/// **不要**改 [_localLibraryViewLabel] 本身：它还在标题、空态、刷新提示等多处被用着
+/// （计划步骤 7.3 要求"随 `albumOnly` 切换的文案行为要保留"）。
+
 _LocalLibraryView _localLibraryViewFromSetting(String value) {
   switch (normalizeLocalLibraryView(value)) {
     case 'aggregate':
@@ -661,6 +678,21 @@ String _localLibraryViewToSetting(_LocalLibraryView view) {
       return 'remote';
     case _LocalLibraryView.local:
       return 'local';
+  }
+}
+
+/// 当前档位的**图标**（33 号新增，36 号改为用在设置面板的档位区）。
+///
+/// 三个档位各用一个语义不同、轮廓差异明显的图标（文件夹=本地、层叠=聚合、
+/// 云=远程），再配上档位全名，用户不展开折叠区也能一眼看出"现在在哪一档"。
+IconData _localLibraryViewIcon(_LocalLibraryView view) {
+  switch (view) {
+    case _LocalLibraryView.local:
+      return Icons.folder_outlined;
+    case _LocalLibraryView.aggregate:
+      return Icons.layers_outlined;
+    case _LocalLibraryView.remote:
+      return Icons.cloud_outlined;
   }
 }
 
@@ -692,6 +724,36 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
           : _localLibraryViewFromSetting(
               appdata.settings[localLibraryViewSettingIndex],
             );
+
+  // ---------------------------------------------------------------------------
+  // 「图集 / 插画」视图维度（settings[155]）
+  //
+  // 它与上面的三档 `_view` **正交**（24 号计划决策 3）：
+  // - `_view` 决定"图集侧看哪个来源"，持久化在 settings[104]，行为完全不变；
+  // - `_illustView` 决定"这一页是图集还是插画"，持久化在 settings[155]。
+  // 两边各自保留自己的状态，来回切换互不影响。
+  //
+  // 插画侧**没有**自己的来源档位：目前只有"本地已下载的 Pixiv 插画"这一个
+  // 数据源（计划决策 3 的注：先按"至少一档"实现，用户要更多档再议）。
+  // 所以这里不新增档位枚举，也不复用/扩展现有的 `_LocalLibraryView`。
+  // ---------------------------------------------------------------------------
+  late IllustLibraryView _illustView = illustLibraryViewFromSetting(
+    appdata.settings[illustLibraryViewSettingIndex],
+  );
+
+  bool _illustLoading = false;
+  String? _illustErrorText;
+  List<IllustLibraryEntry> _illustEntries = const <IllustLibraryEntry>[];
+  List<IllustTagSummary> _illustTags = const <IllustTagSummary>[];
+  final Set<String> _selectedIllustTags = <String>{};
+
+  /// 页数记忆：页数只能靠列目录数出来，而 `_loadIllust` 每次都会重建条目
+  /// （`pageCount` 恒为 null），所以必须跨次记住，否则刷新一次页数就消失。
+  /// 详见 `foundation/illust_cover_size.dart` 的 `IllustPageCountMemo`。
+  final IllustPageCountMemo _illustPageCountMemo = IllustPageCountMemo();
+
+  /// 页面内容区是否正在滚动（驱动视图切换悬浮按钮的半透明）。
+  bool _scrollInteracting = false;
 
   bool get _isClientMode =>
       normalizeAppRuntimeMode(appdata.settings[appRuntimeModeSettingIndex]) ==
@@ -730,8 +792,58 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
     return false;
   }
 
-  bool get _showSourceSelector =>
-      _remoteAvailable && !_isRemoteRootPage && !_isLocalRootPage;
+  /// 「资源库显示设置」面板里各区块的可见性（判据本体在 foundation 层，那里有测试）。
+  ///
+  /// 36 号起这份判据**不再驱动工具栏的弹出菜单**（那个菜单已撤销），
+  /// 而是驱动设置面板里的档位折叠区：
+  /// - [_tiersApplicable] → 档位折叠区出不出现；
+  /// - `tiersEnabled` → 「聚合 / 远程」两档能不能选（不能选时置灰并写明原因）。
+  LocalLibraryViewScopeMenu get _viewScopeMenu => localLibraryViewScopeMenu(
+        remoteAvailable: _remoteAvailable,
+        isLocalRootPage: _isLocalRootPage,
+        isRemoteRootPage: _isRemoteRootPage,
+        pageAlbumOnly: widget.albumOnly,
+        albumOnly: _isAlbumOnly,
+      );
+
+  /// 本页是否存在"档位"这个概念（不是本地根 / 远程根子页面）。
+  ///
+  /// 它**不再**包含"远程是否可用"——那个交给 `_viewScopeMenu.tiersEnabled`
+  /// 去决定"能不能选"。24 号那条 `_showSourceSelector` 把两件事混在一起，
+  /// 后果是远程不可用时档位整块消失、用户找不到它（真机反馈，见 36 号）。
+  bool get _tiersApplicable => _viewScopeMenu.tiersApplicable;
+
+  /// 当前是否处于「插画」视图。
+  bool get _isIllustView => _illustView == IllustLibraryView.illust;
+
+  int get _illustViewWaterfallColumns => normalizeIllustWaterfallColumns(
+        appdata.settings[illustWaterfallColumnsSettingIndex],
+      );
+
+  /// 是否显示视图切换悬浮按钮。
+  ///
+  /// 三个条件缺一不可：
+  ///
+  /// 1. **只在图集形态的根列表上**。`_isAlbumOnly` 为假时这一页是"资源库"
+  ///    （`getAll()` 的全部记录），"插画"在那里不是一个有意义的切面；
+  ///    `_isLocalRootPage` / `_isRemoteRootPage` 是**子页面**（点进某个图集目录
+  ///    或远程根里面），在那里切视图语义上也说不通。这条与 [_tiersApplicable]
+  ///    的"子页面上没有档位"是同一个口径。
+  /// 2. **多选态下不显示** —— 与 `_buildMultiSelectFab` 互斥（计划步骤 4.4）。
+  /// 3. **操作进行中不显示**（删除时有全屏遮罩，按钮没有意义）。
+  ///
+  /// 判据本体抽在 foundation 层的 [shouldShowIllustViewSwitcher]，那里有测试。
+  bool get _showIllustViewSwitcher => shouldShowIllustViewSwitcher(
+        albumOnly: _isAlbumOnly,
+        isLocalRootPage: _isLocalRootPage,
+        isRemoteRootPage: _isRemoteRootPage,
+        selecting: _selecting,
+        operationRunning: _isOperationRunning,
+      );
+
+  /// 插画视图下、按已选标签筛过的条目。
+  List<IllustLibraryEntry> get _filteredIllustEntries =>
+      filterIllustEntriesByTags(_illustEntries, _selectedIllustTags);
 
   int get _selectedCount => _selectedItemIds.length;
 
@@ -899,12 +1011,107 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
     await _load();
   }
 
+  /// 切换「图集 / 插画」视图。
+  ///
+  /// 只改视图维度，**不动** `_view`（三档）与 `settings[104]` —— 这正是决策 3
+  /// 的验收点：图集侧切到"聚合"档、去插画视图转一圈、再切回来，图集侧仍是"聚合"。
+  ///
+  /// 切到插画时总是重新 `_loadIllust()`（不传 `showLoadingState`）：用户切视图
+  /// 的动作本身就意味着"我想看最新的"，而 `getManagedDownloads()` 带 in-flight
+  /// 去重；已有数据时不会闪加载态，只是后台静默刷新。
+  Future<void> _setIllustView(IllustLibraryView nextView) async {
+    if (_illustView == nextView) {
+      return;
+    }
+    setState(() {
+      _illustView = nextView;
+      _clearSelectionState();
+    });
+    appdata.settings[illustLibraryViewSettingIndex] =
+        illustLibraryViewToSetting(nextView);
+    await appdata.updateSettings();
+    if (nextView == IllustLibraryView.illust) {
+      await _loadIllust(showLoadingState: _illustEntries.isEmpty);
+    }
+  }
+
+  /// 取插画视图的数据。
+  ///
+  /// 数据源是 `LocalLibraryManager().getManagedDownloads()`
+  /// （`foundation/local_library_query.dart:31`，带 in-flight 去重），
+  /// 再按 `sourceKey == 'pixiv'` 过滤 —— **不按 id 前缀猜**（21 号文档的核心教训，
+  /// 判据见 `foundation/local_library_illust_view.dart` 的 `buildIllustEntries`）。
+  ///
+  /// [showLoadingState] 为真时把内容区切成"加载中"。**只切内容区**：
+  /// 本方法完全不碰 `_loading`，所以不会出现整页转圈（20 号计划确立的原则）。
+  Future<void> _loadIllust({bool showLoadingState = false}) async {
+    if (mounted) {
+      setState(() {
+        _illustLoading = true;
+        _illustErrorText = null;
+        if (showLoadingState) {
+          _illustEntries = const <IllustLibraryEntry>[];
+          _illustTags = const <IllustTagSummary>[];
+        }
+      });
+    }
+    List<IllustLibraryEntry> entries = const <IllustLibraryEntry>[];
+    String? errorText;
+    try {
+      final downloads = await _manager.getManagedDownloads();
+      // 回填已数出来的页数：`buildIllustEntries` 每次重建条目，页数恒为 null，
+      // 不回填的话后台刷新一次「页数」就从卡片上消失。
+      entries = _illustPageCountMemo.apply(buildIllustEntries(downloads));
+    } catch (e) {
+      errorText = _operationErrorText(e);
+    }
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _illustEntries = entries;
+      _illustTags = summarizeIllustTags(entries);
+      _illustErrorText = errorText;
+      _illustLoading = false;
+      // 数据变了，之前选的标签可能已经不存在（例如刚删掉某个作品）。
+      // 留着幽灵标签会让筛选结果永远为空，且筛选条上看不到它 —— 无从排查。
+      _selectedIllustTags.removeWhere(
+        (tag) => !_illustTags.any((summary) => summary.tag == tag),
+      );
+    });
+    // 首帧已按 db 数据（缺则占位比例）渲染；真实比例在后台补齐后刷新
+    // （见 `_resolveIllustSizes` 的注释：绝不能同步做，否则首帧卡在磁盘上）。
+    unawaited(_resolveIllustSizes(entries));
+  }
+
+  void _toggleIllustTag(String tag) {
+    setState(() {
+      if (!_selectedIllustTags.remove(tag)) {
+        _selectedIllustTags.add(tag);
+      }
+    });
+  }
+
+  void _clearIllustTags() {
+    if (_selectedIllustTags.isEmpty) {
+      return;
+    }
+    setState(_selectedIllustTags.clear);
+  }
+
   @override
   void initState() {
     super.initState();
     App.localDataVersion.addListener(_handleLocalDataChanged);
     App.serviceConfigVersion.addListener(_handleServiceConfigChanged);
     App.serviceRuntimeVersion.addListener(_handleServiceRuntimeChanged);
+    // 纯显示类设置（卡片底部信息 / 瀑布流列数 / 悬浮按钮位置）。
+    //
+    // 必须单独监听：设置页是非 opaque 路由，pop 回来**不会**重建本页
+    // （`foundation/app.dart` 的 `displaySettingsVersion` 注释里有实测数据），
+    // 而这三个值都只在 `build` 里读。不监听的话症状是
+    // "在设置里改了、返回后没反应"，用户会以为改坏了。
+    App.displaySettingsVersion.addListener(_handleDisplaySettingsChanged);
     _searchController.addListener(() {
       if (mounted) {
         setState(() {});
@@ -918,8 +1125,22 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
     App.localDataVersion.removeListener(_handleLocalDataChanged);
     App.serviceConfigVersion.removeListener(_handleServiceConfigChanged);
     App.serviceRuntimeVersion.removeListener(_handleServiceRuntimeChanged);
+    App.displaySettingsVersion.removeListener(_handleDisplaySettingsChanged);
     _searchController.dispose();
     super.dispose();
+  }
+
+  /// 显示类设置变了 → 只重建，**不重扫本地库**（那会白扫几百个目录）。
+  void _handleDisplaySettingsChanged() {
+    if (!mounted) {
+      return;
+    }
+    setState(() {});
+    // 「页数」是"改了配置才需要补"的字段：用户在设置里勾上它时，
+    // 补页数的那趟流程可能根本没跑过（当时还没勾），所以这里补跑一次。
+    if (_isIllustView && _illustEntries.isNotEmpty) {
+      unawaited(_resolveIllustSizes(_illustEntries));
+    }
   }
 
   void _handleLocalDataChanged() {
@@ -1198,6 +1419,13 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
         _loading = false;
       });
     }
+    // 插画侧的数据与图集侧的档位/来源无关（永远读本机已下载的 Pixiv 内容），
+    // 但**下拉刷新与删除后重载**要让插画侧一起跟上，否则删掉一个插画再回来
+    // 它还在。放在 try/catch 之外：图集侧报错时插画侧仍该能正常显示。
+    // 不传 showLoadingState：已有数据时不要把列表换成转圈（刷新不应闪白屏）。
+    if (mounted && _isIllustView) {
+      await _loadIllust();
+    }
   }
 
   List<DownloadedItem> get _filteredItems {
@@ -1328,23 +1556,68 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
                 borderRadius: BorderRadius.circular(18),
               ),
               child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 280),
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 8),
-                  child: SwitchListTile(
-                    value: albumOnly,
-                    title: Text('仅显示图集'.tl),
-                    subtitle: Text('隐藏下载目录来源，只看普通本地图集'.tl),
-                    secondary: const Icon(Icons.photo_library_outlined),
-                    onChanged: (value) async {
-                      setDialogState(() {
-                        albumOnly = value;
-                      });
-                      appdata.settings[localLibraryAlbumOnlySettingIndex] =
-                          value ? '1' : '0';
-                      await appdata.updateSettings();
-                      await _load();
-                    },
+                constraints: BoxConstraints(
+                  maxWidth: 280,
+                  // 档位折叠区展开后内容会变高：给一个高度上限并让内容可滚，
+                  // 否则小屏/横屏上会直接 RenderFlex overflow。
+                  maxHeight: MediaQuery.of(context).size.height * 0.6,
+                ),
+                // 页内第二处「视图切换按钮位置」入口（用户要求"页面内一处 +
+                // 设置页一处"，见 「浏览」设置区）。设置页那处在
+                // `pages/settings/explore_settings.dart`。
+                // 两处写的是同一个 settings[157]，不需要额外同步。
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      // 36 号：档位（本地 / 聚合 / 远程）**折叠**在这里。
+                      // 默认收起，收起时副标题已写明当前档位。
+                      if (_viewScopeMenu.tiersApplicable)
+                        _buildTierSection(setDialogState: setDialogState),
+                      SwitchListTile(
+                        value: albumOnly,
+                        title: Text('仅显示图集'.tl),
+                        subtitle: Text('隐藏下载目录来源，只看普通本地图集'.tl),
+                        secondary: const Icon(Icons.photo_library_outlined),
+                        onChanged: (value) async {
+                          setDialogState(() {
+                            albumOnly = value;
+                          });
+                          appdata.settings[localLibraryAlbumOnlySettingIndex] =
+                              value ? '1' : '0';
+                          await appdata.updateSettings();
+                          await _load();
+                        },
+                      ),
+                      ListTile(
+                        leading: const Icon(Icons.open_with_outlined),
+                        title: Text('视图切换按钮位置'.tl),
+                        subtitle: Text(
+                          illustViewSwitcherAlignsLeft(
+                            appdata.settings[
+                                illustViewSwitcherPositionSettingIndex],
+                          )
+                              ? '靠左'.tl
+                              : '靠右'.tl,
+                        ),
+                        onTap: () async {
+                          final next = illustViewSwitcherAlignsLeft(
+                            appdata.settings[
+                                illustViewSwitcherPositionSettingIndex],
+                          )
+                              ? illustViewSwitcherRight
+                              : illustViewSwitcherLeft;
+                          appdata.settings[
+                                  illustViewSwitcherPositionSettingIndex] =
+                              next;
+                          await appdata.updateSettings();
+                          setDialogState(() {});
+                          if (mounted) {
+                            setState(() {});
+                          }
+                        },
+                      ),
+                    ],
                   ),
                 ),
               ),
@@ -1844,6 +2117,20 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
     );
   }
 
+  /// 本页是否是**可切换「图集 / 插画」视图的根列表**。
+  ///
+  /// 判据与 [_showIllustViewSwitcher] 完全同源（同一个 foundation 层函数），只把
+  /// `selecting` / `operationRunning` 这两个**瞬时条件**固定为 false —— 标题问的是
+  /// "这一页属于哪个视图"，而不是"此刻按钮可不可见"；否则一进多选态标题就会先跳回
+  /// 「图集」再被"已选择 N 个项目"覆盖，多一次无意义的闪动。
+  bool get _isIllustSwitchableRoot => shouldShowIllustViewSwitcher(
+        albumOnly: _isAlbumOnly,
+        isLocalRootPage: _isLocalRootPage,
+        isRemoteRootPage: _isRemoteRootPage,
+        selecting: false,
+        operationRunning: false,
+      );
+
   Widget _buildTitle() {
     if (_searchMode) {
       return TextField(
@@ -1858,36 +2145,130 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
     if (_selecting) {
       return Text('已选择 @num 个项目'.tlParams({'num': _selectedCount.toString()}));
     }
+    // 标题的三条来源与**优先级**（33 号明确写出，避免以后再加分支时各猜一套）：
+    //
+    // 1. **视图**（最高）：本页确实能切「图集 / 插画」时，标题跟着视图走 ——
+    //    用户原话「顶部的画集标题应该随着按钮的切换而切换」。文案直接取
+    //    [illustViewLabel]，与悬浮按钮上的标识**同一个函数**，不会出现
+    //    "按钮写着插画、标题写着图集"。
+    //
+    //    ⚠️ 这条**必须高于 `widget.title`**，否则本需求在主入口上根本不生效：
+    //    从「我」页进图集页时传的就是 `title: '图集'`
+    //    （`me_page.dart:454-457`），若 `widget.title` 优先，切到插画后标题仍是
+    //    「图集」—— 那正是 33 号真机截图里的症状。
+    //    计划文里"建议 widget.title > 视图"的写法在这一点上与主需求冲突，故取
+    //    "视图 > widget.title"；实际可见结果反而更稳：图集侧渲染出来仍是「图集」
+    //    （与该页传进来的 `widget.title` 逐字相同），只有切到插画才变。
+    //
+    // 2. **显式 `widget.title`**：子页面（本地根 / 远程根，标题是那个根的名字）
+    //    与任何调用方指定的标题。这些页 `_isIllustSwitchableRoot` 为假，所以上面
+    //    那条不会截走它们 —— 既有行为**一点没改**。
+    //
+    // 3. **`albumOnly`**（最低，既有分支）：`widget.title` 没给时，
+    //    `图集` / `资源库`。行为与改动前逐字一致。
+    if (_isIllustSwitchableRoot) {
+      return Text(illustViewLabel(_illustView));
+    }
     return Text((widget.title ?? (_isAlbumOnly ? '图集' : '资源库')).tl);
   }
 
-  Widget _buildSourceSelector() {
-    return SliverToBoxAdapter(
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
-        child: Align(
-          alignment: Alignment.centerLeft,
-          child: SegmentedButton<_LocalLibraryView>(
-            showSelectedIcon: false,
-            segments: [
-              for (final view in _LocalLibraryView.values)
-                ButtonSegment<_LocalLibraryView>(
-                  value: view,
-                  label: Text(
-                    _localLibraryViewLabel(view, albumOnly: _isAlbumOnly).tl,
-                  ),
-                ),
-            ],
-            selected: {_view},
-            onSelectionChanged: (selection) {
-              if (selection.isEmpty || selection.first == _view) {
-                return;
-              }
-              _setView(selection.first);
-            },
+  /// 设置面板里的**档位区**（36 号）。
+  ///
+  /// ## 为什么撤销 33 号那个"档位 + 设置共用一个弹出菜单"
+  ///
+  /// 33 号为了让工具栏只占 4 个 action（宽度硬约束，见
+  /// `test/local_library_page_view_scope_test.dart` 里的算术守卫），把档位三档与
+  /// 「资源库显示设置」并进了同一个 `PopupMenuButton`。真机反馈暴露两个问题：
+  ///
+  /// 1. **设置变成了二级** —— 点按钮先弹菜单，还要再点"资源库显示设置"才进设置；
+  /// 2. **档位在远程不可用时整块不出现**（沿用 24 号的 `_showSourceSelector`），
+  ///    用户于是问"本地-聚合-远程 的档位切换按钮呢"。
+  ///
+  /// 现在的形态：**按钮点击直达设置面板**（一级），档位**直接平铺**在面板首项。
+  /// action 数量仍是 4 个，宽度约束一点没动。
+  ///
+  /// ## 为什么是"平铺"而不是"折叠"（36 号第二轮真机反馈）
+  ///
+  /// 第一轮实现成了 `ExpansionTile`（默认收起）。真机反馈原话：
+  /// 「最好保持展开样式，不要折叠那三档」—— 折叠多出一次点击，而档位只有
+  /// 三项目、本来就不占地方。所以现在**标题行 + 三档平铺**，一进面板就看得到
+  /// 自己停在哪一档、能切到哪几档。
+  ///
+  /// ## 样式来源：探索页的「榜单范围」菜单（`explore_page.dart` 的 `_EntryMenu`）
+  ///
+  /// 用户要求"参考探索页的"。这里逐项对齐那个菜单的视觉，**数值都是照抄的**：
+  /// 选项容器 `minHeight: 52` / `padding: h12 v8` / 圆角 12；选中态
+  /// `secondaryContainer` 铺底；左侧 32×32 圆角 10 的图标块（选中
+  /// `surface@0.65`、未选中 `surfaceContainerHighest`，图标 19）；尾部 20 宽位
+  /// 放 `check_circle_rounded`；标题行 12px / `onSurfaceVariant` / `w500`。
+  ///
+  /// ## 远程不可用时：置灰，不隐藏
+  ///
+  /// 判据见 [LocalLibraryViewScopeMenu.tiersEnabled]。用户在远程不可用时最需要的
+  /// 恰恰是"看得到档位在哪"，藏起来等于这个功能不存在。
+  Widget _buildTierSection({required StateSetter setDialogState}) {
+    final colors = Theme.of(context).colorScheme;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: <Widget>[
+        // 与探索页菜单里那行小标题同规格（12px / onSurfaceVariant / w500）。
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 4, 12, 8),
+          child: Text(
+            '档位'.tl,
+            style: TextStyle(
+              color: colors.onSurfaceVariant,
+              fontSize: 12,
+              fontWeight: FontWeight.w500,
+            ),
           ),
         ),
+        for (final view in _LocalLibraryView.values)
+          _buildTierOption(
+            view: view,
+            selected: view == _view,
+            setDialogState: setDialogState,
+          ),
+        const SizedBox(height: 4),
+        Divider(height: 1, color: colors.outlineVariant.withValues(alpha: 0.6)),
+      ],
+    );
+  }
+
+  /// 档位区里的一项。
+  ///
+  /// 渲染交给 [LibraryViewSelectorTile]（`components/library_view_selector.dart`）
+  /// —— 与「已下载 / 图片收藏 / 图库 / 回收站」的档位面板**是同一份实现**，
+  /// 不再各写一套长得像的样式。
+  ///
+  /// 文案用完整版 [_localLibraryViewLabel]（含 `albumOnly` 换出来的
+  /// `本地图集` / `远程 · 图集`），它的既有行为一点没改。
+  ///
+  /// 需要远程的档位（聚合 / 远程）在远程不可用时**置灰 + 写明原因**，而不是
+  /// 消失。当前档位照常打勾，哪怕它此刻不可选 —— 用户需要知道"我停在哪一档"，
+  /// 否则会以为自己从没设置过。
+  Widget _buildTierOption({
+    required _LocalLibraryView view,
+    required bool selected,
+    required StateSetter setDialogState,
+  }) {
+    final needsRemote = view != _LocalLibraryView.local;
+    return LibraryViewSelectorTile<_LocalLibraryView>(
+      entry: LibraryViewSelectorEntry<_LocalLibraryView>(
+        value: view,
+        label: _localLibraryViewLabel(view, albumOnly: _isAlbumOnly),
+        icon: _localLibraryViewIcon(view),
+        enabled: _viewScopeMenu.tierAvailable(needsRemote: needsRemote),
+        disabledReason: '远程服务不可用',
       ),
+      selected: selected,
+      onTap: () async {
+        if (view == _view) {
+          return;
+        }
+        await _setView(view);
+        setDialogState(() {});
+      },
     );
   }
 
@@ -2045,6 +2426,202 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
     );
   }
 
+  /// 悬浮入口。同一时刻**最多一个**：
+  ///
+  /// - 多选态下只显示多选 FAB（视图切换按钮隐藏，计划步骤 4.4 的互斥）；
+  /// - 非多选态下优先显示视图切换按钮，不显示多选 FAB。
+  ///
+  /// 为什么不是"两个都显示"：这是手机上的同一条右下角通道，两个 FAB 叠在一起
+  /// 既挡内容又难分辨点到了哪个。而"进多选"本身可以从长按条目进入
+  /// （`_handleItemLongPress`），所以隐藏多选 FAB 不会让功能变得不可达。
+  Widget? _buildFloatingActionButton(List<DownloadedItem> items) {
+    if (_showIllustViewSwitcher) {
+      return IllustViewSwitcherFab(
+        currentView: _illustView,
+        scrolling: _scrollInteracting,
+        alignLeft: illustViewSwitcherAlignsLeft(
+          appdata.settings[illustViewSwitcherPositionSettingIndex],
+        ),
+        onViewSelected: (view) {
+          unawaited(_setIllustView(view));
+        },
+      );
+    }
+    return _buildMultiSelectFab(items);
+  }
+
+  /// 悬浮按钮的落点。
+  ///
+  /// ## 为什么由 `Scaffold` 决定左右，而不是控件自己 `Align`
+  ///
+  /// 32 号真机反馈「他靠左时有点不对等」。实测根因：控件自己用一层**撑满整屏**的
+  /// `Align` 选边时，`Scaffold` 量到的 FAB 尺寸等于**屏宽**，`endFloat` 算出的
+  /// 偏移变成 `-16`，再叠上控件自己的 `left: 16`，按钮正好落在屏幕最左边 ——
+  /// 左边距 0、右边距 32。
+  ///
+  /// 改用 Flutter 自己的 `startFloat` / `endFloat` 后，两侧由同一套槽位算术决定，
+  /// **结构上不可能不对称**；同时也顺手拿到了 Scaffold 的键盘/底部条避让。
+  ///
+  /// 多选 FAB 保持默认（`endFloat`）：它一直是靠右的，不在本次反馈范围内。
+  FloatingActionButtonLocation get _floatingActionButtonLocation {
+    final alignLeft = _showIllustViewSwitcher &&
+        illustViewSwitcherAlignsLeft(
+          appdata.settings[illustViewSwitcherPositionSettingIndex],
+        );
+    return alignLeft
+        ? FloatingActionButtonLocation.startFloat
+        : FloatingActionButtonLocation.endFloat;
+  }
+
+  /// 插画视图的内容 sliver（标签筛选条 + 瀑布流 + 三种状态）。
+  Widget _buildIllustContent() {
+    return LocalLibraryIllustSlivers(
+      allEntries: _illustEntries,
+      entries: _filteredIllustEntries,
+      tags: _illustTags,
+      selectedTags: _selectedIllustTags,
+      loading: _illustLoading,
+      errorText: _illustErrorText,
+      columns: _illustViewWaterfallColumns,
+      itemBuilder: _buildIllustItem,
+      onToggleTag: _toggleIllustTag,
+      onClearTags: _clearIllustTags,
+    );
+  }
+
+  Widget _buildIllustItem(BuildContext context, IllustLibraryEntry entry) {
+    final item = entry.item;
+    return IllustCard(
+      entry: entry,
+      // 必须走 manager 的 provider 工厂：它内部会按"是否处于 root/Shizuku
+      // 特权模式"决定走 FileImage 快路径还是 StreamImageProvider，
+      // 直接 FileImage 在特权模式下会整片破图（见 foundation/local_library.dart:1213）。
+      imageProvider: illustCoverProviderFor(item),
+      // 底部信息随 `settings[illustCardInfoSettingIndex]` 变化（32 号）。
+      // 取值与拼接走 foundation 层的纯函数，卡片控件不读全局设置。
+      infoSpans: illustrateCardInfoSpansFor(
+        entry: entry,
+        fields: _illustCardInfoSpec.fields,
+        separator: _illustCardInfoSpec.separator,
+      ),
+      selecting: _selecting,
+      selected: _isItemSelected(item),
+      onTap: () => _handleItemTap(item),
+      onLongPress: () => _handleItemLongPress(item),
+    );
+  }
+
+  /// 当前卡片底部信息的字段与分隔符（从设置解析一次，整页复用）。
+  ///
+  /// 记忆化到"设置原串"上：卡片列表可能有几百条，`_buildIllustItem` 每条都会
+  /// 问一次这个规格，而模板串只与设置有关、与条目无关。原串一变就重新解析，
+  /// 所以用户在设置页改完返回后能立刻生效，也不会读到陈旧值。
+  String? _illustCardInfoRawSetting;
+  ({List<String> fields, String separator})? _illustCardInfoSpecCache;
+
+  ({List<String> fields, String separator}) get _illustCardInfoSpec {
+    final raw = appdata.settings[illustCardInfoSettingIndex];
+    if (_illustCardInfoSpecCache == null || _illustCardInfoRawSetting != raw) {
+      _illustCardInfoRawSetting = raw;
+      _illustCardInfoSpecCache = illustCardInfoSpecFromSetting(raw);
+    }
+    return _illustCardInfoSpecCache!;
+  }
+
+  /// 补齐缺宽高条目的**真实比例**（32 号的核心修复）。
+  ///
+  /// ## 为什么必须异步、且与首帧渲染分开
+  ///
+  /// 老下载记录里没有 `width`/`height`（真机实测三条 Pixiv 记录全缺，见回写区），
+  /// 只能读封面文件头拿真实尺寸。读文件是 IO，**绝不能在 `build` 或
+  /// `buildIllustEntries` 里同步做**：那会把整页首帧卡在磁盘上，几百条更久。
+  ///
+  /// 所以流程是：先用 db 数据（或占位比例）**立即渲染**，再在后台补齐并
+  /// `setState` 刷新。用户看到的是"先按占位排、很快调整成真实高度"，
+  /// 而不是"白屏等一秒"。
+  ///
+  /// ## 只对"需要"的条目动手
+  ///
+  /// - 宽高齐全的条目（新下载的记录）**不进这个流程**：db 里的作品级尺寸比
+  ///   封面读数更权威，重算没有意义，还会白发一次 IO；
+  /// - 只有配置里勾了「页数」时才去列目录数图片（多一次 IO）。
+  Future<void> _resolveIllustSizes(List<IllustLibraryEntry> requested) async {
+    final spec = _illustCardInfoSpec;
+    final wantPageCount = spec.fields.contains('pages');
+    final targets = illustEntriesNeedingResolution(
+      requested,
+      wantPageCount: wantPageCount,
+      pageCountMemo: _illustPageCountMemo,
+    );
+    if (targets.isEmpty) {
+      return;
+    }
+    // 只在**本次目标里确实有"页数未知"的条目**时才去列目录。
+    //
+    // 不能用一个"本页补过没有"的布尔量代替：用户先在没勾「页数」的配置下进过一次
+    // 视图，之后再去设置里勾上，那个标志会把这一次压成"不用补"，于是页数
+    // **永远补不上**（卡片上一直不显示，且不报任何错）。
+    final needPageCount = wantPageCount &&
+        targets.any(
+          (entry) => entry.pageCount == null && _illustPageCountMemo.needsCount(entry.id),
+        );
+
+    Map<String, IllustResolvedInfo> resolved;
+    try {
+      resolved = await resolveIllustEntryInfo(
+        entries: targets,
+        resolveCoverPath: _manager.resolveCoverPathForItem,
+        needPageCount: needPageCount,
+      );
+    } catch (_) {
+      // 补齐是"锦上添花"：读不到就继续用占位比例，**不要**把它升级成页面错误
+      // （那会让一次 IO 失败看起来像"整个插画视图坏了"）。
+      return;
+    }
+    if (!mounted || resolved.isEmpty) {
+      return;
+    }
+    if (needPageCount) {
+      // 记下结果（含"没数出来"），避免每次刷新都对同一条反复列目录。
+      for (final entry in targets) {
+        if (entry.pageCount == null) {
+          _illustPageCountMemo.record(entry.id, resolved[entry.id]?.pageCount);
+        }
+      }
+    }
+    setState(() {
+      _illustEntries = applyIllustResolvedInfo(_illustEntries, resolved);
+    });
+  }
+
+  /// 内容区的滚动通知 → `_scrollInteracting`（驱动悬浮按钮半透明）。
+  ///
+  /// 恢复只认 `ScrollEndNotification` 与 `UserScrollNotification(direction: idle)`，
+  /// **不在 `ScrollUpdateNotification` 里恢复** —— 惯性滚动期间 update 会持续触发，
+  /// 在那里恢复会让按钮在半透明与不透明之间反复闪。
+  /// 这套判定沿用既有先例（`pages/download_page.dart:680-692`）。
+  bool _handleScrollNotification(ScrollNotification notification) {
+    if (!_showIllustViewSwitcher) {
+      return false;
+    }
+    final interacting = notification is ScrollStartNotification ||
+        (notification is UserScrollNotification &&
+            notification.direction != ScrollDirection.idle);
+    final settled = notification is ScrollEndNotification ||
+        (notification is UserScrollNotification &&
+            notification.direction == ScrollDirection.idle);
+    if (interacting && !_scrollInteracting) {
+      setState(() {
+        _scrollInteracting = true;
+      });
+    } else if (settled && _scrollInteracting) {
+      setState(() {
+        _scrollInteracting = false;
+      });
+    }
+    return false;
+  }
+
   @override
   Widget build(BuildContext context) {
     final items = _filteredItems;
@@ -2055,10 +2632,13 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
         ? (_isAlbumOnly ? '刷新远程图集'.tl : '刷新远程资源库'.tl)
         : (_isAlbumOnly ? '刷新图集'.tl : '刷新资源库'.tl);
     Widget page = Scaffold(
-      floatingActionButton: _buildMultiSelectFab(items),
+      floatingActionButtonLocation: _floatingActionButtonLocation,
+      floatingActionButton: _buildFloatingActionButton(items),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
-          : SmoothCustomScrollView(
+          : NotificationListener<ScrollNotification>(
+              onNotification: _handleScrollNotification,
+              child: SmoothCustomScrollView(
               cacheExtent: MediaQuery.of(context).size.height,
               slivers: [
                 SliverAppbar(
@@ -2094,7 +2674,22 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
                           ),
                           if (_canToggleCollectionShell)
                             _buildCollectionShellAction(),
-                          if (!widget.albumOnly)
+                          // 入口条件比原来宽一档：原来只在 `!widget.albumOnly`
+                          // 时出现，而"图集"页恰恰是 `albumOnly: true`（从「我」
+                          // 页进入），于是图集页上**没有任何页内设置入口** ——
+                          // 视图切换按钮位置就只能在设置页里改。
+                          // 现在只要视图切换按钮可能出现（`_isAlbumOnly` 为真），
+                          // 页内入口就一起出现，满足"页面内一处 + 设置页一处"。
+                          // 对既有非图集页（`albumOnly` 为假）行为**完全不变**。
+                          //
+                          // 33 号曾把这个入口与「视图档位」合并成同一个弹出菜单
+                          // （理由是工具栏只有 4 个 action 的宽度余量），36 号撤回：
+                          // 合并的后果是"设置变成二级"（用户真机反馈原话：
+                          // 「为什么资源库设置的点击需要进到二级点击才会显示」）。
+                          // 现在按钮**点击直达设置面板**，档位折叠在面板里，
+                          // action 数量仍是 4 个 —— 宽度约束与 33 号完全一致。
+                          if (_tiersApplicable ||
+                              _viewScopeMenu.showDisplaySettings)
                             IconButton(
                               icon: Icon(
                                 appdata.settings[
@@ -2126,8 +2721,18 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
                           ),
                         ],
                 ),
-                if (_showSourceSelector) _buildSourceSelector(),
-                if (items.isEmpty)
+                // 「档位」原来在这里是一行紧凑的 `SegmentedButton`（由
+                // `_showSourceSelector` 决定显不显示）。33 号把它挪去了工具栏，
+                // 36 号按用户要求改成**折叠在「资源库显示设置」面板里**
+                // （`_buildTierSection`）—— 内容区自 33 号起就不再渲染它，
+                // 显示条件（子页面上没有档位）与当时一致。
+                // 插画视图下档位同样不参与：插画只有"本地"一档内容，
+                // 切到插画再切回来时档位原样还在。
+                // 插画视图：内容区完全由插画侧自己决定（含三种状态），
+                // 图集侧的 items / 定时器 / 选择框一概不参与。
+                if (_isIllustView)
+                  _buildIllustContent()
+                else if (items.isEmpty)
                   _buildEmptyState()
                 else
                   SliverPadding(
@@ -2145,6 +2750,7 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
                   ),
               ],
             ),
+          ),
     );
     if (_isOperationRunning) {
       page = Stack(

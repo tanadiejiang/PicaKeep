@@ -41,6 +41,23 @@ typedef OnlineComicPageBuilder = Widget Function(BaseComic comic);
 /// ehentai 等需要 Cookie/Referer/User-Agent 鉴权的源在源注册时填上。
 typedef ImageHeadersBuilder = Map<String, String>? Function(BaseComic comic);
 
+/// 源级别的「作者页」构造钩子：由 ID 直跳区的输入构造**App 内的作者页**。
+///
+/// 与 [OnlineComicPageBuilder] **同形**（都吃一个轻量 BaseComic、都返回 Widget），
+/// 因为这两个入口消费的是同一份输入：搜索页 ID 直跳区里那个 `cleanId`。
+/// 差别只在语义——`comicPageBuilder` 是"这个 id 是作品 id"，
+/// `authorPageBuilder` 是"这个 id 是作者 uid"。
+///
+/// 为什么需要"并排两个入口"：纯数字输入**无法区分**作品 id 与作者 uid
+/// （Pixiv 两者都是数字），任何启发式猜测都必然误判，所以两个入口同时给出、
+/// 由用户自己选 —— 与既有"四个源并排、用户自己选"的形态一致。
+///
+/// 为什么钩子返回 Widget 而不是 URL：本轮的产品决策是 **App 内打开**
+/// （用户明确要求），页面由源自己提供；UI 只负责"点一下把页面 push 上去"，
+/// 不知道也不需要知道页面长什么样（写死 `if (source == pixiv)` 会让"加一个源"
+/// 变成"改搜索页"）。
+typedef OnlineAuthorPageBuilder = Widget Function(BaseComic comic);
+
 class ComicSource {
   ComicSource.named({
     required this.key,
@@ -49,6 +66,7 @@ class ComicSource {
     this.favoriteData,
     this.searchPageData,
     this.comicPageBuilder,
+    this.authorPageBuilder,
     this.imageHeadersBuilder,
     this.idMatcher,
     Map<String, dynamic>? data,
@@ -100,12 +118,18 @@ class ComicSource {
   final SearchPageData? searchPageData;
   final OnlineComicPageBuilder? comicPageBuilder;
 
+  /// 可选:「作者页」构造钩子。默认 `null`，此时搜索页不为该源渲染
+  /// 「打开作者页」入口（其它源保持既有行为，不受本钩子影响）。
+  /// 目前只有 pixiv 声明它。
+  final OnlineAuthorPageBuilder? authorPageBuilder;
+
   /// 可选:源级别封面/图片请求头钩子。默认 `null`,消费端回退裸 `NetworkImage`。
   final ImageHeadersBuilder? imageHeadersBuilder;
 
   /// 可选:ID 直跳正则。搜索页检测到输入文本匹配时，建议列表出现「打开漫画」条目。
   /// 匹配后搜索页将文本传给 [comicPageBuilder]（前缀剥离由源自行处理）。
   final RegExp? idMatcher;
+
 
   final Map<String, dynamic> data;
 

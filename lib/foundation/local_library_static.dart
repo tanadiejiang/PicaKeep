@@ -1113,24 +1113,24 @@ List<String> _downloadRowTags(Row row, Iterable<String> keys) {
   return const <String>[];
 }
 
+/// 托管下载行的作者文本（列表卡片 `subTitle` 位）。
+///
+/// 判定逻辑本身抽在 foundation 层的纯函数 [resolveDownloadedRowAuthor]（那里有
+/// 测试，也写清了"自定义源直取 subTitle、EH/NH 走分类元数据、拿不到就留空"
+/// 这三条优先级）。
+///
+/// 为什么必须走那一份而不是在这里就地写：本函数被 `local_library_scan.dart:323`
+/// 与 `:540` **两处**调用（托管下载路径与子目录路径），逻辑放两份必然分叉 ——
+/// `_parseDownloadedItem` 上面那段注释记的正是上一次分叉（EH 画廊 id 被误判成
+/// 自定义源）造成的真机症状。所以这里只做转调，一处改、两处生效。
+///
+/// `row` 参数保留是为了不动两个调用点；本函数的取值**只用 `json` 与 `fallback`**。
 String _metadataAuthorForDownloadedRow(
   Row row,
   String json,
   DownloadedItem fallback,
 ) {
-  final resolved = resolveDownloadedAuthorsFromRecord(
-    fallback.id,
-    json,
-    fallback: fallback,
-  );
-  if (resolved.isNotEmpty) {
-    return resolved.join(', ');
-  }
-  if (fallback.type == DownloadType.ehentai ||
-      fallback.type == DownloadType.nhentai) {
-    return '';
-  }
-  return resolveDownloadedAuthors(fallback).join(', ');
+  return resolveDownloadedRowAuthor(rawJson: json, fallback: fallback);
 }
 
 List<String> _metadataTagsForDownloadedRow(

@@ -8,6 +8,7 @@ import 'package:picakeep/comic_source/comic_source.dart';
 import 'package:picakeep/components/comic_tile.dart';
 import 'package:picakeep/components/local_favorite_update_dialog.dart';
 import 'package:picakeep/components/layout.dart';
+import 'package:picakeep/components/library_view_selector.dart';
 import 'package:picakeep/foundation/app.dart';
 import 'package:picakeep/foundation/app_runtime_mode.dart';
 import 'package:picakeep/foundation/download.dart';
@@ -35,6 +36,16 @@ String _favoritesViewLabel(FavoritesView view) {
       return '本地';
     case FavoritesView.remote:
       return '远程';
+  }
+}
+
+/// 档位图标（36 号）：与图集页 / 已下载页 / 图片收藏页**逐字相同**的视觉语言。
+IconData _favoritesViewIcon(FavoritesView view) {
+  switch (view) {
+    case FavoritesView.local:
+      return Icons.folder_outlined;
+    case FavoritesView.remote:
+      return Icons.cloud_outlined;
   }
 }
 
@@ -754,20 +765,23 @@ class _MainFavoritesPageState extends State<MainFavoritesPage> {
                     padding: const EdgeInsets.fromLTRB(20, 4, 20, 8),
                     child: Row(
                       children: [
-                        SegmentedButton<FavoritesView>(
-                          showSelectedIcon: false,
-                          segments: [
+                        // 36 号：这一行原来的 `SegmentedButton` 换成与图集页同一套的
+                        // 档位选择器（图标按钮 → 圆角面板 → 平铺选项）。
+                        //
+                        // 本页**没有 AppBar**（内容全在 Sliver 里，导航靠 Drawer），
+                        // 所以按钮就留在这一行，不能像已下载页那样挪到工具栏上。
+                        LibraryViewSelectorAction<FavoritesView>(
+                          title: '收藏 · 档位',
+                          entries: <LibraryViewSelectorEntry<FavoritesView>>[
                             for (final view in FavoritesView.values)
-                              ButtonSegment<FavoritesView>(
+                              LibraryViewSelectorEntry<FavoritesView>(
                                 value: view,
-                                label: Text(_favoritesViewLabel(view).tl),
+                                label: _favoritesViewLabel(view),
+                                icon: _favoritesViewIcon(view),
                               ),
                           ],
-                          selected: {_view},
-                          onSelectionChanged: (selection) {
-                            if (selection.isEmpty) return;
-                            unawaited(_setView(selection.first));
-                          },
+                          selected: _view,
+                          onSelected: (view) => unawaited(_setView(view)),
                         ),
                         const Spacer(),
                         if (_isRemoteView)

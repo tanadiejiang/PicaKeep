@@ -293,19 +293,28 @@ PixivComicBrief? _parseBriefItem(Map<String, dynamic> item) {
   );
 }
 
-/// 解析搜索结果：`body` 里同时有 `illust` 与 `manga` 两个子对象，各含 `data` 数组。
+/// 解析搜索结果。
 ///
-/// 关键决策：**两种作品类型都要合并，illust 在前**。Pixiv 会按内容把插画与漫画
-/// 分流到不同键，只读 `illust` 会漏掉漫画作品（用户视角里都是"一张一张的图"，
-/// 没有理由在搜索列表里丢掉一半结果）。
+/// ## 键名在 2026-09 变过（实测）
 ///
-/// 去重按 id 只保留**第一个**：同一作品可能同时出现在两个键下，
-/// 保留先出现的（illust 优先）以保证顺序稳定。
+/// - **当前形状**：`body.illustManga.data` —— 插画与漫画已被 Pixiv **合并**成一份
+///   列表（同时只有这一个键，`illust` / `manga` 都不再返回）；
+/// - **旧形状**：`body.illust.data` + `body.manga.data` 两段分开。
+///
+/// 两者都吃，且 `illustManga` 排在最前：只认旧键会让搜索结果**恒为空列表**
+/// ——而且是静默的（拿不到 `data` 只当"这页没结果"，不报错），
+/// 这种"HTTP 200 + 空列表"比报错难查得多。
+///
+/// 关键决策：**两种作品类型都要合并**。用户视角里插画与漫画都是"一张一张的图"，
+/// 没有理由在列表里丢掉一半结果。
+///
+/// 去重按 id 只保留**第一个**：同一作品可能同时出现在多个键下，
+/// 保留先出现的（`illustManga` 优先）以保证顺序稳定。
 List<PixivComicBrief> parsePixivSearchItems(Map<String, dynamic> body) {
   final result = <PixivComicBrief>[];
   final seenIds = <String>{};
-  // 顺序即优先级：illust 在前，manga 在后。
-  for (final key in const <String>['illust', 'manga']) {
+  // 顺序即优先级：新形状（已合并）在前，旧形状的两键在后。
+  for (final key in const <String>['illustManga', 'illust', 'manga']) {
     final data = _map(body[key])['data'];
     if (data is! List) continue;
     for (final item in data) {
@@ -342,18 +351,55 @@ List<PixivComicBrief> parsePixivBookmarkItems(Map<String, dynamic> body) {
   return result;
 }
 
-/// 从搜索结果里推断总页数；找不到返回 null。
+/// 解析首页推荐（`/ajax/illust/discovery`）。
 ///
-/// 搜索响应里页数字段在不同版本/灰度下位置会变（`illust.total`、`manga.total`、
-/// `illust.lastPage`、以及顶层同名键都出现过），因此这里做**防御式解析**：
-/// 逐个位置找候选、取其中最大值，全部找不到时返回 null —— 由调用方退回保守判停
-/// （例如"本页不足 N 条即停"）。
+/// 入参是 Ajax 响应里的 `body`：`{"illusts":[{…}, …]}` —— **直接是数组**，
+/// 不像搜索那样嵌在 `illustManga` / `illust` 之下，因此**不能**复用
+/// [parsePixivSearchItems]（那个要求再往下一层有 `data`，直接套会恒得空列表）。
 ///
-/// 约定：本函数**绝不抛异常**，结构完全变化时也只是返回 null。
+/// 条目字段与搜索项同构（`id` / `title` / `url` / `tags` / `userName` /
+/// `illustType` / `pageCount`），故复用 [_parseBriefItem]，取值口径与搜索一致；
+/// `tags` 实测是**纯字符串数组**（`["a","b"]`），[_parseBriefTags] 已兼容。
+///
+/// 坏条目（id 缺失或非数字）与重复 id 跳过，与其它列表解析同口径。
+/// 本函数绝不抛异常：`illusts` 不是数组（结构再变）时返回空列表，
+/// 由调用方按"这页没有内容"处理。
+List<PixivComicBrief> parsePixivDiscoveryItems(Map<String, dynamic> body) {
+  final illusts = body['illusts'];
+  if (illusts is! List) return const <PixivComicBrief>[];
+  final result = <PixivComicBrief>[];
+  final seenIds = <String>{};
+  for (final item in illusts) {
+    if (item is! Map) continue;
+    final brief = _parseBriefItem(_map(item));
+    if (brief == null) continue;
+    if (seenIds.add(brief.id)) result.add(brief);
+  }
+  return result;
+}
+
+/// 从搜索结果里推断**末页页码**；找不到返回 null。
+///
+/// 消费端契约：`subData` 放的是**末页页码**（见 `lib/comic_source/built_in/pixiv.dart`
+/// 的 `searchPageData` 注释），搜索页据此判停。
+///
+/// ## 为什么只认 `lastPage`
+///
+/// 页数字段在不同版本/灰度下位置会变，所以做**防御式解析**（在几个可能的位置找
+/// `lastPage`）；当前实测位置是 `body.illustManga.lastPage`（= 10）。
+///
+/// **`total` 绝不能当页数候选**：它是**总条数**（实测 `illustManga.total = 619617`）。
+/// 旧实现把 `total` 与 `lastPage` 放在一起"取最大值"，真取到就会把末页算成
+/// 61 万页、让用户永远翻不到底。当时之所以没暴露，只是因为调用方传错了层级
+/// （传的是整个响应而不是 `body`），任何键都取不到、恒返回 null —— 修层级时
+/// 必须同时修掉这个隐患，否则会把它从"不生效"变成"生效但错得离谱"。
+///
+/// 约定：本函数**绝不抛异常**，结构完全变化时也只是返回 null
+/// ——调用方退回保守判停（"本页不足 N 条即停"）。
 int? parsePixivSearchMaxPage(Map<String, dynamic> body) {
   int? best;
 
-  void consider(dynamic value) {
+  void considerPage(dynamic value) {
     final parsed = _int(value, -1);
     if (parsed <= 0) return;
     if (best == null || parsed > best!) best = parsed;
@@ -361,17 +407,15 @@ int? parsePixivSearchMaxPage(Map<String, dynamic> body) {
 
   void considerMap(dynamic node) {
     final map = _map(node);
-    // `lastPage` 语义上更接近"最后一页"，与 total 同时存在时取较大者更安全。
-    consider(map['lastPage']);
-    consider(map['total']);
+    considerPage(map['lastPage']);
+    // 部分结构把分页信息再包一层。
+    considerPage(_map(map['pagination'])['lastPage']);
   }
 
-  for (final key in const <String>['illust', 'manga']) {
+  // `illustManga` 是当前形状（合并列表），旧形状的 `illust` / `manga` 一并保留。
+  for (final key in const <String>['illustManga', 'illust', 'manga']) {
     considerMap(body[key]);
-    // 部分响应把字段再嵌一层（如 `{illust: {data: [...], total: N}}` 之外的结构）。
-    final nested = _map(body[key]);
-    considerMap(nested['page']);
-    considerMap(nested['pagination']);
+    considerMap(_map(body[key])['page']);
   }
   // 顶层同名键（防御结构变化）。
   considerMap(body);
@@ -566,3 +610,181 @@ const List<String> pixivCsrfCookieNames = <String>[
   '_csrf',
   'pixiv_csrf_token',
 ];
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  作者页（App 内）三步链路的解析
+//
+//  链路（端点依据 PixivFE v3.0.3 的 core/endpoints.go + core/user.go）：
+//  1. `GET /ajax/user/{uid}?full=1`            → 作者资料（本文件的 parsePixivAuthorInfo）
+//  2. `GET /ajax/user/{uid}/profile/all`       → 全部作品 id（parsePixivUserWorkIds）
+//  3. `GET /ajax/user/{uid}/profile/illusts?work_category=illustManga&is_first_page=0
+//     &lang=zh&ids[]=<id>…`                    → 这些 id 的作品详情（parsePixivUserWorks）
+//
+//  ⚠️ 第 3 步的 `ids[]`（复数、GET）**尚未真机验证**：它来自仍在维护的
+//  PixivFE 实现，而不是本项目真机实测。因此本文件的解析函数一律
+//  **收窄失败面**：形状不符时宁可抛/返回空并让网络层带上形状报错，
+//  也不要静默当成"没有作品"（诊断见 [describePixivJsonShape]）。
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// 把简介里的 `\r\n` / `\r` 统一成 `\n` 并折叠多余空行。
+///
+/// Pixiv 的 `comment` 是**纯文本**但换行符是 CRLF（实测样例带 `\r\n`）。
+/// 直接交给 `Text` 虽然不会报错，但行高会因残留 `\r` 出现异常，
+/// 且这里的折叠规则要与 [stripPixivHtml] 的收尾保持一致（同一份简介，
+/// 走纯文本分支与走 HTML 分支应当显示成同一个样子）。
+String _normalizePlainComment(String raw) {
+  if (raw.isEmpty) return '';
+  var text = raw.replaceAll('\r\n', '\n').replaceAll('\r', '\n');
+  text = text.replaceAll(RegExp(r'\n{3,}'), '\n\n');
+  return text.trim();
+}
+
+/// 解析作者资料：入参是 `/ajax/user/{uid}?full=1` 响应里的 `body` 对象。
+///
+/// 字段口径（已对齐样例响应）：
+/// - id：`userId`，回退 `id`；
+/// - 名：`name`，回退 `userName`；
+/// - 头像：`imageBig`（170px）优先，回退 `image`（50px）——
+///   作者页头像要显示 48~64dp，50px 会明显糊；
+/// - 简介：`comment`（纯文本）优先；为空才用 `commentHtml` 并清洗 HTML；
+/// - 关注数：`following`。
+///
+/// **唯一抛 [FormatException] 的情况**：id 与 name 同时缺失（这条响应不可能是
+/// 有效用户）；其余字段一律兜底。
+PixivAuthor parsePixivAuthorInfo(Map<String, dynamic> body) {
+  final id = _firstNonEmpty(<dynamic>[body['userId'], body['id']]);
+  final name = _firstNonEmpty(<dynamic>[body['name'], body['userName']]);
+  if (id.isEmpty && name.isEmpty) {
+    throw const FormatException('Pixiv user 响应缺少 userId 与 name');
+  }
+  final plainComment = _str(body['comment']);
+  return PixivAuthor(
+    id: id,
+    name: name,
+    avatar: _firstNonEmpty(<dynamic>[body['imageBig'], body['image']]),
+    comment: plainComment.isNotEmpty
+        ? _normalizePlainComment(plainComment)
+        : stripPixivHtml(_str(body['commentHtml'])),
+    following: _int(body['following']),
+  );
+}
+
+/// `profile/all` 里的 id 容器是不是我们认识的形状（诊断用）。
+///
+/// 认识两种：`{ "123": null }` 这样的 **Map**（当前真实形状），以及某些
+/// 版本/代理拍平后的 **List**。`null` 也算"认识"（该用户没有这一类作品）。
+/// 其它类型（字符串/数字/布尔）一律视为**形状变化**，由调用方如实报出来。
+bool isPixivWorkIdContainer(dynamic raw) =>
+    raw == null || raw is Map || raw is List;
+
+/// 解析「该用户的全部作品 id」：入参是 `/ajax/user/{uid}/profile/all` 的 `body`。
+///
+/// 形状：`body.illusts` 与 `body.manga` 都是 `{ "<id>": null, ... }` 的 **map**
+/// ——值恒为 null，**键才是数据**；因此取值走键遍历而不是值遍历（写成
+/// `for (final v in map.values)` 会永远拿不到 id）。
+///
+/// 三个决策：
+/// 1. **插画与漫画合并**：与 [parsePixivSearchItems] 的"两类都算作品"一致，
+///    用户视角里都是一张一张的图，没理由在作者页丢掉一半；
+/// 2. **按 id 数值倒序**输出，**不依赖 map 的键顺序**：JSON 对象顺序在接口版本
+///    间变过（老样例是新作在前，但没有契约保证），PixivFE 也是显式排序；
+/// 3. 只保留纯数字 id（坏键跳过），与项目"坏条目跳过而非塞空 id"的口径一致。
+List<String> parsePixivUserWorkIds(Map<String, dynamic> body) {
+  final ids = <String>{};
+
+  void collect(dynamic container) {
+    if (container is Map) {
+      for (final key in container.keys) {
+        final id = _idStr(key);
+        if (id.isNotEmpty && int.tryParse(id) != null) ids.add(id);
+      }
+    } else if (container is List) {
+      for (final item in container) {
+        // List 形态：可能是 id 数组，也可能是 `{id: ...}` 对象数组。
+        final bare = _idStr(item);
+        final fromMap = item is Map ? _idStr(_map(item)['id']) : '';
+        final id = bare.isNotEmpty ? bare : fromMap;
+        if (id.isNotEmpty && int.tryParse(id) != null) ids.add(id);
+      }
+    }
+  }
+
+  collect(body['illusts']);
+  collect(body['manga']);
+
+  final result = ids.toList();
+  result.sort((a, b) => _compareIdDesc(a, b));
+  return result;
+}
+
+/// 解析「按 id 批量取回的作品详情」：
+/// 入参是 `/ajax/user/{uid}/profile/illusts` 响应里的 `body` 对象。
+///
+/// 主形状：`body.works` 是 `{ "<id>": {作品对象}, ... }` 的 **map**（不是数组，
+/// 这点与搜索/书签的 `data`/`works` **数组**不同——写成数组遍历会一条都拿不到）。
+/// 兼容数组形态（个别版本/代理会拍平）；单项字段与搜索项同构，因此复用
+/// [_parseBriefItem]，不另写一套取值逻辑。
+///
+/// 坏条目（id 缺失或非数字）跳过，输出按 id 数值倒序 ——
+/// 让"第 N 页"的边界在服务端返回顺序变化时仍保持稳定。
+List<PixivComicBrief> parsePixivUserWorks(Map<String, dynamic> body) {
+  final works = body['works'];
+  final result = <PixivComicBrief>[];
+  final seenIds = <String>{};
+
+  void addItem(dynamic item) {
+    if (item is! Map) return;
+    final brief = _parseBriefItem(_map(item));
+    if (brief == null) return;
+    if (seenIds.add(brief.id)) result.add(brief);
+  }
+
+  if (works is Map) {
+    for (final value in works.values) {
+      addItem(value);
+    }
+  } else if (works is List) {
+    for (final item in works) {
+      addItem(item);
+    }
+  }
+
+  result.sort((a, b) => _compareIdDesc(a.id, b.id));
+  return result;
+}
+
+/// 纯数字 id 的**数值**倒序比较（非数字/超长串退回字符串比较，保证全序稳定）。
+///
+/// 不用字符串比较的原因：`"9" > "10"`，字符串序会把老作品排到前面。
+int _compareIdDesc(String a, String b) {
+  final left = int.tryParse(a);
+  final right = int.tryParse(b);
+  if (left != null && right != null) return right.compareTo(left);
+  return b.compareTo(a);
+}
+
+/// 描述一个 JSON 值**实际长什么样**：类型 + （Map/List 时）键名或长度。
+///
+/// 只用于**报错文案**，因而必须是纯函数、可单测、且绝不抛。
+/// 存在的理由：作者页三步链路里第 3 步未经真机验证，一旦"HTTP 200 但形状变了"，
+/// 日志里必须能直接看到"实际拿到的是什么"，否则只剩一句"加载失败"，
+/// 排查只能靠猜（见 07 号 Komiic 那次的教训）。
+String describePixivJsonShape(dynamic value, {int maxKeys = 10}) {
+  if (value == null) return 'null';
+  if (value is Map) {
+    final keys = value.keys.map((key) => key.toString()).toList();
+    final shown = keys.take(maxKeys).join(', ');
+    final suffix = keys.length > maxKeys ? ', …(+${keys.length - maxKeys})' : '';
+    return 'Map(键: $shown$suffix)';
+  }
+  if (value is List) {
+    final head = value.take(2).map(describePixivJsonShape).join(', ');
+    return 'List(长度 ${value.length}${value.isEmpty ? '' : '; 首项: $head'})';
+  }
+  if (value is String) {
+    final text = value.trim();
+    return 'String("${text.length <= 40 ? text : '${text.substring(0, 40)}…'}")';
+  }
+  return '${value.runtimeType}';
+}
+

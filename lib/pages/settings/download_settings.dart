@@ -13,10 +13,11 @@ Widget _buildDownloadSettings(double width) {
     ),
     const Divider(),
     const _FixDirectoryNamesTile(),
-    const Divider(),
+    // 这里原有一条 `const Divider()`：32 号给 `SettingsTitle` 统一加了主分割线
+    // （见 `settings_common_widgets.dart` 的 `SettingsSectionDivider`），
+    // 留着就会紧挨着出现两条线。删掉这一条，分区线由那套机制统一出。
     SettingsTitle('禁漫 (jm) 网络'.tl),
     const _JmApiDomainsTile(),
-    const Divider(),
     SettingsTitle('Pixiv'.tl),
     const _PixivDirNameTemplateTile(),
     const Divider(),
@@ -334,11 +335,20 @@ class _PixivDirNameTemplateTileState
 
 /// Pixiv **专属下载目录**（`settings[152]`）。
 ///
-/// 留空 = 与其它来源共用「本应用下载目录」（`settings[22]`）。
+/// ## 36 号起的默认位置
 ///
-/// ⚠️ 非空时它是一个**独立下载根**：读取侧会把它当成"本应用的第二个下载源"
-/// 参与列表扫描（见 `local_library_scan.dart` 的 Pixiv 源）。改这里**不会**
-/// 搬动已下载内容，所以弹窗里不出现下载转移选项。
+/// 留空**不再**表示"与其它来源共用「本应用下载目录」"，而是
+/// **`<数据目录>/download_pixiv`**（与 `download` 同级）——
+/// 真机反馈里 Pixiv 的目录/单图/zip 混在 `download` 里"裸露在外面"，
+/// 用户要求单独放。解析统一走 `effectivePixivDownloadRoot()`。
+///
+/// ⚠️ 它始终是一个**独立下载根**：读取侧会把它当成"本应用的另一个下载源"
+/// 参与列表扫描（见 `local_library_scan.dart` 的 Pixiv 源）。
+///
+/// ## 旧内容迁移
+///
+/// 改默认位置只影响**新**下载。36 号之前已经落进 `download` 的内容由本 tile
+/// 下方的迁移入口负责搬（`foundation/pixiv_download_migration.dart`）。
 class _PixivDownloadDirTile extends StatefulWidget {
   const _PixivDownloadDirTile();
 
@@ -347,6 +357,34 @@ class _PixivDownloadDirTile extends StatefulWidget {
 }
 
 class _PixivDownloadDirTileState extends State<_PixivDownloadDirTile> {
+  /// 旧根（`<数据目录>/download`）里还留着多少条 Pixiv 记录。
+  ///
+  /// 为 0 时**不显示**迁移入口 —— 一个常年存在的"迁移"按钮会让人以为
+  /// 总有什么要搬。
+  int _pendingLegacyEntries = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_detectLegacyEntries());
+  }
+
+  Future<void> _detectLegacyEntries() async {
+    final legacy = legacyPixivDownloadPath();
+    // 两者相同时没有"旧根"可言（用户把 Pixiv 目录显式设回了 download）。
+    if (legacy == effectivePixivDownloadRoot()) {
+      if (mounted && _pendingLegacyEntries != 0) {
+        setState(() => _pendingLegacyEntries = 0);
+      }
+      return;
+    }
+    final count = await countPixivEntriesInRoot(legacy);
+    if (!mounted) {
+      return;
+    }
+    setState(() => _pendingLegacyEntries = count);
+  }
+
   Future<String?> _pickFolder() async {
     try {
       return await FilePicker.platform.getDirectoryPath();
@@ -395,15 +433,16 @@ class _PixivDownloadDirTileState extends State<_PixivDownloadDirTile> {
       context: context,
       builder: (ctx) => _DirectoryPathDialog(
         title: '设置 Pixiv 专属下载目录'.tl,
-        hintText: '留空 = 跟随「本应用下载目录」'.tl,
+        hintText: '留空 = 用默认的 download_pixiv 目录'.tl,
         helperText:
             '提示：点按“浏览”调用系统目录选择；长按“浏览”打开内置文件夹浏览。'
                     '设置后该目录会被当作本应用的另一个下载根，参与已下载列表扫描。'
                 .tl,
         controller: controller,
         initialPath: appdata.settings[pixivDownloadDirSettingIndex],
-        // 只换扫描/落盘位置，不搬已下载内容（目录名已进 db，搬动会牵连记录），
-        // 因此不出现下载转移选项。
+        // 本弹窗只改**落盘位置**，不搬已下载内容 —— 内容搬迁走 tile 上那个
+        // 专门的迁移入口（`_migrateLegacyEntries`），它只搬 Pixiv 那几条，
+        // 而不是像「本应用下载目录」那样整目录转移。
         hasExistingDownloads: false,
         onBrowse: () async {
           final picked = await _pickFolder();
@@ -452,18 +491,194 @@ class _PixivDownloadDirTileState extends State<_PixivDownloadDirTile> {
 
   @override
   Widget build(BuildContext context) {
-    final path = appdata.settings[pixivDownloadDirSettingIndex].trim();
+    // 36 号起**恒有生效路径**（未设置时是默认的 `<数据目录>/download_pixiv`），
+    // 所以不再显示"未设置"——那会让用户以为 Pixiv 内容没有自己的目录。
     // trailing 只放短占位（与「原应用下载目录」tile 的 `未设置` 一致）：
     // 写长文案会把 trailing 撑满，标题被挤成两行（真机截图已暴露）。
-    // "留空 = 跟随本应用下载目录"的语义交给 subtitle 承载。
-    final display = path.isEmpty ? '未设置'.tl : path;
-    return buildResponsiveSettingTile(
-      leading: const Icon(Icons.folder_special_outlined),
-      title: Text('Pixiv 专属下载目录'.tl),
-      subtitle: Text('留空则与其它来源共用「本应用下载目录」'.tl),
-      trailingWidth: 220,
-      onTap: _showBrowseDialog,
-      trailing: _buildPathDisplay(context, display),
+    final display = effectivePixivDownloadRoot();
+    final useDefault = pixivDownloadRootIsDefault();
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: <Widget>[
+        buildResponsiveSettingTile(
+          leading: const Icon(Icons.folder_special_outlined),
+          title: Text('Pixiv 专属下载目录'.tl),
+          subtitle: Text(
+            useDefault
+                ? '默认与「本应用下载目录」同级，单独存放 Pixiv 内容'.tl
+                : '已自定义：Pixiv 的下载都落到这个独立目录'.tl,
+          ),
+          trailingWidth: 220,
+          onTap: _showBrowseDialog,
+          trailing: _buildPathDisplay(context, display),
+        ),
+        if (_pendingLegacyEntries > 0)
+          ListTile(
+            leading: const Icon(Icons.drive_file_move_outline),
+            title: Text('把旧的 Pixiv 下载搬过来'.tl),
+            subtitle: Text(
+              '检测到 $_pendingLegacyEntries 项仍留在「本应用下载目录」里'.tl,
+            ),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: _migrateLegacyEntries,
+          ),
+      ],
+    );
+  }
+
+  /// 把旧根里的 Pixiv 内容搬到当前生效的 Pixiv 根。
+  ///
+  /// 先确认再执行：这是**数据搬迁**，不能让用户在没被告知的情况下触发。
+  /// 进度与结果都在对话框里（[_PixivMigrationDialog]），完成后重扫本地库，
+  /// 让"已下载 / 资源库"立刻反映新位置。
+  Future<void> _migrateLegacyEntries() async {
+    final from = legacyPixivDownloadPath();
+    final to = effectivePixivDownloadRoot();
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('迁移 Pixiv 下载内容'.tl),
+        content: Text(
+          '把「本应用下载目录」里的 $_pendingLegacyEntries 项 Pixiv 内容'
+          '移动到：\n$to\n\n'
+          '· 只移动 Pixiv 的内容，其它来源原样不动；\n'
+          '· 目标已存在同名条目会跳过，不会覆盖；\n'
+          '· 移动失败的内容留在原处，不会丢失。'
+              .tl,
+        ),
+        actions: <Widget>[
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: Text('取消'.tl),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: Text('开始迁移'.tl),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) {
+      return;
+    }
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => _PixivMigrationDialog(from: from, to: to),
+    );
+    if (!mounted) {
+      return;
+    }
+    await _detectLegacyEntries();
+    if (!mounted) {
+      return;
+    }
+    await _runRescanLocalComics(context);
+  }
+}
+
+/// 迁移进度 / 结果对话框。
+///
+/// 迁移本身在 [initState] 里启动（不是按钮回调），这样对话框一出现就开始干活，
+/// 进度回调只需要 `setState`。完成后再挂一个「完成」按钮 ——
+/// 结果必须让用户看到：搬了几条、跳过几条、哪些失败。
+class _PixivMigrationDialog extends StatefulWidget {
+  const _PixivMigrationDialog({required this.from, required this.to});
+
+  final String from;
+  final String to;
+
+  @override
+  State<_PixivMigrationDialog> createState() => _PixivMigrationDialogState();
+}
+
+class _PixivMigrationDialogState extends State<_PixivMigrationDialog> {
+  int _current = 0;
+  int _total = 0;
+  String _label = '';
+  PixivMigrationResult? _result;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_run());
+  }
+
+  Future<void> _run() async {
+    final result = await migratePixivDownloadEntries(
+      fromRoot: widget.from,
+      toRoot: widget.to,
+      onProgress: (current, total, label) {
+        if (!mounted) {
+          return;
+        }
+        setState(() {
+          _current = current;
+          _total = total;
+          _label = label;
+        });
+      },
+    );
+    if (!mounted) {
+      return;
+    }
+    setState(() => _result = result);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final result = _result;
+    if (result == null) {
+      return AlertDialog(
+        title: Text('正在迁移 Pixiv 下载'.tl),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            LinearProgressIndicator(
+              value: _total <= 0 ? null : _current / _total,
+            ),
+            const SizedBox(height: 12),
+            Text('$_current / $_total'),
+            if (_label.isNotEmpty) ...<Widget>[
+              const SizedBox(height: 6),
+              Text(
+                _label,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ],
+          ],
+        ),
+      );
+    }
+    final failures = result.failures;
+    return AlertDialog(
+      title: Text('迁移完成'.tl),
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            Text('已移动 ${result.movedEntries} 项，跳过 ${result.skippedEntries} 项'.tl),
+            if (failures.isNotEmpty) ...<Widget>[
+              const SizedBox(height: 12),
+              Text('${failures.length} 项失败：'.tl),
+              for (final failure in failures.take(8))
+                Text('· $failure', style: Theme.of(context).textTheme.bodySmall),
+              if (failures.length > 8)
+                Text('· …', style: Theme.of(context).textTheme.bodySmall),
+            ],
+          ],
+        ),
+      ),
+      actions: <Widget>[
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: Text('完成'.tl),
+        ),
+      ],
     );
   }
 }

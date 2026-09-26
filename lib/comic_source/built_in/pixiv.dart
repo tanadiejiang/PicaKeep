@@ -6,6 +6,7 @@ import 'package:picakeep/foundation/widget_utils.dart' show ContextExt;
 import 'package:picakeep/network/base_comic.dart';
 import 'package:picakeep/network/pixiv_network/pixiv_network.dart';
 import 'package:picakeep/network/res.dart';
+import 'package:picakeep/pages/online_comic/pixiv_author_page_v2.dart';
 import 'package:picakeep/pages/online_comic/pixiv_comic_page_v2.dart';
 import 'package:picakeep/pages/online_comic/pixiv_login_page.dart';
 
@@ -154,4 +155,17 @@ final ComicSource pixiv = ComicSource.named(
   // ── ID 直跳（纯数字 / pixiv前缀）──────────────────────────────────────────
   // 前缀剥离由搜索页统一处理（见 online_search_page.dart 的 _stripIdPrefix）。
   idMatcher: RegExp(r'^(?:pixiv)?\d+$', caseSensitive: false),
+
+  // ── 作者页直跳（把输入当作作者 uid）───────────────────────────────────────
+  // 用户输入的纯数字在他看来**就是 uid**，所以这里直接把 id 交给作者页，
+  // **不做**"从作品 id 反查作者"（那要查详情、多一次网络请求，用户明确排除）。
+  //
+  // 为什么入参要再清洗一次：搜索页虽然已经先剥过一次前缀（`_stripIdPrefix`）
+  // 再把 cleanId 传进来，但钩子不能假设调用方一定清洗过。这里复用 foundation 的
+  // extractPixivNumericId —— 本文件收藏区（addOrDelFavorite / loadComicInfo）在用的
+  // 同一个函数，覆盖 `pixiv41678351` 这类前缀形态；非数字时它返回 null，
+  // 此时按 `''` 处理，由作者页自己报"uid 无效"（不在源层编造一个能打开的页面）。
+  authorPageBuilder: (comic) => PixivAuthorPageV2(
+    source_id_rules.extractPixivNumericId(comic.id) ?? '',
+  ),
 );

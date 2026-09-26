@@ -6,7 +6,8 @@ extension LocalLibrarySettings on LocalLibraryManager {
     return path.isEmpty ? null : path;
   }
 
-  /// Pixiv 专属下载目录（`settings[152]`）；未设置时返回 `null`。
+  /// Pixiv 专属下载目录；36 号起**恒有值**（未设置时是默认的
+  /// `<数据目录>/download_pixiv`）。
   ///
   /// 它与 [configuredOriginalDownloadPath] **对称**：都是一个"额外的下载根"，
   /// 各自成为一个 `LocalLibrarySourceKind.currentDownload` 源，
@@ -14,9 +15,10 @@ extension LocalLibrarySettings on LocalLibraryManager {
   ///
   /// ⚠️ 这是读取侧的一半；写入侧在 `online_download_manager._runPixivTask`
   /// （按同一个设置决定 Pixiv 的落盘根）。两边少接任一处，症状都是
-  /// **"下载成功、但列表里看不到"**。
+  /// **"下载成功、但列表里看不到"**。两边都走
+  /// `effectivePixivDownloadRoot()`，不要各自读 `settings[152]`。
   String? get configuredPixivDownloadPath {
-    final path = appdata.settings[pixivDownloadDirSettingIndex].trim();
+    final path = effectivePixivDownloadRoot().trim();
     return path.isEmpty ? null : path;
   }
 

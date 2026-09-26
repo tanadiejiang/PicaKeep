@@ -22,7 +22,7 @@ publish_to: 'none'
 #
 # 本轮曾因误用 split 装出 4002，为覆盖它把基准临时抬到 4003；现已卸载重装，
 # 基准回到 1 重新开始。
-version: 1.9.86+3
+version: 1.9.87+4
 
 environment:
   sdk: '>=3.3.0'
@@ -46,6 +46,16 @@ dependencies:
   intl: any
   flutter_displaymode: 0.6.0
   flutter_reorderable_grid_view: 5.0.1
+  # 瀑布流（图集页「插画」视图用）。选它的理由（24 号计划步骤 1 决策 1）：
+  # 只有它提供**真正的 sliver** 瀑布流（`SliverMasonryGrid.count`），因此仍支持
+  # 懒加载 + 与既有 CustomScrollView 拼接。被否决的方案：
+  # B) 已声明未用的 `sliver_tools` —— 只提供 sliver 组合能力，**不含变高布局算法**，
+  #    用它仍要自己写分配算法，等于白加一个未经本项目检验的依赖；
+  # C) 纯手写多列 Column —— **无法懒加载**，整列表 widget 与图片一次性构建；
+  #    Pixiv 下载条目可达数百条、每项一张大图，配合 BaseImageProvider 的
+  #    50 MB FIFO 字节缓存（foundation/image_loader/base_image_provider.dart:99）
+  #    内存风险不可接受。
+  flutter_staggered_grid_view: ^0.7.0
   sqlite3: 2.1.0
   sqlite3_flutter_libs: ^0.5.24
   sliver_tools: ^0.2.12

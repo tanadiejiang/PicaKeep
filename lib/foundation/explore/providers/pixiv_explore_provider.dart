@@ -1,8 +1,9 @@
 /// Pixiv 探索适配器（第十八轮新增）。
 ///
 /// 提供三个入口：
-/// - **推荐**：Pixiv 首页插画推荐（`/ajax/illust/recommended-nologin` 走游客版，
-///   未登录也能看）；
+/// - **推荐**：Pixiv 首页插画推荐（`/ajax/illust/discovery?mode=all`，游客版，
+///   未登录也能看）。原先走的 `/ajax/illust/recommended-nologin` **已被 Pixiv
+///   下线（404）**，端点变更经过与实测结论见 `PixivNetwork.getRecommended`；
 /// - **我的收藏**：当前账号的书签列表（`/ajax/user/{uid}/illusts/bookmarks`），
 ///   **必须登录**才有 `userId`；
 /// - **排行榜**：`ranking.php?format=json`，多档榜期。
@@ -33,8 +34,11 @@ class PixivExploreEntries {
 
 /// 排行榜选项。`id` 直接进 `ranking.php` 的 `mode` 参数。
 ///
-/// 不含 `*_r18` 档（需登录且高风险），也不含 `content` 维度——首版固定
-/// `content=illust`，把"插画/漫画"的细分留给后续按需扩展。
+/// 不含 `*_r18` 档（需登录且高风险），也不含 `content` 维度——`content` 由网络层
+/// 按榜期自动推导（见 `PixivNetwork.rankingContentForMode`）：**原创 / 男性向 /
+/// 女性向这三档只有"综合榜"**（`content=all`，含漫画），带 `content=illust`
+/// 会直接 404；其余四档才用 `content=illust`。因此这里只声明榜期，
+/// 不让"选了某档必然失败"这种组合从这一层漏出去。
 const List<ExploreOption> pixivRankingOptions = <ExploreOption>[
   ExploreOption(id: 'daily', label: '今日'),
   ExploreOption(id: 'weekly', label: '本周'),
@@ -135,7 +139,7 @@ class PixivExploreProvider implements ExploreProvider {
             : List<BaseComic>.from(recommendedRes.data),
         error:
             recommendedRes.error ? exploreErrorFromRes(recommendedRes) : null,
-        // 推荐是单页内容块，不建立续页（首页推荐接口的游标语义不稳定）。
+        // 推荐是单页内容块，不建立续页（该接口固定 10 条且无游标）。
         isSinglePage: true,
         moreEntryId: null,
       ),
@@ -198,8 +202,10 @@ class PixivExploreProvider implements ExploreProvider {
       sourceKey: 'pixiv',
       entryId: request.entryId,
       items: List<BaseComic>.from(res.data),
-      // 推荐不建续页：该接口没有可靠的页码/游标契约，
-      // 伪造分页会让用户以为"还有更多"却永远翻不到新内容。
+      // 推荐不建续页：`illust/discovery` 固定返回 10 条，响应里既没有游标也没有
+      // 总数（`p`/`page`/`offset`/`limit` 传了都被忽略），伪造分页只会让用户
+      // 以为"还有更多"却永远翻不到新内容。要换一批内容用"重新加载"
+      // ——该接口每次返回的 10 条并不相同。
       nextToken: null,
     ));
   }

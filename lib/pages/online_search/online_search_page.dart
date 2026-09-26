@@ -313,11 +313,13 @@ class _SearchBarSection extends StatelessWidget {
                   spacing: 8,
                   runSpacing: 4,
                   children: [
-                    for (final m in matches)
+                    for (final m in matches) ...[
                       ActionChip(
                         avatar: const Icon(Icons.open_in_new, size: 16),
                         label: Text('打开漫画: ${m.source.name}  ${m.cleanId}'),
                         onPressed: () {
+                          // 与作者页入口共用同一个轻量适配器：两个入口消费的
+                          // 是同一份输入（ID 直跳区的 cleanId）。
                           final page = m.source.comicPageBuilder!(
                             _IdBaseComic(m.cleanId),
                           );
@@ -325,6 +327,30 @@ class _SearchBarSection extends StatelessWidget {
                               .push(AppPageRoute(builder: (_) => page));
                         },
                       ),
+                      // 「打开作者页」是对「打开漫画」的**增量**：只在源声明了
+                      // authorPageBuilder 时追加，其它源（jm / nhentai / komiic /
+                      // picacg / ehentai）的 chip 数量与显示条件完全不变。
+                      //
+                      // 为什么两个入口并排而不是二选一：纯数字无法区分"作品 id"
+                      // 与"作者 uid"（Pixiv 两者都是数字），任何启发式猜测都必然
+                      // 误判，所以把选择权交给用户——与"四个源并排"同一形态。
+                      if (m.source.authorPageBuilder != null)
+                        ActionChip(
+                          // 图标与「打开漫画」区分开：那是"打开作品"，
+                          // 这是"打开作者主页"，配上"人形"图标减少误点。
+                          avatar: const Icon(Icons.person_outline, size: 16),
+                          label: Text(
+                            '打开作者页: ${m.source.name}  ${m.cleanId}',
+                          ),
+                          onPressed: () {
+                            final page = m.source.authorPageBuilder!(
+                              _IdBaseComic(m.cleanId),
+                            );
+                            Navigator.of(context)
+                                .push(AppPageRoute(builder: (_) => page));
+                          },
+                        ),
+                    ],
                   ],
                 ),
               );
@@ -569,8 +595,10 @@ class _NoLoggedInSourceView extends StatelessWidget {
 //  _IdBaseComic — idMatcher 直跳用的轻量 BaseComic 适配器
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// 仅用于 idMatcher 命中后通过 [ComicSource.comicPageBuilder] 跳转详情页，
-/// comicPageBuilder 只读 [id]，其余字段填空即可。
+/// 仅用于 idMatcher 命中后的两个直跳入口
+/// （[ComicSource.comicPageBuilder] 与 [ComicSource.authorPageBuilder]）：
+/// 两个构造器都只读 [id]，其余字段填空即可 ——
+/// 这也正是"两个入口消费同一份输入"的体现。
 class _IdBaseComic extends BaseComic {
   const _IdBaseComic(this.id);
 

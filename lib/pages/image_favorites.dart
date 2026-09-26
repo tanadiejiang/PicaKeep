@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:picakeep/base.dart';
 import 'package:picakeep/components/layout.dart';
+import 'package:picakeep/components/library_view_selector.dart';
 import 'package:picakeep/foundation/app.dart';
 import 'package:picakeep/foundation/app_runtime_mode.dart';
 import 'package:picakeep/foundation/image_favorites.dart';
@@ -23,6 +24,17 @@ String _imageFavoritesViewLabel(_ImageFavoritesView view) {
       return '本地';
     case _ImageFavoritesView.remote:
       return '远程';
+  }
+}
+
+/// 档位图标（36 号）：与图集页 / 已下载页**逐字相同**的视觉语言
+/// （文件夹=本地、云=远程；这两页没有"聚合"档）。
+IconData _imageFavoritesViewIcon(_ImageFavoritesView view) {
+  switch (view) {
+    case _ImageFavoritesView.local:
+      return Icons.folder_outlined;
+    case _ImageFavoritesView.remote:
+      return Icons.cloud_outlined;
   }
 }
 
@@ -169,38 +181,31 @@ class _ImageFavoritesPageState extends State<ImageFavoritesPage> {
           appBar: AppBar(
             title: Text('图片收藏'.tl),
             actions: [
+              // 36 号：档位从 AppBar 底部那行 `SegmentedButton` 挪到这里，
+              // 改用与图集页同一套的圆角面板选择器。
+              //
+              // 这两档**不做置灰**：本页原本就是"切过去再报错"的模型
+              // （切到远程时探测可用性，失败显示 `_remoteError`），
+              // 加置灰要新引入一份可用性状态，超出"统一样式"的范围。
+              LibraryViewSelectorAction<_ImageFavoritesView>(
+                title: '图片收藏 · 档位',
+                entries: <LibraryViewSelectorEntry<_ImageFavoritesView>>[
+                  for (final view in _ImageFavoritesView.values)
+                    LibraryViewSelectorEntry<_ImageFavoritesView>(
+                      value: view,
+                      label: _imageFavoritesViewLabel(view),
+                      icon: _imageFavoritesViewIcon(view),
+                    ),
+                ],
+                selected: _view,
+                onSelected: (view) => unawaited(_setView(view)),
+              ),
               if (useRemote)
                 IconButton(
                   onPressed: _loadRemoteImages,
                   icon: const Icon(Icons.refresh),
                 ),
             ],
-            bottom: PreferredSize(
-              preferredSize: const Size.fromHeight(52),
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
-                child: Align(
-                  alignment: Alignment.centerLeft,
-                  child: SegmentedButton<_ImageFavoritesView>(
-                    showSelectedIcon: false,
-                    segments: [
-                      for (final view in _ImageFavoritesView.values)
-                        ButtonSegment<_ImageFavoritesView>(
-                          value: view,
-                          label: Text(_imageFavoritesViewLabel(view).tl),
-                        ),
-                    ],
-                    selected: {_view},
-                    onSelectionChanged: (selection) {
-                      if (selection.isEmpty) {
-                        return;
-                      }
-                      unawaited(_setView(selection.first));
-                    },
-                  ),
-                ),
-              ),
-            ),
           ),
           body: _loadingRemote && useRemote
               ? const Center(child: CircularProgressIndicator())
