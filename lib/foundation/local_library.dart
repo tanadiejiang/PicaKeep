@@ -12,6 +12,7 @@ import 'package:picakeep/foundation/privileged_storage_access.dart';
 import 'package:picakeep/pages/reader/comic_reading_page.dart';
 
 import '../base.dart';
+import 'app.dart';
 import 'archive/archive_episode_builder.dart';
 import 'archive/archive_image_provider.dart';
 import 'archive/archive_models.dart';
@@ -19,11 +20,17 @@ import 'archive/archive_password_store.dart';
 import 'archive/archive_reading_service.dart';
 import 'download_model.dart';
 import 'download_author_resolver.dart';
+import 'download_snapshot_reader.dart';
+import 'cover_thumbnail_cache.dart';
+import 'local_cover_cache.dart';
 import 'local_data_source.dart';
 import 'local_favorites.dart';
 import 'local_library_settings.dart';
 import 'local_trash_store.dart';
+import 'log.dart';
 import 'pixiv_download_root.dart';
+import 'pixiv_library.dart';
+import 'pixiv_library_locations.dart';
 
 part 'local_library_manager_settings.dart';
 part 'local_library_query.dart';
@@ -407,9 +414,7 @@ class LocalLibraryComicItem extends DownloadedItem {
     _localCoverPath = null;
   }
 
-  bool get isManagedDownloadItem =>
-      itemId.startsWith('local_download::current_download::') ||
-      itemId.startsWith('local_download::original_download::');
+  bool get isManagedDownloadItem => itemId.startsWith('local_download::');
 
   @override
   Map<String, dynamic> toJson() => {
@@ -695,7 +700,12 @@ class LocalLibraryManager {
 
   bool _loaded = false;
   Future<void>? _refreshTask;
+  int _databaseSnapshotSequence = 0;
+  final Map<String, Future<String?>> _coverResolutions = {};
   Future<List<LocalLibraryComicItem>>? _managedDownloadsLoadTask;
+  List<LocalLibraryComicItem>? _managedDownloadsSnapshot;
+  String? _managedDownloadsVersion;
+  int _managedDownloadsGeneration = 0;
   final List<LocalLibraryComicItem> _items = [];
   final List<LocalLibraryStorageEntry> _storageEntries = [];
   final Map<String, LocalLibraryComicItem> _idIndex = {};
@@ -852,6 +862,34 @@ class LocalLibraryManager {
     );
   }
 
+  /// 清掉**所有源**的"无封面"标记，返回清理了几个源（43 号续）。
+  ///
+  /// ## 为什么必须接这一步
+  ///
+  /// `noCoverSentinel` 是一次性判定：一旦落下，
+  /// `_ensureManagedDownloadCoverCache`（`local_library.dart:992`）与
+  /// `resolveCoverPathForItem`（`:1249`）都会**直接短路**、**永不再探测**。
+  ///
+  /// 这在"封面文件后来才出现"的场景下就是错的，而真机上恰好发生了：
+  /// **Pixiv 内容归位到专属目录后**，`cover.jpg` 明明就在包里
+  ///（`zip` 里第一个条目），列表却永远是占位图标 —— 因为归位**之前**
+  /// 那次扫描已经给它打了标记。
+  ///
+  /// `_LocalLibrarySourceCache.clearNoCoverSentinels`（`:200`）本来就是为这件事
+  /// 写的（注释原文："用于用户主动刷新/重扫——可能手动添加了封面文件"），
+  /// **但此前全项目没有任何调用方**，是死代码。现在由 [_refreshInternal] 调用。
+  Future<int> clearAllNoCoverSentinels() async {
+    var cleared = 0;
+    for (final source in await _buildSources()) {
+      final cache = await _loadSourceCache(source);
+      if (cache.clearNoCoverSentinels()) {
+        await cache.save();
+        cleared++;
+      }
+    }
+    return cleared;
+  }
+
   Future<_LocalLibrarySourceCache> _loadSourceCache(
     LocalLibrarySource source,
   ) async {
@@ -895,7 +933,8 @@ class LocalLibraryManager {
     final root = await _localCacheRoot();
     final dbDir = Directory(_joinPath(root.path, 'db'));
     await dbDir.create(recursive: true);
-    final file = File(_joinPath(dbDir.path, '${_safeCacheName(source.id)}.db'));
+    final file = File(_joinPath(dbDir.path,
+        '${_safeCacheName(source.id)}_${_databaseSnapshotSequence++}.db'));
     await file.writeAsBytes(dbBytes, flush: true);
     return file;
   }
@@ -986,39 +1025,69 @@ class LocalLibraryManager {
     LocalLibraryComicItem item,
     String? existingCachePath,
   ) async {
-    final normalizedExisting = existingCachePath?.trim() ?? '';
-    // 已持久化"无封面"标记：跳过全部 root 探测，直接返回 null（调用方渲染占位）。
-    if (normalizedExisting == noCoverSentinel) {
+    final entryKey = _coverCacheEntryKey(item);
+    final sourceFile = File(item.fileSystemPath!);
+    var sourceFingerprint = '${sourceFile.path}|0|0';
+    try {
+      final stamp = await sourceFile.stat();
+      sourceFingerprint =
+          '${sourceFile.path}|${stamp.size}|${stamp.modified.millisecondsSinceEpoch}';
+    } catch (_) {
+      // An unprivileged stat failure must not bypass root/Shizuku resolution.
+    }
+    if (await LocalCoverCache.isKnownMissing(entryKey,
+        fingerprint: sourceFingerprint)) {
       return null;
     }
-    if (await _hasUsableManagedCoverCache(item, normalizedExisting)) {
-      return normalizedExisting;
+    final known =
+        await LocalCoverCache.lookup(entryKey, fingerprint: sourceFingerprint);
+    if (known != null &&
+        _isUnifiedLocalCoverPath(known) &&
+        await _hasUsableManagedCoverCache(item, known)) {
+      return known;
     }
     final sourcePath = await _resolveManagedDownloadSourceCoverPath(item);
     if (sourcePath == null || sourcePath.isEmpty) {
-      // 源目录没有任何可用封面，持久化标记避免下次进页面再走 root 通道。
+      // 源侧确实没有封面：记**短期**负缓存（不再是永久否定）。
       await _persistManagedDownloadCoverCachePath(item, noCoverSentinel);
+      await LocalCoverCache.markMissing(entryKey,
+          fingerprint: sourceFingerprint);
       return null;
     }
     final bytes = await _readFileBytes(sourcePath);
     if (bytes == null || bytes.isEmpty) {
+      // 读取失败通常是**暂时**的（权限/占用/特权通道瞬时故障），
+      // 同样只记短期负缓存。
       await _persistManagedDownloadCoverCachePath(item, noCoverSentinel);
+      await LocalCoverCache.markMissing(entryKey,
+          fingerprint: sourceFingerprint);
       return null;
     }
-    final target = await _managedDownloadCoverCacheFile(item, sourcePath);
-    try {
-      await target.parent.create(recursive: true);
-      final temp = File('${target.path}.part');
-      await temp.writeAsBytes(bytes, flush: true);
-      if (await target.exists()) {
-        await target.delete();
-      }
-      await temp.rename(target.path);
-      await _persistManagedDownloadCoverCachePath(item, target.path);
-      return target.path;
-    } catch (_) {
+    // plan/12：字节落进**统一封面缓存**（`App.dataPath/local_library_cache/covers`），
+    // 由 `LocalCoverCache` 负责原子写入、指纹、索引与负缓存清理。
+    final stored = await LocalCoverCache.storeBytes(
+      entryKey: entryKey,
+      bytes: bytes,
+      fingerprint: sourceFingerprint,
+      extension: _coverCacheExtensionForPath(sourcePath),
+    );
+    if (stored == null || stored.isEmpty) {
       return null;
     }
+    await _persistManagedDownloadCoverCachePath(item, stored);
+    return stored;
+  }
+
+  bool _isUnifiedLocalCoverPath(String path) {
+    final normalized = path.trim().replaceAll('\\', '/').toLowerCase();
+    if (normalized.isEmpty || normalized == noCoverSentinel) {
+      return false;
+    }
+    final root = LocalCoverCache.rootDirectory()
+        .path
+        .replaceAll('\\', '/')
+        .toLowerCase();
+    return normalized == root || normalized.startsWith('$root/');
   }
 
   Future<bool> _hasUsableManagedCoverCache(
@@ -1029,17 +1098,34 @@ class LocalLibraryManager {
     if (normalized.isEmpty || !await _fileExists(normalized)) {
       return false;
     }
-    return _isManagedDownloadCoverCachePath(normalized);
+    // plan/12：不再要求"必须在 managed_download_covers 目录下"。
+    //
+    // 封面缓存已统一到 `App.dataPath/local_library_cache/covers`
+    //（`LocalCoverCache`），而**旧缓存仍在 `managed_download_covers`**、
+    // 压缩包解出的封面也归统一根 —— 用"目录前缀"当判据会把后两者全部判成
+    // "不可用"，于是每次进页面都重解一遍封面（甚至反复覆盖）。判据回归本质：
+    // **文件在、且非空**，就是可用缓存。
+    return true;
   }
 
-  Future<bool> _isManagedDownloadCoverCachePath(String path) async {
-    final root = await _localCacheRoot();
-    final managedCoverRoot = _joinPath(root.path, 'managed_download_covers')
-        .replaceAll('\\', '/')
-        .toLowerCase();
-    final normalizedPath = path.replaceAll('\\', '/').toLowerCase();
-    return normalizedPath.startsWith(managedCoverRoot);
+  /// 一条本地条目在统一封面缓存里的键（plan/12）。
+  ///
+  /// 三段式（来源 + 原始 id + 源路径）而不是裸 id：同一个作品 id 可能同时
+  /// 出现在多个下载根，用裸 id 会让两边的封面互相覆盖。
+  String _coverCacheEntryKey(LocalLibraryComicItem item) {
+    return LocalCoverCache.entryKeyFor(
+      sourceId: _managedDownloadSourceIdForItem(item) ?? 'unknown',
+      originalId: item.originalId,
+      sourceRelative: item.fileSystemPath ?? '',
+    );
   }
+
+  // plan/12：原 `_isManagedDownloadCoverCachePath` 已删除。
+  //
+  // 它用"路径前缀是否在 managed_download_covers 下"判断缓存是否可用 ——
+  // 封面缓存统一到 `App.dataPath/local_library_cache/covers` 之后这个判据
+  // 必然为假，会把**所有**缓存判成不可用（于是每次进页面重解一遍）。
+  // 判据已回归本质：文件在且非空即可用（见 `_hasUsableManagedCoverCache`）。
 
   Future<void> _persistManagedDownloadCoverCachePath(
     LocalLibraryComicItem item,
@@ -1082,7 +1168,7 @@ class LocalLibraryManager {
       return null;
     }
     final remaining = id.substring(prefix.length);
-    final separatorIndex = remaining.indexOf('::');
+    final separatorIndex = remaining.lastIndexOf('::');
     if (separatorIndex <= 0) {
       return null;
     }
@@ -1140,32 +1226,11 @@ class LocalLibraryManager {
     return files.first;
   }
 
-  Future<File> _managedDownloadCoverCacheFile(
-    LocalLibraryComicItem item,
-    String sourcePath,
-  ) async {
-    final root = await _localCacheRoot();
-    final coverDir = Directory(_joinPath(root.path, 'managed_download_covers'));
-    final extension = _coverCacheExtensionForPath(sourcePath);
-    final dirPath = item.fileSystemPath ?? '';
-    final key = _managedDownloadCoverCacheKey(item.originalId, dirPath);
-    return File(_joinPath(coverDir.path, '$key$extension'));
-  }
-
-  String _managedDownloadCoverCacheKey(String rawId, String directoryPath) {
-    final composite =
-        _LocalLibrarySourceCache._cacheItemKey(rawId, directoryPath);
-    return _stableHash('v${_LocalLibrarySourceCache.version}::$composite');
-  }
-
-  String _stableHash(String input) {
-    var hash = 1469598103934665603;
-    for (final unit in utf8.encode(input)) {
-      hash ^= unit;
-      hash = (hash * 1099511628211) & 0x7fffffffffffffff;
-    }
-    return hash.toRadixString(16);
-  }
+  // plan/12：原 `_managedDownloadCoverCacheFile` / `_managedDownloadCoverCacheKey`
+  // / `_stableHash` 已删除 —— 缓存文件的命名与原子写入统一由 `LocalCoverCache`
+  // 负责（它用三段式条目键 + 稳定哈希，且扩展名只允许已知图片格式）。
+  // 这里保留 `_coverCacheExtensionForPath`：调用方要把来源扩展名**告诉**
+  // `LocalCoverCache.storeBytes`，避免它退化成 `.img`。
 
   String _coverCacheExtensionForPath(String path) {
     final lower = _basename(path).toLowerCase();
@@ -1190,10 +1255,10 @@ class LocalLibraryManager {
       return null;
     }
     final cached = item.localCoverPath?.trim();
-    if (cached == noCoverSentinel) {
-      return null;
-    }
-    if (cached != null && cached.isNotEmpty) {
+    if (!item.isManagedDownloadItem &&
+        cached != null &&
+        cached.isNotEmpty &&
+        cached != noCoverSentinel) {
       return imageProviderForLocalPath(cached);
     }
     return StreamImageProvider(
@@ -1205,8 +1270,29 @@ class LocalLibraryManager {
         final bytes = await _readFileBytes(resolved);
         return Stream<List<int>>.value(bytes ?? const <int>[]);
       },
-      'local_cover::${item.id}',
+      'local_cover::${item.id}::${LocalCoverCache.fingerprintFor(File(item.fileSystemPath!))}',
     );
+  }
+
+  /// Called only by the page's bounded idle queue, never by an item builder.
+  Future<ImageProvider<Object>?> prepareIllustCover(
+      LocalLibraryComicItem item, int width,
+      {required bool Function() canContinue}) async {
+    if (!canContinue()) return null;
+    final cover = await resolveCoverPathForItem(item);
+    if (cover == null || !canContinue()) return null;
+    if (_isUnifiedLocalCoverPath(cover)) {
+      final prepared = await CoverThumbnailCache.prepareDisplay(cover, width,
+          canContinue: canContinue);
+      if (!canContinue()) return null;
+      // FileImage uses a file-backed ImmutableBuffer and no Dart raw-byte cache.
+      return FileImage(File(prepared ?? cover));
+    }
+    return _PreparedLocalCoverProvider(() async {
+      if (!canContinue()) return Stream<List<int>>.value(const []);
+      final bytes = await _readFileBytes(cover);
+      return Stream<List<int>>.value(bytes ?? const []);
+    }, 'prepared-local::$cover::${item.sourceRowTimeMillis}');
   }
 
   ImageProvider<Object> imageProviderForLocalPath(String path) {
@@ -1236,6 +1322,21 @@ class LocalLibraryManager {
   }
 
   Future<String?> resolveCoverPathForItem(LocalLibraryComicItem item) async {
+    final key = '${item.id}::${item.fileSystemPath}';
+    final task = _coverResolutions.putIfAbsent(
+        key, () => _resolveCoverPathForItem(item));
+    try {
+      final result = await task;
+      if (result != null && result.isNotEmpty) item._localCoverPath = result;
+      return result;
+    } finally {
+      if (identical(_coverResolutions[key], task)) {
+        _coverResolutions.remove(key);
+      }
+    }
+  }
+
+  Future<String?> _resolveCoverPathForItem(LocalLibraryComicItem item) async {
     if (!item.localStorageExists) {
       return null;
     }
@@ -1245,12 +1346,14 @@ class LocalLibraryManager {
       // 同时该标记意味着后续 _resolveNamedCoverPath / _sortedImageFilesForPath 也不
       // 可能有结果（同目录、同设备——不可能 dart:io 失败而 root 通道也失败后突然能
       // 用 dart:io 读到），因此直接终止，不再走后续 fallback。
-      if (cached == noCoverSentinel) {
-        return null;
-      }
       final managedCached =
           await _ensureManagedDownloadCoverCache(item, cached);
       if (managedCached != null && managedCached.isNotEmpty) {
+        // `_prefetchIllustCovers` 会在后台完成解析后触发 setState；如果不把
+        // 结果写回条目，重建出来的卡片仍会拿到同一个惰性 provider key，
+        // Flutter 可能复用首次失败的 ImageCache 结果，表现为“缓存已经生成
+        // 但插画页仍然是破图”。
+        item._localCoverPath = managedCached;
         return managedCached;
       }
       // _ensureManagedDownloadCoverCache 已在失败时持久化 noCoverSentinel，
@@ -1413,6 +1516,12 @@ class LocalLibraryManager {
     }
     return '$fallback $realName';
   }
+}
+
+class _PreparedLocalCoverProvider extends StreamImageProvider {
+  _PreparedLocalCoverProvider(super.loader, super.imageKey);
+  @override
+  bool get cacheRawBytes => false;
 }
 
 class _Semaphore {

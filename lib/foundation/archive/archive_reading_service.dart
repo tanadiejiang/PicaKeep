@@ -6,6 +6,7 @@ import 'archive_memory_cache.dart';
 import 'archive_models.dart';
 import 'archive_password_store.dart';
 import 'archive_registry.dart';
+import 'package:picakeep/foundation/local_cover_cache.dart';
 
 class ArchiveReadingService {
   ArchiveReadingService._();
@@ -181,7 +182,10 @@ class ArchiveReadingService {
 
   void clearAllReadingState() {
     _cache.clearAll();
-    _clearArchiveCoverCache();
+    // plan/12：压缩包封面已并入统一缓存（`LocalCoverCache`），
+    // "清阅读状态"不再删除封面文件 —— 它们是可复用的正式缓存，
+    // 删了会让所有压缩包封面在下次进入页面时重新解一遍。
+    // 需要真正失效时走 `LocalCoverCache.invalidateAll()`。
   }
 
   Future<String?> extractCoverToCache(
@@ -191,18 +195,55 @@ class ArchiveReadingService {
     try {
       final bytes = await _readEntryBytesUncached(archivePath, entryPath);
       if (bytes.isEmpty) return null;
-      final cacheDir = await _archiveCoverCacheDir();
-      final hash = _stableHash('$archivePath::$entryPath');
-      final ext = _extensionForPath(entryPath);
-      final file = File('${cacheDir.path}/$hash$ext');
-      await cacheDir.create(recursive: true);
-      final temp = File('${file.path}.part');
-      await temp.writeAsBytes(bytes, flush: true);
-      if (await file.exists()) await file.delete();
-      await temp.rename(file.path);
-      return file.path;
+      return _storeCoverBytesToUnifiedCache(
+        archivePath: archivePath,
+        entryPath: entryPath,
+        bytes: bytes,
+      );
     } catch (_) {
       return null;
+    }
+  }
+
+  /// 把压缩包内封面的字节写进**统一封面缓存**（plan/12）。
+  ///
+  /// 改动前这里默认写 `Directory.systemTemp/picakeep/...`（Android 上是
+  /// `<pkg>/cache`）：它既不随应用数据目录迁移，又会被系统在存储紧张时清掉，
+  /// 于是"同一张封面一会儿有一会儿没有"。现在统一进
+  /// `App.dataPath/local_library_cache/covers`。
+  ///
+  /// 条目键用 `archive_cover::<包路径哈希>::<条目路径>`：同一压缩包的不同条目
+  /// 分开缓存，不同压缩包互不干扰；指纹取包的长度 + mtime，
+  /// **包被替换后不会再显示旧封面**。
+  Future<String?> _storeCoverBytesToUnifiedCache({
+    required String archivePath,
+    required String entryPath,
+    required Uint8List bytes,
+  }) async {
+    final key = LocalCoverCache.entryKeyFor(
+      sourceId: 'archive_cover',
+      originalId: _stableHash(archivePath),
+      sourceRelative: entryPath,
+    );
+    final fingerprint = _archiveFingerprint(archivePath);
+    final existing = await LocalCoverCache.lookup(key, fingerprint: fingerprint);
+    if (existing != null && existing.isNotEmpty) {
+      return existing;
+    }
+    return LocalCoverCache.storeBytes(
+      entryKey: key,
+      bytes: bytes,
+      fingerprint: fingerprint,
+      extension: _extensionForPath(entryPath),
+    );
+  }
+
+  String _archiveFingerprint(String archivePath) {
+    try {
+      final stat = File(archivePath).statSync();
+      return '$archivePath|${stat.size}|${stat.modified.millisecondsSinceEpoch}';
+    } catch (_) {
+      return '$archivePath|0|0';
     }
   }
 
@@ -213,24 +254,13 @@ class ArchiveReadingService {
     return _readEntryWithPasswordFallback(archivePath, entryPath);
   }
 
-  Future<Directory> _archiveCoverCacheDir() async {
-    final root = Platform.environment['PICAKEEP_CACHE_DIR']?.trim();
-    final base = root == null || root.isEmpty
-        ? '${Directory.systemTemp.path}${Platform.pathSeparator}picakeep'
-        : root;
-    return Directory(
-      '$base${Platform.pathSeparator}local_library_cache${Platform.pathSeparator}archive_covers',
-    );
-  }
-
-  void _clearArchiveCoverCache() async {
-    try {
-      final dir = await _archiveCoverCacheDir();
-      if (await dir.exists()) {
-        await dir.delete(recursive: true);
-      }
-    } catch (_) {}
-  }
+  // plan/12：原 `_archiveCoverCacheDir` / `_clearArchiveCoverCache` 已删除。
+  //
+  // 它们把封面写到 `Directory.systemTemp/picakeep/local_library_cache/archive_covers`
+  //（Android 上是 `<pkg>/cache`）—— 既不随应用数据目录迁移，又会被系统在
+  // 存储紧张时清掉。现在统一由 `LocalCoverCache` 落进
+  // `App.dataPath/local_library_cache/covers`，旧目录里的文件由
+  // `LocalCoverCache.adoptLegacyCovers()` 登记接管（不搬迁、不删除）。
 
   String _stableHash(String input) {
     var hash = 1469598103934665603;

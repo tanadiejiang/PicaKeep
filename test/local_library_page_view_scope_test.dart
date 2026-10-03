@@ -31,6 +31,7 @@ import 'package:picakeep/foundation/local_library_settings.dart';
 import 'package:picakeep/pages/local_library_illust_switcher.dart';
 import 'package:picakeep/pages/local_library_page.dart';
 import 'package:sqlite3/open.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 class _Paths extends PathProviderPlatform {
   _Paths(this.root);
@@ -43,6 +44,23 @@ class _Paths extends PathProviderPlatform {
   Future<String?> getApplicationCachePath() => directory('cache');
   @override
   Future<String?> getApplicationSupportPath() => directory('support');
+}
+
+// Disk I/O and worker isolates need real event-loop time. Preserve every
+// behavior assertion; bound the wait and fail if loading never finishes.
+Future<void> settleDisk(WidgetTester tester) async {
+  for (var i = 0; i < 150; i++) {
+    await tester
+        .runAsync(() => Future<void>.delayed(const Duration(milliseconds: 20)));
+    await tester.pump(const Duration(milliseconds: 50));
+    if (find.byType(CircularProgressIndicator).evaluate().isEmpty &&
+        !tester.binding.hasScheduledFrame) {
+      return;
+    }
+  }
+  expect(find.byType(CircularProgressIndicator), findsNothing,
+      reason: 'page must finish real asynchronous storage loading');
+  await tester.pumpAndSettle();
 }
 
 void main() {
@@ -59,6 +77,7 @@ void main() {
   late PathProviderPlatform savedPaths;
 
   setUpAll(() async {
+    SharedPreferences.setMockInitialValues({});
     savedSettings = List.of(appdata.settings);
     savedMode = managedDataSourceMode;
     savedPaths = PathProviderPlatform.instance;
@@ -134,9 +153,9 @@ void main() {
       ),
     );
     await tester.tap(find.text('open'));
-    await tester.pumpAndSettle();
+    await settleDisk(tester);
     // 首次加载走真实文件扫描（临时空目录），等它落地。
-    await tester.pumpAndSettle();
+    await settleDisk(tester);
   }
 
   /// **顶栏里**的那个标题（不是悬浮按钮上的档位名、也不是菜单项）。
@@ -146,8 +165,7 @@ void main() {
       );
 
   group('标题随视图切换（33 号第 3 条）', () {
-    testWidgets('从「我」页进图集页：初始「图集」→ 切插画 →「插画」→ 切回「图集」',
-        (tester) async {
+    testWidgets('从「我」页进图集页：初始「图集」→ 切插画 →「插画」→ 切回「图集」', (tester) async {
       // `title: '图集'` 就是「我」页传进来的那一份（`me_page.dart:454-457`）。
       // 这条用例同时守住"视图 > widget.title"这个优先级：
       // 若按"widget.title 优先"实现，切到插画后标题仍是「图集」= 真机截图里的症状。
@@ -155,25 +173,25 @@ void main() {
       expect(appBarTitle('图集'), findsOneWidget);
 
       await tester.tap(find.byKey(illustViewSwitcherFabKey));
-      await tester.pumpAndSettle();
-      await tester.tap(find.byKey(illustViewOptionKey(IllustLibraryView.illust)));
-      await tester.pumpAndSettle();
+      await settleDisk(tester);
+      await tester
+          .tap(find.byKey(illustViewOptionKey(IllustLibraryView.illust)));
+      await settleDisk(tester);
 
-      expect(appBarTitle('插画'), findsOneWidget,
-          reason: '切到插画视图后，顶部标题必须变成「插画」');
+      expect(appBarTitle('插画'), findsOneWidget, reason: '切到插画视图后，顶部标题必须变成「插画」');
       expect(appBarTitle('图集'), findsNothing);
 
       // 切回图集：标题回到「图集」（与该页传进来的 title 逐字相同）。
       await tester.tap(find.byKey(illustViewSwitcherFabKey));
-      await tester.pumpAndSettle();
-      await tester.tap(find.byKey(illustViewOptionKey(IllustLibraryView.album)));
-      await tester.pumpAndSettle();
+      await settleDisk(tester);
+      await tester
+          .tap(find.byKey(illustViewOptionKey(IllustLibraryView.album)));
+      await settleDisk(tester);
       expect(appBarTitle('图集'), findsOneWidget);
       expect(appBarTitle('插画'), findsNothing);
     });
 
-    testWidgets('`widget.title` 仍优先于 `albumOnly`（既有分支没被破坏）',
-        (tester) async {
+    testWidgets('`widget.title` 仍优先于 `albumOnly`（既有分支没被破坏）', (tester) async {
       // 「远程 · 资源库」这类显式标题必须原样显示。它不是可切换视图的根列表
       // （`albumOnly` 为假），所以"视图"那条分支不会截走它。
       await pushPage(
@@ -187,8 +205,7 @@ void main() {
       expect(appBarTitle('插画'), findsNothing);
     });
 
-    testWidgets('没有显式 title 时仍按 albumOnly 落到「资源库」（既有兜底）',
-        (tester) async {
+    testWidgets('没有显式 title 时仍按 albumOnly 落到「资源库」（既有兜底）', (tester) async {
       await pushPage(tester, albumOnly: false, albumOnlySetting: '0');
       expect(appBarTitle('资源库'), findsOneWidget);
     });
@@ -208,14 +225,13 @@ void main() {
       expect(find.byTooltip('资源库显示设置'), findsOneWidget);
     });
 
-    testWidgets('点按钮**直接**打开设置面板 —— 不再有中间菜单（36 号修复点）',
-        (tester) async {
+    testWidgets('点按钮**直接**打开设置面板 —— 不再有中间菜单（36 号修复点）', (tester) async {
       // 用户真机反馈原话：「为什么资源库设置的点击需要进到二级点击才会显示」。
       // 33 号把档位与设置并进同一个 `PopupMenuButton`，于是要先弹菜单、
       // 再点「资源库显示设置」那一项才进得去。
       await pushPage(tester, albumOnly: true, title: '图集');
       await tester.tap(find.byTooltip('资源库显示设置'));
-      await tester.pumpAndSettle();
+      await settleDisk(tester);
 
       expect(
         find.text('仅显示图集'),
@@ -225,13 +241,12 @@ void main() {
       expect(find.text('视图切换按钮位置'), findsOneWidget);
     });
 
-    testWidgets('档位三档**直接平铺**在面板里，不需要再展开一次（36 号第二轮）',
-        (tester) async {
+    testWidgets('档位三档**直接平铺**在面板里，不需要再展开一次（36 号第二轮）', (tester) async {
       // 用户真机反馈原话：「最好保持展开样式，不要折叠那三档」。
       // 第一轮实现的是 `ExpansionTile`（默认收起），这里钉住"一进面板就看到三档"。
       await pushPage(tester, albumOnly: true, title: '图集');
       await tester.tap(find.byTooltip('资源库显示设置'));
-      await tester.pumpAndSettle();
+      await settleDisk(tester);
 
       expect(find.text('档位'), findsOneWidget, reason: '小标题行要在场');
       expect(find.text('本地图集'), findsOneWidget);
@@ -251,25 +266,24 @@ void main() {
     testWidgets('远程不可用 → 后两档置灰并写明原因（而不是消失）', (tester) async {
       await pushPage(tester, albumOnly: true, title: '图集');
       await tester.tap(find.byTooltip('资源库显示设置'));
-      await tester.pumpAndSettle();
+      await settleDisk(tester);
 
       // **这是 36 号与 33 号最关键的行为差异**：33 号在远程不可用时
       // 一个档位项都不显示（旧测试正是那么断言的），用户因此以为功能没了。
       expect(find.text('聚合'), findsOneWidget);
       expect(find.text('远程 · 图集'), findsOneWidget);
-      expect(find.text('远程服务不可用'), findsNWidgets(2),
-          reason: '聚合与远程两档各写明一次原因');
+      expect(find.text('远程服务不可用'), findsNWidgets(2), reason: '聚合与远程两档各写明一次原因');
     });
 
     testWidgets('置灰的档位点不动：远程不可用时点「远程」不会切档', (tester) async {
       await pushPage(tester, albumOnly: true, title: '图集');
       await tester.tap(find.byTooltip('资源库显示设置'));
-      await tester.pumpAndSettle();
+      await settleDisk(tester);
 
       // `settings[104]` 是档位的持久化位置（`_setView` 写它）。
       final before = appdata.settings[localLibraryViewSettingIndex];
       await tester.tap(find.text('远程 · 图集'));
-      await tester.pumpAndSettle();
+      await settleDisk(tester);
 
       expect(
         appdata.settings[localLibraryViewSettingIndex],
@@ -288,8 +302,7 @@ void main() {
       addTearDown(tester.view.reset);
     }
 
-    testWidgets('320dp（最窄档）：标题仍有位置，且**不比改动前少**一个像素',
-        (tester) async {
+    testWidgets('320dp（最窄档）：标题仍有位置，且**不比改动前少**一个像素', (tester) async {
       // 顶栏那一行的算术（`components/appbar.dart:176-201`，实测值）：
       //   320 = 8 + 返回 48 + 24 + 标题 + 4×48 + 8  →  标题 = 40dp
       // 合并档位按钮**没有减少**这个宽度：改动前图集页的 action 也是 4 个
@@ -307,21 +320,19 @@ void main() {
       expect(tester.takeException(), isNull);
     });
 
-    testWidgets('360dp（最常见机型宽度）：切到插画后标题「插画」完整显示',
-        (tester) async {
+    testWidgets('360dp（最常见机型宽度）：切到插画后标题「插画」完整显示', (tester) async {
       // 360 = 8 + 48 + 24 + 标题 + 192 + 8 → 标题 = 80dp；
       // 实测「插画」两个汉字的固有宽度 44dp，所以这里必须完整显示、不被省略。
       await setWidth(tester, 360);
       await pushPage(tester, albumOnly: true, title: '图集');
 
       await tester.tap(find.byKey(illustViewSwitcherFabKey));
-      await tester.pumpAndSettle();
+      await settleDisk(tester);
       await tester
           .tap(find.byKey(illustViewOptionKey(IllustLibraryView.illust)));
-      await tester.pumpAndSettle();
+      await settleDisk(tester);
 
-      final paragraph =
-          tester.renderObject<RenderParagraph>(appBarTitle('插画'));
+      final paragraph = tester.renderObject<RenderParagraph>(appBarTitle('插画'));
       expect(
         paragraph.didExceedMaxLines,
         isFalse,

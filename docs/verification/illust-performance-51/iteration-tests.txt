@@ -1,0 +1,31 @@
+Flutter assets will be downloaded from https://storage.flutter-io.cn. Make sure you trust this source!
+00:00 +0: loading D:/Flutter_Projucts/PicaComic/PicaKeep/test/illust_work_queue_test.dart
+00:00 +0: D:/Flutter_Projucts/PicaComic/PicaKeep/test/illust_work_queue_test.dart: queue bounds concurrency and drops offscreen pending work
+00:00 +1: D:/Flutter_Projucts/PicaComic/PicaKeep/test/illust_work_queue_test.dart: scroll defers starts and publishes until 140ms idle
+00:00 +2: D:/Flutter_Projucts/PicaComic/PicaKeep/test/illust_work_queue_test.dart: repeated scroll cancels idle timer and page pause preserves pending
+00:00 +3: D:/Flutter_Projucts/PicaComic/PicaKeep/test/history_single_lookup_test.dart: (setUpAll)
+00:00 +3: D:/Flutter_Projucts/PicaComic/PicaKeep/test/illust_work_queue_test.dart: refresh generation rejects old work and dispose rejects late publication
+00:00 +4: D:/Flutter_Projucts/PicaComic/PicaKeep/test/history_single_lookup_test.dart: single history query uses primary key at 0 rows
+00:00 +5: D:/Flutter_Projucts/PicaComic/PicaKeep/test/history_single_lookup_test.dart: single history query uses primary key at 0 rows
+00:00 +6: D:/Flutter_Projucts/PicaComic/PicaKeep/test/history_single_lookup_test.dart: single history query uses primary key at 1000 rows
+00:00 +7: D:/Flutter_Projucts/PicaComic/PicaKeep/test/history_single_lookup_test.dart: single history query uses primary key at 10000 rows
+00:00 +8: D:/Flutter_Projucts/PicaComic/PicaKeep/test/history_single_lookup_test.dart: primary precedence and secondary fallback preserve progress, hidden source stays hidden
+00:00 +9: D:/Flutter_Projucts/PicaComic/PicaKeep/test/history_single_lookup_test.dart: uninitialized lookup remains null
+00:00 +10: D:/Flutter_Projucts/PicaComic/PicaKeep/test/history_single_lookup_test.dart: (tearDownAll)
+00:11 +10: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folder_cover_integration_test.dart: (setUpAll)
+00:11 +10: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folder_cover_integration_test.dart: directory: registered folder -> scan -> real resized cover -> app cache
+00:11 +11: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folder_cover_integration_test.dart: single: registered folder -> scan -> real resized cover -> app cache
+00:11 +12: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: (setUpAll)
+00:12 +12: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folder_cover_integration_test.dart: zip: registered folder -> scan -> real resized cover -> app cache
+00:12 +13: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:12 +14: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:12 +15: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:13 +16: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:17 +17: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:22 +18: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folder sorting is separate from its long-press menu and persists on back
+00:24 +19: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: root folder offers default action but cannot be renamed or deleted
+00:24 +20: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: illustration long press selects actual items and copies the batch to one folder
+00:35 +21: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: download pill delivers long-press without running ordinary download
+00:35 +22: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: (tearDownAll)
+Fixture cleanup deferred until process exit: C:\Users\tanad\AppData\Local\Temp\pk46_widgets_ba53c80f
+00:35 +22: All tests passed!

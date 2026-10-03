@@ -391,12 +391,14 @@ class OnlineComicPillButton extends StatelessWidget {
     super.key,
     required this.label,
     required this.onTap,
+    this.onLongPress,
     this.busy = false,
     this.filled = false,
   });
 
   final String label;
   final VoidCallback? onTap;
+  final VoidCallback? onLongPress;
   final bool busy;
   final bool filled;
 
@@ -420,11 +422,13 @@ class OnlineComicPillButton extends StatelessWidget {
     return filled
         ? FilledButton(
             onPressed: busy || onTap == null ? null : onTap,
+            onLongPress: busy ? null : onLongPress,
             style: style,
             child: child,
           )
         : FilledButton.tonal(
             onPressed: busy || onTap == null ? null : onTap,
+            onLongPress: busy ? null : onLongPress,
             style: style,
             child: child,
           );

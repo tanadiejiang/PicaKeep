@@ -136,6 +136,7 @@ class MainActivity : FlutterActivity() {
     // and the in-process resources. We rely on it exclusively now.
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        DownloadRuntime.captureIntent(intent)
         Log.i(TAG, "startup onCreate +${SystemClock.elapsedRealtime() - launchStartElapsedMs}ms")
         val splashScreen = installSplashScreen()
         splashScreen.setOnExitAnimationListener { provider -> provider.remove() }
@@ -216,6 +217,12 @@ class MainActivity : FlutterActivity() {
         }
     }
 
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        DownloadRuntime.captureIntent(intent)
+    }
+
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
         if (hasFocus && !firstWindowFocusLogged) {
@@ -225,6 +232,7 @@ class MainActivity : FlutterActivity() {
     }
 
     override fun onDestroy() {
+        DownloadRuntime.disconnect(flutterEngine?.dartExecutor?.binaryMessenger)
         pendingNotificationPermissionResult = null
         pendingShizukuPermissionResult = null
         runCatching {
@@ -246,6 +254,7 @@ class MainActivity : FlutterActivity() {
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        DownloadRuntime.connect(applicationContext, flutterEngine.dartExecutor.binaryMessenger)
         Log.i(TAG, "startup configureFlutterEngine +${SystemClock.elapsedRealtime() - launchStartElapsedMs}ms")
         flutterEngine.renderer.addIsDisplayingFlutterUiListener(
             object : FlutterUiDisplayListener {

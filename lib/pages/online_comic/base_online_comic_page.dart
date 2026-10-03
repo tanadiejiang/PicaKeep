@@ -72,6 +72,8 @@ abstract class BaseOnlineComicPage<T> extends StatelessWidget {
 
   /// 下载。
   void onDownload(BuildContext context, T data);
+  bool get supportsDownloadFolders => false;
+  void onDownloadLongPress(BuildContext context, T data) {}
 
   /// 收藏（点击收藏按钮）。完成后可通过 [refreshFavorite] 同步图标。
   void onFavorite(BuildContext context, T data);
@@ -657,7 +659,8 @@ abstract class BaseOnlineComicPage<T> extends StatelessWidget {
                   Expanded(
                     child: OnlineComicPillButton(
                       label: '下载',
-                      onTap: !logic.downloaded
+                      onLongPress: supportsDownloadFolders ? () => onDownloadLongPress(context, data) : null,
+                      onTap: supportsDownloadFolders || !logic.downloaded
                           ? () => onDownload(context, data)
                           : () async {
                               final confirm = await showDialog<bool>(
@@ -691,7 +694,7 @@ abstract class BaseOnlineComicPage<T> extends StatelessWidget {
                             },
                     ),
                   ),
-                  if (logic.downloaded &&
+                  if (logic.downloaded && !supportsDownloadFolders &&
                       downloadCandidateIds(data) != null) ...[
                     const SizedBox(width: 4),
                     _DeleteDownloadAction(

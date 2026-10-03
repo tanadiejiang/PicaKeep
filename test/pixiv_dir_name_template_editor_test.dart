@@ -1,6 +1,7 @@
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:picakeep/base.dart';
 import 'package:picakeep/foundation/pixiv_download_naming.dart';
 import 'package:picakeep/pages/settings/settings_page.dart';
 
@@ -221,7 +222,41 @@ void main() {
   });
 
   group('PixivDirNameTemplateEditor · 勾选与预览', () {
-    testWidgets('默认只勾 title，预览为示例标题', (tester) async {
+    testWidgets('默认作者在首行，只勾标题和 ID，预览包含两项', (tester) async {
+      final spec = parsePixivDirNameTemplate(
+        appdata.settings[pixivDirNameTemplateSettingIndex],
+      );
+      List<String>? reported;
+      await tester.pumpWidget(_hostWithDialog(
+        initialFields: spec.fields,
+        initialSeparator: spec.separator,
+        onChanged: (fields, _) => reported = fields,
+      ));
+      await tester.tap(find.text('打开弹窗'));
+      await tester.pumpAndSettle();
+
+      const order = <String>['author', 'title', 'id', 'pages'];
+      double previousTop = -double.infinity;
+      for (final key in order) {
+        final row = find.byKey(ValueKey('pixiv-dir-field-$key'));
+        final top = tester.getTopLeft(row).dy;
+        expect(top, greaterThan(previousTop));
+        previousTop = top;
+        final checkbox = tester.widget<Checkbox>(find.descendant(
+          of: row,
+          matching: find.byType(Checkbox),
+        ));
+        expect(checkbox.value, key == 'title' || key == 'id');
+      }
+      expect(find.text('夜の海-150033282'), findsOneWidget);
+
+      await tester.tap(find.text('作者'));
+      await tester.pumpAndSettle();
+      expect(reported, <String>['author', 'title', 'id']);
+      expect(find.text('久蒼穹-夜の海-150033282'), findsOneWidget);
+    });
+
+    testWidgets('已有单标题模板仍只勾 title，预览为示例标题', (tester) async {
       await tester.pumpWidget(_hostWithDialog(onChanged: (_, __) {}));
       await tester.tap(find.text('打开弹窗'));
       await tester.pumpAndSettle();
@@ -229,7 +264,7 @@ void main() {
       expect(find.text('夜の海'), findsOneWidget);
     });
 
-    testWidgets('勾选作者后回调报出 [title, author] 且预览跟着变', (tester) async {
+    testWidgets('勾选作者后回调报出 [author, title] 且预览跟着变', (tester) async {
       List<String>? reportedFields;
       String? reportedSeparator;
       await tester.pumpWidget(
@@ -246,9 +281,9 @@ void main() {
       await tester.tap(find.text('作者'));
       await tester.pumpAndSettle();
 
-      expect(reportedFields, <String>['title', 'author']);
+      expect(reportedFields, <String>['author', 'title']);
       expect(reportedSeparator, '-');
-      expect(find.text('夜の海-久蒼穹'), findsOneWidget);
+      expect(find.text('久蒼穹-夜の海'), findsOneWidget);
     });
 
     testWidgets('取消勾选 title 后只剩 author，且位置信息不丢', (tester) async {
@@ -408,7 +443,7 @@ void main() {
       await tester.tap(find.text('打开弹窗'));
       await tester.pumpAndSettle();
 
-      // 把未勾选的「作者」拖到第一位：勾选集应仍只有 title。
+      // 把未勾选的「作者」往下拖一位：勾选集应仍只有 title。
       await longPressDragDownOneRow(tester, '作者');
       expect(reported, <String>['title']);
     });

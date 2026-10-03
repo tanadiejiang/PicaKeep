@@ -60,6 +60,20 @@ extension ImageExt on ComicReadingPage {
     if (_shouldUseOriginalLocalImageStrategy(logic)) {
       return _ReaderImageRequest(provider: provider);
     }
+    // 39 号「高清模式」= **直接原图**（用户原话「高清模式其实就是直接原图」）：
+    // 跳过下面那次按屏幕宽度算的降采样，让 `Image` 按图片自身的分辨率解码。
+    //
+    // 为什么必须是开关而不是一律不降采样：漫画一部单行本几十页大图，
+    // 全分辨率解码会显著吃内存（`BaseImageProvider` 的原始字节缓存上限只有
+    // 50 MB FIFO）；而插画一话往往就一两张图，值得看细节。用户因此要求
+    // 漫画默认低清、插画/图集默认高清，两套开关各自记忆。
+    if (readerHighQualityEnabled(
+      sourceKey: logic.data.sourceKey,
+      comicSetting: appdata.settings[readerHighQualityComicSettingIndex],
+      illustSetting: appdata.settings[readerHighQualityIllustSettingIndex],
+    )) {
+      return _ReaderImageRequest(provider: provider);
+    }
     final mediaQuery = MediaQuery.of(context);
     final devicePixelRatio =
         mediaQuery.devicePixelRatio.clamp(1.0, 2.5).toDouble();
@@ -147,7 +161,7 @@ extension ImageExt on ComicReadingPage {
                       if (_shouldUseOriginalLocalImageStrategy(logic)) {
                         return Center(
                           child: ComicImage(
-                            filterQuality: FilterQuality.medium,
+                            filterQuality: FilterQuality.high,
                             image:
                                 createImageProvider(type, logic, index, target),
                             knownImageSize: logic.data.imageSize(
@@ -170,7 +184,7 @@ extension ImageExt on ComicReadingPage {
                       );
                       return Center(
                         child: ComicImage(
-                          filterQuality: FilterQuality.medium,
+                          filterQuality: FilterQuality.high,
                           image: imageRequest.provider,
                           knownImageSize: logic.data.imageSize(
                             logic.order,
@@ -253,10 +267,23 @@ extension ImageExt on ComicReadingPage {
                     logic.photoViewControllers[index] ??= PhotoViewController();
 
                     return PhotoViewGalleryPageOptions(
-                      filterQuality: FilterQuality.medium,
+                      filterQuality: FilterQuality.high,
                       imageProvider: imageProvider,
                       fit: getFit(),
                       controller: logic.photoViewControllers[index],
+                      // 39 号：显式钉住缩放的下限与初值。
+                      //
+                      // 参考 `ghboke/core-ui` 的 `ImageViewPlus`：它的
+                      // `freePan` **默认关**，语义是"图片 ≤ 画布时强制居中，
+                      // 只有放大到溢出才能拖"，且 `minZoom` 有明确下限。
+                      // 迁移到这里的对应做法就是——**缩小的下限 = 适配屏幕**，
+                      // 再缩就回弹，而不是停在比适配更小的尺寸上
+                      // （用户原话：「缩小手势时不是自己归位，而是能更小（定住）」）。
+                      minScale: PhotoViewComputedScale.contained,
+                      initialScale: PhotoViewComputedScale.contained,
+                      // 上限**不显式设**：默认的 `covered * 2.5` 对"细长条"
+                      // 这类适配后很窄的图更合适，写死 `contained * N` 反而
+                      // 会让它们放不大。
                       errorBuilder: (_, error, s, retry) {
                         return Center(
                           child: SizedBox(

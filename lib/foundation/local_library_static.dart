@@ -112,7 +112,7 @@ int _rescanManagedDownloadSource(String rootPath) {
     final hiddenIndex = LocalTrashStore.instance.hiddenIndexSync();
     for (final entry in _safeList(root).whereType<Directory>()) {
       final dirName = _basename(entry.path);
-      if (dirName.isEmpty ||
+      if (dirName.isEmpty || dirName.startsWith('.pixiv_') || _isRegisteredPixivFolder(entry.path) ||
           dirName == _localTrashDirectoryName ||
           hiddenIndex.matchesPath(entry.path) ||
           knownIds.contains(dirName) ||
@@ -252,12 +252,46 @@ Future<List<String>> _buildDownloadedEpisodeFilesForEp(
     }
   }
   if (ep == 0 || ep == 1) {
-    return _sortedImageFilesForPath(
+    final files = await _sortedImageFilesForPath(
       itemDirectory,
       sortMode: localAlbumImageSortNameAsc,
     );
+    if (files.isEmpty) {
+      _logEmptyEpisodeFiles(itemDirectory, ep, entries.length, childDirs.length);
+    }
+    return files;
   }
+  // 走到这里说明：既没有可定位的子目录，`ep` 也不是 0/1 —— 属于"章节号超出
+  // 实际结构"的情况，**同样是静默返回空**，所以也留一条日志。
+  _logEmptyEpisodeFiles(itemDirectory, ep, entries.length, childDirs.length);
   return const <String>[];
+}
+
+/// 本地列页得到空结果时记一条 warning（41 号）。
+///
+/// 为什么需要：这条链路**不抛异常**，空列表在阅读器里只表现为「未知错误」
+/// （`comic_reading_page.dart:499` 的 `errorMessage ?? "未知错误"`），
+/// 等于"失败完全无声"。41 号排查真机故障时，就是因为没有任何痕迹而绕了很多轮。
+///
+/// 触发它的两种现实成因：目录被搬走/删除后记录残留；或这条记录来自一个
+/// **已被搬空的旧下载根**（同一个 id 在多个根的 db 里各有一份时）。
+///
+/// 返回值语义不变（仍然是空列表）——"目录真的不在"是合法状态，不该抛错。
+void _logEmptyEpisodeFiles(
+  String itemDirectory,
+  int ep,
+  int entryCount,
+  int childDirCount,
+) {
+  LogManager.addLog(
+    LogLevel.warning,
+    'LocalLibrary',
+    '本地列页结果为空。\n'
+        '  itemDirectory=$itemDirectory\n'
+        '  ep=$ep  目录条目数=$entryCount  子目录数=$childDirCount\n'
+        '提示：目录可能已被搬走或删除；若该 id 在多个下载根的 download.db 里'
+        '各有一份，说明这条记录来自已被搬空的旧根。',
+  );
 }
 
 /// [itemDirectory] 是**文件产物**（压缩包 / 单图）时按页列页。
@@ -933,7 +967,7 @@ DownloadedItem? _parseDownloadedItem(
 }
 
 DownloadedItem? _downloadedItemFromDbRow(
-  Row row,
+  Map<String, Object?> row,
   DateTime time,
   String directory,
 ) {
@@ -1023,7 +1057,7 @@ DownloadedItem? _downloadedItemFromDbRow(
   return comic;
 }
 
-double? _downloadRowDouble(Row row, Iterable<String> keys) {
+double? _downloadRowDouble(Map<String, Object?> row, Iterable<String> keys) {
   for (final key in keys) {
     try {
       final raw = row[key];
@@ -1040,7 +1074,7 @@ double? _downloadRowDouble(Row row, Iterable<String> keys) {
 }
 
 String _metadataTitleForDownloadedRow(
-  Row row,
+  Map<String, Object?> row,
   DownloadedItem fallback,
 ) {
   final fromRow = _downloadRowText(row, const [
@@ -1056,7 +1090,7 @@ String _metadataTitleForDownloadedRow(
   return fallback.name;
 }
 
-String? _downloadRowText(Row row, Iterable<String> keys) {
+String? _downloadRowText(Map<String, Object?> row, Iterable<String> keys) {
   for (final key in keys) {
     try {
       final value = row[key]?.toString().trim();
@@ -1101,7 +1135,7 @@ List<String> _parseTagValues(Object? raw) {
       .toList(growable: false);
 }
 
-List<String> _downloadRowTags(Row row, Iterable<String> keys) {
+List<String> _downloadRowTags(Map<String, Object?> row, Iterable<String> keys) {
   for (final key in keys) {
     try {
       final values = _parseTagValues(row[key]);
@@ -1126,7 +1160,7 @@ List<String> _downloadRowTags(Row row, Iterable<String> keys) {
 ///
 /// `row` 参数保留是为了不动两个调用点；本函数的取值**只用 `json` 与 `fallback`**。
 String _metadataAuthorForDownloadedRow(
-  Row row,
+  Map<String, Object?> row,
   String json,
   DownloadedItem fallback,
 ) {
@@ -1134,7 +1168,7 @@ String _metadataAuthorForDownloadedRow(
 }
 
 List<String> _metadataTagsForDownloadedRow(
-  Row row,
+  Map<String, Object?> row,
   String json,
   DownloadedItem fallback,
 ) {
@@ -1304,4 +1338,11 @@ void _sortItems(List<LocalLibraryComicItem> items, String sortMode) {
           .compareTo(a.time ?? DateTime.fromMillisecondsSinceEpoch(0)));
       break;
   }
+}
+
+// A registered child is a download root, never a directory-shaped work.
+bool _isRegisteredPixivFolder(String path) {
+  final library = PixivLibrary(p.dirname(path));
+  if (!library.registered) return false;
+  return library.folders(includeInactive: true).any((f) => !f.isRoot && p.equals(f.path, path));
 }

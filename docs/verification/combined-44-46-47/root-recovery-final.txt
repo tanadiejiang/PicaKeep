@@ -1,0 +1,17 @@
+Flutter assets will be downloaded from https://storage.flutter-io.cn. Make sure you trust this source!
+00:00 +0: loading C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_root_recovery_test.dart
+00:00 +0: (setUpAll)
+00:00 +0: root relocation resumes after preparing without losing identity or files
+00:00 +1: root relocation resumes after copy without losing identity or files
+00:00 +2: root relocation resumes after published without losing identity or files
+00:01 +3: root relocation resumes after cleaning without losing identity or files
+00:01 +4: root relocation resumes after cleaned without losing identity or files
+00:01 +5: root relocation resumes after rebased without losing identity or files
+00:02 +6: damaged target on cleanup resume preserves the complete source
+00:02 +7: migration blocks mutations and download leases on both roots
+00:02 +8: recovery after journal rebasing does not revalidate against old DB bytes
+00:03 +9: invalid saved stage fails without removing the source
+00:03 +10: new source content while interrupted stops cleanup before removing originals
+00:03 +11: root relocation preserves empty directories too
+00:04 +12: (tearDownAll)
+00:04 +12: All tests passed!

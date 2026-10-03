@@ -441,6 +441,14 @@ class PixivNetwork {
           responseType: ResponseType.plain,
           // 4xx 也要拿回响应体：Pixiv 的错误信息在 JSON 里（`error`/`message`），
           // 直接抛 DioException 会让上层只能看到"状态码 400"而丢掉原因。
+          //
+          // 43 号复核：**放行 4xx 是有意的，也是对的** —— 429 同样包含在内。
+          // 它不会变成"静默失败"，因为两层各管各的：
+          // - **错误识别在这一层**：429 的响应体照样会走下面的 `error` 判定
+          //   （43 号已把判据从"只认布尔真"扩展到"字符串形态也认"）；
+          // - **重试策略在适配器层**：`app_dio.dart` 的 `RetryHttpClientAdapter`
+          //   已把 429 从"4xx 不重试"里单独摘出来，会退避后重试。
+          // 所以这里**不需要也不应该**对 429 特殊处理。
           validateStatus: (status) =>
               status != null &&
               (status == 200 || (status >= 400 && status < 500)),
@@ -512,8 +520,23 @@ class PixivNetwork {
       }
       final json = decoded.map((key, value) => MapEntry(key.toString(), value));
 
-      if (json['error'] == true) {
-        final message = json['message']?.toString();
+      // ⚠️ 判据是「**`error` 这个键存在且不为 `false`**」，不能只判 `== true`。
+      //
+      // Pixiv 的出错响应有**两种形态**：
+      //   1. `{"error": true, "message": "…"}`
+      //   2. `{"error": "ランキングが見つかりませんでした"}` ← **字符串**
+      //
+      // 旧写法只认第一种，第二种会被当成成功响应往下走 —— 落到解析器时
+      // `contents is! List` 成立、**返回空列表**，于是界面表现为
+      // **"榜单/列表就是空的"，不报错、无提示**（本项目 35 号踩过同一类坑，
+      // 那次是端点下线返回错误 JSON 被当正常数据）。
+      // 本文件 `:890` 的注释里就记着第二种形态的实例。
+      final errorFlag = json['error'];
+      final hasError = errorFlag != null && errorFlag != false;
+      if (hasError) {
+        // 字符串形态没有 `message` 键，错误原因就在 `error` 本身。
+        final rawMessage = json['message'] ?? (errorFlag is String ? errorFlag : null);
+        final message = rawMessage?.toString();
         return Res.error(
           '${(message == null || message.isEmpty) ? 'Pixiv 接口返回错误' : message}'
           '$diagnostics',
@@ -670,8 +693,14 @@ class PixivNetwork {
       }
       final json = decoded.map((key, value) => MapEntry(key.toString(), value));
 
-      if (json['error'] == true) {
-        final message = json['message']?.toString();
+      // 与 GET 侧同口径：**`error` 存在且不为 `false` 即失败**（字符串形态也要认）。
+      // 详见 `_getJson` 里的说明。
+      final postErrorFlag = json['error'];
+      final postHasError = postErrorFlag != null && postErrorFlag != false;
+      if (postHasError) {
+        final rawMessage =
+            json['message'] ?? (postErrorFlag is String ? postErrorFlag : null);
+        final message = rawMessage?.toString();
         final text =
             (message == null || message.isEmpty) ? 'Pixiv 接口返回错误' : message;
         // 关键：服务端在这里说的"请重新登录"**不一定**是真的未登录
@@ -724,13 +753,19 @@ class PixivNetwork {
     return markers.any(lower.contains);
   }
 
-  /// 取作品详情（`/ajax/illust/{id}`）。
+  /// 取作品详情（`/ajax/illust/{id}?lang=zh`）。
+  ///
+  /// **`lang=zh` 不能省**：Pixiv 的 Ajax 错误消息**跟随这个参数**
+  /// （见 [recommendedUrl] 的说明）。作品被删除 / 不存在时，不带它拿到的是
+  /// **日文**服务端原文（如「作品が見つかりません」），会直接显示给用户。
+  /// 本文件其它端点（搜索 `:954`、排行 `:1143`、作者页 `:1271/:1280/:1295`）
+  /// 都带了，只有这里曾漏掉。
   Future<Res<PixivComicInfo>> getComicInfo(String id) async {
     if (id.trim().isEmpty) {
       return const Res.error('作品 id 为空',
           errorCode: ResErrorCode.invalidArgument);
     }
-    final res = await _getJson('$pixivWebBase/ajax/illust/$id');
+    final res = await _getJson('$pixivWebBase/ajax/illust/$id?lang=zh');
     if (res.error) return Res.fromErrorRes(res);
     final body = res.data['body'];
     if (body is! Map) {
@@ -1419,12 +1454,22 @@ class PixivNetwork {
     if (works.isEmpty) {
       // 200 但一条都没解析出来：**必须报出来**，不能当成"没有作品"——
       // 请求带了 ${slice.length} 个 id，正常至少能回一部分。
-      // 文案里给出实际形状，真机一失败就能判断是形状变了还是这些 id 全不可见。
+      //
+      // 43 号复核：这里**保持报错**是**有意的**，不改为"静默返回空列表"。
+      // 理由：它是"**响应结构变了**"的唯一探测点，而结构变更恰恰是本项目
+      // 踩过多次的坑（35 号的端点下线、键名变更，**全都是静默的**）。
+      // 改成静默等于主动撤掉哨兵 —— 那类故障将重新变得不可发现。
+      //
+      // 但原文案只对开发者有意义，所以补上**用户能理解的原因**：
+      // 30 个 id 全部不可见时，最常见的现实原因是作者把这批作品删了或
+      // 设为不公开，其次才是我们解析出错。
       return Res.error(
-        '$stepLabel一条都没解析出来（请求了 ${slice.length} 个 id）'
-        '：期望 body.works 为 {id: 作品} 的 map，实际 '
+        '$stepLabel一条都没解析出来（请求了 ${slice.length} 个 id）。'
+        '常见原因：这些作品已被作者删除或设为不公开；'
+        '若反复出现，则可能是 Pixiv 的响应结构变了。'
+        '（期望 body.works 为 {id: 作品} 的 map，实际 '
         '${describePixivJsonShape(map['works'])}'
-        '（body 键: ${map.keys.take(12).join(', ')}）',
+        '；body 键: ${map.keys.take(12).join(', ')}）',
         errorCode: ResErrorCode.parse,
       );
     }

@@ -1,0 +1,68 @@
+Flutter assets will be downloaded from https://storage.flutter-io.cn. Make sure you trust this source!
+00:00 +0: loading D:/Flutter_Projucts/PicaComic/PicaKeep/test/illust_thumbnail_test.dart
+00:00 +0: D:/Flutter_Projucts/PicaComic/PicaKeep/test/illust_thumbnail_test.dart: (setUpAll)
+00:00 +0: D:/Flutter_Projucts/PicaComic/PicaKeep/test/illust_thumbnail_test.dart: real thumbnail uses width buckets and app-internal path; warm reuse
+00:00 +1: D:/Flutter_Projucts/PicaComic/PicaKeep/test/illust_thumbnail_test.dart: small images are not enlarged; long image stays complete within bounds
+00:00 +2: D:/Flutter_Projucts/PicaComic/PicaKeep/test/illust_thumbnail_test.dart: same-key requests share output, deletion and replacement regenerate
+00:00 +3: D:/Flutter_Projucts/PicaComic/PicaKeep/test/illust_thumbnail_test.dart: paused or failed generation exposes no half-file; retry succeeds
+00:00 +4: D:/Flutter_Projucts/PicaComic/PicaKeep/test/illust_thumbnail_test.dart: (tearDownAll)
+00:00 +4: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_card_test.dart: 语义保留阅读、详情、多选动作而不重复朗读装饰内容
+══╡ EXCEPTION CAUGHT BY FLUTTER TEST FRAMEWORK ╞════════════════════════════════════════════════════
+The following assertion was thrown running a test:
+A SemanticsHandle was active at the end of the test.
+All SemanticsHandle instances must be disposed by calling dispose() on the SemanticsHandle.
+
+When the exception was thrown, this was the stack:
+#0      WidgetTester._verifySemanticsHandlesWereDisposed (package:flutter_test/src/widget_tester.dart:1074:7)
+#1      WidgetTester._endOfTestVerifications (package:flutter_test/src/widget_tester.dart:1063:5)
+#2      TestWidgetsFlutterBinding._runTestBody (package:flutter_test/src/binding.dart:1698:22)
+<asynchronous suspension>
+<asynchronous suspension>
+(elided one frame from package:stack_trace)
+
+The test description was:
+  语义保留阅读、详情、多选动作而不重复朗读装饰内容
+════════════════════════════════════════════════════════════════════════════════════════════════════
+00:01 +4 -1: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folder_cover_integration_test.dart: directory: registered folder -> scan -> real resized cover -> app cache
+00:01 +4 -1: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_card_test.dart: 语义保留阅读、详情、多选动作而不重复朗读装饰内容 [E]
+  Test failed. See exception logs above.
+  The test description was: 语义保留阅读、详情、多选动作而不重复朗读装饰内容
+  
+00:01 +5 -1: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folder_cover_integration_test.dart: directory: registered folder -> scan -> real resized cover -> app cache
+00:01 +6 -1: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folder_cover_integration_test.dart: directory: registered folder -> scan -> real resized cover -> app cache
+00:01 +7 -1: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folder_cover_integration_test.dart: directory: registered folder -> scan -> real resized cover -> app cache
+00:01 +8 -1: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folder_cover_integration_test.dart: directory: registered folder -> scan -> real resized cover -> app cache
+00:01 +9 -1: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_card_test.dart: 底部信息：由配置驱动 勾了尺寸 → 显示 宽×高（真实比例那条链路的可见结果）
+00:01 +10 -1: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folder_cover_integration_test.dart: single: registered folder -> scan -> real resized cover -> app cache
+00:01 +11 -1: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folder_cover_integration_test.dart: single: registered folder -> scan -> real resized cover -> app cache
+00:02 +12 -1: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folder_cover_integration_test.dart: single: registered folder -> scan -> real resized cover -> app cache
+00:02 +13 -1: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folder_cover_integration_test.dart: single: registered folder -> scan -> real resized cover -> app cache
+00:02 +14 -1: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folder_cover_integration_test.dart: single: registered folder -> scan -> real resized cover -> app cache
+00:02 +15 -1: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_card_test.dart: 底部信息：由配置驱动 比例未知（占位 3:4）时信息照样在图片下方，高度由占位比例决定
+00:02 +16 -1: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folder_cover_integration_test.dart: zip: registered folder -> scan -> real resized cover -> app cache
+00:02 +17 -1: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folder_cover_integration_test.dart: zip: registered folder -> scan -> real resized cover -> app cache
+00:02 +18 -1: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folder_cover_integration_test.dart: zip: registered folder -> scan -> real resized cover -> app cache
+00:02 +19 -1: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folder_cover_integration_test.dart: zip: registered folder -> scan -> real resized cover -> app cache
+00:02 +20 -1: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folder_cover_integration_test.dart: zip: registered folder -> scan -> real resized cover -> app cache
+00:02 +21 -1: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folder_cover_integration_test.dart: zip: registered folder -> scan -> real resized cover -> app cache
+00:02 +22 -1: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folder_cover_integration_test.dart: zip: registered folder -> scan -> real resized cover -> app cache
+00:02 +23 -1: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folder_cover_integration_test.dart: zip: registered folder -> scan -> real resized cover -> app cache
+00:02 +24 -1: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folder_cover_integration_test.dart: zip: registered folder -> scan -> real resized cover -> app cache
+00:02 +25 -1: D:/Flutter_Projucts/PicaComic/PicaKeep/test/illust_work_queue_test.dart: queue bounds concurrency and drops offscreen pending work
+00:02 +26 -1: D:/Flutter_Projucts/PicaComic/PicaKeep/test/illust_work_queue_test.dart: queue bounds concurrency and drops offscreen pending work
+00:02 +27 -1: D:/Flutter_Projucts/PicaComic/PicaKeep/test/illust_work_queue_test.dart: queue bounds concurrency and drops offscreen pending work
+00:02 +28 -1: D:/Flutter_Projucts/PicaComic/PicaKeep/test/illust_work_queue_test.dart: queue bounds concurrency and drops offscreen pending work
+00:02 +29 -1: D:/Flutter_Projucts/PicaComic/PicaKeep/test/illust_work_queue_test.dart: queue bounds concurrency and drops offscreen pending work
+00:02 +30 -1: D:/Flutter_Projucts/PicaComic/PicaKeep/test/illust_work_queue_test.dart: queue bounds concurrency and drops offscreen pending work
+00:02 +31 -1: D:/Flutter_Projucts/PicaComic/PicaKeep/test/illust_work_queue_test.dart: queue bounds concurrency and drops offscreen pending work
+00:02 +32 -1: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folder_cover_integration_test.dart: copy keeps two independently addressable scanned instances
+00:02 +33 -1: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folder_cover_integration_test.dart: copy keeps two independently addressable scanned instances
+00:02 +34 -1: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folder_cover_integration_test.dart: copy keeps two independently addressable scanned instances
+00:02 +35 -1: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folder_cover_integration_test.dart: copy keeps two independently addressable scanned instances
+00:02 +36 -1: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folder_cover_integration_test.dart: copy keeps two independently addressable scanned instances
+00:02 +37 -1: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folder_cover_integration_test.dart: illustration snapshot reuses data until explicit data change or refresh
+00:03 +38 -1: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folder_cover_integration_test.dart: prepared illustration covers stay internal and decode from file buffer
+00:03 +39 -1: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folder_cover_integration_test.dart: legacy no-cover flag without live negative record is retried
+00:03 +40 -1: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folder_cover_integration_test.dart: root relocation preserves folders, records and redirects old task location
+00:03 +41 -1: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folder_cover_integration_test.dart: (tearDownAll)
+00:03 +41 -1: Some tests failed.

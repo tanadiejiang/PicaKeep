@@ -60,6 +60,15 @@ void main() {
   Future<String> readFile(String root, String relative) =>
       File(p.join(root, relative)).readAsString();
 
+  /// [root] 里所有 `download.db.bak-*` 备份文件（43 号护栏用）。
+  List<File> backupsIn(String root) => Directory(root)
+      .listSync()
+      .whereType<File>()
+      .where(
+        (file) => p.basename(file.path).startsWith('download.db.bak-'),
+      )
+      .toList();
+
   Future<void> seedComics(int count) async {
     for (var i = 0; i < count; i++) {
       await writeFile(sourcePath, 'comic-$i/1.jpg', 'IMG$i');
@@ -104,6 +113,58 @@ void main() {
       await writeFile(sourcePath, 'download.db', 'DB');
       await seedDownloadDatabase(from: sourcePath, to: targetPath);
       expect(await Directory(targetPath).exists(), isTrue);
+    });
+
+    test('目标已有 download.db → 覆盖前先改名备份（43 号护栏）', () async {
+      // 此前 `File.copy` 是无条件覆盖：目标原有的记录会被**整个抹掉**，
+      // 而它的漫画目录还在 ⇒ 内容变孤儿（41 号那个"读不了"故障的镜像版本），
+      // 且事前事后都没有任何提示。
+      await writeFile(sourcePath, 'download.db', 'SOURCE');
+      await writeFile(targetPath, 'download.db', 'TARGET-原内容');
+      await writeFile(targetPath, '目标自己的漫画/1.jpg', 'KEEP');
+
+      final seeded = await seedDownloadDatabase(
+        from: sourcePath,
+        to: targetPath,
+      );
+
+      expect(seeded, isTrue);
+      // 新库 = 源内容（覆盖照旧发生，但已经留了后路）。
+      expect(await readFile(targetPath, 'download.db'), 'SOURCE');
+      // 关键：目标原有 db 必须被**改名保留**，而不是丢掉。
+      final backups = backupsIn(targetPath);
+      expect(backups, hasLength(1), reason: '目标原有 db 必须被改名备份');
+      expect(backups.single.readAsStringSync(), 'TARGET-原内容');
+      // 它的漫画目录一个都没动（本轮只护栏 db，不碰内容）。
+      expect(
+        await File(p.join(targetPath, '目标自己的漫画', '1.jpg')).exists(),
+        isTrue,
+      );
+    });
+
+    test('目标没有 db 时不产生备份文件', () async {
+      await writeFile(sourcePath, 'download.db', 'SOURCE');
+      await seedDownloadDatabase(from: sourcePath, to: targetPath);
+      expect(backupsIn(targetPath), isEmpty);
+    });
+
+    test('重复执行不会覆盖已有备份（后缀递增）', () async {
+      await writeFile(sourcePath, 'download.db', 'SOURCE');
+      await writeFile(targetPath, 'download.db', 'T1');
+      await seedDownloadDatabase(from: sourcePath, to: targetPath);
+      // 再放一份目标 db（模拟用户又往目标目录放了个库），再跑一次。
+      await writeFile(targetPath, 'download.db', 'T2');
+      await seedDownloadDatabase(from: sourcePath, to: targetPath);
+
+      final backups = backupsIn(targetPath);
+      expect(
+        backups.length,
+        greaterThanOrEqualTo(2),
+        reason: '两次备份都要留住 —— 备份的唯一价值就是"还能找回来"',
+      );
+      final contents =
+          backups.map((file) => file.readAsStringSync()).toSet();
+      expect(contents, containsAll(<String>['T1', 'T2']));
     });
   });
 
@@ -450,15 +511,62 @@ void main() {
   });
 
   group('拒绝危险目标', () {
-    test('目标位于源目录内部时抛异常', () async {
-      await seedComics(1);
-      final nested = p.join(sourcePath, 'inner');
+    test('目标位于源目录内部 → **允许**，且不会把目标自己搬进去（真机配置）',
+        () async {
+      // 真机实证的配置（用户实际踩到的）：
+      //   源   `/storage/emulated/0/1/pica`
+      //   目标 `/storage/emulated/0/1/pica/picakeep/download`
+      //
+      // 此前这里直接抛「目标目录不能位于源目录内部」，于是"继续转移下载数据"
+      // 每次必失败、续传状态**永远清不掉**（用户在真机上卡了好几天）。
+      // 正确做法是允许，但遍历时跳过"通往目标的那条路径"。
+      await seedComics(2);
+      final nested = p.join(sourcePath, 'picakeep', 'download');
+      await Directory(nested).create(recursive: true);
+      await writeFile(nested, 'new-comic/1.jpg', 'NEW');
 
-      await expectLater(
-        migrateDownloadEntries(from: sourcePath, to: nested),
-        throwsA(isA<DownloadMigrationException>()),
+      final result = await migrateDownloadEntries(
+        from: sourcePath,
+        to: nested,
+        deleteSourceAsWeGo: true,
       );
-      expect(await relativeFiles(sourcePath), ['comic-0/1.jpg']);
+
+      expect(result.movedEntries, 2);
+      expect(result.failures, isEmpty);
+      // 旧内容确实搬进来了。
+      expect(Directory(p.join(nested, 'comic-0')).existsSync(), isTrue);
+      expect(Directory(p.join(nested, 'comic-1')).existsSync(), isTrue);
+      // 目标里原有的内容一个没动。
+      expect(File(p.join(nested, 'new-comic', '1.jpg')).existsSync(), isTrue);
+      // **关键回归**：目标里不能出现自嵌套的一份 `picakeep/`
+      // （少了那条路径过滤就会把 `picakeep/` 整个搬进 `picakeep/download/`）。
+      expect(
+        Directory(p.join(nested, 'picakeep')).existsSync(),
+        isFalse,
+        reason: '把目标目录自己当成待搬条目 = 自嵌套',
+      );
+      // 源目录本身也不能被删掉（目标还在它里面）。
+      expect(Directory(sourcePath).existsSync(), isTrue);
+      expect(Directory(nested).existsSync(), isTrue);
+    });
+
+    test('默认复制模式同样跳过目标路径（否则会自我递归复制）', () async {
+      await seedComics(1);
+      final nested = p.join(sourcePath, 'picakeep', 'download');
+      await Directory(nested).create(recursive: true);
+
+      final result = await migrateDownloadEntries(
+        from: sourcePath,
+        to: nested,
+      );
+
+      expect(result.failures, isEmpty);
+      expect(Directory(p.join(nested, 'comic-0')).existsSync(), isTrue);
+      expect(Directory(p.join(nested, 'picakeep')).existsSync(), isFalse);
+      // 默认模式是"全部复制成功后再清理旧目录"，所以收尾阶段**同样会删源**；
+      // 但源目录本身必须还在（目标在它里面，不能连它一起删）。
+      expect(Directory(p.join(sourcePath, 'comic-0')).existsSync(), isFalse);
+      expect(Directory(sourcePath).existsSync(), isTrue);
     });
 
     test('源目录位于目标内部时抛异常', () async {
@@ -611,6 +719,38 @@ void main() {
     test('目录不存在返回 false', () async {
       await Directory(sourcePath).delete(recursive: true);
       expect(await hasPendingDownloadEntries(sourcePath), isFalse);
+    });
+
+    test('目标在源目录内部：「只剩通往目标的路径」也算搬完（真机实证）',
+        () async {
+      // 真机现场：旧目录 `/storage/emulated/0/1/pica` 里只剩
+      // `download.db` 与 `picakeep/`（= 目标的父目录链），
+      // 3.7 G 内容其实**已经全部搬进**新目录 —— 完成判定却永远为真，
+      // 用户反复看到「转移未完成」，续传记录也永远销不掉。
+      final nested = p.join(sourcePath, 'picakeep', 'download');
+      await Directory(nested).create(recursive: true);
+      await writeFile(sourcePath, 'download.db', 'DB');
+
+      // 不传 `to`：保持既有语义，`picakeep/` 被当成"还有内容"。
+      expect(await hasPendingDownloadEntries(sourcePath), isTrue);
+      // 传了 `to`：正确判定为"已搬完"。
+      expect(
+        await hasPendingDownloadEntries(sourcePath, to: nested),
+        isFalse,
+        reason: '通往目标的路径不该被算成未搬完的内容',
+      );
+    });
+
+    test('目标在源目录内部：还有真正的漫画目录时仍算未搬完', () async {
+      final nested = p.join(sourcePath, 'picakeep', 'download');
+      await Directory(nested).create(recursive: true);
+      await writeFile(sourcePath, 'comic-0/1.jpg', 'IMG');
+
+      expect(
+        await hasPendingDownloadEntries(sourcePath, to: nested),
+        isTrue,
+        reason: '跳过目标路径不等于把一切都当搬完',
+      );
     });
   });
 

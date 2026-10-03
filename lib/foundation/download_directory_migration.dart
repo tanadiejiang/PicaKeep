@@ -111,8 +111,52 @@ Future<bool> seedDownloadDatabase({
   if (!await target.exists()) {
     await target.create(recursive: true);
   }
-  await sourceDb.copy(p.join(targetPath, kDownloadDatabaseFileName));
+  final targetDbPath = p.join(targetPath, kDownloadDatabaseFileName);
+  // 43 号：**覆盖前先把目标原有的 db 改名备份**。
+  //
+  // `File.copy` 是无条件覆盖 —— 目标原有的记录会被**整个抹掉**，而它的漫画目录
+  // 还在 ⇒ 那些内容立刻变成孤儿（文件在、记录没了、列表里再也看不到）。
+  // 这正是 41 号那个"读不了"故障的**镜像版本**，而且此前**事前事后都没有提示**。
+  //
+  // 为什么用"自动改名备份"而不是"弹确认"：与既有的数据哲学一致
+  //（改名保留、不删除 —— 见 40 号对残留旧库的处理），且不需要用户做决定。
+  //
+  // ⚠️ 备份失败时**不执行覆盖**、把异常抛给调用方 —— 宁可这次迁移没开始，
+  // 也不要静默丢掉记录（调用方会弹窗告知并保持配置不变）。
+  final targetDb = File(targetDbPath);
+  if (await targetDb.exists()) {
+    await targetDb.rename(_uniqueMigrationBackupPath(targetDbPath));
+  }
+  await sourceDb.copy(targetDbPath);
   return true;
+}
+
+/// 迁移备份用的时间戳：**精确到秒**。
+///
+/// 只到日期的话，同一天执行两次会撞名 —— 而"改名"若覆盖了同名备份，
+/// 上一次的备份就丢了。
+String _migrationBackupStamp(DateTime now) {
+  String two(int value) => value.toString().padLeft(2, '0');
+  return '${now.year}${two(now.month)}${two(now.day)}'
+      '-${two(now.hour)}${two(now.minute)}${two(now.second)}';
+}
+
+/// 给 [dbPath] 找一个**不存在**的备份路径（`<db>.bak-<时间戳>[-N]`）。
+///
+/// 时间戳到秒，但同一秒内重跑仍可能撞名；后缀递增保证**任何情况下都不会
+/// 覆盖已有备份** —— 备份的唯一价值就是"还能找回来"，覆盖它就等于没有备份。
+String _uniqueMigrationBackupPath(String dbPath) {
+  final base = '$dbPath.bak-${_migrationBackupStamp(DateTime.now())}';
+  if (!File(base).existsSync()) {
+    return base;
+  }
+  for (var i = 2; i < 1000; i++) {
+    final candidate = '$base-$i';
+    if (!File(candidate).existsSync()) {
+      return candidate;
+    }
+  }
+  return '$base-${DateTime.now().microsecondsSinceEpoch}';
 }
 
 /// 把 [from] 中**除 `download.db` 以外**的条目搬到 [to]。
@@ -147,8 +191,10 @@ Future<DownloadMigrationResult> migrateDownloadEntries({
       stopped: false,
     );
   }
-  if (_isInside(sourcePath, targetPath) || _isInside(targetPath, sourcePath)) {
-    throw const DownloadMigrationException('目标目录不能位于源目录内部（或相反）');
+  if (_isInside(sourcePath, targetPath)) {
+    // 源在目标内部：搬完还要清理源目录，而源本身就是目标的一部分
+    // ⇒ 会把目标也清掉，必须拒绝。
+    throw const DownloadMigrationException('源目录不能位于目标目录内部');
   }
 
   final source = Directory(sourcePath);
@@ -171,6 +217,17 @@ Future<DownloadMigrationResult> migrateDownloadEntries({
   try {
     entries = (await source.list(followLinks: false).toList())
         .where((e) => p.basename(e.path) != kDownloadDatabaseFileName)
+        // **目标在源内部时必须跳过"通往目标的那条路径"。**
+        //
+        // 真机实证（用户配置）：旧目录 `/storage/emulated/0/1/pica`、
+        // 新目录 `/storage/emulated/0/1/pica/picakeep/download` —— 目标就在源
+        // 里面。此前这种情况直接抛「目标目录不能位于源目录内部」，
+        // 于是"继续转移"每次必失败、续传状态永远清不掉（用户真机卡了好几天）。
+        //
+        // 正确做法不是拒绝，而是**别把目标自己当成一个待搬条目**：
+        // 少了这一条过滤，`picakeep/` 会被整个搬进
+        // `picakeep/download/`，形成自嵌套。
+        .where((e) => !_isOnPathToTarget(e.path, targetPath))
         .toList();
   } catch (e) {
     throw DownloadMigrationException('无法读取源目录：${_describe(e)}');
@@ -368,8 +425,9 @@ Future<DownloadMigrationResult> copyDirectoryContents({
       stopped: false,
     );
   }
-  if (_isInside(sourcePath, targetPath) || _isInside(targetPath, sourcePath)) {
-    throw const DownloadMigrationException('目标目录不能位于源目录内部（或相反）');
+  if (_isInside(sourcePath, targetPath)) {
+    // 源在目标内部：复制/搬迁都会把目标自己卷进来，且清理阶段会误删目标。
+    throw const DownloadMigrationException('源目录不能位于目标目录内部');
   }
 
   final source = Directory(sourcePath);
@@ -389,7 +447,12 @@ Future<DownloadMigrationResult> copyDirectoryContents({
 
   final List<FileSystemEntity> entries;
   try {
-    entries = await source.list(followLinks: false).toList();
+    entries = (await source.list(followLinks: false).toList())
+        // 与 [migrateDownloadEntries] 同一条过滤：目标在源内部时，
+        // 跳过"通往目标的那条路径"（否则复制会自我递归，把刚复制出来的
+        // 内容再复制一遍，直到撑满磁盘）。
+        .where((e) => !_isOnPathToTarget(e.path, targetPath))
+        .toList();
   } catch (e) {
     throw DownloadMigrationException('无法读取源目录：${_describe(e)}');
   }
@@ -455,11 +518,21 @@ class DownloadMigrationException implements Exception {
 ///
 /// "还有没有活要干"的唯一判据，比持久化"已迁移清单"更可靠：
 /// 文件系统的实际状态就是唯一真相，应用被杀掉重启后依然成立。
-Future<bool> hasPendingDownloadEntries(String from) async {
+///
+/// [to]（可选）是这次迁移的**目标目录**。传了它才会把"目标在源目录内部"时
+/// **通往目标的那条路径**排除掉 —— 那种配置下（真机实证：源
+/// `/storage/emulated/0/1/pica`、目标 `/storage/emulated/0/1/pica/picakeep/download`），
+/// `picakeep/` 这一层**永远留在源目录里**（它不可能被搬走，搬走就等于搬目标自己）。
+///
+/// ⚠️ 不排除它的后果很具体：内容其实已经**全部搬完**（真机实测旧目录只剩
+/// `download.db` 与 `picakeep/`、体积 3.7 G 已全在新目录），完成判定却永远为真
+/// ⇒ 用户反复看到「转移未完成」，续传记录也永远销不掉。
+Future<bool> hasPendingDownloadEntries(String from, {String? to}) async {
   final sourcePath = _normalize(from);
   if (sourcePath.isEmpty) {
     return false;
   }
+  final targetPath = _normalize(to ?? '');
   final source = Directory(sourcePath);
   try {
     if (!await source.exists()) {
@@ -467,6 +540,10 @@ Future<bool> hasPendingDownloadEntries(String from) async {
     }
     await for (final entity in source.list(followLinks: false)) {
       if (p.basename(entity.path) == kDownloadDatabaseFileName) {
+        continue;
+      }
+      if (targetPath.isNotEmpty &&
+          _isOnPathToTarget(entity.path, targetPath)) {
         continue;
       }
       return true;
@@ -614,6 +691,26 @@ bool _isInside(String child, String parent) {
     return child != '/';
   }
   return child.startsWith('$parent/');
+}
+
+/// [entryPath] 是否位于「通往 [targetPath] 的路径上」（含 [targetPath] 自身）。
+///
+/// 用于**目标目录在源目录内部**的配置（真机实证：
+/// 源 `/storage/emulated/0/1/pica`、目标 `/storage/emulated/0/1/pica/picakeep/download`）：
+/// 遍历源目录时必须跳过这一条路径，否则会把目标目录自己当成一个待搬条目
+/// 搬进目标里，形成自嵌套（复制模式下更是无限递归）。
+///
+/// 例：`entryPath=/a/picakeep`、`targetPath=/a/picakeep/download` → true。
+bool _isOnPathToTarget(String entryPath, String targetPath) {
+  final entry = _normalize(entryPath);
+  final target = _normalize(targetPath);
+  if (entry.isEmpty || target.isEmpty) {
+    return false;
+  }
+  if (entry == target) {
+    return true;
+  }
+  return target.startsWith('$entry/');
 }
 
 String _describe(Object error) {

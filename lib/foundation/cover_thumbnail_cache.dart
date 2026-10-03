@@ -1,10 +1,24 @@
 import 'dart:async';
 import 'dart:collection';
 import 'dart:io';
+import 'dart:math' as math;
 import 'dart:ui' as ui;
 
+import 'package:path/path.dart' as p;
+
+import 'package:picakeep/foundation/local_cover_cache.dart';
+import 'package:picakeep/foundation/remote_library_data_source.dart';
+
 const kCoverThumbnailTargetWidth = 720;
-const _coverThumbnailFileName = 'cover_thumb_720.png';
+
+/// 缩略图子目录名（位于统一封面缓存根之下）。
+const String _coverThumbnailDirName = 'thumbs';
+
+/// 缩略图文件后缀。
+///
+/// 旧实现把文件名固定成 `cover_thumb_720.png`；现在文件名是稳定哈希，
+/// 后缀单独留一个常量，便于识别与清理。
+const String _coverThumbnailSuffix = '.png';
 
 class _CoverThumbnailTask {
   const _CoverThumbnailTask({
@@ -18,13 +32,153 @@ class _CoverThumbnailTask {
 
 class CoverThumbnailCache {
   static final Queue<_CoverThumbnailTask> _queue = Queue<_CoverThumbnailTask>();
-  static final Map<String, Future<String?>> _pending = <String, Future<String?>>{};
+  static final Map<String, Future<String?>> _pending =
+      <String, Future<String?>>{};
   static bool _running = false;
 
+  static final Map<String, Future<String?>> _displayPending = {};
+  static Future<void> _displayTail = Future.value();
+
+  /// Prepared off the build path. Only application-internal resolved covers
+  /// belong here; external privileged sources must first use the manager.
+  static Future<String?> prepareDisplay(String coverPath, int requestedWidth,
+      {required bool Function() canContinue}) async {
+    if (!canContinue()) return null;
+    final source = File(coverPath);
+    final before = await source.stat();
+    if (before.type != FileSystemEntityType.file || before.size == 0) {
+      return null;
+    }
+    final bucket = requestedWidth <= 384
+        ? 384
+        : requestedWidth <= 768
+            ? 768
+            : requestedWidth <= 1536
+                ? 1536
+                : 0;
+    if (bucket == 0) return coverPath;
+    final stamp = '${before.size}|${before.modified.microsecondsSinceEpoch}';
+    final key = LocalCoverCache.stableHashForFileName(
+        '$coverPath|$stamp|$bucket|thumb-v2');
+    final destination = File(p.join(_thumbRoot().path, '$key.png'));
+    if (await destination.exists() && await destination.length() > 0) {
+      return destination.path;
+    }
+    final pending = _displayPending[key];
+    if (pending != null) return pending;
+    final previous = _displayTail;
+    final done = Completer<void>();
+    _displayTail = done.future;
+    late final Future<String?> task;
+    task = () async {
+      await previous;
+      ui.ImmutableBuffer? buffer;
+      ui.ImageDescriptor? descriptor;
+      ui.Codec? codec;
+      ui.Image? image;
+      File? temporary;
+      try {
+        if (!canContinue()) return null;
+        buffer = await ui.ImmutableBuffer.fromFilePath(coverPath);
+        if (!canContinue()) return null;
+        descriptor = await ui.ImageDescriptor.encoded(buffer);
+        final scale = math.min(
+            1.0,
+            math.min(
+                bucket / descriptor.width,
+                math.min(
+                    4096 / math.max(descriptor.width, descriptor.height),
+                    math.sqrt(4 *
+                        1024 *
+                        1024 /
+                        (descriptor.width * descriptor.height)))));
+        if (!canContinue()) return null;
+        codec = await descriptor.instantiateCodec(
+            targetWidth: math.max(1, (descriptor.width * scale).round()),
+            targetHeight: math.max(1, (descriptor.height * scale).round()));
+        image = (await codec.getNextFrame()).image;
+        final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
+        if (bytes == null || !canContinue()) return null;
+        final after = await source.stat();
+        if ('${after.size}|${after.modified.microsecondsSinceEpoch}' != stamp) {
+          return null;
+        }
+        await destination.parent.create(recursive: true);
+        temporary = File(
+            '${destination.path}.${DateTime.now().microsecondsSinceEpoch}.part');
+        await temporary.writeAsBytes(bytes.buffer.asUint8List(), flush: true);
+        if (!canContinue()) return null;
+        await temporary.rename(destination.path);
+        // Existing global quota, throttled and preserving the just-published file.
+        // Quota work is not a condition for successfully showing the thumbnail.
+        try {
+          await RemoteLibraryDataSource.trimCacheToLimit(
+              protectedPath: destination.path);
+        } catch (_) {}
+        return destination.path;
+      } catch (_) {
+        return null;
+      } finally {
+        try {
+          if (temporary != null && await temporary.exists()) {
+            await temporary.delete();
+          }
+        } catch (_) {
+          // A disposable .part may remain; never stall the serial worker.
+        } finally {
+          image?.dispose();
+          codec?.dispose();
+          descriptor?.dispose();
+          buffer?.dispose();
+          done.complete();
+          _displayPending.remove(key);
+        }
+      }
+    }();
+    _displayPending[key] = task;
+    return task;
+  }
+
+  /// 缩略图路径：**统一缓存根下的 `thumbs/` 子目录**（plan/12）。
+  ///
+  /// ## 改动前的问题
+  ///
+  /// 旧实现是 `原封面父目录/cover_thumb_720.png`，有两个真问题：
+  ///
+  /// 1. **往用户下载目录里写文件** —— 原封面在下载目录时，缩略图就落在那里，
+  ///    违背"缓存只写应用目录"（计划验收标准 4）；
+  /// 2. **同一目录下的多个封面共用一个文件名** —— 一个下载目录里的两张封面
+  ///    会互相覆盖对方的缩略图，`_freshThumbnailFile` 的 mtime 判断还可能
+  ///    让它误认为"是这张图的缩略图"，于是显示**别人的图**。
+  ///
+  /// ## 键的构成
+  ///
+  /// `哈希(封面绝对路径 + 封面长度 + 封面 mtime)`：源图变化后键就变了，
+  /// 于是**不会误用旧缩略图**（计划第 5 条的要求）。旧键的残留文件由
+  /// 缓存目录整体清理，不影响正确性。
   static String thumbnailPathForCover(String coverPath) {
-    final file = File(coverPath);
-    final parent = file.parent.path;
-    return '$parent${Platform.pathSeparator}$_coverThumbnailFileName';
+    return p.join(
+        _thumbRoot().path, '${_thumbnailKey(coverPath)}$_coverThumbnailSuffix');
+  }
+
+  /// 缩略图根目录：`<App.dataPath>/local_library_cache/covers/thumbs`。
+  static Directory _thumbRoot() {
+    return Directory(
+      p.join(
+        LocalCoverCache.rootDirectory().path,
+        _coverThumbnailDirName,
+      ),
+    );
+  }
+
+  static String _thumbnailKey(String coverPath) {
+    var fingerprint = '0|0';
+    try {
+      final stat = File(coverPath).statSync();
+      fingerprint = '${stat.size}|${stat.modified.millisecondsSinceEpoch}';
+    } catch (_) {}
+    // 用与 LocalCoverCache 同一套稳定哈希，避免再引入一个哈希实现。
+    return LocalCoverCache.stableHashForFileName('$coverPath|$fingerprint');
   }
 
   static String displayPathForCover(String coverPath) {

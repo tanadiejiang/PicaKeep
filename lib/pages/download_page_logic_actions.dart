@@ -94,20 +94,9 @@ extension DownloadPageLogicActions on DownloadPageLogic {
       await reload();
       return 0;
     }
-    if (!_usesManagedDownloadSources) {
-      final localLibraryManager = LocalLibraryManager();
-      if (await localLibraryManager
-          .shouldBypassDirectDownloadManagerForCurrentDownloads()) {
-        final count = await localLibraryManager
-            .refreshCurrentDownloadsWithShizukuFallback();
-        await reload();
-        return count;
-      }
-      await DownloadManager().init();
-      final count = DownloadManager().scanDirectoryForComics();
-      await reload();
-      return count;
-    }
+    // 43 号：与 `_loadLocalComics` 同口径 —— 列表恒走新本地库，
+    // 那"重新扫描"也必须走同一条；否则扫描与列表会用两套数据源，
+    // 出现"扫出来的和看到的不一致"。
     final localLibraryManager = LocalLibraryManager();
     final count = await (() async {
       if (await localLibraryManager

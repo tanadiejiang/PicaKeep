@@ -22,7 +22,9 @@
 library;
 
 import 'dart:convert';
+import 'dart:isolate';
 
+import 'package:picakeep/foundation/download_model.dart';
 import 'package:picakeep/foundation/local_library.dart';
 
 /// `settings[]` 下标：图集页当前视图（`'album'` / `'illust'`）。
@@ -293,6 +295,12 @@ List<IllustLibraryEntry> buildIllustEntries(
   return entries;
 }
 
+Future<({List<IllustLibraryEntry> entries, List<IllustTagSummary> tags})>
+    prepareIllustEntries(List<LocalLibraryComicItem> items) => Isolate.run(() {
+          final entries = buildIllustEntries(items);
+          return (entries: entries, tags: summarizeIllustTags(entries));
+        });
+
 /// 解析 `download.db` 的 `json` 列文本。
 ///
 /// 解析失败（空串 / 老式行 / 坏 JSON）返回 null —— 调用方据此跳过该条，
@@ -309,6 +317,55 @@ Map<String, dynamic>? decodeIllustSourceRow(LocalLibraryComicItem item) {
     }
   } catch (_) {}
   return null;
+}
+
+/// 这条**本地库条目**是不是 Pixiv 下载。
+///
+/// ## 为什么需要它
+///
+/// 37 号把「已下载」页列表里的 Pixiv 项过滤掉了，但「我」页那个
+/// 「共 N 部漫画」的计数走的是**另一条路**（`me_page.dart` 的
+/// `_resolveDownloadCount` → `LocalLibraryManager.getAll()`），没有跟着过滤。
+/// 用户真机反馈原话：「虽然里面不显示插画项了但还是显示外面的数量」——
+/// 列表 3 条、计数说 6 条。
+///
+/// ⚠️ 判据必须与插画视图（[buildIllustEntries]）**同源**（都用
+/// [decodeIllustSourceRow] 读 `sourceKey`）：两处各写一份，改一处漏一处就会让
+/// 这种"数字对不上"的现象重现，而且不报错。
+///
+/// 注意这里**不能**直接用 `download_model.dart` 的 `isPixivDownloadedItem`：
+/// 那个的 id 前缀兜底认的是 db 原始 id（`pixiv79837313`），而
+/// `LocalLibraryComicItem.id` 是扫描期生成的复合 id
+/// （`local_download::<source>::<原始id>`），前缀判据在这里恒不命中。
+bool isPixivLocalLibraryItem(LocalLibraryComicItem item) {
+  final data = decodeIllustSourceRow(item);
+  if (data == null) {
+    return false;
+  }
+  return data['sourceKey']?.toString().trim() == illustPixivSourceKey;
+}
+
+/// 任意下载条目 → 是不是 Pixiv。
+///
+/// ## 为什么必须只有一个入口
+///
+/// 「已下载」的**列表**与**计数**必须同口径（37 号过滤列表、38 号补计数），
+/// 而计数这一件事本身就有**三条取数路径**（`me_page.dart` 的
+/// `_resolveDownloadCount`）：托管扫描 `LocalLibraryManager.getAll()`、
+/// 特权回退 `getCurrentDownloadsWithShizukuFallback()`、
+/// 旧体系 `DownloadManager().getAll()`。前两者的元素是
+/// [LocalLibraryComicItem]，第三者只有 `DownloadedItem` —— 各写一份判据，
+/// 必然出现"只修了其中一条分支"的情况（38 号第一次就只改了第三条，
+/// 真机反馈「依旧是 6 条」）。
+///
+/// 所以这里把两条既有判据合成一处：本地库条目走 [isPixivLocalLibraryItem]
+/// （读 `json` 列的 `sourceKey`），其余走 `download_model.dart` 的
+/// `isPixivDownloadedItem`（`sourceKey` 优先、db 原始 id 前缀兜底）。
+bool isPixivDownloadRecord(DownloadedItem item) {
+  if (item is LocalLibraryComicItem) {
+    return isPixivLocalLibraryItem(item);
+  }
+  return isPixivDownloadedItem(item);
 }
 
 /// 宽高 → 展示比例。任一缺失/非正数时降级为 [illustFallbackAspectRatio]。

@@ -1,0 +1,14 @@
+Flutter assets will be downloaded from https://storage.flutter-io.cn. Make sure you trust this source!
+00:00 +0: loading C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart
+00:00 +0: (setUpAll)
+00:00 +0: folders show names/counts; long press opens single-folder menu
+00:03 +1: new folder uses entered physical name; cancellation creates nothing
+00:06 +2: folder sorting is separate from its long-press menu and persists on back
+00:07 +3: root folder offers default action but cannot be renamed or deleted
+00:08 +4: illustration long press selects actual items and copies the batch to one folder
+[PicaKeep][IllustCover] resolved id=pixivwidget1 path=C:\Users\tanad\AppData\Local\Temp\pk46_widgets_9e0e4e86\app\local_library_cache\covers\6af9a88a64cdb87b.png inAppCache=true
+[PicaKeep][IllustCover] resolved id=pixivwidget2 path=C:\Users\tanad\AppData\Local\Temp\pk46_widgets_9e0e4e86\app\local_library_cache\covers\5c7ce43c14430c6b.png inAppCache=true
+00:15 +5: download pill delivers long-press without running ordinary download
+00:15 +6: (tearDownAll)
+Fixture cleanup deferred until process exit: C:\Users\tanad\AppData\Local\Temp\pk46_widgets_9e0e4e86
+00:16 +6: All tests passed!

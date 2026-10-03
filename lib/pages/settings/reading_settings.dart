@@ -142,6 +142,18 @@ class ReadingSettings extends StatelessWidget {
         title: "限制图片宽度".tl,
         settingsIndex: 43,
       ),
+      // 39 号：两套清晰度开关。默认值方向**相反**（漫画关、插画/图集开），
+      // 由 `foundation/reader_image_quality.dart` 的归一化函数保证；
+      // 开关本身只是普通 SwitchSetting，用户打开后由 settings 持久化 ——
+      // 这就是用户要的"有记忆"。
+      SwitchSetting(
+        title: "漫画阅读高清模式".tl,
+        settingsIndex: readerHighQualityComicSettingIndex,
+      ),
+      SwitchSetting(
+        title: "插画 / 图集阅读高清模式".tl,
+        settingsIndex: readerHighQualityIllustSettingIndex,
+      ),
       SwitchSetting(
         title: "显示页面信息".tl,
         settingsIndex: 57,

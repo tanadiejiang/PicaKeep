@@ -778,7 +778,38 @@ abstract mixin class _DownloadDb {
     ]);
   }
 
+  /// 数据库是否已打开。
+  ///
+  /// 供诊断使用：`isExists` / `getEpLength` 这类方法在 `_db == null` 时
+  /// **静默返回 false / 0**（而不是抛异常或自动初始化），于是阅读器会安静地
+  /// 落到"读不到图"的分支。把它们的状态暴露出来，才能一眼看出
+  /// "列表能显示、但点进去读不了"是不是这个原因。
+  bool get hasDatabase => _db != null;
+
+  /// 当前已打开 db 里的记录数（诊断用；未打开返回 -1）。
+  ///
+  /// 与 [hasDatabase] 配套：`hasDb=true` 只说明"打开了某个库"，
+  /// 真正要回答的是"打开的是不是那个有记录的库" —— 阅读器读不到本地图时，
+  /// 这两个值的组合能立刻区分"库没打开"与"打开的库不对"。
+  int get debugRecordCount {
+    final db = _db;
+    if (db == null) {
+      return -1;
+    }
+    try {
+      final rows = db.select('select count(*) as c from download');
+      return rows.isEmpty ? -1 : (rows.first['c'] as int? ?? -1);
+    } catch (_) {
+      return -1;
+    }
+  }
+
   bool isExists(String id) {
+    // 43 号：41 号排查时加在这里的两条诊断 `print` 已移除
+    // （每次查询都打，噪音大于价值；"读到 0 张图"那类信号改由
+    // `_logEmptyEpisodeFiles` 在真正列到空时记一条 warning）。
+    // `hasDatabase` / `debugRecordCount` 两个 getter 保留：它们无副作用，
+    // 需要时仍可直接查。
     if (_db == null) {
       return false;
     }

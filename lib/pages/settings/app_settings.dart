@@ -156,6 +156,18 @@ Future<int?> _reloadManagedDataManagers(
   );
   refreshLocalDataCaches();
 
+  // 43 号续：顺手清掉本地库的"无封面"标记。
+  //
+  // `noCoverSentinel` 是一次性判定：一旦落下，封面解析会**直接短路、永不再试**
+  //（`local_library.dart:992` / `:1249`）。而"数据管理-刷新本地漫画"正是用户
+  // 表达"我改动了磁盘上的东西，请重新看一遍"的入口 —— 内容归位、手动补封面
+  // 都属于这一类。不清的话，归位后封面文件明明在包里、列表却永远是占位图标。
+  //
+  // `_LocalLibrarySourceCache.clearNoCoverSentinels` 本来就是为这件事写的
+  //（注释原文："用于用户主动刷新/重扫——可能手动添加了封面文件"），
+  // 但此前**全项目没有任何调用方**，是死代码。
+  await LocalLibraryManager().clearAllNoCoverSentinels();
+
   LogManager.addLog(
       LogLevel.info, 'ManagedDataReload', 'appdata.readData:start');
   await appdata.readData().timeout(const Duration(seconds: 5));
@@ -1193,6 +1205,7 @@ Widget buildAppSettings(double width, BuildContext context) {
       subtitle: Text('按当前设置重新扫描本应用下载目录、原应用下载目录与自定义本地漫画路径'.tl),
       onTap: () => _rescanLocalComics(context),
     ),
+    const _FixDirectoryNamesTile(),
     const _DeleteBehaviorTile(),
     const _UserDataTransferTiles(),
     if (App.isAndroid) const _AndroidPermissionSectionTitle(),
@@ -1216,6 +1229,84 @@ Widget buildAppSettings(double width, BuildContext context) {
     SettingsTitle('其它'.tl),
     const _LanguageSettingTile(),
   ]);
+}
+
+/// 「修正已下载文件夹名」—— **仅用于修正哔咔（picacg）的历史遗留目录名**。
+///
+/// ## 它为什么存在
+///
+/// V1.9.32 引入 picacg 全链路时，那个源的下载目录名是**纯作品 id**，
+/// 于是配了这个"改成标题"的补救工具。其它来源（jm / ehentai / nhentai / pixiv）
+/// 从落地起就用标题或命名模板，**从来没有这个问题** —— 这一条在
+/// 原项目源码里也得到印证（`PicaComic_原项目/lib/network/download_model.dart:163`
+/// 首次下载用的是 `findValidDirectoryName(path, title)`，即标题）。
+///
+/// ## 为什么收窄成"只处理哔咔"
+///
+/// 无差别地对所有源生效会造成**意外改名**：例如把 Pixiv 的
+/// `{author}_{title}_{id}_{pages}` 压成纯标题，一口气丢掉 author / id / pages
+/// 三段信息。收窄的实现在 `OnlineDownloadManager.fixDirectoryNames`
+///（按 `json` 的 `sourceKey` 判据，**不靠 id 前缀猜** —— 猜错就要写盘改名）。
+///
+/// ## 为什么从「下载」挪到「数据管理」
+///
+/// 它是一次性的历史数据维护动作，与「刷新本地漫画」「重新扫描磁盘」同类；
+/// 原先挂在「下载」设置页「并发下载数」正下方，容易被误认为常规下载参数。
+class _FixDirectoryNamesTile extends StatefulWidget {
+  const _FixDirectoryNamesTile();
+
+  @override
+  State<_FixDirectoryNamesTile> createState() => _FixDirectoryNamesTileState();
+}
+
+class _FixDirectoryNamesTileState extends State<_FixDirectoryNamesTile> {
+  bool _running = false;
+
+  Future<void> _run() async {
+    setState(() => _running = true);
+    try {
+      final result = await OnlineDownloadManager.instance.fixDirectoryNames();
+      if (!mounted) return;
+      showDialog<void>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('修正完成'),
+          content: Text(
+            '已修正：${result.fixed} 个\n'
+            '已跳过：${result.skipped} 个\n'
+            '失败：${result.failed} 个',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('确定'),
+            ),
+          ],
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _running = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ListTile(
+      leading: _running
+          ? const SizedBox(
+              width: 24,
+              height: 24,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            )
+          : const Icon(Icons.drive_file_rename_outline),
+      title: Text('修正哔咔的旧文件夹名'.tl),
+      subtitle: Text(
+        '仅修正哔咔（picacg）早期留下的"纯 ID 目录"；其它来源的命名不受影响'.tl,
+      ),
+      trailing: _running ? null : const Icon(Icons.arrow_right),
+      onTap: _running ? null : _run,
+    );
+  }
 }
 
 class _DeleteBehaviorTile extends StatefulWidget {
@@ -1657,6 +1748,7 @@ class _DirectoryPathDialog extends StatefulWidget {
     required this.onOpenCurrentDirectory,
     required this.initialPath,
     required this.hasExistingDownloads,
+    this.onRestoreDefault,
     this.extraSectionBuilder,
   });
 
@@ -1669,6 +1761,15 @@ class _DirectoryPathDialog extends StatefulWidget {
   final Future<void> Function(bool migrateDownloads) onConfirm;
   final VoidCallback onCancel;
   final VoidCallback onOpenCurrentDirectory;
+
+  /// 「还原默认路径」（可空）。
+  ///
+  /// 非空时在「取消 / 确定」**左侧**多出一个按钮 —— 用于"清空自定义值、
+  /// 回到该设置项的默认位置"这一类操作（目前只有 Pixiv 专属下载目录用它）。
+  ///
+  /// 之所以做成可选回调而不是硬编码：本弹窗是**通用组件**，
+  /// 「本应用下载目录」「原应用下载目录」等处也在用，那里没有"默认路径"可言。
+  final Future<void> Function()? onRestoreDefault;
 
   /// 打开弹窗时的下载目录配置值，用于判断路径是否真的被改动。
   final String initialPath;
@@ -1834,6 +1935,13 @@ class _DirectoryPathDialogState extends State<_DirectoryPathDialog> {
                 spacing: 8,
                 runSpacing: 4,
                 children: [
+                  // 「还原默认路径」贴最左（用户要求的位置），且只在调用方
+                  // 提供了该能力时出现（见 `onRestoreDefault` 的注释）。
+                  if (widget.onRestoreDefault != null)
+                    TextButton(
+                      onPressed: () => widget.onRestoreDefault!(),
+                      child: Text('还原默认路径'.tl),
+                    ),
                   if (_showMigrateOption) _buildMigrateOption(context),
                   TextButton(
                     onPressed: widget.onCancel,
@@ -1987,8 +2095,46 @@ Future<void> _startDownloadMigrationTask(
     barrierDismissible: false,
     builder: (_) => _MigrationProgressDialog(task: task),
   );
-  final result = await task;
-  if (!context.mounted || result == null) {
+  // ⚠️ **必须接住异常**。以前这里是裸的 `await task`：迁移一旦在**开始前**就
+  // 失败（最典型的是"目标目录在源目录内部"，参数校验直接抛），异常会从这里
+  // 冒到调用方，于是——
+  //   · 进度框被 `whenComplete` 收掉了（看不到任何进度）；
+  //   · 结果反馈（`_reportDownloadMigrationResult`）**根本不会执行**；
+  //   · 续传状态照旧留着，用户再点一次还是同样的结果。
+  // 真机反馈原话就是「迁移失败卡在这里」，现象是"点了没反应、状态一直挂着"。
+  DownloadMigrationResult? result;
+  Object? failure;
+  try {
+    result = await task;
+  } catch (e) {
+    failure = e;
+  }
+  if (!context.mounted) {
+    return;
+  }
+  if (failure != null) {
+    final reason =
+        failure is DownloadMigrationException ? failure.message : '$failure';
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('迁移没能开始'.tl),
+        content: Text(
+          '$reason\n\n旧目录：$from\n新目录：$to\n\n'
+          '内容没有被移动，修好上面这个问题后可以再点一次「继续转移下载数据」。'
+              .tl,
+        ),
+        actions: <Widget>[
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: Text('知道了'.tl),
+          ),
+        ],
+      ),
+    );
+    return;
+  }
+  if (result == null) {
     return;
   }
   // 漫画是这一轮才落到新目录里的，重扫一次下载页才能立刻看到。
@@ -2006,7 +2152,9 @@ Future<void> _reportDownloadMigrationResult(
   required String to,
 }) async {
   // 以文件系统的实际状态为准：旧目录还有东西就是没搬完。
-  final remaining = await hasPendingDownloadEntries(from);
+  // 传 `to` 才能排除"通往目标的那条路径"（目标在源目录内部时它会永远留在源里，
+  // 不排除就永远判不出搬完）。
+  final remaining = await hasPendingDownloadEntries(from, to: to);
   if (!context.mounted) {
     return;
   }
@@ -2148,7 +2296,7 @@ class _UserDataTransferTilesState extends State<_UserDataTransferTiles> {
       builder: (ctx) => AlertDialog(
         title: Text('导出用户数据'.tl),
         content: Text(
-          '将导出设置、账号（含登录状态）、历史记录与本地收藏。\n\n'
+          '将导出设置、账号资料与登录凭据、历史记录与本地收藏。\n\n'
                   '不含已下载的漫画与下载记录。导出的文件可以被原项目导入，反之亦然。'
               .tl,
         ),
@@ -2199,11 +2347,12 @@ class _UserDataTransferTilesState extends State<_UserDataTransferTiles> {
       builder: (ctx) => AlertDialog(
         title: Text('导入用户数据'.tl),
         content: Text(
-          '将导入设置、账号（含登录状态）、历史记录与本地收藏。\n\n'
+          '将导入设置、账号资料与登录凭据、历史记录与本地收藏。\n\n'
                   '· 设置与账号：**以后导入包为准**（设置只覆盖与原项目一致的部分，'
                   '本应用新增的选项保持不动）；\n'
                   '· 历史与本地收藏：**合并**，本应用已有的记录不会被删除。\n\n'
-                  '导入完成后需要重启应用才会生效。'
+                  '导入完成后不会立即刷新当前运行状态。请彻底关闭应用，再重新打开；'
+                  '重新启动后，账号、凭据和设置才会重新加载。'
               .tl,
         ),
         actions: [
@@ -2237,9 +2386,9 @@ class _UserDataTransferTilesState extends State<_UserDataTransferTiles> {
       final result = await UserDataTransfer.import(path);
       if (!mounted) return;
       if (result.ok) {
-        await _showDetails('导入完成', result);
+        await _showDetails('导入完成，请重启应用', result);
         if (!mounted) return;
-        _showSettingMessage(context, '导入完成，重启应用后生效');
+        _showSettingMessage(context, '导入已写入。请彻底关闭并重新打开应用后再检查账号状态');
       } else {
         await _showDetails('导入失败', result);
       }
@@ -2312,7 +2461,10 @@ class _PendingDownloadMigrationTileState
       return;
     }
     // 记录可能已经过期（用户自己把旧目录内容搬走/删了），以文件系统为准。
-    final stillPending = await hasPendingDownloadEntries(pending.from);
+    // 同样要带上 `to`：目标在源目录内部时，"通往目标的路径"是**应当**留在源里的，
+    // 否则这个入口会在迁移真正完成后仍然一直显示（真机实证）。
+    final stillPending =
+        await hasPendingDownloadEntries(pending.from, to: pending.to);
     if (!mounted) {
       return;
     }

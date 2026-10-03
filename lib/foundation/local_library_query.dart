@@ -2,6 +2,7 @@ part of 'local_library.dart';
 
 extension LocalLibraryQuery on LocalLibraryManager {
   Future<void> refresh() {
+    invalidateManagedDownloads();
     final activeTask = _refreshTask;
     if (activeTask != null) {
       return activeTask;
@@ -28,14 +29,43 @@ extension LocalLibraryQuery on LocalLibraryManager {
     return List<LocalLibrarySource>.from(await _buildSources());
   }
 
-  Future<List<LocalLibraryComicItem>> getManagedDownloads() {
+  void invalidateManagedDownloads() {
+    _managedDownloadsGeneration++;
+    _managedDownloadsSnapshot = null;
+    _managedDownloadsVersion = null;
+    _managedDownloadsLoadTask = null;
+  }
+
+  Future<List<LocalLibraryComicItem>> getManagedDownloads(
+      {bool forceRefresh = false, bool cacheSnapshot = false}) {
+    // Existing callers expect a fresh read after direct library mutations.
+    // Only the version-aware illustration page opts into retained snapshots.
+    if (!cacheSnapshot && _managedDownloadsLoadTask == null) {
+      invalidateManagedDownloads();
+    }
+    // Settings are small strings; no file/DB probes belong in the cache key.
+    final version =
+        '${App.dataPath}|$managedDataSourceMode|${App.localDataVersion.value}|'
+        '${App.serviceConfigVersion.value}|${jsonEncode(appdata.settings)}';
+    if (forceRefresh || _managedDownloadsVersion != version) {
+      invalidateManagedDownloads();
+      _managedDownloadsVersion = version;
+    }
+    final snapshot = _managedDownloadsSnapshot;
+    if (snapshot != null) return Future.value(List.of(snapshot));
     final activeTask = _managedDownloadsLoadTask;
     if (activeTask != null) {
       return activeTask;
     }
 
     late final Future<List<LocalLibraryComicItem>> task;
-    task = _loadManagedDownloadsInternal().whenComplete(() {
+    final generation = _managedDownloadsGeneration;
+    task = _loadManagedDownloadsInternal().then((items) {
+      if (generation == _managedDownloadsGeneration) {
+        _managedDownloadsSnapshot = List.of(items);
+      }
+      return items;
+    }).whenComplete(() {
       if (identical(_managedDownloadsLoadTask, task)) {
         _managedDownloadsLoadTask = null;
       }

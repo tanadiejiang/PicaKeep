@@ -8,6 +8,7 @@ import 'package:picakeep/foundation/app_runtime_mode.dart';
 import 'package:picakeep/foundation/ai/ai_settings.dart';
 import 'package:picakeep/foundation/main_page_hub.dart';
 import 'package:picakeep/tools/local_app_links.dart';
+import 'package:picakeep/tools/download_notification_routes.dart';
 import '../base.dart';
 import '../components/components.dart';
 import 'ai/ai_page.dart';
@@ -223,6 +224,8 @@ class _MainPageState extends State<MainPage> {
       AppStartupTrace.log('MainPage.firstPostFrame');
       if (!mounted) return;
       StateController.find<MainPageHub>().pushPage = _openHubPage;
+      DownloadNotificationRoutes.instance.initialize();
+      DownloadNotificationRoutes.instance.tryOpen();
       _scheduleClipboardCheck();
     });
   }

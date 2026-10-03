@@ -424,6 +424,17 @@ Set<String>? _normalizeSourceSet(Iterable<Object?>? values) {
   return normalized.isEmpty ? null : normalized;
 }
 
+/// Runtime-only evidence of what this user turn actually displayed. Consuming a
+/// temporary result buffer must not erase that evidence between tool rounds.
+class _TurnOutput {
+  int resultLists = 0;
+  bool hasAssistant = false;
+  bool hasSpecificFeedback = false;
+  bool finished = false;
+
+  bool get hasOutput => resultLists > 0 || hasAssistant || hasSpecificFeedback;
+}
+
 /// AI 对话控制器
 class AiConversationController extends ChangeNotifier {
   final List<AiChatMessage> displayMessages = [];
@@ -462,6 +473,8 @@ class AiConversationController extends ChangeNotifier {
   int _currentRound = 0;
 
   List<Map<String, dynamic>>? _pendingDisplayItems;
+  _TurnOutput _turnOutput = _TurnOutput();
+  bool _confirmingDownload = false;
   final List<AiPromptTag> _persistentPromptTags = [];
   Set<String>? _persistentAllowedSearchSources;
 
@@ -652,6 +665,7 @@ class AiConversationController extends ChangeNotifier {
 
   /// 初始化新会话元数据。新会话不继承其他会话的长期状态。
   void _createNew() {
+    _resetTurnOutput();
     conversationId = _generateUuid();
     _conversationTitle = '新会话';
     _titleIsCustom = false;
@@ -662,6 +676,29 @@ class AiConversationController extends ChangeNotifier {
     _persistentLocalOnly = null;
     _activeTurnContext = null;
     _initSystemPrompt();
+  }
+
+  bool _isActiveOutput(_TurnOutput turn) =>
+      identical(_turnOutput, turn) && !turn.finished;
+
+  void _resetTurnOutput() {
+    _turnOutput.finished = true;
+    _llmCancelToken?.cancel('会话已切换');
+    _llmCancelToken = null;
+    _turnOutput = _TurnOutput();
+    _confirmingDownload = false;
+    _pendingDisplayItems = null;
+    _streamingMessageIndex = null;
+    _streamReasoning.clear();
+    _streamContent.clear();
+  }
+
+  @override
+  void dispose() {
+    _turnOutput.finished = true;
+    _llmCancelToken?.cancel('会话已关闭');
+    _llmCancelToken = null;
+    super.dispose();
   }
 
   /// 简化版 UUID v4
@@ -978,20 +1015,21 @@ class AiConversationController extends ChangeNotifier {
     isLoading = true;
     error = null;
     _currentRound = 0;
-    _pendingDisplayItems = null;
+    _resetTurnOutput();
+    final turnOutput = _turnOutput;
     notifyListeners();
 
     try {
-      await _runLoop();
+      await _runLoop(turnOutput);
     } catch (exception) {
+      if (!_isActiveOutput(turnOutput)) return true;
       final message = 'AI 对话执行失败：$exception';
       // 15轮06号计划：异常路径也要收口，防残留”进行中”空气泡。
       _sealStreamingMessage();
       displayMessages.add(AiChatMessage.error(message));
-      isLoading = false;
-      _activeTurnContext = null;
-      notifyListeners();
+      _finishActiveTurn();
     }
+    if (!identical(_turnOutput, turnOutput)) return true;
     await _save();
     return true;
   }
@@ -1155,6 +1193,27 @@ class AiConversationController extends ChangeNotifier {
     }
   }
 
+  void Function({String? reasoning, String? content}) _streamSink(
+      _TurnOutput turn, CancelToken token) {
+    return ({String? reasoning, String? content}) {
+      if (_isActiveOutput(turn) &&
+          identical(_llmCancelToken, token) &&
+          !token.isCancelled) {
+        _onStreamDelta(reasoning: reasoning, content: content);
+      }
+    };
+  }
+
+  /// Captures the same guarded delta path used by the active network request.
+  /// Scripted tests can exercise real stream sealing without a live LLM server.
+  @visibleForTesting
+  void Function({String? reasoning, String? content})
+      captureStreamSinkForTesting() {
+    final token = _llmCancelToken;
+    if (token == null) throw StateError('没有进行中的模型请求');
+    return _streamSink(_turnOutput, token);
+  }
+
   /// 收口流式进行中气泡；返回是否保留了气泡。
   /// - 传入终值（或缓冲区）非空 → 气泡定格为终值；全空 → 移除空气泡。
   /// - 收口必 notifyListeners()：把节流窗口内攒着的最后一段 delta 刷出。
@@ -1175,12 +1234,15 @@ class AiConversationController extends ChangeNotifier {
       text,
       reasoningText: reasoning.isEmpty ? null : reasoning,
     );
+    _turnOutput.hasAssistant = true;
     notifyListeners();
     return true;
   }
 
   /// 工具调用循环
-  Future<_RunLoopOutcome> _runLoop() async {
+  Future<_RunLoopOutcome> _runLoop([_TurnOutput? expectedTurn]) async {
+    final turnOutput = expectedTurn ?? _turnOutput;
+    if (!_isActiveOutput(turnOutput)) return _RunLoopOutcome.finished;
     if (_currentRound >= _effectiveMaxRounds) {
       displayMessages.add(
         AiChatMessage.assistant('已达到最大工具调用次数（$_effectiveMaxRounds轮），对话结束。'),
@@ -1192,31 +1254,44 @@ class AiConversationController extends ChangeNotifier {
 
     final tools = _getEnabledToolSchemas();
     final requestMessages = _buildRequestMessages();
-    // 15轮07号计划：每轮新建令牌，工具子轮复用（同一个 token 取消后后续子轮
-    // dio 立即抛 cancel，整轮统一停止）。
-    _llmCancelToken ??= CancelToken();
-    final response = _chatRequestForTesting == null
-        ? await LlmClient.chat(
-            requestMessages,
-            tools: tools,
-            conversationHash: aiDiagnosticSha256(conversationId ?? ''),
-            turn: _currentTurnNumber,
-            round: _currentRound + 1,
-            // 15轮06号计划（决策A）：传回调即走流式；测试注入路径不涉流式。
-            onReasoningDelta: (delta) => _onStreamDelta(reasoning: delta),
-            onContentDelta: (delta) => _onStreamDelta(content: delta),
-            // 15轮07号计划：注入取消令牌，支持用户主动停止。
-            cancelToken: _llmCancelToken,
-          )
-        : await _chatRequestForTesting(
-            requestMessages,
-            tools: tools,
-            conversationHash: aiDiagnosticSha256(conversationId ?? ''),
-            turn: _currentTurnNumber,
-            round: _currentRound + 1,
-          );
-
-    _llmCancelToken = null; // 请求完成（无论成功/失败/取消），清理令牌。
+    // Each request owns its token; cancellation finishes the user turn before
+    // another tool subround starts. Late callbacks cannot clear a newer token.
+    final token = _llmCancelToken ??= CancelToken();
+    final stream = _streamSink(turnOutput, token);
+    late LlmResponse response;
+    try {
+      response = _chatRequestForTesting == null
+          ? await LlmClient.chat(
+              requestMessages,
+              tools: tools,
+              conversationHash: aiDiagnosticSha256(conversationId ?? ''),
+              turn: _currentTurnNumber,
+              round: _currentRound + 1,
+              // 15轮06号计划（决策A）：传回调即走流式；测试注入路径不涉流式。
+              onReasoningDelta: (delta) => stream(reasoning: delta),
+              onContentDelta: (delta) => stream(content: delta),
+              // 15轮07号计划：注入取消令牌，支持用户主动停止。
+              cancelToken: token,
+            )
+          : await _chatRequestForTesting(
+              requestMessages,
+              tools: tools,
+              conversationHash: aiDiagnosticSha256(conversationId ?? ''),
+              turn: _currentTurnNumber,
+              round: _currentRound + 1,
+            );
+    } finally {
+      if (identical(_llmCancelToken, token)) _llmCancelToken = null;
+    }
+    if (!_isActiveOutput(turnOutput)) return _RunLoopOutcome.finished;
+    if (token.isCancelled) {
+      // User stop preserves partial display only, never a fallback or a tool
+      // call from a response that arrived after cancellation.
+      _sealStreamingMessage();
+      _flushPendingDisplayItems();
+      _finishActiveTurn();
+      return _RunLoopOutcome.finished;
+    }
 
     if (response.hasError) {
       // 流式中断契约：已流出的半截文本/思考只定格展示（display-only），
@@ -1250,16 +1325,17 @@ class AiConversationController extends ChangeNotifier {
       finalReasoning: response.reasoningContent,
     );
 
-    return _processToolCalls(response.toolCalls!);
+    return _processToolCalls(response.toolCalls!, expectedTurn: turnOutput);
   }
 
   /// 处理一轮"LLM 无 tool_calls"的最终文本回复：
   /// - 有实际内容（trim 后非空）：正常生成气泡并写入 `_history`。
   /// - 无内容（`null`/空字符串/纯空白）：不生成空文本气泡（避免灰色空块）；
-  ///   若此时也没有待展示的工具结果（清单卡等），改为展示一条轻量提示气泡，
+  ///   若本次用户提问也没有实际展示的结果或具体反馈，展示一次轻量提示，
   ///   让用户感知"AI本轮没有回复内容"而不是完全静默；该提示气泡只展示给
   ///   用户，不写入 `_history`，避免污染后续请求的历史上下文。
   void _handleFinalTextResponse(String? rawText, {String? reasoningText}) {
+    if (_turnOutput.finished) return;
     final trimmedText = rawText?.trim() ?? '';
     if (trimmedText.isNotEmpty) {
       // 保留原始文本（未 trim）写入气泡与历史，与修复前的展示行为保持一致，
@@ -1270,15 +1346,16 @@ class AiConversationController extends ChangeNotifier {
       } else {
         displayMessages.add(
             AiChatMessage.assistant(rawText!, reasoningText: reasoningText));
+        _turnOutput.hasAssistant = true;
       }
       _history.add(LlmMessage.assistant(
           content: rawText, reasoningContent: reasoningText));
     } else {
       // 只有思考没有正文：保留思考气泡（display-only，不入 _history）；
-      // 什么都没有且无待展示清单时保持原有提示气泡行为。
-      final kept = _sealStreamingMessage(finalReasoning: reasoningText);
-      if (!kept &&
-          (_pendingDisplayItems == null || _pendingDisplayItems!.isEmpty)) {
+      // 判断的是本轮已经展示的内容，不是已消费的临时缓冲区。
+      _sealStreamingMessage(finalReasoning: reasoningText);
+      _flushPendingDisplayItems();
+      if (!_turnOutput.hasOutput) {
         displayMessages.add(AiChatMessage.assistant('（AI本轮未返回有效内容）'));
       }
     }
@@ -1314,8 +1391,11 @@ class AiConversationController extends ChangeNotifier {
   Future<_RunLoopOutcome> _processToolCalls(
     List<LlmToolCall> toolCalls, {
     bool continueWithLlm = true,
+    _TurnOutput? expectedTurn,
   }) async {
+    final turnOutput = expectedTurn ?? _turnOutput;
     for (final toolCall in toolCalls) {
+      if (!_isActiveOutput(turnOutput)) return _RunLoopOutcome.finished;
       final toolName = toolCall.name;
       final toolArgs = toolCall.arguments;
 
@@ -1362,6 +1442,7 @@ class AiConversationController extends ChangeNotifier {
               resolveAttachmentPath: _resolveAttachmentPath,
             ),
           );
+      if (!_isActiveOutput(turnOutput)) return _RunLoopOutcome.finished;
       _appendToolResult(toolCall.id, toolName, result);
     }
 
@@ -1373,7 +1454,7 @@ class AiConversationController extends ChangeNotifier {
     }
 
     if (continueWithLlm) {
-      return _runLoop();
+      return _runLoop(turnOutput);
     }
     return _RunLoopOutcome.finished;
   }
@@ -1387,6 +1468,7 @@ class AiConversationController extends ChangeNotifier {
     List<LlmToolCall> toolCalls, {
     bool continueWithLlm = true,
   }) async {
+    if (_turnOutput.finished) return;
     _currentRound++;
     _history.add(LlmMessage.assistant(toolCalls: toolCalls));
     final outcome = await _processToolCalls(
@@ -1409,6 +1491,7 @@ class AiConversationController extends ChangeNotifier {
     String toolName,
     AiToolResult result,
   ) {
+    if (_turnOutput.finished) return;
     _history.add(
       LlmMessage.tool(
         toolCallId: toolCallId,
@@ -1424,6 +1507,14 @@ class AiConversationController extends ChangeNotifier {
         message: result.message,
       ),
     );
+    final message = result.message?.trim() ?? '';
+    // Default/generic execution status and raw tool JSON are not an answer.
+    // Explicit tool feedback (no results, validation errors, action outcomes)
+    // is already visible in the tool-result card and needs no generic fallback.
+    if (message.isNotEmpty &&
+        !RegExp(r'^(工具)?(执行|查询|搜索|调用)?(成功|失败|完成)[。.!！]?$').hasMatch(message)) {
+      _turnOutput.hasSpecificFeedback = true;
+    }
     if (shouldAutoDisplayToolResult(toolName, result.ok)) {
       final report = AiResultItem.decodeToolData(result.data);
       if (report.items.isNotEmpty) {
@@ -1440,11 +1531,13 @@ class AiConversationController extends ChangeNotifier {
       displayMessages.add(
         AiChatMessage.resultList(items: List.of(_pendingDisplayItems!)),
       );
+      _turnOutput.resultLists++;
     }
     _pendingDisplayItems = null;
   }
 
   void _finishActiveTurn() {
+    _turnOutput.finished = true;
     isLoading = false;
     _activeTurnContext = null;
     notifyListeners();
@@ -1459,8 +1552,21 @@ class AiConversationController extends ChangeNotifier {
   /// 的 tool_call 挂在 assistant 消息上）；只有队列真正清空后才续跑
   /// `_runLoop()` 让 LLM 看到全部下载结果继续对话。
   Future<void> confirmDownload(bool confirmed) async {
-    if (_pendingDownloads.isEmpty) return;
+    if (_pendingDownloads.isEmpty ||
+        _confirmingDownload ||
+        _turnOutput.finished) {
+      return;
+    }
+    final turnOutput = _turnOutput;
+    _confirmingDownload = true;
+    try {
+      await _confirmDownload(confirmed, turnOutput);
+    } finally {
+      if (identical(_turnOutput, turnOutput)) _confirmingDownload = false;
+    }
+  }
 
+  Future<void> _confirmDownload(bool confirmed, _TurnOutput turnOutput) async {
     final pending = _pendingDownloads.removeAt(0);
     notifyListeners();
 
@@ -1484,8 +1590,10 @@ class AiConversationController extends ChangeNotifier {
       result = const AiToolResult.failure('用户取消了下载');
     }
 
+    if (!_isActiveOutput(turnOutput)) return;
     _appendToolResult(pending.toolCallId, 'download_comic', result);
     await _save();
+    if (!_isActiveOutput(turnOutput)) return;
 
     if (_pendingDownloads.isNotEmpty) {
       // 本轮还有更多待确认下载：停留等待，不续跑 LLM 请求。
@@ -1493,16 +1601,16 @@ class AiConversationController extends ChangeNotifier {
     }
 
     try {
-      await _runLoop();
+      await _runLoop(turnOutput);
     } catch (exception) {
+      if (!_isActiveOutput(turnOutput)) return;
       final message = 'AI 对话执行失败：$exception';
       // 15轮06号计划：异常路径也要收口，防残留”进行中”空气泡。
       _sealStreamingMessage();
       displayMessages.add(AiChatMessage.error(message));
-      isLoading = false;
-      _activeTurnContext = null;
-      notifyListeners();
+      _finishActiveTurn();
     }
+    if (!identical(_turnOutput, turnOutput)) return;
     await _save();
   }
 

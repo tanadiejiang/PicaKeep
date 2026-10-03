@@ -142,6 +142,8 @@ class _ToolsPageState extends State<ToolsPage> {
     final cacheDirectories = <Directory>[
       Directory(App.cachePath),
       Directory('${App.dataPath}${Platform.pathSeparator}cache'),
+      Directory('${App.dataPath}${Platform.pathSeparator}local_library_cache'
+          '${Platform.pathSeparator}covers${Platform.pathSeparator}thumbs'),
     ];
     for (final cacheDirectory in cacheDirectories) {
       if (!await cacheDirectory.exists()) {

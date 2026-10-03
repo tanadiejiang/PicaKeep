@@ -1,0 +1,3335 @@
+import 'package:path/path.dart' as p;
+import 'package:picakeep/foundation/pixiv_library.dart';
+import 'package:picakeep/foundation/pixiv_download_root.dart';
+import 'package:picakeep/pages/pixiv_folders_page.dart';
+import 'dart:async';
+import 'dart:io';
+import 'dart:math' as math;
+
+import 'package:file_picker/file_picker.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show ScrollDirection;
+import 'package:flutter/services.dart';
+import 'package:picakeep/base.dart';
+import 'package:picakeep/components/comic_tile.dart';
+import 'package:picakeep/components/components.dart';
+import 'package:picakeep/components/layout.dart';
+import 'package:picakeep/components/library_view_selector.dart';
+import 'package:picakeep/components/scrollable.dart';
+import 'package:picakeep/foundation/app.dart';
+import 'package:picakeep/foundation/app_runtime_mode.dart';
+import 'package:picakeep/foundation/archive/archive_password_store.dart';
+import 'package:picakeep/foundation/download_model.dart';
+import 'package:picakeep/foundation/download_author_resolver.dart';
+import 'package:picakeep/foundation/illust_card_info_config.dart';
+import 'package:picakeep/foundation/illust_cover_size.dart';
+import 'package:picakeep/foundation/local_library.dart';
+import 'package:picakeep/foundation/local_library_illust_view.dart';
+import 'package:picakeep/foundation/local_library_settings.dart';
+import 'package:picakeep/foundation/remote_library_event_channel.dart';
+import 'package:picakeep/foundation/remote_library_data_source.dart';
+import 'package:picakeep/foundation/service_data_source.dart';
+import 'package:picakeep/foundation/trash.dart';
+import 'package:picakeep/foundation/ui_mode.dart';
+import 'package:picakeep/pages/settings/settings_page.dart';
+import 'package:picakeep/tools/read_history_helper.dart';
+import 'package:picakeep/tools/translations.dart';
+
+import 'download_page.dart' show DownloadedComicInfoView, DownloadPageLogic;
+import 'package:picakeep/components/archive_password_dialog.dart';
+import 'package:picakeep/components/side_bar.dart' show showSideBar;
+import 'local_comic_detail_page.dart';
+import 'local_library_illust_card.dart';
+import 'local_library_illust_switcher.dart';
+import 'local_library_illust_view.dart';
+
+String _formatLocalLibrarySize(double sizeMb) {
+  if (sizeMb >= 1024) {
+    return '${(sizeMb / 1024).toStringAsFixed(1)} GB';
+  }
+  return '${sizeMb.toStringAsFixed(1)} MB';
+}
+
+String _localLibraryAuthor(DownloadedItem item) {
+  if (item is LocalLibraryComicItem) {
+    return resolveDownloadedAuthors(item).join(', ');
+  }
+  return item.subTitle.trim();
+}
+
+String _localLibrarySourceLabel(LocalLibrarySource source) {
+  switch (source.kind) {
+    case LocalLibrarySourceKind.currentDownload:
+      return '本应用下载目录'.tl;
+    case LocalLibrarySourceKind.originalDownload:
+      return '原应用下载目录'.tl;
+    case LocalLibrarySourceKind.customPath:
+      return '自定义路径'.tl;
+  }
+}
+
+IconData _localLibrarySourceIcon(LocalLibrarySource source) {
+  switch (source.kind) {
+    case LocalLibrarySourceKind.currentDownload:
+      return Icons.download_for_offline;
+    case LocalLibrarySourceKind.originalDownload:
+      return Icons.drive_folder_upload;
+    case LocalLibrarySourceKind.customPath:
+      return Icons.photo_library;
+  }
+}
+
+Future<void> _openDirectoryPath(BuildContext context, String path) async {
+  if (path.trim().isEmpty) {
+    return;
+  }
+  if (Platform.isWindows) {
+    await Process.run('explorer', [path]);
+  } else if (Platform.isMacOS) {
+    await Process.run('open', [path]);
+  } else if (Platform.isLinux) {
+    await Process.run('xdg-open', [path]);
+  } else if (context.mounted) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('当前平台不支持直接打开目录'.tl)),
+    );
+  }
+}
+
+Future<void> _copyPath(BuildContext context, String path) async {
+  await Clipboard.setData(ClipboardData(text: path));
+  if (context.mounted) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('已复制路径'.tl)),
+    );
+  }
+}
+
+Future<void> _refreshLocalLibrary({bool rescan = false}) async {
+  final localLibraryManager = LocalLibraryManager();
+  if (rescan) {
+    if (await localLibraryManager
+        .shouldBypassDirectDownloadManagerForCurrentDownloads()) {
+      await localLibraryManager.refresh();
+    } else if (await localLibraryManager
+        .shouldUsePrivilegedManagedDownloadHandling()) {
+      await localLibraryManager.refresh();
+    } else {
+      await localLibraryManager.rescan();
+    }
+  } else {
+    await localLibraryManager.refresh();
+  }
+  App.notifyLocalDataChanged();
+}
+
+class _LocalLibraryComicTile extends DownloadedComicTile {
+  const _LocalLibraryComicTile({
+    required this.comicId,
+    required this.enableLongPress,
+    required super.name,
+    required super.author,
+    required super.imagePath,
+    super.imageProvider,
+    required super.type,
+    required super.tag,
+    required super.size,
+    required super.onTap,
+    required super.onLongTap,
+    required super.onSecondaryTap,
+    super.optimizeCoverDecode,
+  });
+
+  final String comicId;
+  final bool enableLongPress;
+
+  @override
+  String? get comicID => comicId;
+
+  @override
+  bool get enableLongPressed => enableLongPress;
+}
+
+class _RemoteRootCollage extends StatelessWidget {
+  const _RemoteRootCollage({required this.item});
+
+  final RemoteLibraryRootItem item;
+
+  @override
+  Widget build(BuildContext context) {
+    final visibleUrls = item.previewCoverUrls
+        .map((entry) => entry.trim())
+        .where((entry) => entry.isNotEmpty)
+        .take(6)
+        .toList(growable: false);
+    if (visibleUrls.isEmpty) {
+      return const Center(child: Icon(Icons.image_not_supported));
+    }
+    return GridView.builder(
+      physics: const NeverScrollableScrollPhysics(),
+      padding: EdgeInsets.zero,
+      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: 2,
+        mainAxisSpacing: 1.5,
+        crossAxisSpacing: 1.5,
+        childAspectRatio: 1.12,
+      ),
+      itemCount: visibleUrls.length,
+      itemBuilder: (context, index) {
+        final provider =
+            item.client.coverImageProviderForUrl(visibleUrls[index]);
+        return provider == null
+            ? Container(
+                color: Theme.of(context).colorScheme.secondaryContainer,
+                child: const Icon(Icons.broken_image_outlined, size: 18),
+              )
+            : Image(
+                image: provider,
+                fit: BoxFit.cover,
+                gaplessPlayback: true,
+                errorBuilder: (_, __, ___) => Container(
+                  color: Theme.of(context).colorScheme.secondaryContainer,
+                  child: const Icon(Icons.broken_image_outlined, size: 18),
+                ),
+              );
+      },
+    );
+  }
+}
+
+class _LocalRootCollage extends StatefulWidget {
+  const _LocalRootCollage({required this.item});
+
+  final _LocalLibraryRootItem item;
+
+  @override
+  State<_LocalRootCollage> createState() => _LocalRootCollageState();
+}
+
+class _LocalRootCollageState extends State<_LocalRootCollage> {
+  // path → resolved cover path（null 表示已解析但无封面）。用 path 作 key 避免
+  // 同一 source 内不同子项 id 冲突，且换页/重建后能按 path 复用。
+  static final Map<String, String?> _coverCache = <String, String?>{};
+  List<ImageProvider<Object>?> _providers = const [];
+
+  @override
+  void initState() {
+    super.initState();
+    _resolveCovers();
+  }
+
+  List<LocalLibraryStorageChildEntry> get _previewChildren =>
+      widget.item.entry.children
+          .where((child) => child.path.trim().isNotEmpty)
+          .take(4)
+          .toList(growable: false);
+
+  Future<void> _resolveCovers() async {
+    final children = _previewChildren;
+    if (children.isEmpty) {
+      return;
+    }
+    final manager = LocalLibraryManager();
+    final resolved = <ImageProvider<Object>?>[];
+    for (final child in children) {
+      final path = child.path;
+      String? cover;
+      if (_coverCache.containsKey(path)) {
+        cover = _coverCache[path];
+      } else {
+        cover = await manager.resolveChildCoverPath(path);
+        _coverCache[path] = cover;
+      }
+      resolved.add(
+        cover != null && cover.isNotEmpty
+            ? manager.imageProviderForLocalPath(cover)
+            : null,
+      );
+    }
+    if (mounted) {
+      setState(() {
+        _providers = resolved;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final children = _previewChildren;
+    if (children.isEmpty) {
+      return Icon(
+        Icons.photo_library_outlined,
+        size: 42,
+        color: colorScheme.onSecondaryContainer,
+      );
+    }
+    // 解析未完成时先占位（保持原有图标观感），完成后渲染 2x2 拼贴。
+    if (_providers.length != children.length) {
+      return Icon(
+        Icons.photo_library_outlined,
+        size: 42,
+        color: colorScheme.onSecondaryContainer,
+      );
+    }
+    final hasAnyCover = _providers.any((provider) => provider != null);
+    if (!hasAnyCover) {
+      return Icon(
+        Icons.photo_library_outlined,
+        size: 42,
+        color: colorScheme.onSecondaryContainer,
+      );
+    }
+    final covers = _providers
+        .where((provider) => provider != null)
+        .toList(growable: false);
+    // 单项内容直接铺满整块封面区，不走 2x2 拼贴网格（避免右侧大片留白）。
+    if (covers.length == 1) {
+      return Image(
+        image: covers.first!,
+        fit: BoxFit.cover,
+        width: double.infinity,
+        height: double.infinity,
+        gaplessPlayback: true,
+        filterQuality: FilterQuality.medium,
+        errorBuilder: (_, __, ___) =>
+            Container(color: colorScheme.secondaryContainer),
+      );
+    }
+    return GridView.builder(
+      physics: const NeverScrollableScrollPhysics(),
+      padding: EdgeInsets.zero,
+      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: 2,
+        mainAxisSpacing: 1.5,
+        crossAxisSpacing: 1.5,
+        childAspectRatio: 0.74,
+      ),
+      itemCount: math.min(4, _providers.length),
+      itemBuilder: (context, index) {
+        final provider = _providers[index];
+        if (provider == null) {
+          return Container(color: colorScheme.secondaryContainer);
+        }
+        return Image(
+          image: provider,
+          fit: BoxFit.cover,
+          gaplessPlayback: true,
+          filterQuality: FilterQuality.medium,
+          errorBuilder: (_, __, ___) =>
+              Container(color: colorScheme.secondaryContainer),
+        );
+      },
+    );
+  }
+}
+
+class _LocalLibraryRemoteRootCard extends StatelessWidget {
+  const _LocalLibraryRemoteRootCard({
+    required this.item,
+    required this.sizeText,
+    required this.onTap,
+    required this.onLongPress,
+    required this.onSecondaryTap,
+  });
+
+  final RemoteLibraryRootItem item;
+  final String sizeText;
+  final VoidCallback onTap;
+  final VoidCallback? onLongPress;
+  final void Function(TapDownDetails details) onSecondaryTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
+      child: Material(
+        color: Theme.of(context).colorScheme.surface,
+        borderRadius: BorderRadius.circular(8),
+        elevation: 1,
+        child: InkWell(
+          onTap: onTap,
+          onLongPress: onLongPress,
+          onSecondaryTapDown: onSecondaryTap,
+          borderRadius: BorderRadius.circular(8),
+          splashColor: Colors.transparent,
+          highlightColor: Colors.transparent,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(10, 10, 10, 10),
+            child: Row(
+              children: [
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(8),
+                  child: SizedBox(
+                    width: 92,
+                    height: 124,
+                    child: Container(
+                      color: Theme.of(context).colorScheme.secondaryContainer,
+                      child: _RemoteRootCollage(item: item),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        item.name,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.titleMedium,
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        item.subTitle,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        sizeText,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                              color: Theme.of(context).colorScheme.outline,
+                            ),
+                      ),
+                      const SizedBox(height: 8),
+                      Wrap(
+                        spacing: 6,
+                        runSpacing: 6,
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 4,
+                            ),
+                            decoration: BoxDecoration(
+                              color: Theme.of(context)
+                                  .colorScheme
+                                  .secondaryContainer,
+                              borderRadius: BorderRadius.circular(999),
+                            ),
+                            child: Text(
+                              item.sourceDisplayName,
+                              style: const TextStyle(fontSize: 12),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _LocalLibraryRootItem extends DownloadedItem {
+  _LocalLibraryRootItem({required this.entry}) {
+    comicSize = entry.sizeMb;
+  }
+
+  final LocalLibraryStorageEntry entry;
+
+  LocalLibrarySource get source => entry.source;
+
+  @override
+  DownloadType get type => DownloadType.other;
+
+  @override
+  String get name => entry.title;
+
+  @override
+  List<String> get eps => const [];
+
+  @override
+  List<int> get downloadedEps => const [];
+
+  @override
+  String get id => 'local_root::${entry.path}';
+
+  @override
+  String get subTitle => '${entry.comicCount} 个项目';
+
+  @override
+  double? comicSize;
+
+  @override
+  List<String> get tags => const [];
+
+  @override
+  String get sourceDisplayName => _localLibrarySourceLabel(source);
+
+  @override
+  bool get canDelete => false;
+
+  @override
+  String? get fileSystemPath => entry.path;
+
+  @override
+  String? get localCoverPath => null;
+
+  @override
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'title': name,
+        'path': entry.path,
+        'itemCount': entry.comicCount,
+        'sizeMb': entry.sizeMb,
+        'collectionShellEnabled': source.collectionShellEnabled,
+      };
+
+  @override
+  Widget createReadingPage({int? ep, int? page}) {
+    throw StateError('本地目录不支持直接阅读');
+  }
+}
+
+class _LocalLibraryLocalRootCard extends StatelessWidget {
+  const _LocalLibraryLocalRootCard({
+    required this.item,
+    required this.sizeText,
+    required this.onTap,
+    required this.onLongPress,
+    required this.onSecondaryTap,
+  });
+
+  final _LocalLibraryRootItem item;
+  final String sizeText;
+  final VoidCallback onTap;
+  final VoidCallback? onLongPress;
+  final void Function(TapDownDetails details) onSecondaryTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
+      child: Material(
+        color: colorScheme.surface,
+        borderRadius: BorderRadius.circular(8),
+        elevation: 1,
+        child: InkWell(
+          onTap: onTap,
+          onLongPress: onLongPress,
+          onSecondaryTapDown: onSecondaryTap,
+          borderRadius: BorderRadius.circular(8),
+          splashColor: Colors.transparent,
+          highlightColor: Colors.transparent,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(10, 10, 10, 10),
+            child: Row(
+              children: [
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(8),
+                  child: SizedBox(
+                    width: 92,
+                    height: 124,
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        color: colorScheme.secondaryContainer,
+                      ),
+                      child: _LocalRootCollage(item: item),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        item.name,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.titleMedium,
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        item.subTitle,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        sizeText,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                              color: colorScheme.outline,
+                            ),
+                      ),
+                      const SizedBox(height: 8),
+                      Wrap(
+                        spacing: 6,
+                        runSpacing: 6,
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 4,
+                            ),
+                            decoration: BoxDecoration(
+                              color: colorScheme.secondaryContainer,
+                              borderRadius: BorderRadius.circular(999),
+                            ),
+                            child: Text(
+                              item.sourceDisplayName,
+                              style: const TextStyle(fontSize: 12),
+                            ),
+                          ),
+                          if (item.source.collectionShellEnabled)
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 8,
+                                vertical: 4,
+                              ),
+                              decoration: BoxDecoration(
+                                color: colorScheme.primaryContainer,
+                                borderRadius: BorderRadius.circular(999),
+                              ),
+                              child: Text(
+                                '合集'.tl,
+                                style: const TextStyle(fontSize: 12),
+                              ),
+                            ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class LocalLibraryPage extends StatefulWidget {
+  const LocalLibraryPage({
+    super.key,
+    this.albumOnly = false,
+    this.preferRemoteView = false,
+    this.title,
+    this.localRootPath,
+    this.remoteRootId,
+  });
+
+  final bool albumOnly;
+  final bool preferRemoteView;
+  final String? title;
+  final String? localRootPath;
+  final String? remoteRootId;
+
+  @override
+  State<LocalLibraryPage> createState() => _LocalLibraryPageState();
+}
+
+enum _LocalLibraryView {
+  local,
+  aggregate,
+  remote,
+}
+
+String _localLibraryViewLabel(_LocalLibraryView view,
+    {required bool albumOnly}) {
+  switch (view) {
+    case _LocalLibraryView.local:
+      return albumOnly ? '本地图集' : '本地资源';
+    case _LocalLibraryView.aggregate:
+      return '聚合';
+    case _LocalLibraryView.remote:
+      return albumOnly ? '远程 · 图集' : '远程 · 资源库';
+  }
+}
+
+/// 紧凑选择器上用的**短文案**（完整文案见 [_localLibraryViewLabel]）。
+///
+/// ⚠️ 33 号起没有再保留的必要，已随内容区顶部那行紧凑 `SegmentedButton` 一起删除：
+/// 档位改挂到工具栏的弹出菜单上，菜单项要的是**完整文案**（菜单宽度不受限，
+/// 没有"紧凑"的必要）。用户要的是"一个按钮 + 菜单"，不是"更短的分段按钮"。
+/// 需要短文案的场合若将来再次出现，从 [_localLibraryViewLabel] 派生即可 ——
+/// **不要**改 [_localLibraryViewLabel] 本身：它还在标题、空态、刷新提示等多处被用着
+/// （计划步骤 7.3 要求"随 `albumOnly` 切换的文案行为要保留"）。
+
+_LocalLibraryView _localLibraryViewFromSetting(String value) {
+  switch (normalizeLocalLibraryView(value)) {
+    case 'aggregate':
+      return _LocalLibraryView.aggregate;
+    case 'remote':
+      return _LocalLibraryView.remote;
+    case 'local':
+    default:
+      return _LocalLibraryView.local;
+  }
+}
+
+String _localLibraryViewToSetting(_LocalLibraryView view) {
+  switch (view) {
+    case _LocalLibraryView.aggregate:
+      return 'aggregate';
+    case _LocalLibraryView.remote:
+      return 'remote';
+    case _LocalLibraryView.local:
+      return 'local';
+  }
+}
+
+/// 当前档位的**图标**（33 号新增，36 号改为用在设置面板的档位区）。
+///
+/// 三个档位各用一个语义不同、轮廓差异明显的图标（文件夹=本地、层叠=聚合、
+/// 云=远程），再配上档位全名，用户不展开折叠区也能一眼看出"现在在哪一档"。
+IconData _localLibraryViewIcon(_LocalLibraryView view) {
+  switch (view) {
+    case _LocalLibraryView.local:
+      return Icons.folder_outlined;
+    case _LocalLibraryView.aggregate:
+      return Icons.layers_outlined;
+    case _LocalLibraryView.remote:
+      return Icons.cloud_outlined;
+  }
+}
+
+class _LocalLibraryPageState extends State<LocalLibraryPage> {
+  final _manager = LocalLibraryManager();
+  final _remoteDataSource = const RemoteLibraryDataSource();
+  final _searchController = TextEditingController();
+  final Set<String> _selectedItemIds = <String>{};
+  bool _loading = true;
+  bool _searchMode = false;
+  bool _remoteAvailable = false;
+  bool _selecting = false;
+  String? _errorText;
+  bool _isDeleteOperationRunning = false;
+  int _deleteProgressCurrent = 0;
+  int _deleteProgressTotal = 0;
+  String _deleteProgressActionLabel = '';
+  bool _forceRemoteRefreshOnNextLoad = false;
+  bool _localDataRefreshRunning = false;
+  bool _localDataRefreshRequested = false;
+  DateTime? _lastManualRemoteRefreshAt;
+  List<DownloadedItem> _items = const <DownloadedItem>[];
+  LocalLibrarySource? _localRootSource;
+  RemoteLibraryRootSummary? _remoteRootSummary;
+  late _LocalLibraryView _view = widget.preferRemoteView || _isRemoteRootPage
+      ? _LocalLibraryView.remote
+      : _isLocalRootPage
+          ? _LocalLibraryView.local
+          : _localLibraryViewFromSetting(
+              appdata.settings[localLibraryViewSettingIndex],
+            );
+
+  // ---------------------------------------------------------------------------
+  // 「图集 / 插画」视图维度（settings[155]）
+  //
+  // 它与上面的三档 `_view` **正交**（24 号计划决策 3）：
+  // - `_view` 决定"图集侧看哪个来源"，持久化在 settings[104]，行为完全不变；
+  // - `_illustView` 决定"这一页是图集还是插画"，持久化在 settings[155]。
+  // 两边各自保留自己的状态，来回切换互不影响。
+  //
+  // 插画侧**没有**自己的来源档位：目前只有"本地已下载的 Pixiv 插画"这一个
+  // 数据源（计划决策 3 的注：先按"至少一档"实现，用户要更多档再议）。
+  // 所以这里不新增档位枚举，也不复用/扩展现有的 `_LocalLibraryView`。
+  // ---------------------------------------------------------------------------
+  late IllustLibraryView _illustView = illustLibraryViewFromSetting(
+    appdata.settings[illustLibraryViewSettingIndex],
+  );
+
+  List<PixivFolder> _pixivFolders = [];
+  String? _pixivFolderFilter;
+  bool _illustTransferRunning = false;
+  bool _illustLoading = false;
+  String? _illustErrorText;
+  List<IllustLibraryEntry> _illustEntries = const <IllustLibraryEntry>[];
+  List<IllustTagSummary> _illustTags = const <IllustTagSummary>[];
+  final Set<String> _selectedIllustTags = <String>{};
+
+  /// 页数记忆：页数只能靠列目录数出来，而 `_loadIllust` 每次都会重建条目
+  /// （`pageCount` 恒为 null），所以必须跨次记住，否则刷新一次页数就消失。
+  /// 详见 `foundation/illust_cover_size.dart` 的 `IllustPageCountMemo`。
+  final IllustPageCountMemo _illustPageCountMemo = IllustPageCountMemo();
+
+  /// 页面内容区是否正在滚动（驱动视图切换悬浮按钮的半透明）。
+  bool _scrollInteracting = false;
+
+  bool get _isClientMode =>
+      normalizeAppRuntimeMode(appdata.settings[appRuntimeModeSettingIndex]) ==
+      appRuntimeModeClient;
+
+  bool get _isAlbumOnly =>
+      widget.albumOnly ||
+      appdata.settings[localLibraryAlbumOnlySettingIndex] != '0';
+
+  bool get _isRemoteRootPage => widget.remoteRootId?.trim().isNotEmpty == true;
+
+  bool get _isLocalRootPage => widget.localRootPath?.trim().isNotEmpty == true;
+
+  bool get _shouldStrictlyUseRemoteData => _isRemoteRootPage;
+
+  bool get _canToggleCollectionShell {
+    if (!_isAlbumOnly || _searchMode || _selecting) {
+      return false;
+    }
+    if (_isLocalRootPage) {
+      return _localRootSource?.supportsCollectionShell == true;
+    }
+    if (_isRemoteRootPage) {
+      return _remoteRootSummary?.supportsCollectionShell == true;
+    }
+    return false;
+  }
+
+  bool get _collectionShellEnabled {
+    if (_isLocalRootPage) {
+      return _localRootSource?.collectionShellEnabled == true;
+    }
+    if (_isRemoteRootPage) {
+      return _remoteRootSummary?.collectionShellEnabled == true;
+    }
+    return false;
+  }
+
+  /// 「资源库显示设置」面板里各区块的可见性（判据本体在 foundation 层，那里有测试）。
+  ///
+  /// 36 号起这份判据**不再驱动工具栏的弹出菜单**（那个菜单已撤销），
+  /// 而是驱动设置面板里的档位折叠区：
+  /// - [_tiersApplicable] → 档位折叠区出不出现；
+  /// - `tiersEnabled` → 「聚合 / 远程」两档能不能选（不能选时置灰并写明原因）。
+  LocalLibraryViewScopeMenu get _viewScopeMenu => localLibraryViewScopeMenu(
+        remoteAvailable: _remoteAvailable,
+        isLocalRootPage: _isLocalRootPage,
+        isRemoteRootPage: _isRemoteRootPage,
+        pageAlbumOnly: widget.albumOnly,
+        albumOnly: _isAlbumOnly,
+      );
+
+  /// 本页是否存在"档位"这个概念（不是本地根 / 远程根子页面）。
+  ///
+  /// 它**不再**包含"远程是否可用"——那个交给 `_viewScopeMenu.tiersEnabled`
+  /// 去决定"能不能选"。24 号那条 `_showSourceSelector` 把两件事混在一起，
+  /// 后果是远程不可用时档位整块消失、用户找不到它（真机反馈，见 36 号）。
+  bool get _tiersApplicable => _viewScopeMenu.tiersApplicable;
+
+  /// 当前是否处于「插画」视图。
+  bool get _isIllustView => _illustView == IllustLibraryView.illust;
+
+  int get _illustViewWaterfallColumns => normalizeIllustWaterfallColumns(
+        appdata.settings[illustWaterfallColumnsSettingIndex],
+      );
+
+  /// 是否显示视图切换悬浮按钮。
+  ///
+  /// 三个条件缺一不可：
+  ///
+  /// 1. **只在图集形态的根列表上**。`_isAlbumOnly` 为假时这一页是"资源库"
+  ///    （`getAll()` 的全部记录），"插画"在那里不是一个有意义的切面；
+  ///    `_isLocalRootPage` / `_isRemoteRootPage` 是**子页面**（点进某个图集目录
+  ///    或远程根里面），在那里切视图语义上也说不通。这条与 [_tiersApplicable]
+  ///    的"子页面上没有档位"是同一个口径。
+  /// 2. **多选态下不显示** —— 与 `_buildMultiSelectFab` 互斥（计划步骤 4.4）。
+  /// 3. **操作进行中不显示**（删除时有全屏遮罩，按钮没有意义）。
+  ///
+  /// 判据本体抽在 foundation 层的 [shouldShowIllustViewSwitcher]，那里有测试。
+  bool get _showIllustViewSwitcher => shouldShowIllustViewSwitcher(
+        albumOnly: _isAlbumOnly,
+        isLocalRootPage: _isLocalRootPage,
+        isRemoteRootPage: _isRemoteRootPage,
+        selecting: _selecting,
+        operationRunning: _isOperationRunning,
+      );
+
+  /// 插画视图下、按已选标签筛过的条目。
+  List<IllustLibraryEntry> get _filteredIllustEntries {
+    final keyword = _searchController.text.trim().toLowerCase();
+    final folders = _pixivFolders;
+    final selectedFolder = folders.where((f) => f.id == _pixivFolderFilter).firstOrNull;
+    return filterIllustEntriesByTags(_illustEntries, _selectedIllustTags).where((e) =>
+      (selectedFolder == null || p.equals(p.dirname(e.item.fileSystemPath!), selectedFolder.path)) &&
+      (keyword.isEmpty || e.item.name.toLowerCase().contains(keyword) || e.item.subTitle.toLowerCase().contains(keyword))
+    ).toList();
+  }
+
+  int get _selectedCount => _selectedItemIds.length;
+
+  List<DownloadedItem> get _selectedDeleteItems => (_isIllustView ? _illustEntries.map<DownloadedItem>((e) => e.item).toList() : _items)
+      .where(
+          (item) => _selectedItemIds.contains(item.id) && _canSelectItem(item))
+      .toList(growable: false);
+
+  bool _canSelectItem(DownloadedItem item) {
+    if (item is RemoteLibraryRootItem) {
+      return false;
+    }
+    if (item is RemoteLibraryComicItem) {
+      return true;
+    }
+    if (item is LocalLibraryComicItem) {
+      return item.fileSystemPath?.trim().isNotEmpty == true;
+    }
+    return item.canDelete;
+  }
+
+  bool get _isOperationRunning => _isDeleteOperationRunning || _illustTransferRunning;
+
+  String get _deleteProgressHint => '请不要退出，强制退出可能导致操作异常';
+
+  bool _isItemSelected(DownloadedItem item) {
+    return _selectedItemIds.contains(item.id);
+  }
+
+  void _clearSelectionState() {
+    _selectedItemIds.clear();
+    _selecting = false;
+  }
+
+  void _exitSelectionMode() {
+    if (!_selecting && _selectedItemIds.isEmpty) {
+      return;
+    }
+    setState(_clearSelectionState);
+  }
+
+  void _toggleItemSelection(DownloadedItem item) {
+    if (!_canSelectItem(item)) {
+      return;
+    }
+    setState(() {
+      _selecting = true;
+      if (!_selectedItemIds.add(item.id)) {
+        _selectedItemIds.remove(item.id);
+      }
+      if (_selectedItemIds.isEmpty) {
+        _selecting = false;
+      }
+    });
+  }
+
+  String _operationErrorText(Object error) {
+    final message = error is StateError
+        ? error.message.toString()
+        : error.toString().replaceFirst('Exception: ', '');
+    if (message.contains(deleteFailurePermissionDenied) ||
+        message.toLowerCase().contains('permission denied')) {
+      return deleteFailureMessage(deleteFailurePermissionDenied).tl;
+    }
+    if (message.contains(deleteFailureLocalPathNotFound)) {
+      return deleteFailureMessage(deleteFailureLocalPathNotFound).tl;
+    }
+    return message.replaceFirst('Bad state: ', '');
+  }
+
+  Future<String?> _runDeleteOperation(
+    List<DownloadedItem> items,
+  ) async {
+    if (_isDeleteOperationRunning || items.isEmpty) {
+      return null;
+    }
+    final optimisticRemovedIds = items.map((item) => item.id).toSet();
+    setState(() {
+      _isDeleteOperationRunning = true;
+      _deleteProgressCurrent = 0;
+      _deleteProgressTotal = items.length;
+      _deleteProgressActionLabel =
+          TrashManager.instance.useTrashByDefault ? '正在放进回收站' : '正在删除';
+      _items = _items
+          .where((item) => !optimisticRemovedIds.contains(item.id))
+          .toList(growable: false);
+      _selectedItemIds.removeAll(optimisticRemovedIds);
+      if (_selectedItemIds.isEmpty) {
+        _selecting = false;
+      }
+    });
+    App.beginNavigationLock();
+    App.temporaryDisablePopGesture = true;
+    String? errorText;
+    try {
+      final remoteTargets = items.whereType<RemoteLibraryComicItem>().toList();
+      final canUseRemoteBatch =
+          remoteTargets.length == items.length && remoteTargets.length > 1;
+      if (canUseRemoteBatch) {
+        if (mounted) {
+          setState(() {
+            _deleteProgressCurrent = items.length;
+          });
+        } else {
+          _deleteProgressCurrent = items.length;
+        }
+        await TrashManager.instance.deleteRemoteItems(remoteTargets);
+      } else {
+        for (int i = 0; i < items.length; i++) {
+          if (mounted) {
+            setState(() {
+              _deleteProgressCurrent = i + 1;
+            });
+          } else {
+            _deleteProgressCurrent = i + 1;
+          }
+          final result = await TrashManager.instance.deleteItem(items[i]);
+          if (!result.ok) {
+            errorText = deleteFailureMessage(result.error).tl;
+            break;
+          }
+        }
+      }
+    } catch (e) {
+      errorText = _operationErrorText(e);
+    } finally {
+      try {
+        await _load(forceLocalRefresh: true);
+      } catch (e) {
+        errorText ??= _operationErrorText(e);
+      }
+      App.temporaryDisablePopGesture = false;
+      App.endNavigationLock();
+      if (mounted) {
+        setState(() {
+          _isDeleteOperationRunning = false;
+          _deleteProgressCurrent = 0;
+          _deleteProgressTotal = 0;
+          _deleteProgressActionLabel = '';
+        });
+        if (_localDataRefreshRequested) {
+          unawaited(_reloadAfterLocalDataChanged());
+        }
+      } else {
+        _isDeleteOperationRunning = false;
+        _deleteProgressCurrent = 0;
+        _deleteProgressTotal = 0;
+        _deleteProgressActionLabel = '';
+      }
+    }
+    return errorText;
+  }
+
+  Future<void> _setView(_LocalLibraryView nextView) async {
+    if (_view == nextView) {
+      return;
+    }
+    setState(() {
+      _view = nextView;
+      _clearSelectionState();
+    });
+    appdata.settings[localLibraryViewSettingIndex] =
+        _localLibraryViewToSetting(nextView);
+    await appdata.updateSettings();
+    await _load();
+  }
+
+  /// 切换「图集 / 插画」视图。
+  ///
+  /// 只改视图维度，**不动** `_view`（三档）与 `settings[104]` —— 这正是决策 3
+  /// 的验收点：图集侧切到"聚合"档、去插画视图转一圈、再切回来，图集侧仍是"聚合"。
+  ///
+  /// 切到插画时总是重新 `_loadIllust()`（不传 `showLoadingState`）：用户切视图
+  /// 的动作本身就意味着"我想看最新的"，而 `getManagedDownloads()` 带 in-flight
+  /// 去重；已有数据时不会闪加载态，只是后台静默刷新。
+  Future<void> _setIllustView(IllustLibraryView nextView) async {
+    if (_illustView == nextView) {
+      return;
+    }
+    setState(() {
+      _illustView = nextView;
+      _clearSelectionState();
+    });
+    appdata.settings[illustLibraryViewSettingIndex] =
+        illustLibraryViewToSetting(nextView);
+    await appdata.updateSettings();
+    if (nextView == IllustLibraryView.illust) {
+      await _loadIllust(showLoadingState: _illustEntries.isEmpty);
+    }
+  }
+
+  /// 取插画视图的数据。
+  ///
+  /// 数据源是 `LocalLibraryManager().getManagedDownloads()`
+  /// （`foundation/local_library_query.dart:31`，带 in-flight 去重），
+  /// 再按 `sourceKey == 'pixiv'` 过滤 —— **不按 id 前缀猜**（21 号文档的核心教训，
+  /// 判据见 `foundation/local_library_illust_view.dart` 的 `buildIllustEntries`）。
+  ///
+  /// [showLoadingState] 为真时把内容区切成"加载中"。**只切内容区**：
+  /// 本方法完全不碰 `_loading`，所以不会出现整页转圈（20 号计划确立的原则）。
+  Future<void> _loadIllust({bool showLoadingState = false}) async {
+    if (mounted) {
+      setState(() {
+        _illustLoading = true;
+        _illustErrorText = null;
+        if (showLoadingState) {
+          _illustEntries = const <IllustLibraryEntry>[];
+          _illustTags = const <IllustTagSummary>[];
+        }
+      });
+    }
+    List<IllustLibraryEntry> entries = const <IllustLibraryEntry>[];
+    String? errorText;
+    try {
+      _pixivFolders = PixivLibrary(effectivePixivDownloadRoot()).folders();
+      final downloads = await _manager.getManagedDownloads();
+      // 回填已数出来的页数：`buildIllustEntries` 每次重建条目，页数恒为 null，
+      // 不回填的话后台刷新一次「页数」就从卡片上消失。
+      entries = _illustPageCountMemo.apply(buildIllustEntries(downloads));
+    } catch (e) {
+      errorText = _operationErrorText(e);
+    }
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _illustEntries = entries;
+      _illustTags = summarizeIllustTags(entries);
+      _illustErrorText = errorText;
+      _illustLoading = false;
+      // 数据变了，之前选的标签可能已经不存在（例如刚删掉某个作品）。
+      // 留着幽灵标签会让筛选结果永远为空，且筛选条上看不到它 —— 无从排查。
+      _selectedIllustTags.removeWhere(
+        (tag) => !_illustTags.any((summary) => summary.tag == tag),
+      );
+    });
+    // 首帧已按 db 数据（缺则占位比例）渲染；真实比例在后台补齐后刷新
+    // （见 `_resolveIllustSizes` 的注释：绝不能同步做，否则首帧卡在磁盘上）。
+    unawaited(_resolveIllustSizes(entries));
+    // 45 号：插画侧也要**预解析封面**。
+    //
+    // ## 为什么必须补这一步
+    //
+    // `IllustCard` 拿到的 provider，在 `localCoverPath` 为空时是**惰性**的
+    //（`coverImageProviderForItem` 返回 `StreamImageProvider`，真正的解析在
+    // 它的 loader 里）。而真机加日志实测那个 loader **从未被执行**：
+    // `[cover] provider` 打了 128 次、`[cover] resolve` **0 次** —— 于是所有
+    // "封面不是现成的 `cover.*` 文件"的条目（zip 打包 / 单图直放）**永远是占位图标**，
+    // 而目录形态因为扫描时就填好了 `localCoverPath`、走"有值快路径"而正常显示。
+    //
+    // 这里主动预解析并**回写 `item.localCoverPath`**，让它也走那条快路径。
+    // 图集侧一直这么做（`_prefetchLocalCovers`），插画侧当初漏了 ——
+    // 正如上面那句注释所说"插画侧的数据与图集侧无关"，于是这层也被一起漏掉。
+    unawaited(_prefetchIllustCovers(entries));
+  }
+
+  /// 给插画卡片预解析封面（`localCoverPath` 为空或无效的项）。
+  ///
+  /// 与 [_prefetchLocalCovers] 同思路，但作用于插画侧的条目：解析成功后
+  /// `resolveCoverPathForItem` 会**回写 `item._localCoverPath`**，于是卡片
+  /// 重建时走"有值快路径"，不再依赖那条实测不生效的惰性 loader。
+  Future<void> _prefetchIllustCovers(List<IllustLibraryEntry> entries) async {
+    var changed = false;
+    for (final entry in entries) {
+      final item = entry.item;
+      if (!item.localStorageExists) {
+        continue;
+      }
+      final cover = item.localCoverPath?.trim();
+      if (cover != null &&
+          cover.isNotEmpty &&
+          cover != LocalLibraryManager.noCoverSentinel &&
+          !item.isManagedDownloadItem) {
+        continue;
+      }
+      final resolved = await _manager.resolveCoverPathForItem(item);
+      if (resolved != null && resolved.trim().isNotEmpty) {
+        print('[PicaKeep][IllustCover] resolved '
+            'id=${item.originalId} path=$resolved '
+            'inAppCache=${resolved.replaceAll('\\', '/').contains('/local_library_cache/covers/')}');
+        changed = true;
+      } else {
+        print('[PicaKeep][IllustCover] unresolved '
+            'id=${item.originalId} source=${item.fileSystemPath} '
+            'exists=${item.localStorageExists} cached=${item.localCoverPath}');
+      }
+    }
+    if (changed && mounted) {
+      setState(() {});
+    }
+  }
+
+  void _toggleIllustTag(String tag) {
+    setState(() {
+      if (!_selectedIllustTags.remove(tag)) {
+        _selectedIllustTags.add(tag);
+      }
+    });
+  }
+
+  void _clearIllustTags() {
+    if (_selectedIllustTags.isEmpty) {
+      return;
+    }
+    setState(_selectedIllustTags.clear);
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    App.localDataVersion.addListener(_handleLocalDataChanged);
+    App.serviceConfigVersion.addListener(_handleServiceConfigChanged);
+    App.serviceRuntimeVersion.addListener(_handleServiceRuntimeChanged);
+    // 纯显示类设置（卡片底部信息 / 瀑布流列数 / 悬浮按钮位置）。
+    //
+    // 必须单独监听：设置页是非 opaque 路由，pop 回来**不会**重建本页
+    // （`foundation/app.dart` 的 `displaySettingsVersion` 注释里有实测数据），
+    // 而这三个值都只在 `build` 里读。不监听的话症状是
+    // "在设置里改了、返回后没反应"，用户会以为改坏了。
+    App.displaySettingsVersion.addListener(_handleDisplaySettingsChanged);
+    _searchController.addListener(() {
+      if (mounted) {
+        setState(() {});
+      }
+    });
+    _load();
+  }
+
+  @override
+  void dispose() {
+    App.localDataVersion.removeListener(_handleLocalDataChanged);
+    App.serviceConfigVersion.removeListener(_handleServiceConfigChanged);
+    App.serviceRuntimeVersion.removeListener(_handleServiceRuntimeChanged);
+    App.displaySettingsVersion.removeListener(_handleDisplaySettingsChanged);
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  /// 显示类设置变了 → 只重建，**不重扫本地库**（那会白扫几百个目录）。
+  void _handleDisplaySettingsChanged() {
+    if (!mounted) {
+      return;
+    }
+    setState(() {});
+    // 「页数」是"改了配置才需要补"的字段：用户在设置里勾上它时，
+    // 补页数的那趟流程可能根本没跑过（当时还没勾），所以这里补跑一次。
+    if (_isIllustView && _illustEntries.isNotEmpty) {
+      unawaited(_resolveIllustSizes(_illustEntries));
+    }
+  }
+
+  void _handleLocalDataChanged() {
+    unawaited(_reloadAfterLocalDataChanged());
+  }
+
+  Future<void> _reloadAfterLocalDataChanged() async {
+    if (_isDeleteOperationRunning) {
+      _localDataRefreshRequested = true;
+      return;
+    }
+    if (_localDataRefreshRunning) {
+      _localDataRefreshRequested = true;
+      return;
+    }
+    _localDataRefreshRunning = true;
+    try {
+      do {
+        _localDataRefreshRequested = false;
+        await _load(forceLocalRefresh: true);
+      } while (_localDataRefreshRequested && mounted);
+    } finally {
+      _localDataRefreshRunning = false;
+      _localDataRefreshRequested = false;
+    }
+  }
+
+  void _handleServiceConfigChanged() {
+    _load();
+  }
+
+  void _handleServiceRuntimeChanged() {
+    _load();
+  }
+
+  Future<void> _refreshCurrentLibrary({bool rescan = false}) async {
+    await _refreshLocalLibrary(rescan: rescan);
+    await _load();
+  }
+
+  void _triggerManualRemoteRefresh() {
+    final now = DateTime.now();
+    final lastTriggeredAt = _lastManualRemoteRefreshAt;
+    if (lastTriggeredAt != null &&
+        now.difference(lastTriggeredAt) < const Duration(milliseconds: 1500)) {
+      return;
+    }
+    _lastManualRemoteRefreshAt = now;
+    _forceRemoteRefreshOnNextLoad = true;
+    unawaited(_load());
+  }
+
+  Future<void> _setCollectionShellEnabled(bool enabled) async {
+    if (!_canToggleCollectionShell) {
+      return;
+    }
+    if (mounted) {
+      setState(() {
+        _loading = true;
+        _errorText = null;
+      });
+    }
+    try {
+      if (_isLocalRootPage) {
+        final path = widget.localRootPath?.trim() ?? '';
+        if (path.isEmpty) {
+          return;
+        }
+        await _manager.setCollectionShellEnabledForLocalComicPath(
+            path, enabled);
+        await _load(forceLocalRefresh: true);
+        App.notifyLocalDataChanged();
+        return;
+      }
+      if (_isRemoteRootPage) {
+        final rootId = widget.remoteRootId?.trim() ?? '';
+        if (rootId.isEmpty) {
+          return;
+        }
+        await _remoteDataSource.setCollectionShellEnabledForRoot(
+            rootId, enabled);
+        _forceRemoteRefreshOnNextLoad = true;
+        await _load();
+      }
+    } catch (e) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _errorText = e.toString().trim();
+        _loading = false;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(_errorText ?? '切换失败'.tl)),
+      );
+    }
+  }
+
+  // 本地项首帧可能 localCoverPath 为 null（图集/本地扫描项按需补全），
+  // tile 同步的 _coverFile→resolveLocalComicCover 找不到封面会破图。这里加载后
+  // 异步对这些项走 resolveCoverPathForItem（含目录扫描兜底，会回写 item._localCoverPath），
+  // 完成后 setState 刷新让 tile 拿到回写后的封面。一次性、低频，不在滚动帧间隙跑。
+  Future<void> _prefetchLocalCovers(List<DownloadedItem> items) async {
+    final manager = LocalLibraryManager();
+    var changed = false;
+    for (final item in items) {
+      if (item is! LocalLibraryComicItem || !item.localStorageExists) {
+        continue;
+      }
+      final cover = item.localCoverPath?.trim();
+      if (cover != null &&
+          cover.isNotEmpty &&
+          cover != LocalLibraryManager.noCoverSentinel &&
+          !item.isManagedDownloadItem) {
+        continue;
+      }
+      final resolved = await manager.resolveCoverPathForItem(item);
+      if (resolved != null && resolved.trim().isNotEmpty) {
+        changed = true;
+      }
+    }
+    if (changed && mounted) {
+      setState(() {});
+    }
+  }
+
+  Future<bool> _checkRemoteAvailability() async {
+    if (!_isClientMode) {
+      return false;
+    }
+    try {
+      final snapshot =
+          await RuntimeServiceDataSourceResolver.current().fetchSnapshot();
+      return snapshot.connectionState == ServiceConnectionState.online;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<List<DownloadedItem>> _loadLocalItems({
+    bool forceRefresh = false,
+  }) async {
+    if (forceRefresh) {
+      await _manager.refresh();
+    }
+    _localRootSource = null;
+    _remoteRootSummary = null;
+    final rootPath = widget.localRootPath?.trim() ?? '';
+    final allItems = await _manager.getAll();
+    if (rootPath.isNotEmpty) {
+      final entries = await _manager.getStorageEntries();
+      final entry = _findLocalStorageEntry(entries, rootPath);
+      if (entry == null) {
+        return const <DownloadedItem>[];
+      }
+      _localRootSource = entry.source;
+      final childIds = entry.children.map((child) => child.id).toSet();
+      final childItems = allItems
+          .where((item) => childIds.contains(item.id))
+          .cast<DownloadedItem>()
+          .toList(growable: false);
+      return _sortItems(childItems);
+    }
+
+    if (_isAlbumOnly) {
+      final entries = await _manager.getStorageEntries();
+      final rootItems = entries
+          .where((entry) => entry.source.supportsCollectionShell)
+          .map((entry) => _LocalLibraryRootItem(entry: entry))
+          .cast<DownloadedItem>()
+          .toList(growable: false);
+      return _sortItems(rootItems);
+    }
+
+    return _sortItems(allItems.cast<DownloadedItem>().toList(growable: false));
+  }
+
+  LocalLibraryStorageEntry? _findLocalStorageEntry(
+    List<LocalLibraryStorageEntry> entries,
+    String rootPath,
+  ) {
+    final key = normalizeLocalCollectionShellPathKey(rootPath);
+    if (key.isEmpty) {
+      return null;
+    }
+    for (final entry in entries) {
+      if (normalizeLocalCollectionShellPathKey(entry.path) == key) {
+        return entry;
+      }
+    }
+    return null;
+  }
+
+  Future<List<DownloadedItem>> _loadRemoteItems() async {
+    RemoteLibraryEventChannel.instance.onRemotePageActivated();
+    final rootId = widget.remoteRootId?.trim() ?? '';
+    final forceRemoteRefresh = _forceRemoteRefreshOnNextLoad;
+    _forceRemoteRefreshOnNextLoad = false;
+    if (rootId.isNotEmpty) {
+      final summary = await _remoteDataSource.fetchRootSummary(
+        rootId,
+        forceRefresh: forceRemoteRefresh,
+      );
+      _remoteRootSummary = summary;
+      final items = await _remoteDataSource.fetchItemsForRoot(rootId);
+      return _sortItems(items.toList());
+    }
+    _remoteRootSummary = null;
+    final roots = await _remoteDataSource.fetchRootItems(
+      customLibraryOnly: true,
+      forceRefresh: forceRemoteRefresh,
+    );
+    return _sortItems(roots.cast<DownloadedItem>().toList());
+  }
+
+  Future<void> _load({bool forceLocalRefresh = false}) async {
+    if (mounted) {
+      setState(() {
+        _loading = true;
+        _errorText = null;
+      });
+    }
+    try {
+      final remoteAvailable = await _checkRemoteAvailability();
+      if (!remoteAvailable &&
+          _view != _LocalLibraryView.local &&
+          !_shouldStrictlyUseRemoteData) {
+        _view = _LocalLibraryView.local;
+        appdata.settings[localLibraryViewSettingIndex] = 'local';
+        await appdata.updateSettings();
+      }
+      final localItems = await _loadLocalItems(
+        forceRefresh: forceLocalRefresh,
+      );
+      List<DownloadedItem> items;
+      switch (_view) {
+        case _LocalLibraryView.local:
+          items = localItems;
+          break;
+        case _LocalLibraryView.aggregate:
+          if (!remoteAvailable) {
+            items = localItems;
+            break;
+          }
+          try {
+            final remoteItems = await _loadRemoteItems();
+            items = _sortItems([...localItems, ...remoteItems]);
+          } catch (_) {
+            items = localItems;
+          }
+          break;
+        case _LocalLibraryView.remote:
+          items = remoteAvailable
+              ? await _loadRemoteItems()
+              : throw const RemoteLibraryDataSourceException('远程服务当前不可用');
+          break;
+      }
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _items = items;
+        _remoteAvailable = remoteAvailable;
+        _clearSelectionState();
+        _loading = false;
+      });
+      unawaited(_prefetchLocalCovers(items));
+    } catch (e) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _items = const <DownloadedItem>[];
+        _remoteAvailable = false;
+        _clearSelectionState();
+        _errorText = e.toString().trim();
+        _loading = false;
+      });
+    }
+    // 插画侧的数据与图集侧的档位/来源无关（永远读本机已下载的 Pixiv 内容），
+    // 但**下拉刷新与删除后重载**要让插画侧一起跟上，否则删掉一个插画再回来
+    // 它还在。放在 try/catch 之外：图集侧报错时插画侧仍该能正常显示。
+    // 不传 showLoadingState：已有数据时不要把列表换成转圈（刷新不应闪白屏）。
+    if (mounted && _isIllustView) {
+      await _loadIllust();
+    }
+  }
+
+  List<DownloadedItem> get _filteredItems {
+    final keyword = _searchController.text.trim().toLowerCase();
+    if (keyword.isEmpty) {
+      return List<DownloadedItem>.from(_items, growable: false);
+    }
+    return _items.where((item) {
+      return item.name.toLowerCase().contains(keyword) ||
+          _localLibraryAuthor(item).toLowerCase().contains(keyword) ||
+          item.sourceDisplayName.toLowerCase().contains(keyword) ||
+          item.tags.any((tag) => tag.toLowerCase().contains(keyword)) ||
+          (item.fileSystemPath?.toLowerCase().contains(keyword) ?? false);
+    }).toList(growable: false);
+  }
+
+  List<DownloadedItem> _sortItems(List<DownloadedItem> items) {
+    final sorted = List<DownloadedItem>.from(items);
+    switch (normalizeLocalLibraryListSort(
+      appdata.settings[localLibraryListSortSettingIndex],
+    )) {
+      case 'time_asc':
+        sorted.sort(
+          (a, b) => (a.time ?? DateTime.fromMillisecondsSinceEpoch(0))
+              .compareTo(b.time ?? DateTime.fromMillisecondsSinceEpoch(0)),
+        );
+        break;
+      case 'name_asc':
+        sorted.sort((a, b) => a.name.compareTo(b.name));
+        break;
+      case 'name_desc':
+        sorted.sort((a, b) => b.name.compareTo(a.name));
+        break;
+      case 'size_asc':
+        sorted.sort((a, b) => (a.comicSize ?? 0).compareTo(b.comicSize ?? 0));
+        break;
+      case 'size_desc':
+        sorted.sort((a, b) => (b.comicSize ?? 0).compareTo(a.comicSize ?? 0));
+        break;
+      case 'time_desc':
+      default:
+        sorted.sort(
+          (a, b) => (b.time ?? DateTime.fromMillisecondsSinceEpoch(0))
+              .compareTo(a.time ?? DateTime.fromMillisecondsSinceEpoch(0)),
+        );
+        break;
+    }
+    return sorted;
+  }
+
+  File _coverFile(DownloadedItem item) {
+    if (item is LocalLibraryComicItem) {
+      return resolveLocalComicCover(item);
+    }
+    final path = item.localCoverPath?.trim();
+    if (path != null && path.isNotEmpty) {
+      return File(path);
+    }
+    return File('');
+  }
+
+  ImageProvider<Object>? _coverImageProvider(DownloadedItem item) {
+    if (item is RemoteLibraryComicItem) {
+      return item.coverImageProvider;
+    }
+    if (item is LocalLibraryComicItem) {
+      // 惰性 provider：localCoverPath 未回写（退出再进首帧为 null）时，由 provider
+      // 自身异步解析+读字节，不再依赖 _prefetchLocalCovers 的 setState 时序——
+      // 这是「有时退出再进不显示封面」的修复。走特权通道，root/shizuku 下可读。
+      return LocalLibraryManager().coverImageProviderForItem(item);
+    }
+    return null;
+  }
+
+  Future<void> _showSortDialog() async {
+    final selected = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) {
+        final current = normalizeLocalLibraryListSort(
+          appdata.settings[localLibraryListSortSettingIndex],
+        );
+        return SimpleDialog(
+          title: Text('排序'.tl),
+          children: [
+            for (final entry in const <MapEntry<String, String>>[
+              MapEntry('time_desc', '最近更新优先'),
+              MapEntry('time_asc', '最早更新优先'),
+              MapEntry('name_asc', '名称 A-Z'),
+              MapEntry('name_desc', '名称 Z-A'),
+              MapEntry('size_desc', '体积从大到小'),
+              MapEntry('size_asc', '体积从小到大'),
+            ])
+              ListTile(
+                leading: Icon(
+                  entry.key == current
+                      ? Icons.radio_button_checked
+                      : Icons.radio_button_unchecked,
+                ),
+                title: Text(entry.value.tl),
+                onTap: () {
+                  Navigator.of(dialogContext).pop(entry.key);
+                },
+              ),
+          ],
+        );
+      },
+    );
+    if (selected == null) {
+      return;
+    }
+    appdata.settings[localLibraryListSortSettingIndex] = selected;
+    await appdata.updateSettings();
+    await _load();
+  }
+
+  Future<void> _showFilterDialog() async {
+    var albumOnly = appdata.settings[localLibraryAlbumOnlySettingIndex] != '0';
+    await showDialog<void>(
+      context: context,
+      barrierColor: Colors.transparent,
+      builder: (dialogContext) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return Dialog(
+              insetPadding: const EdgeInsets.only(top: 72, right: 12, left: 80),
+              alignment: Alignment.topRight,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(18),
+              ),
+              child: ConstrainedBox(
+                constraints: BoxConstraints(
+                  maxWidth: 280,
+                  // 档位折叠区展开后内容会变高：给一个高度上限并让内容可滚，
+                  // 否则小屏/横屏上会直接 RenderFlex overflow。
+                  maxHeight: MediaQuery.of(context).size.height * 0.6,
+                ),
+                // 页内第二处「视图切换按钮位置」入口（用户要求"页面内一处 +
+                // 设置页一处"，见 「浏览」设置区）。设置页那处在
+                // `pages/settings/explore_settings.dart`。
+                // 两处写的是同一个 settings[157]，不需要额外同步。
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      // 36 号：档位（本地 / 聚合 / 远程）**折叠**在这里。
+                      // 默认收起，收起时副标题已写明当前档位。
+                      if (_viewScopeMenu.tiersApplicable)
+                        _buildTierSection(setDialogState: setDialogState),
+                      SwitchListTile(
+                        value: albumOnly,
+                        title: Text('仅显示图集'.tl),
+                        subtitle: Text('隐藏下载目录来源，只看普通本地图集'.tl),
+                        secondary: const Icon(Icons.photo_library_outlined),
+                        onChanged: (value) async {
+                          setDialogState(() {
+                            albumOnly = value;
+                          });
+                          appdata.settings[localLibraryAlbumOnlySettingIndex] =
+                              value ? '1' : '0';
+                          await appdata.updateSettings();
+                          await _load();
+                        },
+                      ),
+                      ListTile(
+                        leading: const Icon(Icons.open_with_outlined),
+                        title: Text('视图切换按钮位置'.tl),
+                        subtitle: Text(
+                          illustViewSwitcherAlignsLeft(
+                            appdata.settings[
+                                illustViewSwitcherPositionSettingIndex],
+                          )
+                              ? '靠左'.tl
+                              : '靠右'.tl,
+                        ),
+                        onTap: () async {
+                          final next = illustViewSwitcherAlignsLeft(
+                            appdata.settings[
+                                illustViewSwitcherPositionSettingIndex],
+                          )
+                              ? illustViewSwitcherRight
+                              : illustViewSwitcherLeft;
+                          appdata.settings[
+                                  illustViewSwitcherPositionSettingIndex] =
+                              next;
+                          await appdata.updateSettings();
+                          setDialogState(() {});
+                          if (mounted) {
+                            setState(() {});
+                          }
+                        },
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  void _openItem(DownloadedItem item) {
+    if (item is RemoteLibraryRootItem) {
+      App.pushInner(
+        () => LocalLibraryPage(
+          albumOnly: true,
+          preferRemoteView: true,
+          title: item.name,
+          remoteRootId: item.root.id,
+        ),
+      );
+      return;
+    }
+    if (item is _LocalLibraryRootItem) {
+      // 单项 source 直接进该项详情，不再套一层「合集列表」外壳——只有 1 个子项时
+      // 中间列表毫无意义。child.id 即 _items 里的 itemId，findCachedById 同步可取。
+      final children = item.entry.children;
+      if (children.length == 1) {
+        final comic = LocalLibraryManager().findCachedById(children.first.id);
+        if (comic != null) {
+          App.pushInner(() => LocalComicDetailPage(comic: comic));
+          return;
+        }
+      }
+      App.pushInner(
+        () => LocalLibraryPage(
+          albumOnly: true,
+          title: item.name,
+          localRootPath: item.entry.path,
+        ),
+      );
+      return;
+    }
+    App.pushInner(() => LocalComicDetailPage(comic: item));
+  }
+
+  void _showItemInfo(DownloadedItem item) {
+    if (item is RemoteLibraryRootItem) {
+      _openItem(item);
+      return;
+    }
+    if (item is _LocalLibraryRootItem) {
+      _openItem(item);
+      return;
+    }
+    final logic = DownloadPageLogic(
+      pageTitle: _isAlbumOnly ? '图集'.tl : '资源库'.tl,
+    )
+      ..loading = false
+      ..baseComics = [item]
+      ..comics = [item]
+      ..selected = [false];
+    if (UiMode.m1(context)) {
+      final screenHeight = MediaQuery.of(context).size.height;
+      final maxSize = screenHeight > 0
+          ? math.min(0.8, math.max(0.5, (screenHeight - 92) / screenHeight))
+          : 0.8;
+      const minSize = 0.3;
+      final sheetController = DraggableScrollableController();
+      showModalBottomSheet(
+        context: context,
+        isScrollControlled: true,
+        showDragHandle: false,
+        useSafeArea: false,
+        backgroundColor: Colors.transparent,
+        builder: (context) {
+          return DraggableScrollableSheet(
+            controller: sheetController,
+            initialChildSize: 0.6,
+            minChildSize: minSize,
+            maxChildSize: maxSize,
+            expand: false,
+            builder: (context, scrollController) {
+              return Material(
+                color: Theme.of(context).colorScheme.surface,
+                surfaceTintColor: Theme.of(context).colorScheme.surfaceTint,
+                shape: const RoundedRectangleBorder(
+                  borderRadius: BorderRadius.vertical(
+                    top: Radius.circular(16),
+                  ),
+                ),
+                clipBehavior: Clip.antiAlias,
+                child: DownloadedComicInfoView(
+                  item,
+                  logic,
+                  scrollController: scrollController,
+                  sheetController: sheetController,
+                  sheetMaxSize: maxSize,
+                  sheetMinSize: minSize,
+                ),
+              );
+            },
+          );
+        },
+      ).whenComplete(sheetController.dispose);
+    } else {
+      showSideBar(
+        App.globalContext ?? context,
+        DownloadedComicInfoView(item, logic),
+        useSurfaceTintColor: true,
+      );
+    }
+  }
+
+  Future<void> _showActions(DownloadedItem item) async {
+    final path = item.fileSystemPath?.trim() ?? '';
+    final isRootItem =
+        item is RemoteLibraryRootItem || item is _LocalLibraryRootItem;
+    await showModalBottomSheet<void>(
+      context: context,
+      builder: (sheetContext) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ListTile(
+                leading: const Icon(Icons.info_outline),
+                title: Text(isRootItem ? '打开列表'.tl : '查看详情'.tl),
+                onTap: () {
+                  Navigator.of(sheetContext).pop();
+                  _openItem(item);
+                },
+              ),
+              if (!isRootItem)
+                ListTile(
+                  leading: const Icon(Icons.menu_book),
+                  title: Text('继续阅读'.tl),
+                  onTap: () async {
+                    Navigator.of(sheetContext).pop();
+                    await ensureHistoryBeforeRead(item);
+                    await App.openReader(() => item.createReadingPage());
+                  },
+                ),
+              if (path.isNotEmpty)
+                ListTile(
+                  leading: const Icon(Icons.folder_open),
+                  title: Text('打开目录'.tl),
+                  onTap: () async {
+                    Navigator.of(sheetContext).pop();
+                    await _openDirectoryPath(context, path);
+                  },
+                ),
+              if (path.isNotEmpty)
+                ListTile(
+                  leading: const Icon(Icons.copy),
+                  title: Text('复制路径'.tl),
+                  onTap: () async {
+                    Navigator.of(sheetContext).pop();
+                    await _copyPath(context, path);
+                  },
+                ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  void _showDesktopMenu(DownloadedItem item, TapDownDetails details) {
+    final path = item.fileSystemPath?.trim() ?? '';
+    final isRootItem =
+        item is RemoteLibraryRootItem || item is _LocalLibraryRootItem;
+    showMenu(
+      context: context,
+      position: RelativeRect.fromLTRB(
+        details.globalPosition.dx,
+        details.globalPosition.dy,
+        details.globalPosition.dx + 1,
+        details.globalPosition.dy + 1,
+      ),
+      items: [
+        PopupMenuItem<void>(
+          child: Text(isRootItem ? '打开列表'.tl : '查看详情'.tl),
+          onTap: () {
+            Future.delayed(const Duration(milliseconds: 120), () {
+              if (mounted) {
+                _openItem(item);
+              }
+            });
+          },
+        ),
+        if (!isRootItem)
+          PopupMenuItem<void>(
+            child: Text('继续阅读'.tl),
+            onTap: () {
+              Future.delayed(const Duration(milliseconds: 120), () async {
+                await ensureHistoryBeforeRead(item);
+                await App.openReader(() => item.createReadingPage());
+              });
+            },
+          ),
+        if (path.isNotEmpty)
+          PopupMenuItem<void>(
+            child: Text('打开目录'.tl),
+            onTap: () {
+              Future.delayed(const Duration(milliseconds: 120), () async {
+                if (mounted) {
+                  await _openDirectoryPath(context, path);
+                }
+              });
+            },
+          ),
+        if (path.isNotEmpty)
+          PopupMenuItem<void>(
+            child: Text('复制路径'.tl),
+            onTap: () {
+              Future.delayed(const Duration(milliseconds: 120), () async {
+                if (mounted) {
+                  await _copyPath(context, path);
+                }
+              });
+            },
+          ),
+      ],
+    );
+  }
+
+  void _handleItemTap(DownloadedItem item) {
+    if (_selecting && _canSelectItem(item)) {
+      _toggleItemSelection(item);
+      return;
+    }
+    if (item is LocalLibraryComicItem && item.needsArchivePassword) {
+      _handleArchivePasswordTap(item);
+      return;
+    }
+    if (item is RemoteLibraryComicItem && item.needsArchivePassword) {
+      _handleRemoteArchivePasswordTap(item);
+      return;
+    }
+    _showItemInfo(item);
+  }
+
+  Future<void> _handleArchivePasswordTap(LocalLibraryComicItem item) async {
+    final archivePath = item.fileSystemPath ?? '';
+    if (archivePath.isEmpty) return;
+    final result = await showArchivePasswordDialog(
+      context: context,
+      archivePath: archivePath,
+      archiveFileName: item.name,
+      format: item.archiveFormat,
+    );
+    if (result == null) return;
+    item.markArchiveUnlocked(result.password);
+    if (result.addToDefaults) {
+      await ArchivePasswordStore.instance.addDefaultPassword(result.password);
+    }
+    await LocalLibraryManager.instance.refreshArchiveCoverFor(item);
+    if (mounted) setState(() {});
+    _showItemInfo(item);
+  }
+
+  Future<void> _handleRemoteArchivePasswordTap(
+    RemoteLibraryComicItem item,
+  ) async {
+    final result = await showArchivePasswordDialog(
+      context: context,
+      archivePath: item.remotePath,
+      archiveFileName: item.name,
+      format: item.archiveFormat,
+      allowAddToDefaults: false,
+      onVerify: (password) => item.client.unlockArchive(item.id, password),
+    );
+    if (result == null) return;
+    item.archivePasswordMatched = true;
+    await _load();
+    if (!mounted) return;
+    final refreshed = _items.whereType<RemoteLibraryComicItem>().where(
+          (candidate) => candidate.id == item.id,
+        );
+    _showItemInfo(refreshed.isEmpty ? item : refreshed.first);
+  }
+
+  void _handleItemLongPress(DownloadedItem item) {
+    if (_canSelectItem(item)) {
+      _toggleItemSelection(item);
+      return;
+    }
+    _showActions(item);
+  }
+
+  void _handleItemSecondaryTap(DownloadedItem item, TapDownDetails details) {
+    if (_selecting && _canSelectItem(item)) {
+      _toggleItemSelection(item);
+      return;
+    }
+    _showDesktopMenu(item, details);
+  }
+
+  Future<void> _deleteSelectedItems() async {
+    if (_selectedCount == 0) {
+      return;
+    }
+    final texts = buildDeleteActionTexts(
+      count: _selectedCount,
+      itemLabel: _isAlbumOnly ? '图集' : '项目',
+    );
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          title: Text(texts.title.tl),
+          content: Text(texts.content.tl),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: Text('取消'.tl),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              child: Text(texts.confirmLabel.tl),
+            ),
+          ],
+        );
+      },
+    );
+    if (confirmed != true) {
+      return;
+    }
+
+    final error = await _runDeleteOperation(_selectedDeleteItems);
+    if (error != null && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(error)),
+      );
+    }
+  }
+
+  Widget _buildSelectionFrame({
+    required DownloadedItem item,
+    required Widget child,
+  }) {
+    if (!_canSelectItem(item)) {
+      return child;
+    }
+    final colorScheme = Theme.of(context).colorScheme;
+    final selected = _isItemSelected(item);
+    return Padding(
+      padding: const EdgeInsets.all(2),
+      child: ClipRRect(
+        borderRadius: const BorderRadius.all(Radius.circular(16)),
+        child: Stack(
+          children: [
+            Positioned.fill(child: child),
+            if (selected)
+              Positioned.fill(
+                child: IgnorePointer(
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: colorScheme.primary.withValues(alpha: 0.22),
+                      border: Border.all(
+                        color: colorScheme.primary,
+                        width: 1.6,
+                      ),
+                      borderRadius: const BorderRadius.all(Radius.circular(16)),
+                    ),
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          begin: Alignment.topCenter,
+                          end: Alignment.bottomCenter,
+                          colors: [
+                            colorScheme.primary.withValues(alpha: 0.14),
+                            colorScheme.primary.withValues(alpha: 0.28),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildItem(DownloadedItem item) {
+    if (item is RemoteLibraryRootItem) {
+      return Padding(
+        padding: const EdgeInsets.all(2),
+        child: _LocalLibraryRemoteRootCard(
+          item: item,
+          sizeText: item.comicSize == null
+              ? '未知大小'.tl
+              : _formatLocalLibrarySize(item.comicSize!),
+          onTap: () => _handleItemTap(item),
+          onLongPress: () => _handleItemLongPress(item),
+          onSecondaryTap: (details) => _handleItemSecondaryTap(item, details),
+        ),
+      );
+    }
+    if (item is _LocalLibraryRootItem) {
+      return Padding(
+        padding: const EdgeInsets.all(2),
+        child: _LocalLibraryLocalRootCard(
+          item: item,
+          sizeText: item.comicSize == null
+              ? '未知大小'.tl
+              : _formatLocalLibrarySize(item.comicSize!),
+          onTap: () => _handleItemTap(item),
+          onLongPress: () => _handleItemLongPress(item),
+          onSecondaryTap: (details) => _handleItemSecondaryTap(item, details),
+        ),
+      );
+    }
+    final tile = _LocalLibraryComicTile(
+      comicId: item.id,
+      enableLongPress: true,
+      name: item.name,
+      author: _localLibraryAuthor(item),
+      imagePath: _coverFile(item),
+      imageProvider: _coverImageProvider(item),
+      optimizeCoverDecode: true,
+      type: item.sourceDisplayName,
+      tag: item.tags,
+      size: item.comicSize == null
+          ? '未知大小'.tl
+          : _formatLocalLibrarySize(item.comicSize!),
+      onTap: () => _handleItemTap(item),
+      onLongTap: () => _handleItemLongPress(item),
+      onSecondaryTap: (details) => _handleItemSecondaryTap(item, details),
+    );
+    return _buildSelectionFrame(item: item, child: tile);
+  }
+
+  Widget _buildEmptyState() {
+    final hasKeyword = _searchController.text.trim().isNotEmpty;
+    final viewLabel = _localLibraryViewLabel(_view, albumOnly: _isAlbumOnly).tl;
+    final emptyTitle = hasKeyword
+        ? '没有匹配的$viewLabel'
+        : (_errorText?.trim().isNotEmpty == true
+            ? '$viewLabel暂不可用'
+            : '暂无$viewLabel');
+    final emptyDescription = hasKeyword
+        ? '尝试调整搜索关键词'.tl
+        : (_errorText?.trim().isNotEmpty == true
+            ? _errorText!
+            : _view == _LocalLibraryView.remote ||
+                    _view == _LocalLibraryView.aggregate
+                ? (_isAlbumOnly
+                    ? '请确认服务端地址和服务状态后再刷新远程图集'.tl
+                    : '请确认服务端地址和服务状态后再刷新远程资源库'.tl)
+                : _isAlbumOnly
+                    ? '可在工具-本地文件管理中添加图集目录'.tl
+                    : '可在工具-本地文件管理中添加本地漫画路径'.tl);
+    final isRemoteRefreshView = (_view == _LocalLibraryView.remote ||
+            _view == _LocalLibraryView.aggregate) &&
+        _remoteAvailable;
+    final refreshLabel = isRemoteRefreshView
+        ? (_isAlbumOnly ? '刷新远程图集'.tl : '刷新远程资源库'.tl)
+        : (_isAlbumOnly ? '刷新图集'.tl : '刷新资源库'.tl);
+    return SliverToBoxAdapter(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.photo_library_outlined,
+                size: 64, color: Colors.grey),
+            const SizedBox(height: 16),
+            Text(
+              emptyTitle.tl,
+              style: const TextStyle(fontSize: 18, color: Colors.grey),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              emptyDescription,
+              style: TextStyle(
+                fontSize: 12,
+                color: Theme.of(context).colorScheme.outline,
+              ),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 16),
+            FilledButton.icon(
+              onPressed: isRemoteRefreshView
+                  ? _triggerManualRemoteRefresh
+                  : () async {
+                      await _refreshCurrentLibrary();
+                    },
+              icon: const Icon(Icons.refresh),
+              label: Text(refreshLabel),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 本页是否是**可切换「图集 / 插画」视图的根列表**。
+  ///
+  /// 判据与 [_showIllustViewSwitcher] 完全同源（同一个 foundation 层函数），只把
+  /// `selecting` / `operationRunning` 这两个**瞬时条件**固定为 false —— 标题问的是
+  /// "这一页属于哪个视图"，而不是"此刻按钮可不可见"；否则一进多选态标题就会先跳回
+  /// 「图集」再被"已选择 N 个项目"覆盖，多一次无意义的闪动。
+  bool get _isIllustSwitchableRoot => shouldShowIllustViewSwitcher(
+        albumOnly: _isAlbumOnly,
+        isLocalRootPage: _isLocalRootPage,
+        isRemoteRootPage: _isRemoteRootPage,
+        selecting: false,
+        operationRunning: false,
+      );
+
+  Widget _buildTitle() {
+    if (_searchMode && !_selecting) {
+      return TextField(
+        controller: _searchController,
+        autofocus: true,
+        decoration: InputDecoration(
+          border: InputBorder.none,
+          hintText: '搜索'.tl,
+        ),
+      );
+    }
+    if (_selecting) {
+      return Text('已选择 @num 个项目'.tlParams({'num': _selectedCount.toString()}));
+    }
+    // 标题的三条来源与**优先级**（33 号明确写出，避免以后再加分支时各猜一套）：
+    //
+    // 1. **视图**（最高）：本页确实能切「图集 / 插画」时，标题跟着视图走 ——
+    //    用户原话「顶部的画集标题应该随着按钮的切换而切换」。文案直接取
+    //    [illustViewLabel]，与悬浮按钮上的标识**同一个函数**，不会出现
+    //    "按钮写着插画、标题写着图集"。
+    //
+    //    ⚠️ 这条**必须高于 `widget.title`**，否则本需求在主入口上根本不生效：
+    //    从「我」页进图集页时传的就是 `title: '图集'`
+    //    （`me_page.dart:454-457`），若 `widget.title` 优先，切到插画后标题仍是
+    //    「图集」—— 那正是 33 号真机截图里的症状。
+    //    计划文里"建议 widget.title > 视图"的写法在这一点上与主需求冲突，故取
+    //    "视图 > widget.title"；实际可见结果反而更稳：图集侧渲染出来仍是「图集」
+    //    （与该页传进来的 `widget.title` 逐字相同），只有切到插画才变。
+    //
+    // 2. **显式 `widget.title`**：子页面（本地根 / 远程根，标题是那个根的名字）
+    //    与任何调用方指定的标题。这些页 `_isIllustSwitchableRoot` 为假，所以上面
+    //    那条不会截走它们 —— 既有行为**一点没改**。
+    //
+    // 3. **`albumOnly`**（最低，既有分支）：`widget.title` 没给时，
+    //    `图集` / `资源库`。行为与改动前逐字一致。
+    if (_isIllustSwitchableRoot) {
+      return Text(illustViewLabel(_illustView));
+    }
+    return Text((widget.title ?? (_isAlbumOnly ? '图集' : '资源库')).tl);
+  }
+
+  /// 设置面板里的**档位区**（36 号）。
+  ///
+  /// ## 为什么撤销 33 号那个"档位 + 设置共用一个弹出菜单"
+  ///
+  /// 33 号为了让工具栏只占 4 个 action（宽度硬约束，见
+  /// `test/local_library_page_view_scope_test.dart` 里的算术守卫），把档位三档与
+  /// 「资源库显示设置」并进了同一个 `PopupMenuButton`。真机反馈暴露两个问题：
+  ///
+  /// 1. **设置变成了二级** —— 点按钮先弹菜单，还要再点"资源库显示设置"才进设置；
+  /// 2. **档位在远程不可用时整块不出现**（沿用 24 号的 `_showSourceSelector`），
+  ///    用户于是问"本地-聚合-远程 的档位切换按钮呢"。
+  ///
+  /// 现在的形态：**按钮点击直达设置面板**（一级），档位**直接平铺**在面板首项。
+  /// action 数量仍是 4 个，宽度约束一点没动。
+  ///
+  /// ## 为什么是"平铺"而不是"折叠"（36 号第二轮真机反馈）
+  ///
+  /// 第一轮实现成了 `ExpansionTile`（默认收起）。真机反馈原话：
+  /// 「最好保持展开样式，不要折叠那三档」—— 折叠多出一次点击，而档位只有
+  /// 三项目、本来就不占地方。所以现在**标题行 + 三档平铺**，一进面板就看得到
+  /// 自己停在哪一档、能切到哪几档。
+  ///
+  /// ## 样式来源：探索页的「榜单范围」菜单（`explore_page.dart` 的 `_EntryMenu`）
+  ///
+  /// 用户要求"参考探索页的"。这里逐项对齐那个菜单的视觉，**数值都是照抄的**：
+  /// 选项容器 `minHeight: 52` / `padding: h12 v8` / 圆角 12；选中态
+  /// `secondaryContainer` 铺底；左侧 32×32 圆角 10 的图标块（选中
+  /// `surface@0.65`、未选中 `surfaceContainerHighest`，图标 19）；尾部 20 宽位
+  /// 放 `check_circle_rounded`；标题行 12px / `onSurfaceVariant` / `w500`。
+  ///
+  /// ## 远程不可用时：置灰，不隐藏
+  ///
+  /// 判据见 [LocalLibraryViewScopeMenu.tiersEnabled]。用户在远程不可用时最需要的
+  /// 恰恰是"看得到档位在哪"，藏起来等于这个功能不存在。
+  Widget _buildTierSection({required StateSetter setDialogState}) {
+    final colors = Theme.of(context).colorScheme;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: <Widget>[
+        // 与探索页菜单里那行小标题同规格（12px / onSurfaceVariant / w500）。
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 4, 12, 8),
+          child: Text(
+            '档位'.tl,
+            style: TextStyle(
+              color: colors.onSurfaceVariant,
+              fontSize: 12,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+        ),
+        for (final view in _LocalLibraryView.values)
+          _buildTierOption(
+            view: view,
+            selected: view == _view,
+            setDialogState: setDialogState,
+          ),
+        const SizedBox(height: 4),
+        Divider(height: 1, color: colors.outlineVariant.withValues(alpha: 0.6)),
+      ],
+    );
+  }
+
+  /// 档位区里的一项。
+  ///
+  /// 渲染交给 [LibraryViewSelectorTile]（`components/library_view_selector.dart`）
+  /// —— 与「已下载 / 图片收藏 / 图库 / 回收站」的档位面板**是同一份实现**，
+  /// 不再各写一套长得像的样式。
+  ///
+  /// 文案用完整版 [_localLibraryViewLabel]（含 `albumOnly` 换出来的
+  /// `本地图集` / `远程 · 图集`），它的既有行为一点没改。
+  ///
+  /// 需要远程的档位（聚合 / 远程）在远程不可用时**置灰 + 写明原因**，而不是
+  /// 消失。当前档位照常打勾，哪怕它此刻不可选 —— 用户需要知道"我停在哪一档"，
+  /// 否则会以为自己从没设置过。
+  Widget _buildTierOption({
+    required _LocalLibraryView view,
+    required bool selected,
+    required StateSetter setDialogState,
+  }) {
+    final needsRemote = view != _LocalLibraryView.local;
+    return LibraryViewSelectorTile<_LocalLibraryView>(
+      entry: LibraryViewSelectorEntry<_LocalLibraryView>(
+        value: view,
+        label: _localLibraryViewLabel(view, albumOnly: _isAlbumOnly),
+        icon: _localLibraryViewIcon(view),
+        enabled: _viewScopeMenu.tierAvailable(needsRemote: needsRemote),
+        disabledReason: '远程服务不可用',
+      ),
+      selected: selected,
+      onTap: () async {
+        if (view == _view) {
+          return;
+        }
+        await _setView(view);
+        setDialogState(() {});
+      },
+    );
+  }
+
+  Widget _buildCollectionShellAction() {
+    final enabled = _collectionShellEnabled;
+    return Tooltip(
+      message: enabled ? '关闭合集识别'.tl : '开启合集识别'.tl,
+      child: Padding(
+        padding: const EdgeInsets.only(left: 2, right: 4),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              '合集'.tl,
+              style: Theme.of(context).textTheme.labelMedium,
+            ),
+            Switch.adaptive(
+              value: enabled,
+              onChanged: _setCollectionShellEnabled,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildDeleteProgressOverlay() {
+    final theme = Theme.of(context);
+    final progressText = '$_deleteProgressCurrent/$_deleteProgressTotal';
+    final isDesktop = App.isDesktop;
+    final barrierColor = Color.alphaBlend(
+      theme.colorScheme.primary.withValues(alpha: 0.06),
+      Colors.white.withValues(alpha: 0.76),
+    );
+    final panelColor = Color.alphaBlend(
+      theme.colorScheme.primary.withValues(alpha: 0.04),
+      theme.colorScheme.surface.withValues(alpha: 0.97),
+    );
+    return Stack(
+      children: [
+        ModalBarrier(
+          dismissible: false,
+          color: barrierColor,
+        ),
+        Center(
+          child: ConstrainedBox(
+            constraints: BoxConstraints(
+              maxWidth: isDesktop ? 440 : 300,
+              minWidth: isDesktop ? 340 : 260,
+            ),
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                color: panelColor,
+                borderRadius: BorderRadius.circular(24),
+                boxShadow: [
+                  BoxShadow(
+                    color: theme.colorScheme.shadow.withValues(alpha: 0.08),
+                    blurRadius: 24,
+                    offset: const Offset(0, 10),
+                  ),
+                ],
+                border: Border.all(
+                  color:
+                      theme.colorScheme.outlineVariant.withValues(alpha: 0.45),
+                ),
+              ),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 24,
+                  vertical: 22,
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    SizedBox(
+                      width: 36,
+                      height: 36,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 3.2,
+                        color: theme.colorScheme.primary,
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    if (isDesktop)
+                      Text(
+                        '$_deleteProgressActionLabel $progressText',
+                        textAlign: TextAlign.center,
+                        style: theme.textTheme.titleMedium?.copyWith(
+                          fontWeight: FontWeight.w700,
+                          color: theme.colorScheme.onSurface,
+                        ),
+                      )
+                    else ...[
+                      Text(
+                        _deleteProgressActionLabel,
+                        textAlign: TextAlign.center,
+                        style: theme.textTheme.titleMedium?.copyWith(
+                          fontWeight: FontWeight.w700,
+                          color: theme.colorScheme.onSurface,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        progressText,
+                        textAlign: TextAlign.center,
+                        style: theme.textTheme.titleSmall?.copyWith(
+                          fontWeight: FontWeight.w600,
+                          color: theme.colorScheme.primary,
+                          height: 1.25,
+                        ),
+                      ),
+                    ],
+                    const SizedBox(height: 12),
+                    Text(
+                      _deleteProgressHint.tl,
+                      textAlign: TextAlign.center,
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                        height: 1.35,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget? _buildMultiSelectFab(List<DownloadedItem> items) {
+    if (items.where(_canSelectItem).isEmpty) {
+      return null;
+    }
+    return FloatingActionButton(
+      enableFeedback: true,
+      onPressed: _isOperationRunning
+          ? null
+          : () {
+              if (!_selecting) {
+                setState(() {
+                  _selecting = true;
+                });
+                return;
+              }
+              if (_selectedCount == 0) {
+                return;
+              }
+              _deleteSelectedItems();
+            },
+      child: _selecting
+          ? const Icon(Icons.delete_forever_outlined)
+          : const Icon(Icons.checklist_outlined),
+    );
+  }
+
+  /// 悬浮入口。同一时刻**最多一个**：
+  ///
+  /// - 多选态下只显示多选 FAB（视图切换按钮隐藏，计划步骤 4.4 的互斥）；
+  /// - 非多选态下优先显示视图切换按钮，不显示多选 FAB。
+  ///
+  /// 为什么不是"两个都显示"：这是手机上的同一条右下角通道，两个 FAB 叠在一起
+  /// 既挡内容又难分辨点到了哪个。而"进多选"本身可以从长按条目进入
+  /// （`_handleItemLongPress`），所以隐藏多选 FAB 不会让功能变得不可达。
+  Widget? _buildFloatingActionButton(List<DownloadedItem> items) {
+    if (_showIllustViewSwitcher) {
+      return IllustViewSwitcherFab(
+        currentView: _illustView,
+        scrolling: _scrollInteracting,
+        alignLeft: illustViewSwitcherAlignsLeft(
+          appdata.settings[illustViewSwitcherPositionSettingIndex],
+        ),
+        onViewSelected: (view) {
+          unawaited(_setIllustView(view));
+        },
+      );
+    }
+    return _buildMultiSelectFab(items);
+  }
+
+  /// 悬浮按钮的落点。
+  ///
+  /// ## 为什么由 `Scaffold` 决定左右，而不是控件自己 `Align`
+  ///
+  /// 32 号真机反馈「他靠左时有点不对等」。实测根因：控件自己用一层**撑满整屏**的
+  /// `Align` 选边时，`Scaffold` 量到的 FAB 尺寸等于**屏宽**，`endFloat` 算出的
+  /// 偏移变成 `-16`，再叠上控件自己的 `left: 16`，按钮正好落在屏幕最左边 ——
+  /// 左边距 0、右边距 32。
+  ///
+  /// 改用 Flutter 自己的 `startFloat` / `endFloat` 后，两侧由同一套槽位算术决定，
+  /// **结构上不可能不对称**；同时也顺手拿到了 Scaffold 的键盘/底部条避让。
+  ///
+  /// 多选 FAB 保持默认（`endFloat`）：它一直是靠右的，不在本次反馈范围内。
+  FloatingActionButtonLocation get _floatingActionButtonLocation {
+    final alignLeft = _showIllustViewSwitcher &&
+        illustViewSwitcherAlignsLeft(
+          appdata.settings[illustViewSwitcherPositionSettingIndex],
+        );
+    return alignLeft
+        ? FloatingActionButtonLocation.startFloat
+        : FloatingActionButtonLocation.endFloat;
+  }
+
+  Widget _buildPixivFolderBar() {
+    final folders = _pixivFolders;
+    if (!folders.any((f) => f.id == _pixivFolderFilter)) _pixivFolderFilter = null;
+    return Padding(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6), child: Row(children: [
+      const Icon(Icons.folder_outlined), const SizedBox(width: 10),
+      Expanded(child: DropdownButton<String>(isExpanded: true, value: _pixivFolderFilter ?? '', underline: const SizedBox.shrink(),
+        items: [const DropdownMenuItem(value: '', child: Text('全部文件夹')),
+          for (final f in folders) DropdownMenuItem(value: f.id, child: Text(f.name, overflow: TextOverflow.ellipsis))],
+        onChanged: _selecting || _isOperationRunning ? null : (id) => setState(() => _pixivFolderFilter = id == '' ? null : id))),
+      TextButton(onPressed: _selecting || _isOperationRunning ? null : () async {
+        final selected = await Navigator.push<String>(context, MaterialPageRoute(builder: (_) => const PixivFoldersPage()));
+        if (!mounted) return;
+        if (selected != null) setState(() => _pixivFolderFilter = selected);
+        await _loadIllust();
+      }, child: const Text('管理')),
+    ]));
+  }
+
+  Future<void> _onIllustSelectionAction(String action) async {
+    if (_isOperationRunning) return;
+    if (action == 'all') {
+      setState(() { _selectedItemIds.addAll(_filteredIllustEntries.map((e) => e.item.id)); });
+      return;
+    }
+    if (_selectedCount == 0) return;
+    if (action == 'delete') { await _deleteSelectedItems(); return; }
+    final selected = _selectedDeleteItems.whereType<LocalLibraryComicItem>().toList();
+    setState(() => _illustTransferRunning = true);
+    try { await transferPixivItems(context, selected, move: action == 'move'); }
+    finally {
+      if (mounted) {
+        setState(() { _illustTransferRunning = false; _clearSelectionState(); });
+        await _loadIllust();
+      }
+    }
+  }
+
+  /// 插画视图的内容 sliver（标签筛选条 + 瀑布流 + 三种状态）。
+  Widget _buildIllustContent() {
+    return LocalLibraryIllustSlivers(
+      allEntries: _illustEntries,
+      entries: _filteredIllustEntries,
+      tags: _illustTags,
+      selectedTags: _selectedIllustTags,
+      loading: _illustLoading,
+      errorText: _illustErrorText,
+      columns: _illustViewWaterfallColumns,
+      itemBuilder: _buildIllustItem,
+      onToggleTag: (tag) { if (!_selecting) _toggleIllustTag(tag); },
+      onClearTags: () { if (!_selecting) _clearIllustTags(); },
+    );
+  }
+
+  Widget _buildIllustItem(BuildContext context, IllustLibraryEntry entry) {
+    final item = entry.item;
+    return IllustCard(
+      entry: entry,
+      // 必须走 manager 的 provider 工厂：它内部会按"是否处于 root/Shizuku
+      // 特权模式"决定走 FileImage 快路径还是 StreamImageProvider，
+      // 直接 FileImage 在特权模式下会整片破图（见 foundation/local_library.dart:1213）。
+      imageProvider: illustCoverProviderFor(item),
+      locationLabel: _pixivFolderFilter == null ? p.basename(p.dirname(item.fileSystemPath!)) : null,
+      // 底部信息随 `settings[illustCardInfoSettingIndex]` 变化（32 号）。
+      // 取值与拼接走 foundation 层的纯函数，卡片控件不读全局设置。
+      infoSpans: illustrateCardInfoSpansFor(
+        entry: entry,
+        fields: _illustCardInfoSpec.fields,
+        separator: _illustCardInfoSpec.separator,
+      ),
+      selecting: _selecting,
+      selected: _isItemSelected(item),
+      // 36 号：图片与信息**分区响应** —— 看图的人想马上翻，管理的人才会点文字。
+      onTap: () => _handleIllustImageTap(item),
+      onInfoTap: () => _handleItemTap(item),
+      onLongPress: () => _handleItemLongPress(item),
+    );
+  }
+
+  /// 点插画卡片的**图片**：直接进阅读器（36 号真机要求）。
+  ///
+  /// 与点信息区（[_handleItemTap] → 本地详情页）分开，但**两条例外完全沿用**
+  /// [_handleItemTap] 的分支，理由分别是：
+  /// - 多选态下点击只该切换选中，不该突然跳进阅读器；
+  /// - 需要密码的压缩包这时读必然失败，得先走既有的密码流程。
+  void _handleIllustImageTap(DownloadedItem item) {
+    if (_selecting && _canSelectItem(item)) {
+      _toggleItemSelection(item);
+      return;
+    }
+    if (item is LocalLibraryComicItem && item.needsArchivePassword) {
+      _handleArchivePasswordTap(item);
+      return;
+    }
+    if (item is RemoteLibraryComicItem && item.needsArchivePassword) {
+      _handleRemoteArchivePasswordTap(item);
+      return;
+    }
+    _openReader(item);
+  }
+
+  /// 直接打开阅读器。
+  ///
+  /// 走条目自己的 `createReadingPage()`：各来源的阅读数据（本地路径 / 压缩包 /
+  /// 单文件产物 / 远程）由各子类给出，这里**不自己造 `ReadingData`** ——
+  /// 31 号的教训是同一个作品在两条链路上各造一次阅读数据，迟早出现
+  /// "从详情页进得去、从列表进打不开"的分裂。
+  void _openReader(DownloadedItem item) {
+    App.pushInner(() => item.createReadingPage());
+  }
+
+  /// 当前卡片底部信息的字段与分隔符（从设置解析一次，整页复用）。
+  ///
+  /// 记忆化到"设置原串"上：卡片列表可能有几百条，`_buildIllustItem` 每条都会
+  /// 问一次这个规格，而模板串只与设置有关、与条目无关。原串一变就重新解析，
+  /// 所以用户在设置页改完返回后能立刻生效，也不会读到陈旧值。
+  String? _illustCardInfoRawSetting;
+  ({List<String> fields, String separator})? _illustCardInfoSpecCache;
+
+  ({List<String> fields, String separator}) get _illustCardInfoSpec {
+    final raw = appdata.settings[illustCardInfoSettingIndex];
+    if (_illustCardInfoSpecCache == null || _illustCardInfoRawSetting != raw) {
+      _illustCardInfoRawSetting = raw;
+      _illustCardInfoSpecCache = illustCardInfoSpecFromSetting(raw);
+    }
+    return _illustCardInfoSpecCache!;
+  }
+
+  /// 补齐缺宽高条目的**真实比例**（32 号的核心修复）。
+  ///
+  /// ## 为什么必须异步、且与首帧渲染分开
+  ///
+  /// 老下载记录里没有 `width`/`height`（真机实测三条 Pixiv 记录全缺，见回写区），
+  /// 只能读封面文件头拿真实尺寸。读文件是 IO，**绝不能在 `build` 或
+  /// `buildIllustEntries` 里同步做**：那会把整页首帧卡在磁盘上，几百条更久。
+  ///
+  /// 所以流程是：先用 db 数据（或占位比例）**立即渲染**，再在后台补齐并
+  /// `setState` 刷新。用户看到的是"先按占位排、很快调整成真实高度"，
+  /// 而不是"白屏等一秒"。
+  ///
+  /// ## 只对"需要"的条目动手
+  ///
+  /// - 宽高齐全的条目（新下载的记录）**不进这个流程**：db 里的作品级尺寸比
+  ///   封面读数更权威，重算没有意义，还会白发一次 IO；
+  /// - 只有配置里勾了「页数」时才去列目录数图片（多一次 IO）。
+  Future<void> _resolveIllustSizes(List<IllustLibraryEntry> requested) async {
+    final spec = _illustCardInfoSpec;
+    final wantPageCount = spec.fields.contains('pages');
+    final targets = illustEntriesNeedingResolution(
+      requested,
+      wantPageCount: wantPageCount,
+      pageCountMemo: _illustPageCountMemo,
+    );
+    if (targets.isEmpty) {
+      return;
+    }
+    // 只在**本次目标里确实有"页数未知"的条目**时才去列目录。
+    //
+    // 不能用一个"本页补过没有"的布尔量代替：用户先在没勾「页数」的配置下进过一次
+    // 视图，之后再去设置里勾上，那个标志会把这一次压成"不用补"，于是页数
+    // **永远补不上**（卡片上一直不显示，且不报任何错）。
+    final needPageCount = wantPageCount &&
+        targets.any(
+          (entry) => entry.pageCount == null && _illustPageCountMemo.needsCount(entry.id),
+        );
+
+    Map<String, IllustResolvedInfo> resolved;
+    try {
+      resolved = await resolveIllustEntryInfo(
+        entries: targets,
+        resolveCoverPath: _manager.resolveCoverPathForItem,
+        needPageCount: needPageCount,
+      );
+    } catch (_) {
+      // 补齐是"锦上添花"：读不到就继续用占位比例，**不要**把它升级成页面错误
+      // （那会让一次 IO 失败看起来像"整个插画视图坏了"）。
+      return;
+    }
+    if (!mounted || resolved.isEmpty) {
+      return;
+    }
+    if (needPageCount) {
+      // 记下结果（含"没数出来"），避免每次刷新都对同一条反复列目录。
+      for (final entry in targets) {
+        if (entry.pageCount == null) {
+          _illustPageCountMemo.record(entry.id, resolved[entry.id]?.pageCount);
+        }
+      }
+    }
+    setState(() {
+      _illustEntries = applyIllustResolvedInfo(_illustEntries, resolved);
+    });
+  }
+
+  /// 内容区的滚动通知 → `_scrollInteracting`（驱动悬浮按钮半透明）。
+  ///
+  /// 恢复只认 `ScrollEndNotification` 与 `UserScrollNotification(direction: idle)`，
+  /// **不在 `ScrollUpdateNotification` 里恢复** —— 惯性滚动期间 update 会持续触发，
+  /// 在那里恢复会让按钮在半透明与不透明之间反复闪。
+  /// 这套判定沿用既有先例（`pages/download_page.dart:680-692`）。
+  bool _handleScrollNotification(ScrollNotification notification) {
+    if (!_showIllustViewSwitcher) {
+      return false;
+    }
+    final interacting = notification is ScrollStartNotification ||
+        (notification is UserScrollNotification &&
+            notification.direction != ScrollDirection.idle);
+    final settled = notification is ScrollEndNotification ||
+        (notification is UserScrollNotification &&
+            notification.direction == ScrollDirection.idle);
+    if (interacting && !_scrollInteracting) {
+      setState(() {
+        _scrollInteracting = true;
+      });
+    } else if (settled && _scrollInteracting) {
+      setState(() {
+        _scrollInteracting = false;
+      });
+    }
+    return false;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final items = _filteredItems;
+    final isRemoteRefreshView = (_view == _LocalLibraryView.remote ||
+            _view == _LocalLibraryView.aggregate) &&
+        _remoteAvailable;
+    final refreshTooltip = isRemoteRefreshView
+        ? (_isAlbumOnly ? '刷新远程图集'.tl : '刷新远程资源库'.tl)
+        : (_isAlbumOnly ? '刷新图集'.tl : '刷新资源库'.tl);
+    Widget page = Scaffold(
+      floatingActionButtonLocation: _floatingActionButtonLocation,
+      floatingActionButton: _buildFloatingActionButton(items),
+      body: _loading
+          ? const Center(child: CircularProgressIndicator())
+          : NotificationListener<ScrollNotification>(
+              onNotification: _handleScrollNotification,
+              child: SmoothCustomScrollView(
+              cacheExtent: MediaQuery.of(context).size.height,
+              slivers: [
+                SliverAppbar(
+                  title: _buildTitle(),
+                  color: _selecting
+                      ? Theme.of(context).colorScheme.primaryContainer
+                      : null,
+                  leading: _selecting
+                      ? IconButton(
+                          onPressed: _exitSelectionMode,
+                          icon: const Icon(Icons.close),
+                        )
+                      : null,
+                  actions: _selecting
+                      ? [
+                          if (_isIllustView) PopupMenuButton<String>(
+                            tooltip: '更多', icon: const Icon(Icons.more_horiz),
+                            onSelected: _onIllustSelectionAction,
+                            itemBuilder: (_) => const [
+                              PopupMenuItem(value: 'all', child: Text('全选')),
+                              PopupMenuItem(value: 'copy', child: Text('复制到…')),
+                              PopupMenuItem(value: 'move', child: Text('移动到…')),
+                              PopupMenuItem(value: 'delete', child: Text('删除')),
+                            ],
+                          ) else IconButton(icon: const Icon(Icons.delete_outline), tooltip: '删除',
+                            onPressed: _selectedCount == 0 ? null : _deleteSelectedItems),
+                        ]
+                      : [
+                          IconButton(
+                            icon: const Icon(Icons.refresh),
+                            tooltip: refreshTooltip,
+                            onPressed: isRemoteRefreshView
+                                ? _triggerManualRemoteRefresh
+                                : () async {
+                                    await _refreshCurrentLibrary();
+                                  },
+                          ),
+                          if (_canToggleCollectionShell)
+                            _buildCollectionShellAction(),
+                          // 入口条件比原来宽一档：原来只在 `!widget.albumOnly`
+                          // 时出现，而"图集"页恰恰是 `albumOnly: true`（从「我」
+                          // 页进入），于是图集页上**没有任何页内设置入口** ——
+                          // 视图切换按钮位置就只能在设置页里改。
+                          // 现在只要视图切换按钮可能出现（`_isAlbumOnly` 为真），
+                          // 页内入口就一起出现，满足"页面内一处 + 设置页一处"。
+                          // 对既有非图集页（`albumOnly` 为假）行为**完全不变**。
+                          //
+                          // 33 号曾把这个入口与「视图档位」合并成同一个弹出菜单
+                          // （理由是工具栏只有 4 个 action 的宽度余量），36 号撤回：
+                          // 合并的后果是"设置变成二级"（用户真机反馈原话：
+                          // 「为什么资源库设置的点击需要进到二级点击才会显示」）。
+                          // 现在按钮**点击直达设置面板**，档位折叠在面板里，
+                          // action 数量仍是 4 个 —— 宽度约束与 33 号完全一致。
+                          if (_tiersApplicable ||
+                              _viewScopeMenu.showDisplaySettings)
+                            IconButton(
+                              icon: Icon(
+                                appdata.settings[
+                                            localLibraryAlbumOnlySettingIndex] !=
+                                        '0'
+                                    ? Icons.tune
+                                    : Icons.tune_outlined,
+                              ),
+                              tooltip: '资源库显示设置'.tl,
+                              onPressed: _showFilterDialog,
+                            ),
+                          IconButton(
+                            icon: const Icon(Icons.sort),
+                            tooltip: '排序'.tl,
+                            onPressed: _showSortDialog,
+                          ),
+                          IconButton(
+                            icon:
+                                Icon(_searchMode ? Icons.close : Icons.search),
+                            tooltip: _searchMode ? '关闭搜索'.tl : '搜索'.tl,
+                            onPressed: () {
+                              setState(() {
+                                _searchMode = !_searchMode;
+                                if (!_searchMode) {
+                                  _searchController.clear();
+                                }
+                              });
+                            },
+                          ),
+                        ],
+                ),
+                // 「档位」原来在这里是一行紧凑的 `SegmentedButton`（由
+                // `_showSourceSelector` 决定显不显示）。33 号把它挪去了工具栏，
+                // 36 号按用户要求改成**折叠在「资源库显示设置」面板里**
+                // （`_buildTierSection`）—— 内容区自 33 号起就不再渲染它，
+                // 显示条件（子页面上没有档位）与当时一致。
+                // 插画视图下档位同样不参与：插画只有"本地"一档内容，
+                // 切到插画再切回来时档位原样还在。
+                // 插画视图：内容区完全由插画侧自己决定（含三种状态），
+                // 图集侧的 items / 定时器 / 选择框一概不参与。
+                if (_isIllustView)
+                  SliverToBoxAdapter(child: _buildPixivFolderBar()),
+                if (_isIllustView)
+                  _buildIllustContent()
+                else if (items.isEmpty)
+                  _buildEmptyState()
+                else
+                  SliverPadding(
+                    padding: const EdgeInsets.fromLTRB(2, 0, 2, 24),
+                    sliver: SliverGrid(
+                      delegate: SliverChildBuilderDelegate(
+                        (context, index) {
+                          final item = items[index];
+                          return _buildItem(item);
+                        },
+                        childCount: items.length,
+                      ),
+                      gridDelegate: SliverGridDelegateWithComics(),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+    );
+    if (_isDeleteOperationRunning) {
+      page = Stack(
+        fit: StackFit.expand,
+        children: [
+          page,
+          Positioned.fill(
+            child: _buildDeleteProgressOverlay(),
+          ),
+        ],
+      );
+    }
+    return PopScope(
+      canPop: !_isOperationRunning && !_selecting,
+      onPopInvokedWithResult: (didPop, result) { if (!didPop && !_isOperationRunning) _exitSelectionMode(); },
+      child: page,
+    );
+  }
+}
+
+class LocalLibraryFilesPage extends StatefulWidget {
+  const LocalLibraryFilesPage({super.key});
+
+  @override
+  State<LocalLibraryFilesPage> createState() => _LocalLibraryFilesPageState();
+}
+
+class _LocalLibraryFilesPageState extends State<LocalLibraryFilesPage> {
+  final _manager = LocalLibraryManager();
+  bool _loading = true;
+  List<LocalLibrarySource> _sources = const <LocalLibrarySource>[];
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    if (mounted) {
+      setState(() {
+        _loading = true;
+      });
+    }
+    final sources = await _manager.getSources();
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _sources = sources;
+      _loading = false;
+    });
+  }
+
+  Future<String?> _pickFolder() async {
+    try {
+      return await FilePicker.platform.getDirectoryPath();
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<String?> _browsePath(String initialPath) async {
+    if (App.isAndroid) {
+      return openInternalDirectoryBrowser(
+        context,
+        title: '选择本地漫画路径'.tl,
+        initialPath: initialPath,
+      );
+    }
+    return _pickFolder();
+  }
+
+  Future<void> _addPathAndReload(String path) async {
+    final normalized = path.trim();
+    if (normalized.isEmpty) {
+      return;
+    }
+    await _manager.addConfiguredLocalComicPath(normalized);
+    if (!mounted) {
+      return;
+    }
+    await _load();
+    await _refreshLocalLibrary();
+    if (!mounted) {
+      return;
+    }
+    await _load();
+  }
+
+  Future<void> _showAddPathDialog() async {
+    final controller = TextEditingController();
+    final isDesktop = App.isDesktop;
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          title: Text('添加本地漫画路径'.tl),
+          content: StatefulBuilder(
+            builder: (context, setStateDialog) {
+              return Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  TextField(
+                    controller: controller,
+                    decoration: InputDecoration(
+                      hintText: '支持选择下载目录、单个图集目录或总目录'.tl,
+                      border: const OutlineInputBorder(),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: FilledButton.icon(
+                          onPressed: () async {
+                            if (App.isAndroid) {
+                              final initialPath = controller.text.trim();
+                              Navigator.of(dialogContext).pop();
+                              await Future<void>.delayed(Duration.zero);
+                              if (!mounted) {
+                                return;
+                              }
+                              final path = await _browsePath(initialPath);
+                              if (path == null) {
+                                return;
+                              }
+                              await _addPathAndReload(path);
+                              return;
+                            }
+                            final path =
+                                await _browsePath(controller.text.trim());
+                            if (path != null) {
+                              controller.text = path;
+                              setStateDialog(() {});
+                            }
+                          },
+                          icon: const Icon(Icons.folder_open),
+                          label: Text('浏览'.tl),
+                        ),
+                      ),
+                    ],
+                  ),
+                  if (isDesktop && controller.text.trim().isNotEmpty) ...[
+                    const SizedBox(height: 12),
+                    SizedBox(
+                      width: double.infinity,
+                      child: OutlinedButton.icon(
+                        onPressed: () =>
+                            _openDirectoryPath(context, controller.text.trim()),
+                        icon: const Icon(Icons.launch),
+                        label: Text('打开当前目录'.tl),
+                      ),
+                    ),
+                  ],
+                ],
+              );
+            },
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: Text('取消'.tl),
+            ),
+            TextButton(
+              onPressed: () async {
+                final path = controller.text.trim();
+                if (path.isEmpty) {
+                  return;
+                }
+                await _addPathAndReload(path);
+                if (!dialogContext.mounted) {
+                  return;
+                }
+                Navigator.of(dialogContext).pop();
+              },
+              child: Text('确定'.tl),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Future<void> _removeCustomPath(LocalLibrarySource source) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          title: Text('移除路径'.tl),
+          content: Text('确定要移除这个本地漫画路径吗？'.tl),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: Text('取消'.tl),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              child: Text('移除'.tl),
+            ),
+          ],
+        );
+      },
+    );
+    if (confirmed != true) {
+      return;
+    }
+    await _manager.removeConfiguredLocalComicPath(source.path);
+    await _refreshLocalLibrary();
+    await _load();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Text('本地文件管理'.tl),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.refresh),
+            tooltip: '刷新本地漫画'.tl,
+            onPressed: () async {
+              await _refreshLocalLibrary();
+              await _load();
+            },
+          ),
+          IconButton(
+            icon: const Icon(Icons.add),
+            tooltip: '添加路径'.tl,
+            onPressed: _showAddPathDialog,
+          ),
+        ],
+      ),
+      body: _loading
+          ? const Center(child: CircularProgressIndicator())
+          : ListView(
+              children: [
+                ListTile(
+                  leading: const Icon(Icons.info_outline),
+                  title: Text('本地漫画路径说明'.tl),
+                  subtitle: Text(
+                    '自定义路径始终参与扫描；可添加下载目录、单个图集目录或递归总目录。'.tl,
+                  ),
+                ),
+                if (App.isAndroid) ...[
+                  Card.outlined(
+                    margin: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+                    child: Padding(
+                      padding: const EdgeInsets.all(12),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            '安卓目录访问'.tl,
+                            style: Theme.of(context).textTheme.titleMedium,
+                          ),
+                          const SizedBox(height: 8),
+                          Text(
+                            '这里会打开与设置页一致的内置文件夹浏览器，支持安卓全部文件访问权限、Shizuku 授权或 Root 模式。'
+                                .tl,
+                          ),
+                          const SizedBox(height: 12),
+                          FilledButton.icon(
+                            onPressed: _showAddPathDialog,
+                            icon: const Icon(Icons.folder_open),
+                            label: Text('选择目录'.tl),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+                const Divider(height: 1),
+                for (final source in _sources) ...[
+                  ListTile(
+                    leading: Icon(_localLibrarySourceIcon(source)),
+                    title: Text(source.title),
+                    subtitle: Text(
+                      '${_localLibrarySourceLabel(source)}\n${source.path}',
+                    ),
+                    isThreeLine: true,
+                    trailing: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        IconButton(
+                          icon: const Icon(Icons.folder_open),
+                          tooltip: '打开目录'.tl,
+                          onPressed: () =>
+                              _openDirectoryPath(context, source.path),
+                        ),
+                        if (source.isCustom)
+                          IconButton(
+                            icon: const Icon(Icons.delete_outline),
+                            tooltip: '移除'.tl,
+                            onPressed: () => _removeCustomPath(source),
+                          ),
+                      ],
+                    ),
+                    onLongPress: () => _copyPath(context, source.path),
+                  ),
+                  const Divider(height: 1),
+                ],
+              ],
+            ),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: _showAddPathDialog,
+        icon: const Icon(Icons.add),
+        label: Text('添加路径'.tl),
+      ),
+    );
+  }
+}
+
+class LocalLibraryStoragePage extends StatefulWidget {
+  const LocalLibraryStoragePage({super.key});
+
+  @override
+  State<LocalLibraryStoragePage> createState() =>
+      _LocalLibraryStoragePageState();
+}
+
+class _LocalLibraryStoragePageState extends State<LocalLibraryStoragePage> {
+  final _manager = LocalLibraryManager();
+  bool _loading = true;
+  List<LocalLibraryStorageEntry> _entries = const <LocalLibraryStorageEntry>[];
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    if (mounted) {
+      setState(() {
+        _loading = true;
+      });
+    }
+    final entries = await _manager.getStorageEntries();
+    entries.sort((a, b) => b.sizeMb.compareTo(a.sizeMb));
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _entries = entries;
+      _loading = false;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Text('存储空间'.tl),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.refresh),
+            tooltip: '刷新本地漫画'.tl,
+            onPressed: () async {
+              await _refreshLocalLibrary();
+              await _load();
+            },
+          ),
+        ],
+      ),
+      body: _loading
+          ? const Center(child: CircularProgressIndicator())
+          : ListView.separated(
+              itemCount: _entries.length,
+              separatorBuilder: (_, __) => const Divider(height: 1),
+              itemBuilder: (context, index) {
+                final entry = _entries[index];
+                return ListTile(
+                  leading: Icon(_localLibrarySourceIcon(entry.source)),
+                  title: Text(entry.title),
+                  subtitle: Text(
+                    '${_formatLocalLibrarySize(entry.sizeMb)} · ${'共 @a 个图集'.tlParams({
+                          'a': entry.comicCount.toString()
+                        })}\n${entry.path}',
+                  ),
+                  isThreeLine: true,
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () {
+                    Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) =>
+                            _LocalLibraryStorageDetailPage(entry: entry),
+                      ),
+                    );
+                  },
+                );
+              },
+            ),
+    );
+  }
+}
+
+class _LocalLibraryStorageDetailPage extends StatelessWidget {
+  const _LocalLibraryStorageDetailPage({required this.entry});
+
+  final LocalLibraryStorageEntry entry;
+
+  @override
+  Widget build(BuildContext context) {
+    final children = entry.children.toList()
+      ..sort((a, b) => b.sizeMb.compareTo(a.sizeMb));
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(entry.title),
+      ),
+      body: ListView(
+        children: [
+          ListTile(
+            leading: Icon(_localLibrarySourceIcon(entry.source)),
+            title: Text(_formatLocalLibrarySize(entry.sizeMb)),
+            subtitle: Text(entry.path),
+            isThreeLine: false,
+            trailing:
+                Text('共 @a 个图集'.tlParams({'a': entry.comicCount.toString()})),
+          ),
+          const Divider(height: 1),
+          for (final child in children) ...[
+            ListTile(
+              leading: const Icon(Icons.folder_copy_outlined),
+              title: Text(child.title),
+              subtitle: Text('${child.sourceDisplayName} · ${child.path}'),
+              trailing: Text(_formatLocalLibrarySize(child.sizeMb)),
+              onLongPress: () => _copyPath(context, child.path),
+              onTap: () => _openDirectoryPath(context, child.path),
+            ),
+            const Divider(height: 1),
+          ],
+        ],
+      ),
+    );
+  }
+}

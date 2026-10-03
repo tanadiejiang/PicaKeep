@@ -1,3 +1,4 @@
+import 'package:picakeep/foundation/pixiv_library.dart';
 // ignore_for_file: depend_on_referenced_packages
 
 import 'dart:convert';
@@ -14,6 +15,7 @@ import 'foundation/local_library_illust_view.dart';
 import 'foundation/local_library_settings.dart';
 import 'foundation/log.dart';
 import 'foundation/pixiv_download_naming.dart';
+import 'foundation/reader_image_quality.dart';
 import 'foundation/history.dart';
 import 'foundation/local_favorites.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -186,12 +188,16 @@ class Appdata {
     '{}', //150 comicTileDisplayConfig 卡片信息显示配置 JSON，结构 {"local":{...},"online":{...},"search":{"<源key>":{...}}}，每个节点 {"tagRows":2,"showTags":true,"showId":true}（tagRows 0=不限行）；读写见 foundation/comic_tile_display_config.dart
     '0', //151 originalDirUsageMode 原应用下载目录的使用方式：0=直接使用（原地读取，默认，不占额外空间）；1=复制到本应用下载目录后再使用（摆脱对原目录与权限的依赖，但占用双倍空间）
     '', //152 pixivDownloadDir Pixiv 专属下载目录；空=跟随「本应用下载目录」（settings[22]）。Pixiv 是单图作品，与漫画混在一个目录里不好翻，所以允许单独指定
-    '{title}', //153 pixivDirNameTemplate Pixiv 下载的目录名模板，支持 {title} / {author} / {id} / {pages}；默认 {title} 与改动前行为一致。渲染见 foundation/pixiv_download_naming.dart
+    kDefaultPixivDirNameTemplate, //153 pixivDirNameTemplate 默认标题 + 作品 ID；见 foundation/pixiv_download_naming.dart
     '0', //154 pixivMultiPageZip Pixiv 多图打包：1=多图打成一个 zip（仅存储不加密）、单图直接放图片文件；0=一个作品一个目录（默认，与改动前逐字节一致）。读取侧必须同时认两种形态，见 local_library_static.dart
     'album', //155 illustLibraryView 图集页当前视图：album=图集（默认，与改动前一致）／illust=Pixiv 插画瀑布流。与三档来源（settings[104]）**正交**，见 foundation/local_library_illust_view.dart
     '3', //156 illustWaterfallColumns 插画瀑布流列数（2 或 3）
     'right', //157 illustViewSwitcherPosition 视图切换悬浮按钮位置：right（默认，与既有 FAB 一致）／left
     '{title}\n{author}', //158 illustCardInfo 插画卡片底部信息模板，支持 {title} / {author} / {pages} / {size}；默认 `{title}`+换行+`{author}`，与改动前"标题、作者各占一行"逐字一致（分隔符默认是换行，见 foundation/illust_card_info_config.dart）
+    '0', //159 readerHighQualityComic 漫画阅读高清模式：1=按图片自身分辨率解码（原图）；0=按屏幕宽度降采样（默认，省内存）。见 foundation/reader_image_quality.dart
+    '1', //160 readerHighQualityIllust 插画/图集阅读高清模式：1=原图（**默认开**）；0=降采样。与 159 分开是用户要求两类内容各自控制，默认值方向也相反
+    'ask', //161 pixivTransferPolicy
+    'ask', //162 pixivFolderDeletePolicy
   ];
 
   List<String> implicitData = [
@@ -343,6 +349,17 @@ class Appdata {
     // `{title}\n{author}` —— 与改动前写死的"标题 + 作者"观感一致。
     settings[illustCardInfoSettingIndex] =
         normalizeIllustCardInfoTemplate(settings[illustCardInfoSettingIndex]);
+    // 阅读清晰度两套开关（settings[159..160]）。归一化方向**刻意相反**：
+    // 漫画缺省即关（只认 '1'），插画/图集缺省即开（只认 '0'）——
+    // 直接写 `== '1'` 会让未设置落到关，与"默认打开"矛盾。
+    settings[readerHighQualityComicSettingIndex] =
+        normalizeReaderHighQualityComic(
+            settings[readerHighQualityComicSettingIndex]);
+    settings[readerHighQualityIllustSettingIndex] =
+        normalizeReaderHighQualityIllust(
+            settings[readerHighQualityIllustSettingIndex]);
+    settings[pixivTransferPolicyIndex] = normalizePixivTransferPolicy(settings[pixivTransferPolicyIndex]);
+    settings[pixivFolderDeletePolicyIndex] = normalizePixivFolderDeletePolicy(settings[pixivFolderDeletePolicyIndex]);
     setManagedDataSourceMode(settings[managedDataSourceModeSettingIndex]);
     _syncArchiveRuntimeSettings();
     var settingsChanged = hadMissingSettings;
@@ -541,6 +558,14 @@ class Appdata {
               settings[illustViewSwitcherPositionSettingIndex]);
       settings[illustCardInfoSettingIndex] = normalizeIllustCardInfoTemplate(
           settings[illustCardInfoSettingIndex]);
+      settings[readerHighQualityComicSettingIndex] =
+          normalizeReaderHighQualityComic(
+              settings[readerHighQualityComicSettingIndex]);
+      settings[readerHighQualityIllustSettingIndex] =
+          normalizeReaderHighQualityIllust(
+              settings[readerHighQualityIllustSettingIndex]);
+      settings[pixivTransferPolicyIndex] = normalizePixivTransferPolicy(settings[pixivTransferPolicyIndex]);
+      settings[pixivFolderDeletePolicyIndex] = normalizePixivFolderDeletePolicy(settings[pixivFolderDeletePolicyIndex]);
       setManagedDataSourceMode(settings[managedDataSourceModeSettingIndex]);
       settings[22] = downloadPath;
       settings[13] = authRequired;

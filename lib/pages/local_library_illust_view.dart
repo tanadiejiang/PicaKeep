@@ -78,6 +78,7 @@ class LocalLibraryIllustSlivers extends StatelessWidget {
     required this.itemBuilder,
     required this.onToggleTag,
     required this.onClearTags,
+    this.onLayoutRange,
   });
 
   /// 筛前全量（用于区分"没有内容"与"筛选无匹配"）。
@@ -98,6 +99,7 @@ class LocalLibraryIllustSlivers extends StatelessWidget {
 
   final ValueChanged<String> onToggleTag;
   final VoidCallback onClearTags;
+  final void Function(int first, int last)? onLayoutRange;
 
   /// 瀑布流的 Key。测试用它拿到 `SliverMasonryGrid` 并断言真实列数 ——
   /// 列数是"布局结果"而不是常量，只断言常量等于没测。
@@ -113,6 +115,7 @@ class LocalLibraryIllustSlivers extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final indexes = {for (var i = 0; i < entries.length; i++) entries[i].id: i};
     final state = resolveIllustContentState(
       loading: loading,
       totalCount: allEntries.length,
@@ -158,14 +161,21 @@ class LocalLibraryIllustSlivers extends StatelessWidget {
             ),
           IllustContentState.content => SliverPadding(
               padding: const EdgeInsets.fromLTRB(2, 0, 2, 96),
-              sliver: SliverMasonryGrid.count(
+              sliver: SliverMasonryGrid(
                 key: waterfallKey,
-                crossAxisCount: columns,
+                gridDelegate: SliverSimpleGridDelegateWithFixedCrossAxisCount(
+                    crossAxisCount: columns),
                 mainAxisSpacing: illustWaterfallSpacing,
                 crossAxisSpacing: illustWaterfallSpacing,
-                childCount: entries.length,
-                itemBuilder: (context, index) =>
-                    itemBuilder(context, entries[index]),
+                delegate: _IllustLayoutDelegate(
+                  (context, index) => KeyedSubtree(
+                      key: ValueKey(entries[index].id),
+                      child: itemBuilder(context, entries[index])),
+                  childCount: entries.length,
+                  findChildIndexCallback: (key) =>
+                      indexes[(key as ValueKey).value],
+                  onLayoutRange: onLayoutRange,
+                ),
               ),
             ),
         },
@@ -179,6 +189,20 @@ class LocalLibraryIllustSlivers extends StatelessWidget {
       return error;
     }
     return '还没有下载过 Pixiv 插画，可在详情页选择「插画」下载'.tl;
+  }
+}
+
+class _IllustLayoutDelegate extends SliverChildBuilderDelegate {
+  _IllustLayoutDelegate(super.builder,
+      {required super.childCount,
+      required super.findChildIndexCallback,
+      this.onLayoutRange});
+  final void Function(int, int)? onLayoutRange;
+  @override
+  void didFinishLayout(int firstIndex, int lastIndex) {
+    super.didFinishLayout(firstIndex, lastIndex);
+    WidgetsBinding.instance.addPostFrameCallback(
+        (_) => onLayoutRange?.call(firstIndex, lastIndex));
   }
 }
 

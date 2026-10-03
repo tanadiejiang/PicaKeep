@@ -58,7 +58,7 @@ void main() {
       );
     });
 
-    test('空模板等同于 {title}', () {
+    test('空模板等同于标题加 ID 的默认模板', () {
       final withEmpty = renderPixivDirectoryName(
         template: '',
         title: '标题',
@@ -74,7 +74,7 @@ void main() {
         pages: null,
       );
       expect(withEmpty, withDefault);
-      expect(withEmpty, '标题');
+      expect(withEmpty, '标题-9');
     });
 
     test('全空白模板也回落到默认模板', () {
@@ -86,7 +86,7 @@ void main() {
           id: '9',
           pages: null,
         ),
-        '标题',
+        '标题-9',
       );
     });
   });
@@ -302,8 +302,15 @@ void main() {
       expect(normalizePixivDirNameTemplate('  {title}-{id}  '), '{title}-{id}');
     });
 
-    test('默认模板就是 {title}（与引入本功能前行为一致）', () {
-      expect(kDefaultPixivDirNameTemplate, '{title}');
+    test('新设置与解析默认值都勾选标题和 ID', () {
+      expect(kDefaultPixivDirNameTemplate, '{title}-{id}');
+      expect(appdata.settings[pixivDirNameTemplateSettingIndex],
+          kDefaultPixivDirNameTemplate);
+      final spec = parsePixivDirNameTemplate(kDefaultPixivDirNameTemplate);
+      expect(spec.fields, <String>['title', 'id']);
+      expect(spec.separator, kDefaultPixivDirNameSeparator);
+      expect(normalizePixivDirNameTemplate('{title}'), '{title}',
+          reason: '已经保存的单标题模板不强制改写');
     });
   });
 
@@ -492,12 +499,13 @@ void main() {
       expect(spec.separator, kDefaultPixivDirNameSeparator);
     });
 
-    test('空模板退回只含 title 的默认规格', () {
-      expect(parsePixivDirNameTemplate('').fields, <String>['title']);
+    test('空模板退回标题和 ID 的默认规格', () {
+      expect(parsePixivDirNameTemplate('').fields, <String>['title', 'id']);
     });
 
     test('解析不出任何已知字段时退回默认，不抛错', () {
-      expect(parsePixivDirNameTemplate('{foo}-{bar}').fields, <String>['title']);
+      expect(parsePixivDirNameTemplate('{foo}-{bar}').fields,
+          <String>['title', 'id']);
     });
 
     test('混有未知占位符时，已知字段仍按出现顺序还原', () {

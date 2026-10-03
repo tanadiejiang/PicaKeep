@@ -27,6 +27,7 @@ import 'package:picakeep/tools/keep_screen_on.dart';
 import 'package:picakeep/foundation/image_manager.dart';
 import 'package:picakeep/foundation/history.dart';
 import 'package:picakeep/foundation/local_library_settings.dart';
+import 'package:picakeep/foundation/reader_image_quality.dart';
 import 'package:picakeep/foundation/download_model.dart';
 import 'package:picakeep/foundation/untranslated_tags/untranslated_tag_coordinator.dart';
 import 'package:picakeep/network/online_image/online_image_manager.dart';

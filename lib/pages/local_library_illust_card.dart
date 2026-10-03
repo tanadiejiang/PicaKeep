@@ -60,9 +60,12 @@ class IllustCard extends StatelessWidget {
     required this.imageProvider,
     required this.onTap,
     required this.onLongPress,
+    this.onInfoTap,
     this.infoSpans,
+    this.locationLabel,
     this.selected = false,
     this.selecting = false,
+    this.onCoverError,
   });
 
   final IllustLibraryEntry entry;
@@ -70,7 +73,15 @@ class IllustCard extends StatelessWidget {
   /// 由调用方解析好的 provider（特权模式安全的那个）。为 null 表示无封面。
   final ImageProvider<Object>? imageProvider;
 
+  /// **图片区**点击（36 号起 = 直接进阅读器）。
   final VoidCallback onTap;
+
+  /// **信息区**点击（36 号起 = 打开本地详情页）。
+  ///
+  /// 为 null 时回落到 [onTap] —— 既有调用（含只关心"点一下有反应"的测试）
+  /// 不会因为多了这一区而失去点击。
+  final VoidCallback? onInfoTap;
+
   final VoidCallback onLongPress;
 
   /// 卡片底部信息（按设置里勾选的字段与顺序渲染）。
@@ -84,8 +95,11 @@ class IllustCard extends StatelessWidget {
   final List<IllustCardInfoSpan>? infoSpans;
 
   /// 多选态下是否已选中。
+  final String? locationLabel;
+
   final bool selected;
   final bool selecting;
+  final VoidCallback? onCoverError;
 
   /// 本控件实际会渲染的信息片段（显式传入，或走默认配置）。
   List<IllustCardInfoSpan> get _effectiveInfoSpans =>
@@ -106,42 +120,100 @@ class IllustCard extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          ClipRRect(
-            borderRadius: BorderRadius.circular(illustCardImageRadius),
-            child: AspectRatio(
-              aspectRatio: entry.aspectRatio,
-              child: Stack(
-                fit: StackFit.expand,
-                children: [
-                  _buildImage(context),
-                  if (selecting && selected)
-                    DecoratedBox(
-                      decoration: BoxDecoration(
-                        color: theme.colorScheme.primary.withValues(alpha: 0.22),
-                      ),
-                      child: Center(
-                        child: Icon(
-                          Icons.check_circle,
-                          color: theme.colorScheme.primary,
-                          size: 28,
+          // 图片区与信息区**各自可点**（36 号）：同一张卡片上，"看图"与"管理"
+          // 是两种意图，给它们各自的命中区域比让整卡做一件事更贴近使用习惯。
+          _tappable(
+            onTap: onTap,
+            label:
+                '${selecting ? "选择" : "阅读"}：${entry.item.name}，${entry.item.subTitle}${locationLabel == null ? "" : "，$locationLabel"}',
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(illustCardImageRadius),
+              child: AspectRatio(
+                aspectRatio: entry.aspectRatio,
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    _buildImage(context),
+                    if (selecting && selected)
+                      DecoratedBox(
+                        decoration: BoxDecoration(
+                          color:
+                              theme.colorScheme.primary.withValues(alpha: 0.22),
+                          border: Border.all(
+                              color: theme.colorScheme.primary, width: 1.6),
+                          borderRadius:
+                              BorderRadius.circular(illustCardImageRadius),
+                        ),
+                        child: Center(
+                          child: Icon(
+                            Icons.check_circle,
+                            color: theme.colorScheme.primary,
+                            size: 28,
+                          ),
                         ),
                       ),
-                    ),
-                ],
+                  ],
+                ),
               ),
             ),
           ),
           if (spans.isNotEmpty) ...[
             const SizedBox(height: 4),
-            Padding(
-              // 上边距取 1 而不是 2：信息块整体要"轻"，把纵向空间让给图片。
-              padding: const EdgeInsets.symmetric(horizontal: 2),
-              child: _buildInfoText(theme, spans),
+            _tappable(
+              onTap: onInfoTap ?? onTap,
+              label:
+                  '详情与管理：${spans.map((s) => s.text).join()}${locationLabel == null ? "" : "，$locationLabel"}',
+              child: Padding(
+                // 上边距取 1 而不是 2：信息块整体要"轻"，把纵向空间让给图片。
+                padding: const EdgeInsets.symmetric(horizontal: 2),
+                child: _buildInfoText(theme, spans),
+              ),
             ),
           ],
+          if (locationLabel != null)
+            ExcludeSemantics(
+                child: Padding(
+              padding: const EdgeInsets.only(top: 2),
+              child: Text(locationLabel!,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.textTheme.labelSmall
+                      ?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
+            )),
         ],
       ),
     );
+  }
+
+  /// 给一块区域挂"点击 + 长按"。
+  ///
+  /// 用 `GestureDetector` 而不是 `InkWell`：这是一面**近无边框**的图片墙，
+  /// 水波纹要么被 `ClipRRect` 裁掉、要么在图上糊一层半透明高亮，两种都难看；
+  /// 这里需要的只是"命中区域"。`HitTestBehavior.opaque` 保证信息区那几行文字
+  /// 之间的空隙也能点中（否则点在行距上会穿透到列表）。
+  ///
+  /// ⚠️ **长按两个区都要响应**：多选是"对这张卡片"的操作，与点哪个区无关。
+  /// 32 号首版这里只声明了 `onTap` 却忘了挂上去（卡片整张点不动），
+  /// 36 号补手势时一并修掉 —— 新增手势区时记得别只挂一半。
+  Widget _tappable(
+      {required VoidCallback onTap,
+      required String label,
+      required Widget child}) {
+    return Semantics(
+        container: true,
+        button: true,
+        selected: selecting ? selected : null,
+        label: label,
+        onTap: onTap,
+        onLongPress: onLongPress,
+        child: ExcludeSemantics(
+            child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          excludeFromSemantics: true,
+          onTap: onTap,
+          onLongPress: onLongPress,
+          child: child,
+        )));
   }
 
   /// 底部信息：**一个** `Text.rich`，每个字段一段（标题加粗、其余次要）。
@@ -165,8 +237,7 @@ class IllustCard extends StatelessWidget {
     );
     // 分隔符片段不计入行数上限（换行分隔符本身"就是"那个换行，不该再占一行额度；
     // `' - '` 这种可见分隔符同理）。所以要按 isSeparator 判，不能按文本是否为空判。
-    final valueCount =
-        spans.where((span) => !span.isSeparator).length;
+    final valueCount = spans.where((span) => !span.isSeparator).length;
     return Text.rich(
       TextSpan(
         children: [
@@ -213,7 +284,13 @@ class IllustCard extends StatelessWidget {
           fit: BoxFit.contain,
           gaplessPlayback: true,
           filterQuality: FilterQuality.medium,
-          errorBuilder: (_, __, ___) => _brokenImagePlaceholder(context),
+          errorBuilder: (_, __, ___) {
+            WidgetsBinding.instance.addPostFrameCallback((_) async {
+              await displayProvider.evict();
+              onCoverError?.call();
+            });
+            return _brokenImagePlaceholder(context);
+          },
         );
       },
     );

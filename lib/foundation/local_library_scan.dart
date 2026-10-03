@@ -8,6 +8,15 @@ extension LocalLibraryScan on LocalLibraryManager {
     _idIndex.clear();
     _aliasIndex.clear();
 
+    // ⚠️ **不要在这里清"无封面"标记**。`clearAllNoCoverSentinels` 要读每个源的
+    // 缓存文件（真实 IO），而 `_refreshInternal` 处在 widget 测试的路径上 ——
+    // 一加 IO，`pumpAndSettle` 就永不收敛（实测：`local_library_page_view_scope_test`
+    // 等 10 条用例全部 `pumpAndSettle timed out`）。这与交接文档里
+    // "testWidgets 里跑真实文件 IO 会挂死"是同一个坑。
+    //
+    // 需要清标记的场合在**调用侧**显式做：目前是"Pixiv 内容归位"完成后
+    //（`download_settings.dart`），那里不在测试路径上。
+
     final sources = await _buildSources();
     for (final source in sources) {
       final sourceExists = await _directoryExists(source.path);
@@ -99,22 +108,17 @@ extension LocalLibraryScan on LocalLibraryManager {
     //
     // 只在"本应用下载目录参与"的模式下添加：`managedDataSourceModeOriginalOnly`
     // 表示用户只要原应用目录，而 Pixiv 的下载属于本应用，此时不该出现。
-    void addPixivSourceIfConfigured() {
-      final pixivPath = configuredPixivDownloadPath;
-      if (pixivPath == null || pixivPath.isEmpty) {
-        return;
-      }
-      if (pixivPath == currentPath || pixivPath == originalPath) {
-        return;
-      }
-      sources.add(
-        LocalLibrarySource(
-          id: 'pixiv_download',
-          title: 'Pixiv 下载目录',
-          path: pixivPath,
+    Future<void> addPixivSourceIfConfigured() async {
+      for (final folder in await readPixivFolders(
+          pixivLibraryRoots(effectivePixivDownloadRoot()))) {
+        if (folder.path == currentPath || folder.path == originalPath) continue;
+        sources.add(LocalLibrarySource(
+          id: folder.libraryId.isEmpty ? 'pixiv_download' : folder.sourceId,
+          title: folder.name,
+          path: folder.path,
           kind: LocalLibrarySourceKind.currentDownload,
-        ),
-      );
+        ));
+      }
     }
 
     switch (normalizeManagedDataSourceMode(managedDataSourceMode)) {
@@ -127,7 +131,7 @@ extension LocalLibraryScan on LocalLibraryManager {
             kind: LocalLibrarySourceKind.currentDownload,
           ),
         );
-        addPixivSourceIfConfigured();
+        await addPixivSourceIfConfigured();
         if (originalPath != null && originalPath != currentPath) {
           sources.add(
             LocalLibrarySource(
@@ -161,7 +165,7 @@ extension LocalLibraryScan on LocalLibraryManager {
             kind: LocalLibrarySourceKind.currentDownload,
           ),
         );
-        addPixivSourceIfConfigured();
+        await addPixivSourceIfConfigured();
         break;
     }
 
@@ -217,13 +221,8 @@ extension LocalLibraryScan on LocalLibraryManager {
 
     final items = <LocalLibraryComicItem>[];
     try {
-      final db = sqlite3.open(openDbPath);
       try {
-        final rows = db
-            .select(
-              'select rowid as __rowid__, * from download order by time desc',
-            )
-            .toList()
+        final rows = await readDownloadSnapshot(openDbPath)
           ..sort((a, b) {
             final score = _downloadRowPriority(
               (b['id'] as String? ?? '').trim(),
@@ -240,7 +239,9 @@ extension LocalLibraryScan on LocalLibraryManager {
           });
         final seenDirectories = <String>{};
 
+        var processed = 0;
         for (final row in rows) {
+          if (++processed % 32 == 0) await Future<void>.delayed(Duration.zero);
           try {
             final rawId = (row['id'] as String? ?? '').trim();
             final jsonText = row['json'] as String? ?? '{}';
@@ -350,7 +351,9 @@ extension LocalLibraryScan on LocalLibraryManager {
           }
         }
       } finally {
-        db.dispose();
+        try {
+          await File(openDbPath).delete();
+        } catch (_) {}
       }
     } catch (e) {
       return _loadDirectoryOnlyDownloadSourceMetadata(source);
@@ -376,7 +379,9 @@ extension LocalLibraryScan on LocalLibraryManager {
     final hiddenIndex = await LocalTrashStore.instance.hiddenIndex();
     final items = <LocalLibraryComicItem>[];
     for (final entry in entries.where((entry) => entry.isDirectory)) {
-      if (entry.name == _localTrashDirectoryName ||
+      if (entry.name.startsWith('.pixiv_') ||
+          _isRegisteredPixivFolder(entry.path) ||
+          entry.name == _localTrashDirectoryName ||
           hiddenIndex.matchesPath(entry.path)) {
         continue;
       }
@@ -588,6 +593,9 @@ extension LocalLibraryScan on LocalLibraryManager {
       );
     } finally {
       db.dispose();
+      try {
+        await File(openDbPath).delete();
+      } catch (_) {}
     }
   }
 
@@ -628,7 +636,9 @@ extension LocalLibraryScan on LocalLibraryManager {
     final entries = await _listDirectoryEntries(source.path);
     final hiddenIndex = await LocalTrashStore.instance.hiddenIndex();
     for (final entry in entries.where((entry) => entry.isDirectory)) {
-      if (entry.name == _localTrashDirectoryName ||
+      if (entry.name.startsWith('.pixiv_') ||
+          _isRegisteredPixivFolder(entry.path) ||
+          entry.name == _localTrashDirectoryName ||
           hiddenIndex.matchesPath(entry.path)) {
         continue;
       }

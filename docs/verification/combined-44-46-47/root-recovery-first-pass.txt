@@ -1,0 +1,45 @@
+Flutter assets will be downloaded from https://storage.flutter-io.cn. Make sure you trust this source!
+00:00 +0: loading C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_root_recovery_test.dart
+00:00 +0: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_root_recovery_test.dart: (setUpAll)
+00:00 +0: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_root_recovery_test.dart: root relocation resumes after preparing without losing identity or files
+00:00 +1: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_library_test.dart: folder name is the physical name; stable IDs, default and sorting survive reopen
+00:00 +2: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_root_recovery_test.dart: root relocation resumes after copy without losing identity or files
+00:00 +3: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folder_cover_integration_test.dart: (setUpAll)
+00:00 +3: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_library_test.dart: existing paths and traversal are rejected without overwriting
+00:00 +4: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_root_recovery_test.dart: root relocation resumes after published without losing identity or files
+00:00 +5: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folder_cover_integration_test.dart: directory: registered folder -> scan -> real resized cover -> app cache
+00:01 +6: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_library_test.dart: copy retains original bytes and independent rows; repeated target is idempotent
+00:01 +7: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_library_test.dart: copy retains original bytes and independent rows; repeated target is idempotent
+00:01 +8: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_root_recovery_test.dart: root relocation resumes after cleaning without losing identity or files
+00:01 +9: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folder_cover_integration_test.dart: zip: registered folder -> scan -> real resized cover -> app cache
+00:01 +10: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_library_test.dart: move publishes target bytes and record before removing source
+00:01 +11: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_library_test.dart: move publishes target bytes and record before removing source
+00:01 +12: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_library_test.dart: move publishes target bytes and record before removing source
+00:01 +13: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_root_recovery_test.dart: root relocation resumes after rebased without losing identity or files
+00:01 +14: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_root_recovery_test.dart: root relocation resumes after rebased without losing identity or files
+00:01 +15: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_library_test.dart: move recovers after interruption at prepared
+00:01 +16: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_library_test.dart: move recovers after interruption at prepared
+00:02 +17: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_root_recovery_test.dart: damaged target on cleanup resume preserves the complete source
+00:02 +18: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_library_test.dart: move recovers after interruption at published
+00:02 +19: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_root_recovery_test.dart: migration blocks mutations and download leases on both roots
+00:02 +20: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_library_test.dart: move recovers after interruption at committed
+00:03 +21: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_root_recovery_test.dart: recovery after journal rebasing does not revalidate against old DB bytes
+00:03 +22: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_library_test.dart: move recovers after interruption at cleaning
+00:03 +23: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_library_test.dart: move recovers after interruption at cleaning
+00:03 +24: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_library_test.dart: same work with different target content is never overwritten
+00:03 +25: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_library_test.dart: new source files stop cleanup instead of deleting untransferred content
+00:04 +26: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_library_test.dart: keep contents moves to main root then removes empty folder
+00:04 +27: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_library_test.dart: unknown files prevent removal of folder after works returned
+00:04 +28: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_library_test.dart: whole folder trash and restore retain DB and folder ID
+00:04 +29: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_library_test.dart: root deletion and leased folder mutation are refused
+00:04 +30: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_library_test.dart: corrupt database is preserved on open failure
+00:05 +31: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_library_test.dart: batch persists unstarted work and resumes without repeating completed items
+00:05 +32: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_library_test.dart: folder creation recovers after persisted intent without losing its identity
+00:05 +33: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_library_test.dart: whole-folder trash recovers after quarantine commit
+00:05 +34: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_library_test.dart: recreating a deleted folder name never overwrites its recoverable old identity
+00:06 +35: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_library_test.dart: copied child database with another folder identity is rejected
+00:06 +36: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_library_test.dart: return-to-root cleanup resumes after metadata stage interruption
+00:06 +37: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_library_test.dart: rename recovers from intent and preserves stable identity
+00:06 +38: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_library_test.dart: both invalid policies default to ask independently
+00:06 +39: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_library_test.dart: (tearDownAll)
+00:06 +39: All tests passed!

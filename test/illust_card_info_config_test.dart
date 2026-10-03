@@ -388,15 +388,39 @@ void main() {
         ),
         'p3',
       );
-      // 单图是 `p0`（不是 `p1`、也不是 `1 页`）—— 与 28 号 `{pages}` 的三分支同解。
+      // 单图**不显示页数**（36 号真机反馈：「p0 单图的就不用显示页数了」）。
+      //
+      // ⚠️ 注意这与**下载目录名**的约定不同：目录名里单图仍是 `p0`
+      // （28 号拍板、已写进 db 的身份），卡片这一侧才省略。两处刻意不同口径，
+      // 所以这里断的是空串，而不是"和 pixivPagesSuffix 一致"。
       expect(
         illustrateCardInfoTextFor(
           entry: entry.withResolvedInfo(pageCount: 1),
           fields: <String>['pages'],
           separator: '\n',
         ),
-        'p0',
+        '',
       );
+      // 未知（0 / 负数 / null）同样不渲染这一项。
+      expect(
+        illustrateCardInfoTextFor(
+          entry: entry.withResolvedInfo(pageCount: 0),
+          fields: <String>['pages'],
+          separator: '\n',
+        ),
+        '',
+      );
+    });
+
+    test('页数文案：多图 p{N}，单图与未知空串（与目录名的单图约定刻意不同）', () {
+      expect(illustCardInfoPageText(2), 'p2');
+      expect(illustCardInfoPageText(18), 'p18');
+      expect(illustCardInfoPageText(1), '', reason: '单图不显示页数');
+      expect(illustCardInfoPageText(0), '');
+      expect(illustCardInfoPageText(-1), '');
+      // 目录名那一侧不受影响：单图仍是 `p0`（回归守卫）。
+      expect(pixivPagesSuffix(1), 'p0');
+      expect(pixivPagesSuffix(18), 'p18');
     });
 
     test('标题是唯一"强调"字段（顺序变了也不变），分隔符是次要样式', () {

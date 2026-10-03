@@ -12,7 +12,12 @@ Widget _buildDownloadSettings(double width) {
       tailing: Icon(Icons.arrow_drop_down),
     ),
     const Divider(),
-    const _FixDirectoryNamesTile(),
+    // 「修正已下载文件夹名」已移到「数据管理」区（`app_settings.dart`）。
+    //
+    // 理由：它是一次性的**历史数据维护**动作（把早期哔咔源留下的"纯 id 目录"
+    // 改成标题），与「刷新本地漫画」「重新扫描磁盘」同类，不属于"下载参数"。
+    // 放在「并发下载数」正下方会让用户误以为它是常规下载设置。
+    //
     // 这里原有一条 `const Divider()`：32 号给 `SettingsTitle` 统一加了主分割线
     // （见 `settings_common_widgets.dart` 的 `SettingsSectionDivider`），
     // 留着就会紧挨着出现两条线。删掉这一条，分区线由那套机制统一出。
@@ -23,16 +28,21 @@ Widget _buildDownloadSettings(double width) {
     const Divider(),
     const _PixivDownloadDirTile(),
     const Divider(),
-    // Pixiv 产物形态（`settings[154]`）。默认关：这是**兼容性变更** ——
-    // 一个作品从"一个目录"变成一个文件，老内容不会被转换，开关关着就与改动前
-    // 逐字节一致，最安全。
-    SwitchSetting(
-      leading: const Icon(Icons.folder_zip_outlined),
-      title: '多图打包为压缩包'.tl,
-      subTitle: '多图作品打成一个 zip（仅存储不压缩），单图作品直接放一个图片文件；'
-              '关闭时一个作品一个文件夹'
-          .tl,
-      settingsIndex: pixivMultiPageZipSettingIndex,
+    const ListTile(
+      leading: Icon(Icons.folder_zip_outlined), title: Text('作品保存方式'),
+      subtitle: Text('单图直接保存为图片，多图保存为 ZIP；已有作品格式保持不变'),
+    ),
+    const SelectSetting(
+      leading: Icon(Icons.drive_file_move_outline),
+      title: '已下载作品另选文件夹时', settingsIndex: pixivTransferPolicyIndex,
+      values: ['copy', 'move', 'ask'], titles: ['复制', '移动', '每次提示（默认）'],
+      controlWidth: 150, tailing: Icon(Icons.arrow_drop_down),
+    ),
+    const SelectSetting(
+      leading: Icon(Icons.folder_delete_outlined),
+      title: '删除下载文件夹时', settingsIndex: pixivFolderDeletePolicyIndex,
+      values: ['delete', 'keep', 'ask'], titles: ['连同作品删除', '先移回主目录', '每次提示（默认）'],
+      controlWidth: 170, tailing: Icon(Icons.arrow_drop_down),
     ),
   ]);
 }
@@ -182,61 +192,9 @@ class _JmApiDomainsTileState extends State<_JmApiDomainsTile> {
   }
 }
 
-class _FixDirectoryNamesTile extends StatefulWidget {
-  const _FixDirectoryNamesTile();
-
-  @override
-  State<_FixDirectoryNamesTile> createState() => _FixDirectoryNamesTileState();
-}
-
-class _FixDirectoryNamesTileState extends State<_FixDirectoryNamesTile> {
-  bool _running = false;
-
-  Future<void> _run() async {
-    setState(() => _running = true);
-    try {
-      final result =
-          await OnlineDownloadManager.instance.fixDirectoryNames();
-      if (!mounted) return;
-      showDialog<void>(
-        context: context,
-        builder: (_) => AlertDialog(
-          title: const Text('修正完成'),
-          content: Text(
-            '已修正：${result.fixed} 个\n'
-            '已跳过：${result.skipped} 个\n'
-            '失败：${result.failed} 个',
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('确定'),
-            ),
-          ],
-        ),
-      );
-    } finally {
-      if (mounted) setState(() => _running = false);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return ListTile(
-      leading: _running
-          ? const SizedBox(
-              width: 24,
-              height: 24,
-              child: CircularProgressIndicator(strokeWidth: 2),
-            )
-          : const Icon(Icons.drive_file_rename_outline),
-      title: const Text('修正已下载文件夹名'),
-      subtitle: const Text('将旧的纯 ID 文件夹改为"标题_ID"格式'),
-      trailing: _running ? null : const Icon(Icons.arrow_right),
-      onTap: _running ? null : _run,
-    );
-  }
-}
+// 「修正已下载文件夹名」（`_FixDirectoryNamesTile`）已整体移到
+// `app_settings.dart` 的「数据管理」区 —— 那是历史数据维护动作，不是下载参数。
+// 同时它已收窄为**只处理哔咔（picacg）的记录**（见 `fixDirectoryNames` 的注释）。
 
 /// Pixiv 下载的**目录名模板**（`settings[153]`）。
 ///
@@ -250,8 +208,7 @@ class _PixivDirNameTemplateTile extends StatefulWidget {
       _PixivDirNameTemplateTileState();
 }
 
-class _PixivDirNameTemplateTileState
-    extends State<_PixivDirNameTemplateTile> {
+class _PixivDirNameTemplateTileState extends State<_PixivDirNameTemplateTile> {
   Future<void> _showDialog() async {
     final parsed = parsePixivDirNameTemplate(
       appdata.settings[pixivDirNameTemplateSettingIndex],
@@ -287,7 +244,7 @@ class _PixivDirNameTemplateTileState
               child: Text('取消'.tl),
             ),
             FilledButton(
-              // 一个字段都没勾时不写盘：空模板会被渲染层退回 `{title}`，
+              // 一个字段都没勾时不写盘：空模板会被渲染层退回默认模板，
               // 那是用户没预期的结果，不如直接拦住。
               onPressed: currentFields.isEmpty
                   ? null
@@ -357,11 +314,18 @@ class _PixivDownloadDirTile extends StatefulWidget {
 }
 
 class _PixivDownloadDirTileState extends State<_PixivDownloadDirTile> {
-  /// 旧根（`<数据目录>/download`）里还留着多少条 Pixiv 记录。
+  /// 每个候选源根里还留着多少条 Pixiv 记录（43 号续）。
   ///
-  /// 为 0 时**不显示**迁移入口 —— 一个常年存在的"迁移"按钮会让人以为
+  /// 全部为 0 时**不显示**迁移入口 —— 一个常年存在的"迁移"按钮会让人以为
   /// 总有什么要搬。
-  int _pendingLegacyEntries = 0;
+  ///
+  /// 用 Map 而不是单个计数：源根不止一个。36 号只查了默认根，而真机上
+  /// Pixiv 内容会随"换下载目录"的迁移落进 `settings[22]`
+  ///（见 `pixivRelocationSourceRoots` 的注释），只查默认根会永远数不到。
+  Map<String, int> _pendingByRoot = <String, int>{};
+
+  int get _pendingTotal =>
+      _pendingByRoot.values.fold<int>(0, (sum, count) => sum + count);
 
   @override
   void initState() {
@@ -370,19 +334,17 @@ class _PixivDownloadDirTileState extends State<_PixivDownloadDirTile> {
   }
 
   Future<void> _detectLegacyEntries() async {
-    final legacy = legacyPixivDownloadPath();
-    // 两者相同时没有"旧根"可言（用户把 Pixiv 目录显式设回了 download）。
-    if (legacy == effectivePixivDownloadRoot()) {
-      if (mounted && _pendingLegacyEntries != 0) {
-        setState(() => _pendingLegacyEntries = 0);
+    final counts = <String, int>{};
+    for (final root in pixivRelocationSourceRoots()) {
+      final count = await countPixivEntriesInRoot(root);
+      if (count > 0) {
+        counts[root] = count;
       }
-      return;
     }
-    final count = await countPixivEntriesInRoot(legacy);
     if (!mounted) {
       return;
     }
-    setState(() => _pendingLegacyEntries = count);
+    setState(() => _pendingByRoot = counts);
   }
 
   Future<String?> _pickFolder() async {
@@ -425,67 +387,69 @@ class _PixivDownloadDirTileState extends State<_PixivDownloadDirTile> {
     );
   }
 
+  Future<void> _applyPixivRoot(String configured, bool migrate) async {
+    final previous = effectivePixivDownloadRoot();
+    final target = configured.trim().isEmpty ? defaultPixivDownloadPath() : configured.trim();
+    try {
+      final library = PixivLibrary(previous);
+      if (migrate && OnlineDownloadManager.instance.tasks.any((t) => t.sourceKey == 'pixiv' && !t.completed && !t.cancelled)) {
+        throw StateError('有未完成的Pixiv下载任务，请先完成或取消后迁移下载根');
+      }
+      if (Directory(previous).existsSync()) {
+        await library.initialize();
+        rememberPixivLibrary(previous);
+        if (migrate && previous != target) {
+          if (previous == appdata.settings[22].trim() || previous == legacyPixivDownloadPath()) {
+            throw StateError('当前目录与漫画共用，请先将Pixiv内容归位到独立目录后迁移');
+          }
+          await relocatePixivLibrary(previous, target);
+        }
+      }
+      final destination = PixivLibrary(resolvePixivLibraryRoot(target));
+      await destination.initialize();
+      rememberPixivLibrary(destination.root);
+      appdata.settings[pixivDownloadDirSettingIndex] = configured.trim();
+      await appdata.updateSettings();
+      if (!mounted) return;
+      setState(() {});
+      await _detectLegacyEntries();
+      if (mounted) await _runRescanLocalComics(context);
+    } catch (e) {
+      if (!mounted) return;
+      await showDialog<void>(context: context, builder: (ctx) => AlertDialog(
+        title: const Text('目录设置未完成'), content: Text('$e'),
+        actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('知道了'))]));
+    }
+  }
+
   Future<void> _showBrowseDialog() async {
-    final controller = TextEditingController(
-      text: appdata.settings[pixivDownloadDirSettingIndex],
-    );
-    await showDialog<void>(
-      context: context,
-      builder: (ctx) => _DirectoryPathDialog(
-        title: '设置 Pixiv 专属下载目录'.tl,
-        hintText: '留空 = 用默认的 download_pixiv 目录'.tl,
-        helperText:
-            '提示：点按“浏览”调用系统目录选择；长按“浏览”打开内置文件夹浏览。'
-                    '设置后该目录会被当作本应用的另一个下载根，参与已下载列表扫描。'
-                .tl,
-        controller: controller,
-        initialPath: appdata.settings[pixivDownloadDirSettingIndex],
-        // 本弹窗只改**落盘位置**，不搬已下载内容 —— 内容搬迁走 tile 上那个
-        // 专门的迁移入口（`_migrateLegacyEntries`），它只搬 Pixiv 那几条，
-        // 而不是像「本应用下载目录」那样整目录转移。
-        hasExistingDownloads: false,
-        onBrowse: () async {
-          final picked = await _pickFolder();
-          if (picked != null) {
-            controller.text = picked;
-          }
-        },
-        onLongPressBrowse: () async {
-          Navigator.of(ctx).pop();
-          final browsed = await openInternalDirectoryBrowser(
-            context,
-            title: '选择 Pixiv 下载目录'.tl,
-            initialPath: controller.text,
-          );
-          if (!mounted || browsed == null) {
-            return;
-          }
-          controller.text = browsed;
-          appdata.settings[pixivDownloadDirSettingIndex] = browsed;
-          await appdata.updateSettings();
-          if (!mounted) {
-            return;
-          }
-          setState(() {});
-          await _runRescanLocalComics(context);
-        },
-        onOpenCurrentDirectory: () {
-          _openCurrentDirectory(controller.text.trim());
-        },
-        onCancel: () => Navigator.of(ctx).pop(),
-        onConfirm: (migrateDownloads) async {
-          appdata.settings[pixivDownloadDirSettingIndex] =
-              controller.text.trim();
-          await appdata.updateSettings();
-          if (!ctx.mounted || !mounted) {
-            return;
-          }
-          Navigator.of(ctx).pop();
-          setState(() {});
-          await _runRescanLocalComics(context);
-        },
-      ),
-    );
+    final previous = effectivePixivDownloadRoot();
+    final controller = TextEditingController(text: appdata.settings[pixivDownloadDirSettingIndex]);
+    await showDialog<void>(context: context, builder: (ctx) => _DirectoryPathDialog(
+      title: '设置 Pixiv 专属下载目录', hintText: '留空使用默认位置',
+      helperText: '勾选转移会连同自定义文件夹和数据库迁移到空目录；不勾选则保留旧位置供浏览。长按浏览可打开内置目录选择。',
+      controller: controller, initialPath: appdata.settings[pixivDownloadDirSettingIndex],
+      hasExistingDownloads: Directory(previous).existsSync(),
+      onBrowse: () async { final path = await _pickFolder(); if (path != null && ctx.mounted) controller.text = path; },
+      onLongPressBrowse: () async {
+        final initial = controller.text;
+        Navigator.pop(ctx);
+        final path = await openInternalDirectoryBrowser(context, title: '选择 Pixiv 下载目录', initialPath: initial);
+        if (path != null && mounted) {
+          final move = await showDialog<bool>(context: context, builder: (inner) => AlertDialog(
+            title: const Text('更改Pixiv下载根'), content: Text('新位置：$path'), actions: [
+              TextButton(onPressed: () => Navigator.pop(inner), child: const Text('取消')),
+              TextButton(onPressed: () => Navigator.pop(inner, false), child: const Text('仅更改路径')),
+              TextButton(onPressed: () => Navigator.pop(inner, true), child: const Text('转移到新目录'))]));
+          if (move != null) await _applyPixivRoot(path, move);
+        }
+      },
+      onRestoreDefault: () { controller.text = ''; return Future<void>.value(); },
+      onOpenCurrentDirectory: () => _openCurrentDirectory(controller.text),
+      onCancel: () => Navigator.pop(ctx),
+      onConfirm: (move) async {final next=controller.text;Navigator.pop(ctx);await _applyPixivRoot(next,move);},
+    ));
+    await Future<void>.delayed(const Duration(milliseconds: 300));
     controller.dispose();
   }
 
@@ -512,12 +476,12 @@ class _PixivDownloadDirTileState extends State<_PixivDownloadDirTile> {
           onTap: _showBrowseDialog,
           trailing: _buildPathDisplay(context, display),
         ),
-        if (_pendingLegacyEntries > 0)
+        if (_pendingTotal > 0)
           ListTile(
             leading: const Icon(Icons.drive_file_move_outline),
             title: Text('把旧的 Pixiv 下载搬过来'.tl),
             subtitle: Text(
-              '检测到 $_pendingLegacyEntries 项仍留在「本应用下载目录」里'.tl,
+              '检测到 $_pendingTotal 项 Pixiv 内容仍在其它下载目录里'.tl,
             ),
             trailing: const Icon(Icons.chevron_right),
             onTap: _migrateLegacyEntries,
@@ -526,24 +490,42 @@ class _PixivDownloadDirTileState extends State<_PixivDownloadDirTile> {
     );
   }
 
-  /// 把旧根里的 Pixiv 内容搬到当前生效的 Pixiv 根。
+  /// 把各候选源根里的 Pixiv 内容搬到当前生效的 Pixiv 根。
   ///
   /// 先确认再执行：这是**数据搬迁**，不能让用户在没被告知的情况下触发。
   /// 进度与结果都在对话框里（[_PixivMigrationDialog]），完成后重扫本地库，
   /// 让"已下载 / 资源库"立刻反映新位置。
-  Future<void> _migrateLegacyEntries() async {
-    final from = legacyPixivDownloadPath();
-    final to = effectivePixivDownloadRoot();
+  ///
+  /// 源根可能有**多个**（默认根 + 用户自定义下载目录），逐个搬、每个弹一次
+  /// 进度框 —— 复用同一个对话框，比把多源塞进去改动更小。
+  Future<void> _migrateLegacyEntries({String? targetOverride}) async {
+    final requestedTarget = (targetOverride ?? '').trim();
+    final to = targetOverride == null
+        ? effectivePixivDownloadRoot()
+        : (requestedTarget.isEmpty
+            ? defaultPixivDownloadPath()
+            : requestedTarget);
+    final sources = _pendingByRoot.entries
+        .where((entry) => entry.value > 0 && entry.key != to)
+        .toList();
+    if (sources.isEmpty) {
+      return;
+    }
+    final pendingTotal =
+        sources.fold<int>(0, (sum, entry) => sum + entry.value);
+    final breakdown = sources
+        .map((entry) => '· ${entry.key}\n  （${entry.value} 项）')
+        .join('\n');
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: Text('迁移 Pixiv 下载内容'.tl),
         content: Text(
-          '把「本应用下载目录」里的 $_pendingLegacyEntries 项 Pixiv 内容'
-          '移动到：\n$to\n\n'
-          '· 只移动 Pixiv 的内容，其它来源原样不动；\n'
-          '· 目标已存在同名条目会跳过，不会覆盖；\n'
-          '· 移动失败的内容留在原处，不会丢失。'
+          '把下列位置里的 $pendingTotal 项 Pixiv 内容移动到：\n$to\n\n'
+                  '$breakdown\n\n'
+                  '· 只移动 Pixiv 的内容，其它来源原样不动；\n'
+                  '· 目标已存在同名条目会跳过，不会覆盖；\n'
+                  '· 移动失败的内容留在原处，不会丢失。'
               .tl,
         ),
         actions: <Widget>[
@@ -561,15 +543,33 @@ class _PixivDownloadDirTileState extends State<_PixivDownloadDirTile> {
     if (confirmed != true || !mounted) {
       return;
     }
-    await showDialog<void>(
-      context: context,
-      barrierDismissible: false,
-      builder: (_) => _PixivMigrationDialog(from: from, to: to),
-    );
+    for (final entry in sources) {
+      if (!mounted) {
+        return;
+      }
+      await showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (_) => _PixivMigrationDialog(from: entry.key, to: to),
+      );
+    }
     if (!mounted) {
       return;
     }
     await _detectLegacyEntries();
+    if (!mounted) {
+      return;
+    }
+    // 43 号续：**归位完成后清掉"无封面"标记**。
+    //
+    // 那些条目在归位**之前**（路径指向旧目录、实体已失效）就已经被打了
+    // `noCoverSentinel`，而它是**一次性判定** —— 一旦落下，
+    // `_ensureManagedDownloadCoverCache` 会直接短路、**永不再探测**。
+    // 于是归位后封面文件明明就在包里，列表却永远是占位图标（真机踩到）。
+    //
+    // 放在这里而不是 `_refreshInternal`：那里处在 widget 测试路径上，
+    // 加真实 IO 会让 `pumpAndSettle` 永不收敛。
+    await LocalLibraryManager().clearAllNoCoverSentinels();
     if (!mounted) {
       return;
     }
@@ -661,12 +661,14 @@ class _PixivMigrationDialogState extends State<_PixivMigrationDialog> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: <Widget>[
-            Text('已移动 ${result.movedEntries} 项，跳过 ${result.skippedEntries} 项'.tl),
+            Text('已移动 ${result.movedEntries} 项，跳过 ${result.skippedEntries} 项'
+                .tl),
             if (failures.isNotEmpty) ...<Widget>[
               const SizedBox(height: 12),
               Text('${failures.length} 项失败：'.tl),
               for (final failure in failures.take(8))
-                Text('· $failure', style: Theme.of(context).textTheme.bodySmall),
+                Text('· $failure',
+                    style: Theme.of(context).textTheme.bodySmall),
               if (failures.length > 8)
                 Text('· …', style: Theme.of(context).textTheme.bodySmall),
             ],
@@ -715,7 +717,6 @@ class PixivDirNameTemplateEditor extends StatefulWidget {
 
 class _PixivDirNameTemplateEditorState
     extends State<PixivDirNameTemplateEditor> {
-
   /// **全部**字段的当前排列（含未勾选的）。
   ///
   /// 未勾选的字段也留在列表里占位：这样"取消勾选"只改勾选态、**不动位置**，
@@ -733,13 +734,16 @@ class _PixivDirNameTemplateEditorState
   @override
   void initState() {
     super.initState();
-    _order = <String>[
-      ...widget.initialFields,
-      ...kPixivDirNameFieldKeys.where(
-        (key) => !widget.initialFields.contains(key),
-      ),
-    ];
+    _order = List<String>.of(kPixivDirNameFieldKeys);
     _selected = <String>{...widget.initialFields};
+    // 未勾选项保留默认位置；已勾选项在对应位置按保存的顺序还原。
+    // 默认只勾标题/ID 时，作者仍在首行，而不是被挤到已勾选项后面。
+    var selectedIndex = 0;
+    for (var i = 0; i < _order.length; i++) {
+      if (_selected.contains(_order[i])) {
+        _order[i] = widget.initialFields[selectedIndex++];
+      }
+    }
     _separator = widget.initialSeparator;
     _separatorOptions = <String>[
       ...kPixivDirNameSeparators,

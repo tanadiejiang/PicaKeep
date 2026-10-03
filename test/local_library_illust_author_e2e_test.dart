@@ -244,14 +244,18 @@ void main() {
       );
     });
 
-    test('单图作品是 `p0`（不是 p1、也不是"1 页"）', () async {
+    test('单图作品**不显示页数**（36 号改了 33 号的这条约定）', () async {
+      // 33 号这一条原本断言 `p0`；36 号真机反馈「p0 单图的就不用显示页数了」
+      // 之后，卡片侧把 `<= 1` 一律省略。**注意目录名不受影响**：那边单图仍是
+      // `p0`（28 号拍板、已写进 db 的身份），两处刻意不同口径。
       await writePixivRecord(pages: 1);
       expect(
         await cardInfoText(
           fields: <String>['title', 'pages'],
           resolvePageCount: true,
         ),
-        '$_pixivTitle\np0',
+        _pixivTitle,
+        reason: '页数段整项跳过，连分隔符一起不产出（不留尾巴）',
       );
     });
 

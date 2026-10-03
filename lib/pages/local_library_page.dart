@@ -1,3 +1,7 @@
+import 'package:path/path.dart' as p;
+import 'package:picakeep/foundation/pixiv_library.dart';
+import 'package:picakeep/foundation/pixiv_download_root.dart';
+import 'package:picakeep/pages/pixiv_folders_page.dart';
 import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
@@ -16,10 +20,12 @@ import 'package:picakeep/foundation/app.dart';
 import 'package:picakeep/foundation/app_runtime_mode.dart';
 import 'package:picakeep/foundation/archive/archive_password_store.dart';
 import 'package:picakeep/foundation/download_model.dart';
+import 'package:picakeep/foundation/download_snapshot_reader.dart';
 import 'package:picakeep/foundation/download_author_resolver.dart';
 import 'package:picakeep/foundation/illust_card_info_config.dart';
 import 'package:picakeep/foundation/illust_cover_size.dart';
 import 'package:picakeep/foundation/local_library.dart';
+import 'package:picakeep/foundation/local_cover_cache.dart';
 import 'package:picakeep/foundation/local_library_illust_view.dart';
 import 'package:picakeep/foundation/local_library_settings.dart';
 import 'package:picakeep/foundation/remote_library_event_channel.dart';
@@ -38,6 +44,8 @@ import 'local_comic_detail_page.dart';
 import 'local_library_illust_card.dart';
 import 'local_library_illust_switcher.dart';
 import 'local_library_illust_view.dart';
+import 'illust_work_queue.dart';
+import 'illust_scroll_anchor.dart';
 
 String _formatLocalLibrarySize(double sizeMb) {
   if (sizeMb >= 1024) {
@@ -696,7 +704,8 @@ IconData _localLibraryViewIcon(_LocalLibraryView view) {
   }
 }
 
-class _LocalLibraryPageState extends State<LocalLibraryPage> {
+class _LocalLibraryPageState extends State<LocalLibraryPage>
+    with WidgetsBindingObserver {
   final _manager = LocalLibraryManager();
   final _remoteDataSource = const RemoteLibraryDataSource();
   final _searchController = TextEditingController();
@@ -741,6 +750,9 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
     appdata.settings[illustLibraryViewSettingIndex],
   );
 
+  List<PixivFolder> _pixivFolders = [];
+  String? _pixivFolderFilter;
+  bool _illustTransferRunning = false;
   bool _illustLoading = false;
   String? _illustErrorText;
   List<IllustLibraryEntry> _illustEntries = const <IllustLibraryEntry>[];
@@ -750,10 +762,125 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
   /// 页数记忆：页数只能靠列目录数出来，而 `_loadIllust` 每次都会重建条目
   /// （`pageCount` 恒为 null），所以必须跨次记住，否则刷新一次页数就消失。
   /// 详见 `foundation/illust_cover_size.dart` 的 `IllustPageCountMemo`。
-  final IllustPageCountMemo _illustPageCountMemo = IllustPageCountMemo();
 
   /// 页面内容区是否正在滚动（驱动视图切换悬浮按钮的半透明）。
-  bool _scrollInteracting = false;
+  final _scrollInteracting = ValueNotifier<bool>(false);
+  late final IllustWorkQueue<
+      ({IllustLibraryEntry entry, ImageProvider<Object>? cover})> _illustWork;
+  final _illustCovers = <String, ImageProvider<Object>>{};
+  final _illustRevisions = <String, ValueNotifier<int>>{};
+  final _illustCoverRetried = <String>{};
+  final _illustAnchor = IllustScrollAnchor();
+  List<String> _illustLaidOut = [];
+  final _illustInfo = <String,
+      ({
+    IllustLibraryEntry entry,
+    String settings,
+    List<IllustCardInfoSpan> spans
+  })>{};
+  Map<String, IllustLibraryEntry> _illustById = {};
+  List<IllustLibraryEntry>? _filteredIllustCache;
+  String? _filteredIllustCacheKey;
+  int _illustGeneration = 0;
+  bool _illustRouteActive = true, _illustAppActive = true;
+  int _illustThumbWidth = 768;
+
+  void _updateIllustWorkState() => _illustWork.setActive(
+      mounted && _isIllustView && _illustRouteActive && _illustAppActive);
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    _illustAppActive = state == AppLifecycleState.resumed;
+    _updateIllustWorkState();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _illustRouteActive = ModalRoute.isCurrentOf(context) ?? true;
+    final media = MediaQuery.of(context);
+    _illustThumbWidth = (media.size.width /
+            _illustViewWaterfallColumns *
+            media.devicePixelRatio *
+            1.35)
+        .ceil();
+    _updateIllustWorkState();
+  }
+
+  Future<({IllustLibraryEntry entry, ImageProvider<Object>? cover})?>
+      _resolveIllustDecoration(String id, bool Function() canContinue) async {
+    final entry = _illustById[id];
+    if (entry == null || !canContinue()) return null;
+    final cover = await _manager.prepareIllustCover(
+        entry.item, _illustThumbWidth,
+        canContinue: canContinue);
+    if (!canContinue()) return null;
+    final info = await resolveIllustEntryInfo(
+        entries: [entry],
+        concurrency: 1,
+        needPageCount: _illustCardInfoSpec.fields.contains('pages') &&
+            entry.pageCount == null,
+        resolveCoverPath: (_) async => entry.item.localCoverPath);
+    if (!canContinue()) return null;
+    final resolved = info[id];
+    return (
+      entry: entry.withResolvedInfo(
+          width: resolved?.width,
+          height: resolved?.height,
+          pageCount: resolved?.pageCount),
+      cover: cover
+    );
+  }
+
+  void _publishIllustDecorations(
+      Map<String, ({IllustLibraryEntry entry, ImageProvider<Object>? cover})>
+          values) {
+    if (!mounted) return;
+    final generation = _illustGeneration;
+    final media = MediaQuery.of(context);
+    final anchor = values.values.any((value) =>
+            value.entry.aspectRatio != _illustById[value.entry.id]?.aspectRatio)
+        ? _illustAnchor.capture(
+            _illustLaidOut,
+            media.padding.top + kToolbarHeight,
+            media.size.height - media.padding.bottom)
+        : null;
+    for (final value in values.values) {
+      final id = value.entry.id;
+      var changed = false;
+      if (!identical(_illustById[id], value.entry)) {
+        _illustById[id] = value.entry;
+        changed = true;
+      }
+      if (value.cover != null && _illustCovers[id] != value.cover) {
+        _illustCovers[id] = value.cover!;
+        changed = true;
+      }
+      if (changed) {
+        final revision = _illustRevisions[id];
+        if (revision != null) revision.value++;
+      }
+    }
+    _illustAnchor.restore(anchor,
+        isCurrent: () =>
+            mounted &&
+            generation == _illustGeneration &&
+            !_scrollInteracting.value &&
+            _illustAppActive &&
+            _illustRouteActive);
+  }
+
+  void _onIllustLayout(int first, int last) {
+    if (!mounted || !_isIllustView) return;
+    final entries = _filteredIllustEntries;
+    if (entries.isEmpty) return;
+    _illustLaidOut = entries
+        .skip(first.clamp(0, entries.length))
+        .take((last - first + 1).clamp(0, entries.length))
+        .map((e) => e.id)
+        .toList();
+    _illustWork.setVisible(_illustLaidOut);
+  }
 
   bool get _isClientMode =>
       normalizeAppRuntimeMode(appdata.settings[appRuntimeModeSettingIndex]) ==
@@ -842,12 +969,34 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
       );
 
   /// 插画视图下、按已选标签筛过的条目。
-  List<IllustLibraryEntry> get _filteredIllustEntries =>
-      filterIllustEntriesByTags(_illustEntries, _selectedIllustTags);
+  List<IllustLibraryEntry> get _filteredIllustEntries {
+    final keyword = _searchController.text.trim().toLowerCase();
+    final filterKey =
+        '$keyword|$_pixivFolderFilter|${(_selectedIllustTags.toList()..sort()).join("|")}';
+    if (_filteredIllustCache != null && _filteredIllustCacheKey == filterKey) {
+      return _filteredIllustCache!;
+    }
+    _filteredIllustCacheKey = filterKey;
+    final folders = _pixivFolders;
+    final selectedFolder =
+        folders.where((f) => f.id == _pixivFolderFilter).firstOrNull;
+    return _filteredIllustCache = filterIllustEntriesByTags(
+            _illustEntries, _selectedIllustTags)
+        .where((e) =>
+            (selectedFolder == null ||
+                p.equals(
+                    p.dirname(e.item.fileSystemPath!), selectedFolder.path)) &&
+            (keyword.isEmpty ||
+                e.item.name.toLowerCase().contains(keyword) ||
+                e.item.subTitle.toLowerCase().contains(keyword)))
+        .toList();
+  }
 
   int get _selectedCount => _selectedItemIds.length;
 
-  List<DownloadedItem> get _selectedDeleteItems => _items
+  List<DownloadedItem> get _selectedDeleteItems => (_isIllustView
+          ? _illustEntries.map<DownloadedItem>((e) => e.item).toList()
+          : _items)
       .where(
           (item) => _selectedItemIds.contains(item.id) && _canSelectItem(item))
       .toList(growable: false);
@@ -865,7 +1014,8 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
     return item.canDelete;
   }
 
-  bool get _isOperationRunning => _isDeleteOperationRunning;
+  bool get _isOperationRunning =>
+      _isDeleteOperationRunning || _illustTransferRunning;
 
   String get _deleteProgressHint => '请不要退出，强制退出可能导致操作异常';
 
@@ -1030,9 +1180,8 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
     appdata.settings[illustLibraryViewSettingIndex] =
         illustLibraryViewToSetting(nextView);
     await appdata.updateSettings();
-    if (nextView == IllustLibraryView.illust) {
-      await _loadIllust(showLoadingState: _illustEntries.isEmpty);
-    }
+    _updateIllustWorkState();
+    await _load();
   }
 
   /// 取插画视图的数据。
@@ -1044,7 +1193,11 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
   ///
   /// [showLoadingState] 为真时把内容区切成"加载中"。**只切内容区**：
   /// 本方法完全不碰 `_loading`，所以不会出现整页转圈（20 号计划确立的原则）。
-  Future<void> _loadIllust({bool showLoadingState = false}) async {
+  Future<void> _loadIllust(
+      {bool showLoadingState = false, bool forceRefresh = false}) async {
+    final generation = ++_illustGeneration;
+    _illustWork.reset();
+    _illustCoverRetried.clear();
     if (mounted) {
       setState(() {
         _illustLoading = true;
@@ -1056,21 +1209,26 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
       });
     }
     List<IllustLibraryEntry> entries = const <IllustLibraryEntry>[];
+    List<IllustTagSummary> tags = const [];
+    List<PixivFolder> folders = const [];
     String? errorText;
     try {
-      final downloads = await _manager.getManagedDownloads();
-      // 回填已数出来的页数：`buildIllustEntries` 每次重建条目，页数恒为 null，
-      // 不回填的话后台刷新一次「页数」就从卡片上消失。
-      entries = _illustPageCountMemo.apply(buildIllustEntries(downloads));
+      folders = await readPixivFolders([effectivePixivDownloadRoot()]);
+      final downloads = await _manager.getManagedDownloads(
+          forceRefresh: forceRefresh, cacheSnapshot: true);
+      final prepared = await prepareIllustEntries(downloads);
+      entries = prepared.entries;
+      tags = prepared.tags;
     } catch (e) {
       errorText = _operationErrorText(e);
     }
-    if (!mounted) {
+    if (!mounted || generation != _illustGeneration) {
       return;
     }
     setState(() {
       _illustEntries = entries;
-      _illustTags = summarizeIllustTags(entries);
+      _illustTags = tags;
+      _pixivFolders = folders;
       _illustErrorText = errorText;
       _illustLoading = false;
       // 数据变了，之前选的标签可能已经不存在（例如刚删掉某个作品）。
@@ -1079,9 +1237,11 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
         (tag) => !_illustTags.any((summary) => summary.tag == tag),
       );
     });
-    // 首帧已按 db 数据（缺则占位比例）渲染；真实比例在后台补齐后刷新
-    // （见 `_resolveIllustSizes` 的注释：绝不能同步做，否则首帧卡在磁盘上）。
-    unawaited(_resolveIllustSizes(entries));
+    _illustById = {for (final entry in entries) entry.id: entry};
+    _illustCovers.clear();
+    _illustInfo.clear();
+    _filteredIllustCache = null;
+    _updateIllustWorkState();
   }
 
   void _toggleIllustTag(String tag) {
@@ -1102,6 +1262,15 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
   @override
   void initState() {
     super.initState();
+    _illustWork = IllustWorkQueue(
+        resolve: _resolveIllustDecoration,
+        publish: _publishIllustDecorations,
+        isComplete: (value) =>
+            value.cover != null &&
+            value.entry.hasRealSize &&
+            (!_illustCardInfoSpec.fields.contains('pages') ||
+                value.entry.pageCount != null));
+    WidgetsBinding.instance.addObserver(this);
     App.localDataVersion.addListener(_handleLocalDataChanged);
     App.serviceConfigVersion.addListener(_handleServiceConfigChanged);
     App.serviceRuntimeVersion.addListener(_handleServiceRuntimeChanged);
@@ -1126,6 +1295,14 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
     App.serviceConfigVersion.removeListener(_handleServiceConfigChanged);
     App.serviceRuntimeVersion.removeListener(_handleServiceRuntimeChanged);
     App.displaySettingsVersion.removeListener(_handleDisplaySettingsChanged);
+    _illustGeneration++;
+    _illustWork.dispose();
+    _scrollInteracting.dispose();
+    _illustAnchor.dispose();
+    for (final revision in _illustRevisions.values) {
+      revision.dispose();
+    }
+    WidgetsBinding.instance.removeObserver(this);
     _searchController.dispose();
     super.dispose();
   }
@@ -1139,7 +1316,8 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
     // 「页数」是"改了配置才需要补"的字段：用户在设置里勾上它时，
     // 补页数的那趟流程可能根本没跑过（当时还没勾），所以这里补跑一次。
     if (_isIllustView && _illustEntries.isNotEmpty) {
-      unawaited(_resolveIllustSizes(_illustEntries));
+      _illustWork.reset();
+      _filteredIllustCache = null;
     }
   }
 
@@ -1177,6 +1355,11 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
   }
 
   Future<void> _refreshCurrentLibrary({bool rescan = false}) async {
+    if (_isIllustView && !rescan) {
+      await LocalCoverCache.revalidateSources();
+      await _loadIllust(forceRefresh: true);
+      return;
+    }
     await _refreshLocalLibrary(rescan: rescan);
     await _load();
   }
@@ -1253,7 +1436,8 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
       final cover = item.localCoverPath?.trim();
       if (cover != null &&
           cover.isNotEmpty &&
-          cover != LocalLibraryManager.noCoverSentinel) {
+          cover != LocalLibraryManager.noCoverSentinel &&
+          !item.isManagedDownloadItem) {
         continue;
       }
       final resolved = await manager.resolveCoverPathForItem(item);
@@ -1356,6 +1540,11 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
   }
 
   Future<void> _load({bool forceLocalRefresh = false}) async {
+    if (_isIllustView) {
+      if (mounted) setState(() => _loading = false);
+      await _loadIllust(forceRefresh: forceLocalRefresh);
+      return;
+    }
     if (mounted) {
       setState(() {
         _loading = true;
@@ -1608,8 +1797,7 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
                               ? illustViewSwitcherRight
                               : illustViewSwitcherLeft;
                           appdata.settings[
-                                  illustViewSwitcherPositionSettingIndex] =
-                              next;
+                              illustViewSwitcherPositionSettingIndex] = next;
                           await appdata.updateSettings();
                           setDialogState(() {});
                           if (mounted) {
@@ -2132,7 +2320,7 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
       );
 
   Widget _buildTitle() {
-    if (_searchMode) {
+    if (_searchMode && !_selecting) {
       return TextField(
         controller: _searchController,
         autofocus: true,
@@ -2436,16 +2624,18 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
   /// （`_handleItemLongPress`），所以隐藏多选 FAB 不会让功能变得不可达。
   Widget? _buildFloatingActionButton(List<DownloadedItem> items) {
     if (_showIllustViewSwitcher) {
-      return IllustViewSwitcherFab(
-        currentView: _illustView,
-        scrolling: _scrollInteracting,
-        alignLeft: illustViewSwitcherAlignsLeft(
-          appdata.settings[illustViewSwitcherPositionSettingIndex],
-        ),
-        onViewSelected: (view) {
-          unawaited(_setIllustView(view));
-        },
-      );
+      return ValueListenableBuilder<bool>(
+          valueListenable: _scrollInteracting,
+          builder: (context, scrolling, _) => IllustViewSwitcherFab(
+                currentView: _illustView,
+                scrolling: scrolling,
+                alignLeft: illustViewSwitcherAlignsLeft(
+                  appdata.settings[illustViewSwitcherPositionSettingIndex],
+                ),
+                onViewSelected: (view) {
+                  unawaited(_setIllustView(view));
+                },
+              ));
     }
     return _buildMultiSelectFab(items);
   }
@@ -2473,42 +2663,192 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
         : FloatingActionButtonLocation.endFloat;
   }
 
+  Widget _buildPixivFolderBar() {
+    final folders = _pixivFolders;
+    if (!folders.any((f) => f.id == _pixivFolderFilter)) {
+      _pixivFolderFilter = null;
+    }
+    return Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        child: Row(children: [
+          const Icon(Icons.folder_outlined),
+          const SizedBox(width: 10),
+          Expanded(
+              child: DropdownButton<String>(
+                  isExpanded: true,
+                  value: _pixivFolderFilter ?? '',
+                  underline: const SizedBox.shrink(),
+                  items: [
+                    const DropdownMenuItem(value: '', child: Text('全部文件夹')),
+                    for (final f in folders)
+                      DropdownMenuItem(
+                          value: f.id,
+                          child: Text(f.name, overflow: TextOverflow.ellipsis))
+                  ],
+                  onChanged: _selecting || _isOperationRunning
+                      ? null
+                      : (id) => setState(
+                          () => _pixivFolderFilter = id == '' ? null : id))),
+          TextButton(
+              onPressed: _selecting || _isOperationRunning
+                  ? null
+                  : () async {
+                      final selected = await Navigator.push<String>(
+                          context,
+                          MaterialPageRoute(
+                              builder: (_) => const PixivFoldersPage()));
+                      if (!mounted) return;
+                      if (selected != null) {
+                        setState(() => _pixivFolderFilter = selected);
+                      }
+                      await _loadIllust();
+                    },
+              child: const Text('管理')),
+        ]));
+  }
+
+  Future<void> _onIllustSelectionAction(String action) async {
+    if (_isOperationRunning) return;
+    if (action == 'all') {
+      setState(() {
+        _selectedItemIds.addAll(_filteredIllustEntries.map((e) => e.item.id));
+      });
+      return;
+    }
+    if (_selectedCount == 0) return;
+    if (action == 'delete') {
+      await _deleteSelectedItems();
+      return;
+    }
+    final selected =
+        _selectedDeleteItems.whereType<LocalLibraryComicItem>().toList();
+    setState(() => _illustTransferRunning = true);
+    try {
+      await transferPixivItems(context, selected, move: action == 'move');
+    } finally {
+      if (mounted) {
+        setState(() {
+          _illustTransferRunning = false;
+          _clearSelectionState();
+        });
+        await _loadIllust();
+      }
+    }
+  }
+
   /// 插画视图的内容 sliver（标签筛选条 + 瀑布流 + 三种状态）。
   Widget _buildIllustContent() {
+    final entries = _filteredIllustEntries;
     return LocalLibraryIllustSlivers(
       allEntries: _illustEntries,
-      entries: _filteredIllustEntries,
+      entries: entries,
       tags: _illustTags,
       selectedTags: _selectedIllustTags,
       loading: _illustLoading,
       errorText: _illustErrorText,
       columns: _illustViewWaterfallColumns,
       itemBuilder: _buildIllustItem,
-      onToggleTag: _toggleIllustTag,
-      onClearTags: _clearIllustTags,
+      onLayoutRange: (first, last) {
+        if (mounted && identical(entries, _filteredIllustEntries)) {
+          _onIllustLayout(first, last);
+        }
+      },
+      onToggleTag: (tag) {
+        if (!_selecting) _toggleIllustTag(tag);
+      },
+      onClearTags: () {
+        if (!_selecting) _clearIllustTags();
+      },
     );
   }
 
   Widget _buildIllustItem(BuildContext context, IllustLibraryEntry entry) {
+    return ValueListenableBuilder<int>(
+      key: _illustAnchor.keyFor(entry.id),
+      valueListenable:
+          _illustRevisions.putIfAbsent(entry.id, () => ValueNotifier(0)),
+      builder: (context, _, __) =>
+          _buildPreparedIllustItem(context, _illustById[entry.id] ?? entry),
+    );
+  }
+
+  Widget _buildPreparedIllustItem(
+      BuildContext context, IllustLibraryEntry entry) {
     final item = entry.item;
+    final raw = appdata.settings[illustCardInfoSettingIndex];
+    final info = _illustInfo[entry.id];
+    if (info == null || !identical(info.entry, entry) || info.settings != raw) {
+      _illustInfo[entry.id] = (
+        entry: entry,
+        settings: raw,
+        spans: illustrateCardInfoSpansFor(
+            entry: entry,
+            fields: _illustCardInfoSpec.fields,
+            separator: _illustCardInfoSpec.separator)
+      );
+    }
     return IllustCard(
+      key: ValueKey(entry.id),
       entry: entry,
       // 必须走 manager 的 provider 工厂：它内部会按"是否处于 root/Shizuku
       // 特权模式"决定走 FileImage 快路径还是 StreamImageProvider，
       // 直接 FileImage 在特权模式下会整片破图（见 foundation/local_library.dart:1213）。
-      imageProvider: illustCoverProviderFor(item),
+      imageProvider: _illustCovers[entry.id],
+      onCoverError: () {
+        if (mounted && _illustCoverRetried.add(entry.id)) {
+          _illustCovers.remove(entry.id);
+          _illustRevisions[entry.id]?.value++;
+          _illustWork.retry(entry.id);
+        }
+      },
+      locationLabel: _pixivFolderFilter == null
+          ? p.basename(p.dirname(item.fileSystemPath!))
+          : null,
       // 底部信息随 `settings[illustCardInfoSettingIndex]` 变化（32 号）。
       // 取值与拼接走 foundation 层的纯函数，卡片控件不读全局设置。
-      infoSpans: illustrateCardInfoSpansFor(
-        entry: entry,
-        fields: _illustCardInfoSpec.fields,
-        separator: _illustCardInfoSpec.separator,
-      ),
+      infoSpans: _illustInfo[entry.id]!.spans,
       selecting: _selecting,
       selected: _isItemSelected(item),
-      onTap: () => _handleItemTap(item),
+      // 36 号：图片与信息**分区响应** —— 看图的人想马上翻，管理的人才会点文字。
+      onTap: () => _handleIllustImageTap(item),
+      onInfoTap: () => _handleItemTap(item),
       onLongPress: () => _handleItemLongPress(item),
     );
+  }
+
+  /// 点插画卡片的**图片**：直接进阅读器（36 号真机要求）。
+  ///
+  /// 与点信息区（[_handleItemTap] → 本地详情页）分开，但**两条例外完全沿用**
+  /// [_handleItemTap] 的分支，理由分别是：
+  /// - 多选态下点击只该切换选中，不该突然跳进阅读器；
+  /// - 需要密码的压缩包这时读必然失败，得先走既有的密码流程。
+  void _handleIllustImageTap(DownloadedItem item) {
+    if (_selecting && _canSelectItem(item)) {
+      _toggleItemSelection(item);
+      return;
+    }
+    if (item is LocalLibraryComicItem && item.needsArchivePassword) {
+      _handleArchivePasswordTap(item);
+      return;
+    }
+    if (item is RemoteLibraryComicItem && item.needsArchivePassword) {
+      _handleRemoteArchivePasswordTap(item);
+      return;
+    }
+    _openReader(item);
+  }
+
+  /// 直接打开阅读器。
+  ///
+  /// 走条目自己的 `createReadingPage()`：各来源的阅读数据（本地路径 / 压缩包 /
+  /// 单文件产物 / 远程）由各子类给出，这里**不自己造 `ReadingData`** ——
+  /// 31 号的教训是同一个作品在两条链路上各造一次阅读数据，迟早出现
+  /// "从详情页进得去、从列表进打不开"的分裂。
+  void _openReader(DownloadedItem item) {
+    _illustWork.setActive(false);
+    App.pushInner(() => item.createReadingPage()).whenComplete(() {
+      if (mounted) _updateIllustWorkState();
+    });
   }
 
   /// 当前卡片底部信息的字段与分隔符（从设置解析一次，整页复用）。
@@ -2528,72 +2868,6 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
     return _illustCardInfoSpecCache!;
   }
 
-  /// 补齐缺宽高条目的**真实比例**（32 号的核心修复）。
-  ///
-  /// ## 为什么必须异步、且与首帧渲染分开
-  ///
-  /// 老下载记录里没有 `width`/`height`（真机实测三条 Pixiv 记录全缺，见回写区），
-  /// 只能读封面文件头拿真实尺寸。读文件是 IO，**绝不能在 `build` 或
-  /// `buildIllustEntries` 里同步做**：那会把整页首帧卡在磁盘上，几百条更久。
-  ///
-  /// 所以流程是：先用 db 数据（或占位比例）**立即渲染**，再在后台补齐并
-  /// `setState` 刷新。用户看到的是"先按占位排、很快调整成真实高度"，
-  /// 而不是"白屏等一秒"。
-  ///
-  /// ## 只对"需要"的条目动手
-  ///
-  /// - 宽高齐全的条目（新下载的记录）**不进这个流程**：db 里的作品级尺寸比
-  ///   封面读数更权威，重算没有意义，还会白发一次 IO；
-  /// - 只有配置里勾了「页数」时才去列目录数图片（多一次 IO）。
-  Future<void> _resolveIllustSizes(List<IllustLibraryEntry> requested) async {
-    final spec = _illustCardInfoSpec;
-    final wantPageCount = spec.fields.contains('pages');
-    final targets = illustEntriesNeedingResolution(
-      requested,
-      wantPageCount: wantPageCount,
-      pageCountMemo: _illustPageCountMemo,
-    );
-    if (targets.isEmpty) {
-      return;
-    }
-    // 只在**本次目标里确实有"页数未知"的条目**时才去列目录。
-    //
-    // 不能用一个"本页补过没有"的布尔量代替：用户先在没勾「页数」的配置下进过一次
-    // 视图，之后再去设置里勾上，那个标志会把这一次压成"不用补"，于是页数
-    // **永远补不上**（卡片上一直不显示，且不报任何错）。
-    final needPageCount = wantPageCount &&
-        targets.any(
-          (entry) => entry.pageCount == null && _illustPageCountMemo.needsCount(entry.id),
-        );
-
-    Map<String, IllustResolvedInfo> resolved;
-    try {
-      resolved = await resolveIllustEntryInfo(
-        entries: targets,
-        resolveCoverPath: _manager.resolveCoverPathForItem,
-        needPageCount: needPageCount,
-      );
-    } catch (_) {
-      // 补齐是"锦上添花"：读不到就继续用占位比例，**不要**把它升级成页面错误
-      // （那会让一次 IO 失败看起来像"整个插画视图坏了"）。
-      return;
-    }
-    if (!mounted || resolved.isEmpty) {
-      return;
-    }
-    if (needPageCount) {
-      // 记下结果（含"没数出来"），避免每次刷新都对同一条反复列目录。
-      for (final entry in targets) {
-        if (entry.pageCount == null) {
-          _illustPageCountMemo.record(entry.id, resolved[entry.id]?.pageCount);
-        }
-      }
-    }
-    setState(() {
-      _illustEntries = applyIllustResolvedInfo(_illustEntries, resolved);
-    });
-  }
-
   /// 内容区的滚动通知 → `_scrollInteracting`（驱动悬浮按钮半透明）。
   ///
   /// 恢复只认 `ScrollEndNotification` 与 `UserScrollNotification(direction: idle)`，
@@ -2601,7 +2875,7 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
   /// 在那里恢复会让按钮在半透明与不透明之间反复闪。
   /// 这套判定沿用既有先例（`pages/download_page.dart:680-692`）。
   bool _handleScrollNotification(ScrollNotification notification) {
-    if (!_showIllustViewSwitcher) {
+    if (notification.depth != 0 || notification.metrics.axis != Axis.vertical) {
       return false;
     }
     final interacting = notification is ScrollStartNotification ||
@@ -2610,14 +2884,12 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
     final settled = notification is ScrollEndNotification ||
         (notification is UserScrollNotification &&
             notification.direction == ScrollDirection.idle);
-    if (interacting && !_scrollInteracting) {
-      setState(() {
-        _scrollInteracting = true;
-      });
-    } else if (settled && _scrollInteracting) {
-      setState(() {
-        _scrollInteracting = false;
-      });
+    if (interacting) {
+      _scrollInteracting.value = true;
+      _illustWork.setScrolling(true);
+    } else if (settled) {
+      _scrollInteracting.value = false;
+      _illustWork.setScrolling(false);
     }
     return false;
   }
@@ -2639,120 +2911,140 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
           : NotificationListener<ScrollNotification>(
               onNotification: _handleScrollNotification,
               child: SmoothCustomScrollView(
-              cacheExtent: MediaQuery.of(context).size.height,
-              slivers: [
-                SliverAppbar(
-                  title: _buildTitle(),
-                  color: _selecting
-                      ? Theme.of(context).colorScheme.primaryContainer
-                      : null,
-                  leading: _selecting
-                      ? IconButton(
-                          onPressed: _exitSelectionMode,
-                          icon: const Icon(Icons.close),
-                        )
-                      : null,
-                  actions: _selecting
-                      ? [
-                          IconButton(
-                            icon: const Icon(Icons.delete_outline),
-                            tooltip: '删除'.tl,
-                            onPressed: _selectedCount == 0
-                                ? null
-                                : _deleteSelectedItems,
-                          ),
-                        ]
-                      : [
-                          IconButton(
-                            icon: const Icon(Icons.refresh),
-                            tooltip: refreshTooltip,
-                            onPressed: isRemoteRefreshView
-                                ? _triggerManualRemoteRefresh
-                                : () async {
-                                    await _refreshCurrentLibrary();
-                                  },
-                          ),
-                          if (_canToggleCollectionShell)
-                            _buildCollectionShellAction(),
-                          // 入口条件比原来宽一档：原来只在 `!widget.albumOnly`
-                          // 时出现，而"图集"页恰恰是 `albumOnly: true`（从「我」
-                          // 页进入），于是图集页上**没有任何页内设置入口** ——
-                          // 视图切换按钮位置就只能在设置页里改。
-                          // 现在只要视图切换按钮可能出现（`_isAlbumOnly` 为真），
-                          // 页内入口就一起出现，满足"页面内一处 + 设置页一处"。
-                          // 对既有非图集页（`albumOnly` 为假）行为**完全不变**。
-                          //
-                          // 33 号曾把这个入口与「视图档位」合并成同一个弹出菜单
-                          // （理由是工具栏只有 4 个 action 的宽度余量），36 号撤回：
-                          // 合并的后果是"设置变成二级"（用户真机反馈原话：
-                          // 「为什么资源库设置的点击需要进到二级点击才会显示」）。
-                          // 现在按钮**点击直达设置面板**，档位折叠在面板里，
-                          // action 数量仍是 4 个 —— 宽度约束与 33 号完全一致。
-                          if (_tiersApplicable ||
-                              _viewScopeMenu.showDisplaySettings)
+                controller: _illustAnchor.controller,
+                cacheExtent:
+                    _isIllustView ? 250 : MediaQuery.of(context).size.height,
+                slivers: [
+                  SliverAppbar(
+                    title: _buildTitle(),
+                    color: _selecting
+                        ? Theme.of(context).colorScheme.primaryContainer
+                        : null,
+                    leading: _selecting
+                        ? IconButton(
+                            onPressed: _exitSelectionMode,
+                            icon: const Icon(Icons.close),
+                          )
+                        : null,
+                    actions: _selecting
+                        ? [
+                            if (_isIllustView)
+                              PopupMenuButton<String>(
+                                tooltip: '更多',
+                                icon: const Icon(Icons.more_horiz),
+                                onSelected: _onIllustSelectionAction,
+                                itemBuilder: (_) => const [
+                                  PopupMenuItem(
+                                      value: 'all', child: Text('全选')),
+                                  PopupMenuItem(
+                                      value: 'copy', child: Text('复制到…')),
+                                  PopupMenuItem(
+                                      value: 'move', child: Text('移动到…')),
+                                  PopupMenuItem(
+                                      value: 'delete', child: Text('删除')),
+                                ],
+                              )
+                            else
+                              IconButton(
+                                  icon: const Icon(Icons.delete_outline),
+                                  tooltip: '删除',
+                                  onPressed: _selectedCount == 0
+                                      ? null
+                                      : _deleteSelectedItems),
+                          ]
+                        : [
+                            IconButton(
+                              icon: const Icon(Icons.refresh),
+                              tooltip: refreshTooltip,
+                              onPressed: isRemoteRefreshView
+                                  ? _triggerManualRemoteRefresh
+                                  : () async {
+                                      await _refreshCurrentLibrary();
+                                    },
+                            ),
+                            if (_canToggleCollectionShell)
+                              _buildCollectionShellAction(),
+                            // 入口条件比原来宽一档：原来只在 `!widget.albumOnly`
+                            // 时出现，而"图集"页恰恰是 `albumOnly: true`（从「我」
+                            // 页进入），于是图集页上**没有任何页内设置入口** ——
+                            // 视图切换按钮位置就只能在设置页里改。
+                            // 现在只要视图切换按钮可能出现（`_isAlbumOnly` 为真），
+                            // 页内入口就一起出现，满足"页面内一处 + 设置页一处"。
+                            // 对既有非图集页（`albumOnly` 为假）行为**完全不变**。
+                            //
+                            // 33 号曾把这个入口与「视图档位」合并成同一个弹出菜单
+                            // （理由是工具栏只有 4 个 action 的宽度余量），36 号撤回：
+                            // 合并的后果是"设置变成二级"（用户真机反馈原话：
+                            // 「为什么资源库设置的点击需要进到二级点击才会显示」）。
+                            // 现在按钮**点击直达设置面板**，档位折叠在面板里，
+                            // action 数量仍是 4 个 —— 宽度约束与 33 号完全一致。
+                            if (_tiersApplicable ||
+                                _viewScopeMenu.showDisplaySettings)
+                              IconButton(
+                                icon: Icon(
+                                  appdata.settings[
+                                              localLibraryAlbumOnlySettingIndex] !=
+                                          '0'
+                                      ? Icons.tune
+                                      : Icons.tune_outlined,
+                                ),
+                                tooltip: '资源库显示设置'.tl,
+                                onPressed: _showFilterDialog,
+                              ),
+                            IconButton(
+                              icon: const Icon(Icons.sort),
+                              tooltip: '排序'.tl,
+                              onPressed: _showSortDialog,
+                            ),
                             IconButton(
                               icon: Icon(
-                                appdata.settings[
-                                            localLibraryAlbumOnlySettingIndex] !=
-                                        '0'
-                                    ? Icons.tune
-                                    : Icons.tune_outlined,
-                              ),
-                              tooltip: '资源库显示设置'.tl,
-                              onPressed: _showFilterDialog,
+                                  _searchMode ? Icons.close : Icons.search),
+                              tooltip: _searchMode ? '关闭搜索'.tl : '搜索'.tl,
+                              onPressed: () {
+                                setState(() {
+                                  _searchMode = !_searchMode;
+                                  if (!_searchMode) {
+                                    _searchController.clear();
+                                  }
+                                });
+                              },
                             ),
-                          IconButton(
-                            icon: const Icon(Icons.sort),
-                            tooltip: '排序'.tl,
-                            onPressed: _showSortDialog,
-                          ),
-                          IconButton(
-                            icon:
-                                Icon(_searchMode ? Icons.close : Icons.search),
-                            tooltip: _searchMode ? '关闭搜索'.tl : '搜索'.tl,
-                            onPressed: () {
-                              setState(() {
-                                _searchMode = !_searchMode;
-                                if (!_searchMode) {
-                                  _searchController.clear();
-                                }
-                              });
-                            },
-                          ),
-                        ],
-                ),
-                // 「档位」原来在这里是一行紧凑的 `SegmentedButton`（由
-                // `_showSourceSelector` 决定显不显示）。33 号把它挪去了工具栏，
-                // 36 号按用户要求改成**折叠在「资源库显示设置」面板里**
-                // （`_buildTierSection`）—— 内容区自 33 号起就不再渲染它，
-                // 显示条件（子页面上没有档位）与当时一致。
-                // 插画视图下档位同样不参与：插画只有"本地"一档内容，
-                // 切到插画再切回来时档位原样还在。
-                // 插画视图：内容区完全由插画侧自己决定（含三种状态），
-                // 图集侧的 items / 定时器 / 选择框一概不参与。
-                if (_isIllustView)
-                  _buildIllustContent()
-                else if (items.isEmpty)
-                  _buildEmptyState()
-                else
-                  SliverPadding(
-                    padding: const EdgeInsets.fromLTRB(2, 0, 2, 24),
-                    sliver: SliverGrid(
-                      delegate: SliverChildBuilderDelegate(
-                        (context, index) {
-                          final item = items[index];
-                          return _buildItem(item);
-                        },
-                        childCount: items.length,
-                      ),
-                      gridDelegate: SliverGridDelegateWithComics(),
-                    ),
+                          ],
                   ),
-              ],
+                  // 「档位」原来在这里是一行紧凑的 `SegmentedButton`（由
+                  // `_showSourceSelector` 决定显不显示）。33 号把它挪去了工具栏，
+                  // 36 号按用户要求改成**折叠在「资源库显示设置」面板里**
+                  // （`_buildTierSection`）—— 内容区自 33 号起就不再渲染它，
+                  // 显示条件（子页面上没有档位）与当时一致。
+                  // 插画视图下档位同样不参与：插画只有"本地"一档内容，
+                  // 切到插画再切回来时档位原样还在。
+                  // 插画视图：内容区完全由插画侧自己决定（含三种状态），
+                  // 图集侧的 items / 定时器 / 选择框一概不参与。
+                  if (_isIllustView)
+                    SliverToBoxAdapter(child: _buildPixivFolderBar()),
+                  if (_isIllustView)
+                    _buildIllustContent()
+                  else if (items.isEmpty)
+                    _buildEmptyState()
+                  else
+                    SliverPadding(
+                      padding: const EdgeInsets.fromLTRB(2, 0, 2, 24),
+                      sliver: SliverGrid(
+                        delegate: SliverChildBuilderDelegate(
+                          (context, index) {
+                            final item = items[index];
+                            return _buildItem(item);
+                          },
+                          childCount: items.length,
+                        ),
+                        gridDelegate: SliverGridDelegateWithComics(),
+                      ),
+                    ),
+                ],
+              ),
             ),
-          ),
     );
-    if (_isOperationRunning) {
+    if (_isDeleteOperationRunning) {
       page = Stack(
         fit: StackFit.expand,
         children: [
@@ -2764,7 +3056,10 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
       );
     }
     return PopScope(
-      canPop: !_isOperationRunning,
+      canPop: !_isOperationRunning && !_selecting,
+      onPopInvokedWithResult: (didPop, result) {
+        if (!didPop && !_isOperationRunning) _exitSelectionMode();
+      },
       child: page,
     );
   }

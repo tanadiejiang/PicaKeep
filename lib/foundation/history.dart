@@ -1,6 +1,7 @@
 // ignore_for_file: no_leading_underscores_for_local_identifiers
 
 import 'dart:io';
+import 'package:flutter/foundation.dart';
 
 import 'package:picakeep/foundation/local_data_source.dart';
 import 'package:sqlite3/sqlite3.dart';
@@ -42,10 +43,8 @@ String? _preferredCustomHistorySourceKey(int type) {
   return mapping[type];
 }
 
-const _currentManagedHistoryPrefix =
-    'local_download::current_download::';
-const _originalManagedHistoryPrefix =
-    'local_download::original_download::';
+const _currentManagedHistoryPrefix = 'local_download::current_download::';
+const _originalManagedHistoryPrefix = 'local_download::original_download::';
 
 void _addCandidate(Set<String> candidates, String value) {
   final v = value.trim();
@@ -266,6 +265,19 @@ class HistoryManager {
 
   HistoryManager.create();
 
+  @visibleForTesting
+  HistoryManager.withDatabasesForTesting(Database primary,
+      {Database? secondary}) {
+    _db = primary;
+    _secondaryDb = secondary;
+    _configureDatabase(primary);
+    if (secondary != null) _configureDatabase(secondary);
+    _initialized = true;
+  }
+
+  @visibleForTesting
+  void Function(String sql, List<Object?> parameters)? onLookupForTesting;
+
   factory HistoryManager() =>
       cache == null ? (cache = HistoryManager.create()) : cache!;
 
@@ -285,8 +297,6 @@ class HistoryManager {
         _db,
         if (_secondaryDb != null) _secondaryDb!,
       ];
-
-  Map<String, bool>? _cachedHistory;
 
   Future<void> init() async {
     final roots = await getManagedDataRoots();
@@ -317,7 +327,6 @@ class HistoryManager {
     }
     _secondaryDb = nextSecondaryDb;
     _reconcileManagedHistoryStorage();
-    _cachedHistory = null;
     _initialized = true;
 
     if (!identical(previousDb, nextDb)) {
@@ -340,7 +349,6 @@ class HistoryManager {
       _secondaryDb?.dispose();
     } catch (_) {}
     _secondaryDb = null;
-    _cachedHistory = null;
     _initialized = false;
   }
 
@@ -396,13 +404,12 @@ class HistoryManager {
   }
 
   History? _findInDb(Database db, String target) {
-    final res = db.select(
-      """
+    const sql = """
       select * from history
       where target == ?;
-    """,
-      [target],
-    );
+    """;
+    onLookupForTesting?.call(sql, [target]);
+    final res = db.select(sql, [target]);
     if (res.isEmpty) {
       return null;
     }
@@ -545,7 +552,6 @@ class HistoryManager {
         where target == ?;
       """, [newItem.target]);
     }
-    _cachedHistory = null;
   }
 
   History? migrateLegacyTarget({
@@ -599,7 +605,6 @@ class HistoryManager {
         delete from history
         where target == ?;
       """, [legacyTarget]);
-      _cachedHistory = null;
       return findSync(newTarget);
     }
     return null;
@@ -619,7 +624,6 @@ class HistoryManager {
       history.maxPage,
       history.target
     ]);
-    _cachedHistory = null;
     if (updateMePage) {
       Future.microtask(() {
         StateController.findOrNull<SimpleController>(tag: "me_page")?.update();
@@ -650,7 +654,6 @@ class HistoryManager {
     for (final db in databases) {
       db.execute("delete from history;");
     }
-    _cachedHistory = null;
     _notifyHistoryChanged();
   }
 
@@ -661,7 +664,6 @@ class HistoryManager {
         where target == ?;
       """, [id]);
     }
-    _cachedHistory = null;
     _notifyHistoryChanged();
   }
 
@@ -673,10 +675,8 @@ class HistoryManager {
     if (!_initialized) {
       return null;
     }
-    _cachedHistory ??= {
-      for (final item in getAll()) item.target: true,
-    };
-    if (!_cachedHistory!.containsKey(target)) {
+    // Filter before querying; single-item reads must not materialize the library.
+    if (!_shouldExposeHistoryTarget(target)) {
       return null;
     }
     return _findInDb(_db, target) ??
@@ -742,9 +742,8 @@ class HistoryManager {
   /// [getAll]，两处数字会对不上。分两次调用又会白跑一遍全量查询。
   ({List<History> recent, int total}) getRecentWithTotal() {
     final items = getAll();
-    final recent = items.length <= recentLimit
-        ? items
-        : items.sublist(0, recentLimit);
+    final recent =
+        items.length <= recentLimit ? items : items.sublist(0, recentLimit);
     return (recent: recent, total: items.length);
   }
 

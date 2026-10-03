@@ -1200,6 +1200,10 @@ class _RemoteLibraryCoverDiskCache {
       collectFilesUnder: '${App.dataPath}${Platform.pathSeparator}cache',
       collectedFiles: files,
     );
+    final thumbs = '${App.dataPath}${Platform.pathSeparator}local_library_cache'
+        '${Platform.pathSeparator}covers${Platform.pathSeparator}thumbs';
+    totalBytes += await _directorySize(Directory(thumbs),
+        collectFilesUnder: thumbs, collectedFiles: files);
     if (totalBytes <= limitBytes || files.isEmpty) {
       return;
     }
@@ -1208,7 +1212,7 @@ class _RemoteLibraryCoverDiskCache {
     final removableFiles = <({File file, DateTime modified, int size})>[];
     for (final file in files) {
       try {
-        if (_normalizePath(file.path) == normalizedProtected) {
+        if (_normalizePath(file.path) == normalizedProtected || file.path.endsWith('.part')) {
           continue;
         }
         final stat = await file.stat();
@@ -1362,8 +1366,10 @@ class RemoteLibraryDataSource {
   /// 手动按 cacheLimit 清理全部缓存目录（LRU 删最旧的到限制内）。
   /// 供工具页"缓存管理"等非远程浏览场景主动触发——平时 trim 只在远程封面
   /// 下载后跑，不浏览远程时缓存会一直超限不降，这里提供一个独立入口。
-  static Future<void> trimCacheToLimit() {
-    return _RemoteLibraryCoverDiskCache.trimToLimitNow();
+  static Future<void> trimCacheToLimit({String? protectedPath}) {
+    return protectedPath == null
+        ? _RemoteLibraryCoverDiskCache.trimToLimitNow()
+        : _RemoteLibraryCoverDiskCache._trimToLimit(protectedPath: protectedPath);
   }
 
   Future<List<RemoteLibraryComicItem>> fetchItems({

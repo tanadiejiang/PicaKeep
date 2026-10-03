@@ -21,6 +21,7 @@ import 'package:picakeep/foundation/local_data_source.dart';
 import 'package:picakeep/foundation/local_favorites.dart';
 import 'package:picakeep/foundation/local_library.dart';
 import 'package:picakeep/foundation/local_library_settings.dart';
+import 'package:picakeep/foundation/local_library_illust_view.dart';
 import 'package:picakeep/foundation/log.dart';
 import 'package:picakeep/foundation/online_download_manager.dart';
 import 'package:picakeep/foundation/remote_library_event_channel.dart';
@@ -460,16 +461,21 @@ class _DownloadedLoadResult {
   final _DownloadedLoadIssue? issue;
 }
 
-const Duration _localLoadTimeout = Duration(seconds: 8);
+// 43 号：`_localLoadTimeout`（8 秒）已移除 —— 本地分支现在恒走新本地库，
+// 要真实列目录（必要时走特权通道），8 秒不够，统一改用 20 秒宽限
+// （见 `download_page_logic_loading.dart` 的 `_loadLocalBranch`）。
 const Duration _remoteLoadTimeout = Duration(seconds: 10);
 
 class DownloadPageLogic extends StateController {
   DownloadPageLogic({
     this.remoteRootId,
     this.pageTitle,
+    bool forceLocal = false,
   }) {
     if (remoteRootId?.trim().isNotEmpty == true) {
       _view = _DownloadedLibraryView.remote;
+    } else if (forceLocal) {
+      _view = _DownloadedLibraryView.local;
     } else {
       _view = _downloadedLibraryViewFromSetting(
         appdata.settings[downloadedLibraryViewSettingIndex],
@@ -599,10 +605,12 @@ class DownloadPage extends StatefulWidget {
     super.key,
     this.remoteRootId,
     this.title,
+    this.forceLocal = false,
   });
 
   final String? remoteRootId;
   final String? title;
+  final bool forceLocal;
 
   @override
   State<DownloadPage> createState() => _DownloadPageState();
@@ -672,6 +680,7 @@ class _DownloadPageState extends State<DownloadPage>
       init: DownloadPageLogic(
         remoteRootId: widget.remoteRootId,
         pageTitle: widget.title,
+        forceLocal: widget.forceLocal,
       ),
       initState: (logic) {
         _logic = logic;
@@ -894,7 +903,21 @@ class _DownloadPageState extends State<DownloadPage>
           children: [
             Positioned.fill(
               child: _DownloadedPageComicTile(
-                comicId: item.id,
+                // 43 号：这里必须用"**历史 / 收藏的原始身份 id**"，不能用 `item.id`。
+                //
+                // 老体系的 `id` 就是裸 id（`jm123`），与阅读历史里存的目标 id 一致；
+                // 而新本地库（`LocalLibraryComicItem`）的 `id` 是**复合形态**
+                // （`local_download::current_download::jm123`）—— 直接用它会让
+                // **阅读历史与收藏标记双双失效**
+                //（`comic_tile.dart:112` 拿 `comicID` 去 `HistoryManager().findSync`）。
+                //
+                // 新库条目取 `originalId`（db 里的原始记录 id，如 `jm123`）
+                // ——**不是** `favoriteTarget`：后者是各源的"来源标识号"，
+                // 例如 jm 会被剥掉前缀变成 `123`（见 `_favoriteTargetForDownloaded`），
+                // 与历史键并非同一口径。收藏侧由 `isFavoriteOverride` 单独提供。
+                comicId: item is LocalLibraryComicItem
+                    ? item.originalId
+                    : item.id,
                 name: item.name,
                 author: viewModel.author,
                 imagePath: coverFile,

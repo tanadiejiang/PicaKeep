@@ -48,7 +48,7 @@ class PrivilegedStorageAccess {
   /// the privileged channel when `dart:io` cannot see it.
   static Future<bool> directoryExists(String path) async {
     try {
-      if (Directory(path).existsSync()) {
+      if (await Directory(path).exists()) {
         return true;
       }
     } catch (_) {}
@@ -59,7 +59,7 @@ class PrivilegedStorageAccess {
   /// privileged channel when `dart:io` cannot see it.
   static Future<bool> fileExists(String path) async {
     try {
-      if (File(path).existsSync()) {
+      if (await File(path).exists()) {
         return true;
       }
     } catch (_) {}
@@ -71,7 +71,7 @@ class PrivilegedStorageAccess {
   static Future<int?> fileLength(String path) async {
     try {
       final file = File(path);
-      if (file.existsSync()) {
+      if (await file.exists()) {
         return await file.length();
       }
     } catch (_) {}
@@ -84,7 +84,7 @@ class PrivilegedStorageAccess {
   static Future<Uint8List?> readFileBytes(String path) async {
     try {
       final file = File(path);
-      if (file.existsSync()) {
+      if (await file.exists()) {
         final bytes = await file.readAsBytes();
         // 同 listDirectoryEntries：root/shizuku 下 existsSync()=true 但读到空字节
         // 可能是 scoped storage 静默拦截，回退特权通道。真正的空文件极少见，
@@ -106,9 +106,8 @@ class PrivilegedStorageAccess {
   ) async {
     try {
       final directory = Directory(path);
-      if (directory.existsSync()) {
-        final entries = directory
-            .listSync(followLinks: false)
+      if (await directory.exists()) {
+        final entries = (await directory.list(followLinks: false).toList())
             .where((entity) => entity is Directory || entity is File)
             .map(
               (entity) => LocalDirectoryEntry(

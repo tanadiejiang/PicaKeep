@@ -290,7 +290,66 @@ PixivComicBrief? _parseBriefItem(Map<String, dynamic> item) {
     tags: _parseBriefTags(item['tags']),
     illustType: _int(item['illustType'], pixivIllustTypeIllust),
     pageCount: _int(item['pageCount']),
+    // 宽高**缺失必须是 null 而不是 0**（`0` 会算出错误比例甚至除零）。
+    width: _positiveIntOrNull(item['width']),
+    height: _positiveIntOrNull(item['height']),
   );
+}
+
+/// 正整数取值；缺失 / 非正 / 非数字一律 null。
+///
+/// 与 `_int` 分开：那个的兜底是 `0`，适合"计数类"字段（页数、类型枚举）；
+/// 而宽高这类**参与除法**的字段必须能表达"不知道"，所以单独一个取值器。
+int? _positiveIntOrNull(dynamic value) {
+  final parsed = _int(value, -1);
+  return parsed > 0 ? parsed : null;
+}
+
+/// 改写成**保持比例**的缩略图 URL 时使用的尺寸框（最长边 360、质量 70）。
+const String kPixivProportionalThumbFrame = '360x360_70';
+
+/// 把 Pixiv 的**方图缩略图** URL 改写成**保持比例**的缩略图 URL。
+///
+/// ## 为什么必须改写
+///
+/// 搜索 / 推荐 / 作者页的作品响应里，`url` 字段给的是**方形裁切**缩略图
+/// （`/c/250x250_80_a2/…_square1200.jpg`）。方图放进瀑布流只有两种结果：
+/// 每格都按 1:1（那就退化成方格墙，不是瀑布流），或者按真实比例画再 `cover`
+/// 裁掉一部分（用户此前对裁切明确表达过不满："这个图的比例没有完全显示"）。
+/// 所以这里把 URL 重写成"最长边 360、保持原比例"的版本。
+///
+/// ## 规则是实测出来的（36 号，宿主机直连 `i.pximg.net`）
+///
+/// | URL | 输出 | 比例 |
+/// |---|---|---|
+/// | `c/250x250_80_a2/…_square1200.jpg` | 250×250 | 1.00（裁切） |
+/// | `c/250x250_80_a2/…_master1200.jpg` | 250×250 | 1.00（**前缀强制方框**） |
+/// | `c/480x960/…_square1200.jpg` | 480×480 | 1.00 |
+/// | **`c/360x360_70/…_master1200.jpg`** | **270×360** | **0.75（真实比例）** |
+/// | 去掉 `/c/…/`（拿原图） | 900×1200 | 0.75，但体积 **1.18 MB** |
+///
+/// 两条结论：**`_square1200` 是方图裁切、`_master1200` 保持比例**；
+/// 而 `250x250_80_a2` 这个前缀会把任何内容强制成方框 ——
+/// 所以**前缀与文件名必须一起换**，只换其一都拿不到正确比例。
+///
+/// ## 失败兜底
+///
+/// 这是站点私有规则、随时可能变，所以调用方**必须**留 `errorBuilder`：
+/// 改写后的地址万一失效，宁可退回原 URL 或显示占位图，也不要让整格空白。
+String pixivProportionalThumbUrl(String url) {
+  final trimmed = url.trim();
+  if (trimmed.isEmpty || !trimmed.contains('/c/')) {
+    // 非 `/c/` 形态（已经是原图、或不是 pixiv 的图）原样返回。
+    return trimmed;
+  }
+  final result = trimmed
+      .replaceFirst(
+        RegExp(r'/c/[^/]+/'),
+        '/c/$kPixivProportionalThumbFrame/',
+      )
+      .replaceAll('_square1200.', '_master1200.')
+      .replaceAll('_custom1200.', '_master1200.');
+  return result;
 }
 
 /// 解析搜索结果。

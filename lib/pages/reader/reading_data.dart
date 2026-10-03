@@ -58,6 +58,12 @@ abstract class ReadingData {
         downloadedEps = comic.downloadedEps;
       }
     }
+    // 43 号：41 号排查时加在这里的三条诊断 `print` 已移除。
+    // 它们的结论已经沉淀进代码与文档，无需每页都打：
+    //   · `downloaded` 为假 → 走 `loadEpNetwork`（`LocalReadingData` 恒返回 `[]`）；
+    //   · "读到 0 张图"这条更有用的信号由 `_logEmptyEpisodeFiles`
+    //     （`local_library_static.dart`）在**真的列到空**时记一条 warning ——
+    //     那才是需要留痕的时刻，而不是每次 loadEp。
     if (downloaded && checkEpDownloaded(ep)) {
       int length;
       if (hasEp) {

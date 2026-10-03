@@ -38,6 +38,8 @@ class PixivComicBrief extends BaseComic {
     required this.tags,
     required this.illustType,
     required this.pageCount,
+    this.width,
+    this.height,
   });
 
   @override
@@ -60,6 +62,18 @@ class PixivComicBrief extends BaseComic {
 
   /// 页数；动图作品这里通常是 1，实际帧数以 ugoira_meta 为准。
   final int pageCount;
+
+  /// 原图宽高（响应里的 `width` / `height`）。
+  ///
+  /// **可空，缺失一律 `null`** —— 与 `CustomDownloadedItem.width/height`
+  /// 同口径：`0` 会被当成"比例为 0"算出错误高度（甚至除零），
+  /// 所以宁可空着让消费侧走占位比例（见 `local_library_illust_view.dart` 的
+  /// `illustFallbackAspectRatio`）。
+  ///
+  /// 用途：作者页的瀑布流按真实比例排版（36 号）。搜索 / 榜单 / 推荐响应里
+  /// 同样带这两个字段，所以 [_parseBriefItem] 一处填充、各列表都受益。
+  final int? width;
+  final int? height;
 
   @override
   String get subTitle => author;

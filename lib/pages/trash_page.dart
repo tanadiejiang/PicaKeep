@@ -1,3 +1,4 @@
+import 'package:picakeep/pages/pixiv_folders_page.dart';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -633,6 +634,13 @@ class _TrashPageState extends State<TrashPage> with WidgetsBindingObserver {
                 ),
               ]
             : [
+                if (_view == _TrashPageView.local) IconButton(
+                  tooltip: '下载文件夹回收站', icon: const Icon(Icons.folder_delete_outlined),
+                  onPressed: () async {
+                    await Navigator.push<String>(context, MaterialPageRoute(builder: (_) => const PixivFoldersPage()));
+                    if (mounted) await _reload();
+                  },
+                ),
                 // 36 号：档位与内容类型筛选从内容区那两行 `SegmentedButton`
                 // 挪到这里，改用与图集页同一套的圆角面板选择器。
                 //

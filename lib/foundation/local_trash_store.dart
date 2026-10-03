@@ -1,3 +1,5 @@
+import 'dart:convert';
+import 'package:path/path.dart' as p;
 import 'dart:io';
 
 import 'package:sqlite3/sqlite3.dart';
@@ -181,6 +183,29 @@ class LocalTrashStore {
     _createTables(_db!);
     _migrateTables(_db!);
     return _db!;
+  }
+
+  /// Rebase trash locations together with a verified physical folder/root move.
+  void relocatePaths(String from, String to) {
+    if (!File(databasePath).existsSync()) return;
+    dynamic rewrite(dynamic value) {
+      if (value is String && (p.equals(value, from) || p.isWithin(from, value))) {
+        return p.join(to, p.relative(value, from: from));
+      }
+      if (value is List) return value.map(rewrite).toList();
+      if (value is Map) return value.map((k,v) => MapEntry(k,rewrite(v)));
+      return value;
+    }
+    final db = _database;
+    db.execute('BEGIN IMMEDIATE');
+    try {
+      for (final row in db.select('SELECT * FROM local_trash')) {
+        final snapshot = rewrite(jsonDecode(row['snapshot_json'] as String));
+        db.execute('UPDATE local_trash SET original_path=?,trashed_path=?,source_db_path=?,snapshot_json=? WHERE id=?', [
+          rewrite(row['original_path']), rewrite(row['trashed_path']), rewrite(row['source_db_path']), jsonEncode(snapshot), row['id']]);
+      }
+      db.execute('COMMIT');
+    } catch (_) {db.execute('ROLLBACK');rethrow;}
   }
 
   void dispose() {

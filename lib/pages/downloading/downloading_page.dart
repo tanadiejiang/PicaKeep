@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
 
 import 'package:picakeep/foundation/online_download_manager.dart';
+import 'package:picakeep/foundation/app.dart';
+import 'package:picakeep/tools/download_notification_controller.dart';
+import 'download_background_support.dart';
 
 import 'downloading_logic.dart';
 
@@ -160,6 +163,15 @@ class _DownloadingPageState extends State<DownloadingPage> {
     return AppBar(
       title: const Text('下载管理器'),
       actions: [
+        if (App.isAndroid)
+          ValueListenableBuilder<String?>(
+            valueListenable: DownloadNotificationController.instance.warning,
+            builder: (_, warning, __) => IconButton(
+              tooltip: warning ?? '后台下载与通知',
+              icon: Icon(warning == null ? Icons.notifications_outlined : Icons.notification_important_outlined),
+              onPressed: () => showDownloadBackgroundSupport(context),
+            ),
+          ),
         if (_hasTasks)
           IconButton(
             tooltip: downloading ? '暂停全部' : '继续全部',
@@ -250,6 +262,7 @@ class _DownloadingTile extends StatelessWidget {
     if (task.error != null) return '出错：${task.error}';
     if (task.completed || task.cancelled) return '';
     if (task.paused) return '已暂停';
+    if (task.waitingForNetwork) return '等待网络恢复';
     final pages = '已下载 ${task.currentPage}/${task.totalPages}';
     return '$pages · ${bytesPerSecToText(task.currentSpeed)}';
   }

@@ -1,0 +1,27 @@
+{
+  "source": {
+    "lib/foundation/history.dart": "775a9957f5018641ac135fa6c6734ed6fc0aba036e4d3a51dd418f5eb4c53cb9",
+    "lib/foundation/privileged_storage_access_flutter.dart": "b0618d0a82585db7d6e71b29078966d81d2cda852c07fc9482a56b8174ce4fe3",
+    "lib/foundation/local_library.dart": "1ace7776149878ebfe85ae4dd8be081bcd16bb24ee563eeef3f78d2353675bca",
+    "lib/foundation/local_library_query.dart": "2d698fb03ab2d15b960f4fb48b94efc4d77d694a99bfbb7efbc44cbc2654b9ee",
+    "lib/foundation/local_library_scan.dart": "d4f248fb82dff3930c6aad0075b60595ccbb70907859bebbc7413a561f35a81e",
+    "lib/foundation/cover_thumbnail_cache.dart": "599e12e48fee85266e0710442518b4b37bd5db1ab628b9609cfd52705318a319",
+    "lib/pages/local_library_page.dart": "72121666cbd6498d11b0d3d6450375ba5331a3875ffe57b537f6e61f2ba69fa8",
+    "lib/pages/local_library_illust_view.dart": "c94da244e8d24150461f7cb895b3bd3d89bbba8195378e5b2093897b1b4416c9",
+    "lib/pages/local_library_illust_card.dart": "56de549eff12127531d033ddc6ce4a14871e5b056c7b32c69a9c454d53e3d66f",
+    "lib/foundation/illust_cover_size.dart": "4fda29e3f422a75a8535e47d29c6100a4e52fdbf7d0fe1042b48d96f6410ecd3"
+  },
+  "originalRecordings": [
+    {
+      "path": "C:\\Users\\tanad\\Downloads\\插画页的滚动dart_devtools_2026-10-02_16_02_48.337.json",
+      "exists": true,
+      "sha256": "a0e6b1ff1d4c5f2347c3be78f68c02e4665e7ecb114605b745930124746b897f"
+    },
+    {
+      "path": "C:\\Users\\tanad\\Downloads\\cpu-插画页的滚动dart_devtools_2026-10-02_16_02_48.337.json",
+      "exists": true,
+      "sha256": "b79c7665313f43c5e8e1b21d9e5ebad5191a3261ba699797b9ab8c09080df043"
+    }
+  ],
+  "newDeviceBaseline": false
+}

@@ -29,6 +29,7 @@ import 'server/local_server_runtime.dart';
 import 'server/local_server_runtime_sync.dart';
 import 'tools/block_screenshot.dart';
 import 'tools/dynamic_theme_channel.dart';
+import 'tools/download_notification_routes.dart';
 import 'tools/tags_translation.dart';
 import 'tools/translations.dart';
 
@@ -441,12 +442,14 @@ class _PicaKeepAppState extends State<PicaKeepApp> with WidgetsBindingObserver {
         state == AppLifecycleState.inactive ||
         state == AppLifecycleState.paused) {
       RemoteLibraryEventChannel.instance.onBackground();
+      unawaited(OnlineDownloadManager.instance.persistQueue());
       _requireAuthOnResume = appdata.settings[13] == '1';
       _lastBackgroundedAt = DateTime.now();
       return;
     }
 
     if (state == AppLifecycleState.resumed) {
+      DownloadNotificationRoutes.instance.foregrounded();
       unawaited(App.applyDisplayModePreference());
       RemoteLibraryClient.rebuildAllTransports();
       RemoteLibraryEventChannel.instance.onForeground();

@@ -179,16 +179,11 @@ extension DownloadPageLogicLoading on DownloadPageLogic {
     String direction,
   ) async {
     try {
-      var timeout = _localLoadTimeout;
-      final localLibraryManager = LocalLibraryManager();
-      if ((!_usesManagedDownloadSources &&
-              await localLibraryManager
-                  .shouldBypassDirectDownloadManagerForCurrentDownloads()) ||
-          (_usesManagedDownloadSources &&
-              await localLibraryManager
-                  .shouldUsePrivilegedManagedDownloadHandling())) {
-        timeout = const Duration(seconds: 20);
-      }
+      // 43 号：本地分支现在**恒走新本地库**（见 `_loadLocalComics`），
+      // 而新库要**真实列目录**（必要时走特权通道），比老库"只读 db"慢得多。
+      // 所以不再按模式挑超时，统一给宽限 —— 从前那个条件判断的前提
+      //（"只有特权模式才慢"）随着代码路径解耦已经不存在了。
+      const timeout = Duration(seconds: 20);
       final items = await _loadLocalComics(order, direction).timeout(
         timeout,
       );
@@ -272,36 +267,62 @@ extension DownloadPageLogicLoading on DownloadPageLogic {
 
   Future<List<DownloadedItem>> _loadLocalComics(
       String order, String direction) async {
-    if (!_usesManagedDownloadSources) {
-      final localLibraryManager = LocalLibraryManager();
-      if (await localLibraryManager
-          .shouldBypassDirectDownloadManagerForCurrentDownloads()) {
-        final items =
-            await localLibraryManager.getCurrentDownloadsWithShizukuFallback();
-        final downloads = items.cast<DownloadedItem>().toList();
-        _sortItems(downloads, order, direction);
-        return downloads;
-      }
-      await DownloadManager().init();
-      final downloads = DownloadManager().getAll(order, direction);
-      final onlineDownloads =
-          await OnlineDownloadManager.instance.loadCompletedDownloads();
-      // Online 下载（picacg/jm）与旧 DownloadManager 共用同一个 download.db，
-      // 同一条记录会被两边各解析一次：旧系统得到基类 DownloadedComic/DownloadedJmComic
-      // （阅读走 LocalReadingData→getImage 0-based 索引，与 1-based 落盘文件错位、封面解析也不同），
-      // Online 系统得到 OnlineDownloadedComic/OnlineDownloadedJmComic（走绝对路径读图+网络回退，正确）。
-      // 因此对同 id 让 Online 版优先覆盖基类版。
-      final onlineIds = onlineDownloads.map((item) => item.id).toSet();
-      downloads.removeWhere((item) => onlineIds.contains(item.id));
-      final seenIds = downloads.map((item) => item.id).toSet();
-      downloads.addAll(
-        onlineDownloads.where((item) => seenIds.add(item.id)),
-      );
-      _sortItems(downloads, order, direction);
-      return downloads;
-    }
+    // 43 号：本地分支**统一走新本地库**，不再按"源设置"分岔。
+    //
+    // ## 为什么必须解耦
+    //
+    // 此前这里是三分支，且**由 `_usesManagedDownloadSources`（= 用户在设置页选的
+    // 源集合）决定走哪套代码**。这两件事没有因果关系：用户选"仅本应用"只是说
+    // "别扫原应用目录"，它不该顺带把整个页面切到老链路上去。
+    //
+    // 而老链路（`DownloadManager.getAll()` + `loadCompletedDownloads()`）
+    // **只读 db、不校验目录** —— 于是"记录还在、内容已搬走"的条目会被列出来，
+    // 点开却读不到。真机症状：**「未知错误」，不报错、不写日志**
+    // （`OnlineLocalReadingData.loadEpNetwork` 里 `if (!dir.exists()) return []`
+    // 是静默的）。
+    //
+    // ## 为什么不保留"新库为空就回退老库"
+    //
+    // 老库只读 db，**目录读不到时它照样能列出记录** —— 看似是兜底，
+    // 但那正是上面那个症状的来源：列表有、点不开。**这不是兜底，是把 bug 请回来。**
+    // 而新库自己**已经有完整的降级链**（`PrivilegedStorageAccess`：
+    // Dart IO → Shizuku/root），它读不到就是真的读不到。
+    //
+    // 用户想诊断"缺了哪一个"时，打开「显示全部数据库记录」即可 ——
+    // 新库在 `_resolveDownloadItemDirectoryFromMetadata` 里已按这个语义实现
+    // （没有真实目录时保留原路径，由该开关决定是否展示占位）。
+    //
+    // 源集合仍由 `managedDataSourceMode` 决定，但那件事现在**只在新库内部生效**
+    // （`_buildSources` 的 switch：仅本应用 / 本+原应用 / 仅原应用）。
+    //
+    // ## 43 号续：在这里补回两道过滤（37 号的语义 + 跨源去重）
+    //
+    // **① Pixiv 不进「已下载」页。** 37 号做过这件事，但那个过滤写在**老链路**里；
+    // 本页改走新库后它就丢了 —— 而新库的 `_buildSources` 在"仅本应用"档下
+    // **照样会挂上 Pixiv 源**（`addPixivSourceIfConfigured`），于是 Pixiv 全冒出来。
+    // Pixiv 有自己的页面（图集页的「插画」）与自己的下载根，**不该混在漫画列表里**。
+    //
+    // **② 跨源按 id 去重，实体存在者优先。** 新库是"一个源一份结果"，
+    // 同一个 id 可能同时出现在当前下载目录与 Pixiv 目录里（用户改过下载目录、
+    // 或旧内容还没归位时）—— 不去重就会看到"两本一模一样的漫画"，
+    // 而且其中一份的实体可能已经不在。
     final items = await LocalLibraryManager().getManagedDownloads();
-    final downloads = items.cast<DownloadedItem>().toList();
+    final byId = <String, DownloadedItem>{};
+    for (final item in items) {
+      if (isPixivLocalLibraryItem(item)) {
+        continue;
+      }
+      final existing = byId[item.id];
+      if (existing == null) {
+        byId[item.id] = item;
+        continue;
+      }
+      if (!OnlineDownloadManager.downloadedItemEntityExists(existing) &&
+          OnlineDownloadManager.downloadedItemEntityExists(item)) {
+        byId[item.id] = item;
+      }
+    }
+    final downloads = byId.values.toList();
     _sortItems(downloads, order, direction);
     return downloads;
   }

@@ -30,9 +30,11 @@ library;
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:isolate';
 import 'dart:typed_data';
 
-import 'package:path_provider/path_provider.dart';
+import 'package:archive/archive_io.dart';
+import 'package:picakeep/foundation/app.dart';
 
 import 'package:picakeep/foundation/image_header_size.dart';
 import 'package:picakeep/foundation/local_library.dart';
@@ -77,6 +79,7 @@ class IllustCoverSizeCache {
   final Map<String, ImageHeaderSize> _entries;
   bool _dirty = false;
   bool _loadedFromDisk = false;
+  Future<void> _saveTail = Future.value();
 
   int get length => _entries.length;
 
@@ -98,7 +101,7 @@ class IllustCoverSizeCache {
     }
     _loadedFromDisk = true;
     try {
-      if (!file.existsSync()) {
+      if (!(await file.exists())) {
         return;
       }
       final decoded = _decodeCacheFile(await file.readAsString());
@@ -109,25 +112,27 @@ class IllustCoverSizeCache {
   }
 
   /// 落盘（尽力而为）。缓存写不进去只是下次多读几遍文件头，**不该升级成异常**。
-  Future<void> save() async {
+  Future<void> save() {
     final file = _file;
-    if (file == null || !_dirty) {
-      return;
-    }
+    if (file == null || !_dirty) return Future.value();
     _dirty = false;
-    try {
-      await file.parent.create(recursive: true);
-      await file.writeAsString(
-        jsonEncode(<String, Object>{
-          'version': illustCoverSizeCacheVersion,
-          'sizes': <String, Object>{
-            for (final entry in _entries.entries)
-              entry.key: <int>[entry.value.width, entry.value.height],
-          },
-        }),
-        flush: true,
-      );
-    } catch (_) {}
+    final encoded = jsonEncode(<String, Object>{
+      'version': illustCoverSizeCacheVersion,
+      'sizes': <String, Object>{
+        for (final entry in _entries.entries)
+          entry.key: <int>[entry.value.width, entry.value.height]
+      },
+    });
+    return _saveTail = _saveTail.then((_) async {
+      try {
+        await file.parent.create(recursive: true);
+        final temporary = File('${file.path}.part');
+        await temporary.writeAsString(encoded, flush: true);
+        await temporary.rename(file.path);
+      } catch (_) {
+        _dirty = true;
+      }
+    });
   }
 
   /// 解析缓存文件；版本不符 / 结构不对 / 坏 JSON 一律返回 `null`（当空缓存重建）。
@@ -219,9 +224,8 @@ void resetSharedIllustCoverSizeCacheForTest() {
 
 Future<IllustCoverSizeCache> _openFileCache() async {
   try {
-    final support = await getApplicationSupportDirectory();
     final file = File(
-      '${support.path}${Platform.pathSeparator}local_library_cache'
+      '${App.dataPath}${Platform.pathSeparator}local_library_cache'
       '${Platform.pathSeparator}illust_cover_sizes.json',
     );
     final cache = IllustCoverSizeCache._(file, <String, ImageHeaderSize>{});
@@ -452,11 +456,21 @@ Future<ImageHeaderSize?> _resolveSizeForPath(
 
 /// 数一条作品的图片张数。
 ///
-/// 只在三种形态下给得出：
+/// 三种产物形态都能给得出：
 /// - **目录形态**（默认）：列目录数图片文件；
 /// - **单文件形态**（`settings[154]` 打开后的单图作品）：恒为 1；
-/// - **压缩包形态**：给不出（要么解压要么读 zip 中央目录，成本与本功能不匹配），
-///   返回 null → 卡片不渲染「页数」这一项。
+/// - **压缩包形态**（`settings[154]` 打开后的多图作品）：**读 zip 中央目录**数条目。
+///
+/// ## 压缩包形态：36 号从"给不出"改成"读中央目录"
+///
+/// 改动前这里对 `.zip` / `.cbz` 直接返回 null（当时的判断是"要么解压、要么读
+/// zip 中央目录，成本与本功能不匹配"）。真机反馈推翻了它：
+/// 用户原话「那些多图压缩包的漫画没有显示页数需要修复」——
+/// 而 `ZipDecoder.decodeStream` **只从文件尾部读 EOCD + 中央目录**，
+/// 不碰任何条目内容、不解压，代价是几十 KB 的读，完全配得上一个准确的页数。
+///
+/// ⚠️ 压缩包仍要**排除封面**（[countIllustPageImages] 已处理）：28 号打包时
+/// `cover.jpg` 与页图平铺在同一个 zip 里，不排除会把单图数成 2 页。
 ///
 /// `episodeFiles` 不再作为来源：真机实测它只从扫描缓存取（见文件头注释），
 /// 2/3 的记录是空的，拿它当来源会让「页数」时有时无。
@@ -471,7 +485,7 @@ Future<int?> _resolvePageCount(
   }
   final lower = path.toLowerCase();
   if (lower.endsWith('.zip') || lower.endsWith('.cbz')) {
-    return null;
+    return countArchivePageImages(path);
   }
   if (isIllustImageFileName(lower)) {
     return 1;
@@ -487,6 +501,44 @@ Future<int?> _resolvePageCount(
     return count > 0 ? count : null;
   } catch (_) {
     return null;
+  }
+}
+
+/// 压缩包形态的页数：读 **zip 中央目录**，不解压也不读条目内容。
+///
+/// 读法与 [readFileHeadBytes] 同思路但方向相反 —— 中央目录在**文件尾部**，
+/// 由 `ZipDecoder.decodeStream` 自己 seek 过去，所以这里只要把文件打开即可。
+///
+/// **任何异常都返回 null**（文件不存在、root/Shizuku 下 scoped storage 拦截、
+/// 不是合法 zip）：页数只是卡片上的一项信息，拿不到就不显示，
+/// 不该让整张卡片失败。
+///
+/// 公开而不是私有：它是一条**独立能力**（给一个压缩包路径、数出作品页数），
+/// 单测可以直接喂真实 zip 验证；私有的话只能隔着整条 `resolveIllustEntryInfo`
+/// 链路测，而那条链路要注入四个口子、还依赖封面缓存落盘。
+Future<int?> countArchivePageImages(String path) =>
+    Isolate.run(() => _countArchivePageImagesSync(path));
+
+int? _countArchivePageImagesSync(String path) {
+  // 类型交给 `InputFileStream` 自己推断：`InputStreamBase` 这个基类在
+  // `archive_io.dart` 的导出面里并不保证可见，写死它会把一个纯粹的类型标注
+  // 变成编译错误。
+  InputFileStream? input;
+  try {
+    input = InputFileStream(path);
+    final archive = ZipDecoder().decodeStream(input);
+    final count = countIllustPageImages(
+      archive.files.where((file) => file.isFile).map((file) => file.name),
+    );
+    return count > 0 ? count : null;
+  } catch (_) {
+    return null;
+  } finally {
+    try {
+      input?.closeSync();
+    } catch (_) {
+      // 关闭失败不影响结果（进程退出时由 OS 回收句柄）。
+    }
   }
 }
 

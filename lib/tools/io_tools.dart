@@ -47,6 +47,8 @@ Future<void> eraseCache() async {
 
   final cacheDirectories = <Directory>[
     Directory(App.cachePath),
+    Directory('${App.dataPath}${Platform.pathSeparator}local_library_cache'
+        '${Platform.pathSeparator}covers${Platform.pathSeparator}thumbs'),
     Directory(
       '${App.dataPath}${Platform.pathSeparator}cache',
     ),
@@ -63,4 +65,5 @@ Future<void> eraseCache() async {
       } catch (_) {}
     }
   }
+  App.notifyLocalDataChanged();
 }

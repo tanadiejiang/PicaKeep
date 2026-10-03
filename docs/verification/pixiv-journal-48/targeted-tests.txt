@@ -1,0 +1,78 @@
+Flutter assets will be downloaded from https://storage.flutter-io.cn. Make sure you trust this source!
+00:00 +0: loading D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_library_maintenance_test.dart
+00:00 +0: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_library_maintenance_test.dart: (setUpAll)
+00:00 +0: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_library_maintenance_test.dart: copy and move automatically compact without altering works or identity
+00:00 +1: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_library_maintenance_test.dart: copy and move automatically compact without altering works or identity
+00:00 +2: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_library_test.dart: existing paths and traversal are rejected without overwriting
+00:01 +3: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_library_maintenance_test.dart: batch compacts only at completion and repeated execution is harmless
+00:01 +4: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_library_test.dart: copy retains original bytes and independent rows; repeated target is idempotent
+00:01 +5: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_library_maintenance_test.dart: legacy journals compact on reopen, cap at 100, shrink and stay idempotent
+48 fixture: DB 1175552 -> 69632 bytes; payload 1084381 -> 21753 bytes
+00:02 +6: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_library_test.dart: move publishes target bytes and record before removing source
+00:02 +7: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_root_recovery_test.dart: root relocation resumes after preparing without losing identity or files
+00:02 +8: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_library_maintenance_test.dart: maintenance preserves interrupted prepared move and recovery
+00:03 +9: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_library_maintenance_test.dart: maintenance preserves interrupted prepared move and recovery
+00:03 +10: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_library_test.dart: move recovers after interruption at prepared
+00:03 +11: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_library_test.dart: move recovers after interruption at prepared
+00:03 +12: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_library_test.dart: move recovers after interruption at prepared
+00:03 +13: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_download_target_queue_test.dart: queue freezes folder, filename and operation identity, and restores both same-work destinations
+00:03 +14: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_library_maintenance_test.dart: maintenance preserves interrupted published move and recovery
+00:03 +15: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_library_maintenance_test.dart: maintenance preserves interrupted published move and recovery
+00:03 +16: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_library_maintenance_test.dart: maintenance preserves interrupted published move and recovery
+00:04 +17: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:04 +18: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:04 +19: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:04 +20: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:04 +21: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:04 +22: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:04 +23: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:04 +24: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:05 +25: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:05 +26: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:06 +27: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:06 +28: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:06 +29: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:07 +30: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:07 +31: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:07 +32: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_library_maintenance_test.dart: completed child survives parent accounting gap, then batch resumes once
+00:07 +33: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_library_test.dart: new source files stop cleanup instead of deleting untransferred content
+00:07 +34: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_root_recovery_test.dart: recovery after journal rebasing does not revalidate against old DB bytes
+00:07 +35: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:08 +36: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:08 +37: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:08 +38: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:08 +39: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:09 +40: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:09 +41: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:09 +42: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:09 +43: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:09 +44: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:09 +45: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:09 +46: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:09 +47: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:10 +48: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:10 +49: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:10 +50: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:10 +51: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:10 +52: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:10 +53: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_library_test.dart: batch persists unstarted work and resumes without repeating completed items
+00:10 +54: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_library_test.dart: batch persists unstarted work and resumes without repeating completed items
+00:11 +55: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_library_test.dart: batch persists unstarted work and resumes without repeating completed items
+00:11 +56: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_library_test.dart: batch persists unstarted work and resumes without repeating completed items
+00:11 +57: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folder sorting is separate from its long-press menu and persists on back
+00:11 +58: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folder sorting is separate from its long-press menu and persists on back
+00:12 +59: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folder sorting is separate from its long-press menu and persists on back
+00:12 +60: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_library_test.dart: whole-folder trash recovers after quarantine commit
+00:12 +61: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: root folder offers default action but cannot be renamed or deleted
+00:12 +62: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: root folder offers default action but cannot be renamed or deleted
+00:12 +63: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_library_test.dart: copied child database with another folder identity is rejected
+00:13 +64: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: illustration long press selects actual items and copies the batch to one folder
+00:13 +65: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: illustration long press selects actual items and copies the batch to one folder
+00:13 +66: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: illustration long press selects actual items and copies the batch to one folder
+00:13 +67: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: illustration long press selects actual items and copies the batch to one folder
+[PicaKeep][IllustCover] resolved id=pixivwidget1 path=C:\Users\tanad\AppData\Local\Temp\pk46_widgets_df876dd4\app\local_library_cache\covers\41be638f224fe37d.png inAppCache=true
+[PicaKeep][IllustCover] resolved id=pixivwidget2 path=C:\Users\tanad\AppData\Local\Temp\pk46_widgets_df876dd4\app\local_library_cache\covers\454237b1180cd781.png inAppCache=true
+00:20 +68: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: download pill delivers long-press without running ordinary download
+00:20 +69: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: (tearDownAll)
+Fixture cleanup deferred until process exit: C:\Users\tanad\AppData\Local\Temp\pk46_widgets_df876dd4
+00:20 +69: All tests passed!

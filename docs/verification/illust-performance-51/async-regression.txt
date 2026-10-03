@@ -1,0 +1,35 @@
+Flutter assets will be downloaded from https://storage.flutter-io.cn. Make sure you trust this source!
+00:00 +0: loading D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_page_view_scope_test.dart
+00:00 +0: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_page_view_scope_test.dart: (setUpAll)
+00:00 +0: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_page_view_scope_test.dart: 标题随视图切换（33 号第 3 条） 从「我」页进图集页：初始「图集」→ 切插画 →「插画」→ 切回「图集」
+00:01 +1: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_page_view_scope_test.dart: 标题随视图切换（33 号第 3 条） 从「我」页进图集页：初始「图集」→ 切插画 →「插画」→ 切回「图集」
+00:01 +2: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_page_view_scope_test.dart: 标题随视图切换（33 号第 3 条） 从「我」页进图集页：初始「图集」→ 切插画 →「插画」→ 切回「图集」
+00:01 +3: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_page_view_scope_test.dart: 标题随视图切换（33 号第 3 条） 从「我」页进图集页：初始「图集」→ 切插画 →「插画」→ 切回「图集」
+00:01 +4: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_page_view_scope_test.dart: 标题随视图切换（33 号第 3 条） 从「我」页进图集页：初始「图集」→ 切插画 →「插画」→ 切回「图集」
+00:01 +5: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_page_view_scope_test.dart: 标题随视图切换（33 号第 3 条） 从「我」页进图集页：初始「图集」→ 切插画 →「插画」→ 切回「图集」
+00:01 +6: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_page_view_scope_test.dart: 标题随视图切换（33 号第 3 条） 从「我」页进图集页：初始「图集」→ 切插画 →「插画」→ 切回「图集」
+00:01 +7: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_page_view_scope_test.dart: 标题随视图切换（33 号第 3 条） 从「我」页进图集页：初始「图集」→ 切插画 →「插画」→ 切回「图集」
+00:02 +8: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_page_view_scope_test.dart: 标题随视图切换（33 号第 3 条） 从「我」页进图集页：初始「图集」→ 切插画 →「插画」→ 切回「图集」
+00:02 +9: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_page_view_scope_test.dart: 标题随视图切换（33 号第 3 条） 从「我」页进图集页：初始「图集」→ 切插画 →「插画」→ 切回「图集」
+00:02 +10: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_page_view_scope_test.dart: 标题随视图切换（33 号第 3 条） 从「我」页进图集页：初始「图集」→ 切插画 →「插画」→ 切回「图集」
+00:02 +11: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_page_view_scope_test.dart: 标题随视图切换（33 号第 3 条） 从「我」页进图集页：初始「图集」→ 切插画 →「插画」→ 切回「图集」
+00:03 +12: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_page_view_scope_test.dart: 标题随视图切换（33 号第 3 条） 从「我」页进图集页：初始「图集」→ 切插画 →「插画」→ 切回「图集」
+00:03 +13: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:03 +14: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:03 +15: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:04 +16: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:04 +17: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:05 +18: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:06 +19: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_page_view_scope_test.dart: 「资源库显示设置」入口与档位折叠区（36 号形态） 档位三档**直接平铺**在面板里，不需要再展开一次（36 号第二轮）
+00:06 +20: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:07 +21: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:08 +22: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:08 +23: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:09 +24: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:11 +25: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folder sorting is separate from its long-press menu and persists on back
+00:13 +26: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: root folder offers default action but cannot be renamed or deleted
+00:13 +27: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: illustration long press selects actual items and copies the batch to one folder
+00:24 +28: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: download pill delivers long-press without running ordinary download
+00:24 +29: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: (tearDownAll)
+Fixture cleanup deferred until process exit: C:\Users\tanad\AppData\Local\Temp\pk46_widgets_31d6b35d
+00:24 +29: All tests passed!

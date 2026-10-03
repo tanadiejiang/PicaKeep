@@ -18,7 +18,7 @@ class PrivilegedStorageAccess {
 
   static Future<bool> directoryExists(String path) async {
     try {
-      return Directory(path).existsSync();
+      return await Directory(path).exists();
     } catch (_) {
       return false;
     }
@@ -26,7 +26,7 @@ class PrivilegedStorageAccess {
 
   static Future<bool> fileExists(String path) async {
     try {
-      return File(path).existsSync();
+      return await File(path).exists();
     } catch (_) {
       return false;
     }
@@ -35,7 +35,7 @@ class PrivilegedStorageAccess {
   static Future<int?> fileLength(String path) async {
     try {
       final file = File(path);
-      if (!file.existsSync()) {
+      if (!(await file.exists())) {
         return null;
       }
       return await file.length();
@@ -47,7 +47,7 @@ class PrivilegedStorageAccess {
   static Future<Uint8List?> readFileBytes(String path) async {
     try {
       final file = File(path);
-      if (!file.existsSync()) {
+      if (!(await file.exists())) {
         return null;
       }
       return await file.readAsBytes();
@@ -61,11 +61,10 @@ class PrivilegedStorageAccess {
   ) async {
     try {
       final directory = Directory(path);
-      if (!directory.existsSync()) {
+      if (!(await directory.exists())) {
         return const <LocalDirectoryEntry>[];
       }
-      return directory
-          .listSync(followLinks: false)
+      return (await directory.list(followLinks: false).toList())
           .where((entity) => entity is Directory || entity is File)
           .map(
             (entity) => LocalDirectoryEntry(

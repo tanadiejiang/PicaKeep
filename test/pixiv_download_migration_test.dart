@@ -188,11 +188,10 @@ void main() {
       // 记录：旧根只剩 nhentai，新根拿到两条 Pixiv。
       expect(idsIn(fromRoot), <String>['nhentai123']);
       expect(idsIn(toRoot), <String>['pixiv148954915', 'pixiv150034783']);
-      // 记录里的路径必须指向新位置（否则列表打不开）。
-      expect(
-        directoryOf(toRoot, 'pixiv150034783'),
-        p.join(toRoot, 'Vodyanitsa'),
-      );
+      // 记录里的路径必须是**相对名**（与写入侧 `_upsertDownloadRecord` 同口径）：
+      // db 存的是"根目录下的单段名"，绝对路径只由读取侧拼出来。
+      // 写绝对路径会让记录在"换根 / 根被重定位"后立刻失效。
+      expect(directoryOf(toRoot, 'pixiv150034783'), 'Vodyanitsa');
     });
 
     test('内容也跟着搬（不是只挪了个空目录）', () async {
@@ -226,6 +225,60 @@ void main() {
 
       expect(result.movedEntries, 1);
       expect(idsIn(toRoot), <String>['pixiv150000001']);
+    });
+
+    test('`directory` 是**相对名**（真机形态）→ 实体照样搬、记录仍写相对名',
+        () async {
+      // ⚠️ 这条是本迁移器最危险的一处，用真机数据形态钉死。
+      //
+      // 设备 `download.db` 里 `directory` 存的是**根目录下的单段名**
+      // （实测：`是色兔子peko`、`墨心mc_稿件_149433791_p6.zip`），
+      // 读取侧才 `p.join(root, directory)` 拼成绝对路径。
+      //
+      // 第一版迁移器直接把它当绝对路径用，后果是：
+      // `_entityExists('是色兔子peko')` 恒为假（相对名当路径找）→ **实体一个都不搬**；
+      // 而记录被写进新库并**从旧库删除** ⇒ 内容变成孤儿
+      // （文件还在 `download/` 里，列表里再也看不到）。
+      final dirPath = await makeDirectoryEntry(fromRoot, '是色兔子peko');
+      writeRow(fromRoot,
+          id: 'pixiv79837313',
+          title: '是色兔子peko',
+          directory: '是色兔子peko',
+          json: _pixivJson('pixiv79837313'));
+
+      final result = await migratePixivDownloadEntries(
+        fromRoot: fromRoot,
+        toRoot: toRoot,
+      );
+
+      expect(result.movedEntries, 1, reason: '相对名也要能定位到实体并搬走');
+      expect(result.failures, isEmpty);
+      expect(Directory(p.join(toRoot, '是色兔子peko')).existsSync(), isTrue);
+      expect(Directory(dirPath).existsSync(), isFalse);
+      // 记录里写的**仍是相对名** —— 与写入侧同口径，换根后天然跟着走。
+      // 写绝对路径会让这条记录在根被重定位后立刻失效。
+      expect(directoryOf(toRoot, 'pixiv79837313'), '是色兔子peko');
+    });
+
+    test('相对名指向的实体不存在 → 只搬记录，且记录仍指向相对名', () async {
+      // 「文件被删了但记录还在」的现实情况：不能因为找不到实体就整条跳过，
+      // 否则旧库里会永远留着一条打不开的记录。
+      writeRow(fromRoot,
+          id: 'pixiv9',
+          title: '已删除的作品',
+          directory: '早就没了',
+          json: _pixivJson('pixiv9'));
+
+      final result = await migratePixivDownloadEntries(
+        fromRoot: fromRoot,
+        toRoot: toRoot,
+      );
+
+      expect(result.movedEntries, 0);
+      expect(result.skippedEntries, 1);
+      expect(result.failures, isEmpty);
+      expect(idsIn(fromRoot), isEmpty);
+      expect(directoryOf(toRoot, 'pixiv9'), '早就没了');
     });
   });
 
@@ -277,9 +330,9 @@ void main() {
       expect(File(p.join(existing, '1.jpg')).readAsStringSync(), '新');
       // 旧根的实体还在（跳过不等于删除）。
       expect(Directory(dirPath).existsSync(), isTrue);
-      // 记录仍然搬过去了，指向新根那个同名目录。
+      // 记录仍然搬过去了，指向新根那个同名目录（相对名，见文件头说明）。
       expect(idsIn(toRoot), <String>['pixiv2']);
-      expect(directoryOf(toRoot, 'pixiv2'), existing);
+      expect(directoryOf(toRoot, 'pixiv2'), 'dup');
     });
 
     test('源实体已经不在了 → 只搬记录（旧 db 不留打不开的记录）', () async {

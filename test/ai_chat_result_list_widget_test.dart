@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:picakeep/foundation/ai/ai_conversation.dart';
+import 'package:picakeep/foundation/ai/llm_client.dart';
 import 'package:picakeep/pages/ai/ai_chat_page.dart';
 
 List<Map<String, dynamic>> _fixtureItems() =>
@@ -32,6 +33,44 @@ void _useTallTestSurface(WidgetTester tester) {
 }
 
 void main() {
+  testWidgets('同轮相同内容的两次调用即时保留两张卡，收尾没有空回复提示', (tester) async {
+    _useTallTestSurface(tester);
+    final controller = AiConversationController.restoreForTesting({
+      'id': 'two-lists-widget',
+      'version': 2,
+      'displayMessages': <dynamic>[],
+      'history': <dynamic>[],
+    });
+    addTearDown(controller.dispose);
+    for (final id in ['first', 'second']) {
+      await controller.simulateToolCallRoundForTesting([
+        LlmToolCall(id: id, name: 'display_result_list', arguments: const {
+          'items': [
+            {'id': '1', 'title': '相同内容', 'source': 'jm'}
+          ],
+        }),
+      ], continueWithLlm: false);
+    }
+    expect(
+        controller.displayMessages
+            .where((m) => m.type == AiChatMessageType.resultList),
+        hasLength(2));
+    controller.simulateFinalTextResponseForTesting(null);
+    controller.simulateFinalTextResponseForTesting('');
+    await tester.pumpWidget(_host(ListView(children: [
+      for (final message in controller.displayMessages)
+        if (message.type == AiChatMessageType.resultList)
+          AiResultListEntryCard(message: message)
+        else if (message.type == AiChatMessageType.assistant)
+          Text(message.text),
+    ])));
+    await tester.pump();
+    expect(find.byType(AiResultListEntryCard), findsNWidgets(2));
+    expect(find.text('共 1 条结果，查看全部'), findsNWidgets(2));
+    expect(find.text('（AI本轮未返回有效内容）'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('工具卡原始结果入口使用规范化条数并可进入完整清单', (tester) async {
     _useTallTestSurface(tester);
     await tester.pumpWidget(

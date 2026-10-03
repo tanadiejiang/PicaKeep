@@ -1,0 +1,140 @@
+Flutter assets will be downloaded from https://storage.flutter-io.cn. Make sure you trust this source!
+00:00 +0: loading D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_turn_output_test.dart
+00:00 +0: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_turn_output_test.dart: (setUpAll)
+00:00 +0: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_turn_output_test.dart: A01 immediate list then final null has no fallback
+00:00 +1: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_turn_output_test.dart: A01 immediate list then final  has no fallback
+00:00 +2: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_turn_output_test.dart: A01 immediate list then final  
+	  has no fallback
+00:00 +3: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_turn_output_test.dart: A02 A03 identical items stay independent within and across tool rounds
+00:00 +4: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_turn_output_test.dart: A05 distinct calls with ID "reused" each produce a card and result
+00:00 +5: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_turn_output_test.dart: A05 distinct calls with ID "" each produce a card and result
+00:00 +6: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_turn_output_test.dart: A06 validation failure can retry with same ID and then finish empty
+00:00 +7: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_turn_output_test.dart: A07 display_result_list keeps explicit zero-result feedback without fallback
+00:00 +8: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_turn_output_test.dart: A07 search_by_image keeps explicit zero-result feedback without fallback
+00:00 +9: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_turn_output_test.dart: A08 concrete failure and retryable data remain visible
+00:00 +10: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_turn_output_test.dart: A09 generic status "null" and raw items still need one fallback
+00:00 +11: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_turn_output_test.dart: A09 generic status "工具执行成功" and raw items still need one fallback
+00:00 +12: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_turn_output_test.dart: A09 generic status "查询完成。" and raw items still need one fallback
+00:00 +13: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_turn_output_test.dart: A04 A09 fully empty final response is displayed only once, never stored
+00:00 +14: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_turn_output_test.dart: A10 new user turn and restored history never inherit earlier output state
+00:00 +15: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_turn_output_test.dart: A11 list and untrimmed text both survive, repeated final is ignored
+00:00 +16: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_turn_output_test.dart: A12 real controller stream sealing retains reasoning display only
+00:00 +17: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_turn_output_test.dart: A12 prior tool-round stream output survives blank final and stale deltas
+00:00 +18: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_turn_output_test.dart: A13 error response seals stream without fallback
+00:00 +19: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_turn_output_test.dart: A13 exception seals stream without fallback
+00:00 +20: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_turn_output_test.dart: A13 stop before any delta ignores late tool response
+00:00 +21: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_turn_output_test.dart: A13 stop after partial stream ignores late tool response
+00:00 +22: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_turn_output_test.dart: A13 max tool rounds retains terminal feedback without duplicate closing
+00:00 +23: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_turn_output_test.dart: A13 old LLM response and deltas cannot corrupt a new active conversation
+00:00 +24: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_turn_output_test.dart: A13 delayed tool execution after clear never appends to the new turn
+00:00 +25: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_turn_output_test.dart: A14 list then download confirmation keeps turn output and pairs once
+00:00 +26: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_turn_output_test.dart: A14 old download confirmation cannot finish or append into new turn
+00:00 +27: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_turn_output_test.dart: A15 image-search whitelist produces immediate independent cards
+00:00 +28: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_turn_output_test.dart: (tearDownAll)
+00:00 +28: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_conversation_test.dart: (setUpAll)
+00:00 +28: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_conversation_test.dart: restoreForTesting 从 titleIsCustom:true 的数据恢复出 _titleIsCustom=true
+00:00 +29: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_conversation_test.dart: 脚本化 LLM 回合会看到 retryable 工具失败并按修正参数重试
+00:00 +30: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_conversation_test.dart: restoreForTesting 缺失 titleIsCustom 字段时默认 false（旧数据兼容）
+00:00 +31: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_conversation_test.dart: applyExternalRename 同步内存标题并置位 _titleIsCustom，不重复触发保存
+00:00 +32: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_conversation_test.dart: 关键回归：_titleIsCustom=true 时 _save() 不会用 _deriveTitle() 覆盖标题，=false 时仍按原逻辑派生标题
+00:00 +33: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_conversation_test.dart: 47号：仅通过 allowedSearchSources 参数选中多个来源（不在正文打字），promptTagNames 包含这些来源的可读标签名，临时模式下生效
+00:00 +34: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_conversation_test.dart: 47号：localOnly:true 且不在正文打字时，promptTagNames 包含 aiLocalOnlyScopeTagName
+00:00 +35: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_conversation_test.dart: 47号：长期模式（persistSelections:true）下来源/本地限定标签同样折入 promptTagNames，不因长期/临时而有差异
+00:00 +36: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_conversation_test.dart: 05号：长期生效（来源+本地限定）但本轮未手动选中时，promptTagNames 仍应回显长期生效的标签（气泡展示与实际生效范围保持一致）
+00:00 +37: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_conversation_test.dart: 05号：长期生效来源为 jm，但本轮手动选中不同来源 eh 时，气泡应按本轮实际生效范围展示 搜eh，不应同时展示矛盾的 搜jm
+00:00 +38: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_conversation_test.dart: 05号：无长期生效状态且本轮未手动选中来源/本地限定时，气泡不回显任何范围类标签（保持47号计划前的原有行为不受影响）
+00:00 +39: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_conversation_test.dart: 重命名一个未打开的历史会话：直接操作 AiConversationStore，不依赖任何 controller 实例
+00:00 +40: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_conversation_test.dart: 46号：一轮回复内多个 download_comic 工具调用不再产生孤儿 tool_call 一轮回复同时返回2个 download_comic：入队顺序正确，且都确认后 _history 中每个 tool_call_id 恰好有一条对应的 tool 消息，不遗漏也不重复
+00:00 +41: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_conversation_test.dart: 46号：一轮回复内多个 download_comic 工具调用不再产生孤儿 tool_call 一轮回复只有1个 download_comic 时行为不受影响：入队1个，确认后队列清空
+00:00 +42: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_conversation_test.dart: 46号：一轮回复内多个 download_comic 工具调用不再产生孤儿 tool_call 一轮回复没有 download_comic 时行为不受影响：直接续跑（非等待确认状态）
+00:00 +43: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_conversation_test.dart: 02号：空/空白 content 不再产生空文本气泡 content 为 null 且无工具调用：不产生空文本气泡，改为轻量提示气泡
+00:00 +44: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_conversation_test.dart: 02号：空/空白 content 不再产生空文本气泡 content 为空字符串且无工具调用：不产生空文本气泡，改为轻量提示气泡
+00:00 +45: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_conversation_test.dart: 02号：空/空白 content 不再产生空文本气泡 content 为纯空白字符串且无工具调用：不产生空文本气泡，改为轻量提示气泡
+00:00 +46: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_conversation_test.dart: 02号：空/空白 content 不再产生空文本气泡 content 有实际内容且无工具调用：气泡内容与原文一致（回归保护）
+00:00 +47: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_conversation_test.dart: 02号：空/空白 content 不再产生空文本气泡 content 为空但本轮清单已即时展示：不追加轻量提示气泡
+00:00 +48: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_conversation_test.dart: 02号：空/空白 content 不再产生空文本气泡 清单工具失败交回模型后，修正调用只生成一次清单且不保留脏数据
+00:00 +49: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_conversation_test.dart: (tearDownAll)
+00:00 +49: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_chat_result_list_widget_test.dart: 同轮相同内容的两次调用即时保留两张卡，收尾没有空回复提示
+00:01 +50: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_chat_result_list_widget_test.dart: 同轮相同内容的两次调用即时保留两张卡，收尾没有空回复提示
+00:01 +51: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_chat_result_list_widget_test.dart: 同轮相同内容的两次调用即时保留两张卡，收尾没有空回复提示
+00:01 +52: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_chat_result_list_widget_test.dart: 同轮相同内容的两次调用即时保留两张卡，收尾没有空回复提示
+00:01 +53: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_chat_result_list_widget_test.dart: 同轮相同内容的两次调用即时保留两张卡，收尾没有空回复提示
+00:01 +54: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_chat_result_list_widget_test.dart: 同轮相同内容的两次调用即时保留两张卡，收尾没有空回复提示
+00:01 +55: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_chat_result_list_widget_test.dart: 同轮相同内容的两次调用即时保留两张卡，收尾没有空回复提示
+00:01 +56: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_chat_result_list_widget_test.dart: 同轮相同内容的两次调用即时保留两张卡，收尾没有空回复提示
+00:01 +57: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_chat_result_list_widget_test.dart: 同轮相同内容的两次调用即时保留两张卡，收尾没有空回复提示
+00:01 +58: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_chat_result_list_widget_test.dart: 同轮相同内容的两次调用即时保留两张卡，收尾没有空回复提示
+00:01 +59: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_chat_result_list_widget_test.dart: 同轮相同内容的两次调用即时保留两张卡，收尾没有空回复提示
+00:01 +60: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_chat_result_list_widget_test.dart: 同轮相同内容的两次调用即时保留两张卡，收尾没有空回复提示
+00:01 +61: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_conversation_store_test.dart: 清理超量会话（prune）时同步删除被清理会话的附件子目录
+00:01 +62: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_conversation_store_test.dart: 清理超量会话（prune）时同步删除被清理会话的附件子目录
+00:01 +63: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_conversation_store_test.dart: 清理超量会话（prune）时同步删除被清理会话的附件子目录
+00:01 +64: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_conversation_store_test.dart: 清理超量会话（prune）时同步删除被清理会话的附件子目录
+00:01 +65: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_conversation_store_test.dart: 清理超量会话（prune）时同步删除被清理会话的附件子目录
+00:01 +66: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_conversation_store_test.dart: 清理超量会话（prune）时同步删除被清理会话的附件子目录
+00:01 +67: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_conversation_store_test.dart: 清理超量会话（prune）时同步删除被清理会话的附件子目录
+00:01 +68: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_conversation_store_test.dart: 清理超量会话（prune）时同步删除被清理会话的附件子目录
+00:01 +69: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_conversation_store_test.dart: 清理超量会话（prune）时同步删除被清理会话的附件子目录
+00:01 +70: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_conversation_store_test.dart: 清理超量会话（prune）时同步删除被清理会话的附件子目录
+00:01 +71: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_chat_result_list_widget_test.dart: 工具卡原始结果入口使用规范化条数并可进入完整清单
+00:01 +72: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_chat_result_list_widget_test.dart: 工具卡原始结果入口使用规范化条数并可进入完整清单
+00:01 +73: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_chat_result_list_widget_test.dart: 工具卡原始结果入口使用规范化条数并可进入完整清单
+00:01 +74: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_chat_result_list_widget_test.dart: 消息清单查看全部入口和长灰块回归
+00:01 +75: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_chat_result_list_widget_test.dart: 全不可恢复旧数据显示有界失败态且点击不抛异常
+00:01 +76: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_reasoning_section_test.dart: 历史消息默认折叠，点标题行展开
+00:01 +77: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_reasoning_section_test.dart: 历史消息默认折叠，点标题行展开
+00:01 +78: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_reasoning_section_test.dart: 历史消息默认折叠，点标题行展开
+00:01 +79: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_reasoning_section_test.dart: 历史消息默认折叠，点标题行展开
+00:01 +80: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_reasoning_section_test.dart: 历史消息默认折叠，点标题行展开
+00:01 +81: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_reasoning_section_test.dart: 历史消息默认折叠，点标题行展开
+00:01 +82: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_reasoning_section_test.dart: 历史消息默认折叠，点标题行展开
+00:02 +83: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_reasoning_section_test.dart: 历史消息默认折叠，点标题行展开
+00:02 +84: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_reasoning_section_test.dart: 历史消息默认折叠，点标题行展开
+00:02 +85: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_reasoning_section_test.dart: 折叠图标为 16px 小图标
+00:02 +86: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_auto_download_test.dart: 自动下载开启：单本直接执行，无待确认项并回填成功结果
+00:02 +87: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_reasoning_section_test.dart: 展开后点内容本身 → 折叠（SelectableText.onTap）
+00:02 +88: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_reasoning_section_test.dart: 展开后点内容本身 → 折叠（SelectableText.onTap）
+00:02 +89: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_reasoning_section_test.dart: 展开后点内容本身 → 折叠（SelectableText.onTap）
+00:02 +90: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_reasoning_section_test.dart: 展开后点内容本身 → 折叠（SelectableText.onTap）
+00:02 +91: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_reasoning_section_test.dart: 展开后点内容本身 → 折叠（SelectableText.onTap）
+00:02 +92: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_reasoning_section_test.dart: 展开后点内容本身 → 折叠（SelectableText.onTap）
+00:02 +93: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_reasoning_section_test.dart: 展开后点内容本身 → 折叠（SelectableText.onTap）
+00:02 +94: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_reasoning_section_test.dart: 展开后点内容本身 → 折叠（SelectableText.onTap）
+00:02 +95: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_auto_download_test.dart: 等待确认期间关闭下载总开关，确认也不能执行
+00:02 +96: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_reasoning_section_test.dart: 展开后长按内容 → 仍展开（长按走选择不走折叠）
+00:02 +97: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_reasoning_section_test.dart: 展开后长按内容 → 仍展开（长按走选择不走折叠）
+00:02 +98: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_reasoning_section_test.dart: 流式思考期默认展开并显示「思考中…」+ 转圈
+00:02 +99: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_reasoning_section_test.dart: 正文首字到达（hasContent 翻 true）→ 自动折叠
+00:02 +100: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_download_queue_test.dart: AiDownloadQueue.addItems 过滤非法 source source 非法或为空的条目不会入队，且计入跳过数
+00:02 +101: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_reasoning_section_test.dart: 用户手动展开后，自动逻辑不覆盖用户选择
+00:02 +102: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_reasoning_section_test.dart: 用户手动展开后，自动逻辑不覆盖用户选择
+00:02 +103: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_reasoning_section_test.dart: 用户手动展开后，自动逻辑不覆盖用户选择
+00:02 +104: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_reasoning_section_test.dart: 用户手动展开后，自动逻辑不覆盖用户选择
+00:02 +105: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_reasoning_section_test.dart: 用户手动展开后，自动逻辑不覆盖用户选择
+00:02 +106: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_reasoning_section_test.dart: 用户手动展开后，自动逻辑不覆盖用户选择
+00:02 +107: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_reasoning_section_test.dart: 用户手动展开后，自动逻辑不覆盖用户选择
+00:02 +108: D:/Flutter_Projucts/PicaComic/PicaKeep/test/display_result_list_tool_test.dart: schema 完整声明清单条目字段和可用性状态
+00:02 +109: D:/Flutter_Projucts/PicaComic/PicaKeep/test/display_result_list_tool_test.dart: 字符串 availability、数字 id 和字符串 tags 会成功规范化
+00:02 +110: D:/Flutter_Projucts/PicaComic/PicaKeep/test/display_result_list_tool_test.dart: items 为空是非重试零结果
+00:02 +111: D:/Flutter_Projucts/PicaComic/PicaKeep/test/display_result_list_tool_test.dart: 顶层类型错误返回 retryable 脱敏失败
+00:02 +112: D:/Flutter_Projucts/PicaComic/PicaKeep/test/display_result_list_tool_test.dart: 关键条目不可恢复时整批失败且不回显原始内容
+00:03 +113: D:/Flutter_Projucts/PicaComic/PicaKeep/test/sse_chat_parser_test.dart: 纯 content 流：三段聚合 + usage + finishReason + [DONE]
+00:03 +114: D:/Flutter_Projucts/PicaComic/PicaKeep/test/sse_chat_parser_test.dart: reasoning→content 切换：回调顺序与聚合值
+00:03 +115: D:/Flutter_Projucts/PicaComic/PicaKeep/test/sse_chat_parser_test.dart: reasoning 兜底字段（reasoning）也被识别
+00:03 +116: D:/Flutter_Projucts/PicaComic/PicaKeep/test/sse_chat_parser_test.dart: 同一 delta 同时带 content 与 tool_calls：分支不互斥
+00:03 +117: D:/Flutter_Projucts/PicaComic/PicaKeep/test/sse_chat_parser_test.dart: tool_calls 分片重组：残缺 arguments 只在 finish 整体 decode
+00:03 +118: D:/Flutter_Projucts/PicaComic/PicaKeep/test/sse_chat_parser_test.dart: 并行双工具：index 0/1 分片交错到达，finish 按 index 排序
+00:03 +119: D:/Flutter_Projucts/PicaComic/PicaKeep/test/sse_chat_parser_test.dart: name 跨片追加而非只取首片
+00:03 +120: D:/Flutter_Projucts/PicaComic/PicaKeep/test/sse_chat_parser_test.dart: keep-alive 注释行 / 空行 / 无空格 data: 前缀都能正确处理
+00:03 +121: D:/Flutter_Projucts/PicaComic/PicaKeep/test/sse_chat_parser_test.dart: include_usage 独立块 choices==[] 不崩且 usage 被记录
+00:03 +122: D:/Flutter_Projucts/PicaComic/PicaKeep/test/sse_chat_parser_test.dart: [DONE] 之后 isDone 为 true 且后续行被忽略
+00:03 +123: D:/Flutter_Projucts/PicaComic/PicaKeep/test/sse_chat_parser_test.dart: 整行坏 JSON 被忽略且不影响后续行
+00:03 +124: D:/Flutter_Projucts/PicaComic/PicaKeep/test/sse_chat_parser_test.dart: DeepSeek 特有 finish_reason 原样保留（不写死枚举）
+00:03 +125: D:/Flutter_Projucts/PicaComic/PicaKeep/test/sse_chat_parser_test.dart: delta 缺失或非 Map 不崩
+00:03 +126: D:/Flutter_Projucts/PicaComic/PicaKeep/test/llm_request_json_test.dart: (setUpAll)
+00:03 +126: D:/Flutter_Projucts/PicaComic/PicaKeep/test/llm_request_json_test.dart: imagePaths 空 → toRequestJson 与 toJson 完全相等
+00:03 +127: D:/Flutter_Projucts/PicaComic/PicaKeep/test/llm_request_json_test.dart: imagePaths 非空 → content 展开为 parts 数组，图片为 base64 data URI
+00:03 +128: D:/Flutter_Projucts/PicaComic/PicaKeep/test/llm_request_json_test.dart: 文件缺失 → 产出占位文本 part，不抛异常
+00:03 +129: D:/Flutter_Projucts/PicaComic/PicaKeep/test/llm_request_json_test.dart: stripImagesToPlaceholder 幂等稳定；无图消息返回同一实例
+00:03 +130: D:/Flutter_Projucts/PicaComic/PicaKeep/test/llm_request_json_test.dart: (tearDownAll)
+00:03 +130: All tests passed!

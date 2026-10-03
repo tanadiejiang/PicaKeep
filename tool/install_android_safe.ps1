@@ -56,7 +56,7 @@
     漫画）被递归删除，Android 不走回收站，**不可恢复**。
 
 .PARAMETER Mode
-    构建模式：profile（默认，性能剖面用）/ release / debug。
+构建模式：profile（默认，性能剖面用）/ debug。release 已禁止。
 
 .PARAMETER Device
     目标设备序列号。省略时自动选择唯一在线的设备；多台在线会要求显式指定。
@@ -80,11 +80,11 @@
     以 profile 模式 + arm64 构建并覆盖安装到唯一在线的设备。
 
 .EXAMPLE
-    pwsh tool\install_android_safe.ps1 -Mode release -Device 192.168.5.185:5555
+    # release 模式已禁止；只能使用 -Mode debug 或 -Mode profile
 #>
 [CmdletBinding()]
 param(
-    [ValidateSet('profile', 'release', 'debug')]
+[ValidateSet('profile', 'debug')]
     [string]$Mode = 'profile',
 
     [string]$Device = '',

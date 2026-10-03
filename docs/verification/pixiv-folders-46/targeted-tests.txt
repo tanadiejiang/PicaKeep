@@ -1,0 +1,202 @@
+Flutter assets will be downloaded from https://storage.flutter-io.cn. Make sure you trust this source!
+00:00 +0: loading C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart
+00:00 +0: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: (setUpAll)
+00:00 +0: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:00 +1: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:00 +2: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:01 +3: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:01 +4: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:01 +5: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:01 +6: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:01 +7: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:01 +8: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:01 +9: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:01 +10: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:01 +11: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:01 +12: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:01 +13: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:01 +14: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:01 +15: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:01 +16: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:01 +17: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:01 +18: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:01 +19: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:01 +20: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:01 +21: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:01 +22: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:01 +23: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:01 +24: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:01 +25: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:02 +26: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:02 +26: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/download_directory_visibility_test.dart: 已下载元数据加载 原值目录可见且图片可解码 "Book "
+  Skip: Windows cannot faithfully create trailing-space/control-character names
+00:02 +26 ~1: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:02 +26 ~1: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/download_directory_visibility_test.dart: 已下载元数据加载 原值目录可见且图片可解码 " Book\nName "
+  Skip: Windows cannot faithfully create trailing-space/control-character names
+00:02 +26 ~2: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:02 +26 ~2: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/download_directory_visibility_test.dart: 已下载元数据加载 原值目录可见且图片可解码 "   "
+  Skip: Windows cannot faithfully create trailing-space/control-character names
+00:02 +26 ~3: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:02 +27 ~3: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:02 +28 ~3: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:02 +29 ~3: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:02 +30 ~3: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:02 +31 ~3: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:02 +32 ~3: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:02 +33 ~3: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:02 +34 ~3: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:02 +35 ~3: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:02 +36 ~3: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:02 +37 ~3: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:02 +38 ~3: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:02 +39 ~3: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:02 +40 ~3: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:02 +41 ~3: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:02 +42 ~3: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:02 +43 ~3: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:02 +44 ~3: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:02 +45 ~3: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:02 +46 ~3: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:02 +47 ~3: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:02 +48 ~3: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:02 +49 ~3: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:02 +50 ~3: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:02 +51 ~3: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:02 +52 ~3: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:02 +53 ~3: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:02 +54 ~3: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:03 +55 ~3: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:03 +55 ~3: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/download_directory_visibility_test.dart: 已下载元数据加载 v1 缓存自动失效并重新加载 "Book " sentinel=false
+  Skip: Requires a filesystem supporting trailing spaces
+00:03 +55 ~4: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:03 +56 ~4: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:03 +56 ~4: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/download_directory_visibility_test.dart: 已下载元数据加载 v1 缓存自动失效并重新加载 "Book " sentinel=true
+  Skip: Requires a filesystem supporting trailing spaces
+00:03 +56 ~5: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:03 +57 ~5: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:03 +58 ~5: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:03 +59 ~5: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:03 +60 ~5: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:03 +61 ~5: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:03 +62 ~5: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:03 +63 ~5: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:03 +64 ~5: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:03 +65 ~5: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:03 +66 ~5: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:03 +67 ~5: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:03 +68 ~5: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:03 +69 ~5: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:03 +70 ~5: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:03 +71 ~5: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:03 +72 ~5: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:03 +73 ~5: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:03 +74 ~5: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:03 +75 ~5: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:03 +76 ~5: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:03 +77 ~5: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:03 +77 ~5: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/download_directory_visibility_test.dart: 完整本地库扫描 原值目录可见且图片可解码 "Book "
+  Skip: Windows cannot faithfully create trailing-space/control-character names
+00:03 +77 ~6: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:03 +77 ~6: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/download_directory_visibility_test.dart: 完整本地库扫描 原值目录可见且图片可解码 " Book\nName "
+  Skip: Windows cannot faithfully create trailing-space/control-character names
+00:03 +77 ~7: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:03 +77 ~7: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/download_directory_visibility_test.dart: 完整本地库扫描 原值目录可见且图片可解码 "   "
+  Skip: Windows cannot faithfully create trailing-space/control-character names
+00:03 +77 ~8: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:03 +78 ~8: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:03 +79 ~8: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:03 +80 ~8: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:03 +81 ~8: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:03 +82 ~8: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:03 +83 ~8: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:03 +84 ~8: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:03 +85 ~8: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:03 +86 ~8: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:03 +87 ~8: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:03 +88 ~8: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:03 +89 ~8: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_library_test.dart: same work with different target content is never overwritten
+00:03 +90 ~8: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_library_test.dart: same work with different target content is never overwritten
+00:03 +91 ~8: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_library_test.dart: same work with different target content is never overwritten
+00:04 +92 ~8: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_library_test.dart: same work with different target content is never overwritten
+00:04 +93 ~8: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/settings_section_divider_test.dart: 「浏览」设置页：真实渲染，分区之间确有主分割线 勾选/排序入口在「插画列表」分区里（用户要的"和下载命名一样"）
+00:04 +94 ~8: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/settings_section_divider_test.dart: 「浏览」设置页：真实渲染，分区之间确有主分割线 勾选/排序入口在「插画列表」分区里（用户要的"和下载命名一样"）
+00:04 +95 ~8: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/settings_section_divider_test.dart: 「浏览」设置页：真实渲染，分区之间确有主分割线 勾选/排序入口在「插画列表」分区里（用户要的"和下载命名一样"）
+00:04 +96 ~8: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:04 +97 ~8: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:04 +98 ~8: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:04 +99 ~8: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:04 +100 ~8: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:04 +101 ~8: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:04 +102 ~8: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:04 +103 ~8: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:04 +104 ~8: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:04 +105 ~8: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:04 +105 ~8: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/download_directory_visibility_test.dart: 完整本地库扫描 v1 缓存自动失效并重新加载 "Book " sentinel=false
+  Skip: Requires a filesystem supporting trailing spaces
+00:04 +105 ~9: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:04 +106 ~9: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:04 +107 ~9: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:04 +107 ~9: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/download_directory_visibility_test.dart: 完整本地库扫描 v1 缓存自动失效并重新加载 "Book " sentinel=true
+  Skip: Requires a filesystem supporting trailing spaces
+00:04 +107 ~10: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:04 +108 ~10: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:04 +109 ~10: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:04 +110 ~10: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:04 +111 ~10: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:04 +112 ~10: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:04 +113 ~10: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:04 +114 ~10: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:04 +115 ~10: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:04 +116 ~10: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:04 +117 ~10: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:04 +118 ~10: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:04 +119 ~10: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:04 +119 ~10: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/download_directory_visibility_test.dart: DownloadManager 公共读取和补录 旧读取链路保留特殊目录 "Book "
+  Skip: Requires a filesystem supporting these names
+00:04 +119 ~11: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:04 +119 ~11: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/download_directory_visibility_test.dart: DownloadManager 公共读取和补录 旧读取链路保留特殊目录 " Book\nName "
+  Skip: Requires a filesystem supporting these names
+00:04 +119 ~12: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:04 +119 ~12: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/download_directory_visibility_test.dart: DownloadManager 公共读取和补录 旧读取链路保留特殊目录 "   "
+  Skip: Requires a filesystem supporting these names
+00:04 +119 ~13: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:05 +119 ~13: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/download_directory_visibility_test.dart: DownloadManager 公共读取和补录 原值与 trim 双目录均保留且读取各自图片
+[PicaKeep] Download path: C:\Users\tanad\AppData\Local\Temp\picakeep_pk02_56b95c3f\fixture_40
+[PicaKeep] getAll() loaded: 2 visible, 2 parsed, 0 failed, total 2
+00:05 +120 ~13: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:05 +121 ~13: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:05 +121 ~13: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/download_directory_visibility_test.dart: DownloadManager 公共读取和补录 原值优先于 sanitize，失效时兼容历史 trim/sanitize
+[PicaKeep] Download path: C:\Users\tanad\AppData\Local\Temp\picakeep_pk02_56b95c3f\fixture_41
+00:05 +122 ~13: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:05 +122 ~13: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/download_directory_visibility_test.dart: DownloadManager 公共读取和补录 本地库重扫原值查重且真孤儿可以补录
+[PicaKeep] Download path: C:\Users\tanad\AppData\Local\Temp\picakeep_pk02_56b95c3f\fixture_42
+00:05 +123 ~13: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:05 +124 ~13: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:05 +124 ~13: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/download_directory_visibility_test.dart: DownloadManager 公共读取和补录 旧管理器重扫原值查重且真孤儿可以补录
+[PicaKeep] Download path: C:\Users\tanad\AppData\Local\Temp\picakeep_pk02_56b95c3f\fixture_43
+00:05 +125 ~13: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:05 +126 ~13: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:05 +127 ~13: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:05 +128 ~13: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:05 +129 ~13: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:05 +130 ~13: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:05 +131 ~13: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:05 +132 ~13: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:06 +133 ~13: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:06 +134 ~13: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:06 +135 ~13: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:06 +136 ~13: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:06 +137 ~13: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:06 +138 ~13: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:07 +139 ~13: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:07 +140 ~13: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_library_test.dart: rename recovers from intent and preserves stable identity
+00:07 +141 ~13: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: folder sorting is separate from its long-press menu and persists on back
+00:07 +142 ~13: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: folder sorting is separate from its long-press menu and persists on back
+00:08 +143 ~13: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: root folder offers default action but cannot be renamed or deleted
+00:09 +144 ~13: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: illustration long press selects actual items and copies the batch to one folder
+[PicaKeep][IllustCover] resolved id=pixivwidget1 path=C:\Users\tanad\AppData\Local\Temp\pk46_widgets_42f1544f\app\local_library_cache\covers\2eb6d79c0c7b30c7.png inAppCache=true
+[PicaKeep][IllustCover] resolved id=pixivwidget2 path=C:\Users\tanad\AppData\Local\Temp\pk46_widgets_42f1544f\app\local_library_cache\covers\6a199e467b612a73.png inAppCache=true
+00:17 +145 ~13: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: download pill delivers long-press without running ordinary download
+00:17 +146 ~13: C:/Users/tanad/.codex/worktrees/500c/PicaKeep/test/pixiv_folders_page_test.dart: (tearDownAll)
+Fixture cleanup deferred until process exit: C:\Users\tanad\AppData\Local\Temp\pk46_widgets_42f1544f
+00:17 +146 ~13: All tests passed!

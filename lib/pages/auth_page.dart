@@ -4,6 +4,7 @@ import 'package:local_auth/local_auth.dart';
 import 'package:picakeep/foundation/app.dart';
 import 'package:picakeep/pages/main_page.dart';
 import 'package:picakeep/tools/translations.dart';
+import 'package:picakeep/tools/download_notification_routes.dart';
 
 class AuthPage extends StatefulWidget {
   const AuthPage({super.key});
@@ -71,6 +72,7 @@ class _AuthPageState extends State<AuthPage> with WidgetsBindingObserver {
     } else {
       App.globalBack();
     }
+    DownloadNotificationRoutes.instance.tryOpen();
   }
 
   @override

@@ -1,0 +1,16 @@
+{
+  "path": "D:\\Flutter_Projucts\\PicaComic\\PicaKeep\\build\\app\\outputs\\flutter-apk\\app-debug.apk",
+  "bytes": 179341446,
+  "sha256": "C25EA885D4256BC4AA7B0D499FAB71E3A5F2B76A3A5FE5C1B59397E176D6EC88",
+  "builtAt": "2026-10-02T16:30:51",
+  "mode": "debug",
+  "installed": false,
+  "branch": "main",
+  "committed": false,
+  "sourceSha256": {
+    "lib/foundation/pixiv_library.dart": "120c4589926cd0c65a5e6d12b009ec7e9878314f7295d9e1ba03620e26cb3469",
+    "lib/foundation/pixiv_library_maintenance.dart": "f363a85ba8918039c670ba3e5ead150f56574ddc9f3215f3f27125964aae1b46",
+    "test/pixiv_library_maintenance_test.dart": "65348c4ec1d44639fb7a11c66752519eea0ef9d4645e27c1c34ef56a89c2ff80",
+    "test/pixiv_root_recovery_test.dart": "5958679a45c7cca9113aefc5f8a0687a2fc25af4d973d542ff2e3313c9a09d13"
+  }
+}

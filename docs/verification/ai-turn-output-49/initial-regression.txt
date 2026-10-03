@@ -1,0 +1,60 @@
+Flutter assets will be downloaded from https://storage.flutter-io.cn. Make sure you trust this source!
+00:00 +0: loading D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_conversation_test.dart
+00:00 +0: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_conversation_test.dart: (setUpAll)
+00:00 +0: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_conversation_test.dart: restoreForTesting 从 titleIsCustom:true 的数据恢复出 _titleIsCustom=true
+00:00 +1: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_conversation_test.dart: 脚本化 LLM 回合会看到 retryable 工具失败并按修正参数重试
+00:00 +2: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_conversation_test.dart: restoreForTesting 缺失 titleIsCustom 字段时默认 false（旧数据兼容）
+00:00 +3: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_conversation_test.dart: applyExternalRename 同步内存标题并置位 _titleIsCustom，不重复触发保存
+00:00 +4: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_conversation_test.dart: 关键回归：_titleIsCustom=true 时 _save() 不会用 _deriveTitle() 覆盖标题，=false 时仍按原逻辑派生标题
+00:00 +5: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_conversation_test.dart: 47号：仅通过 allowedSearchSources 参数选中多个来源（不在正文打字），promptTagNames 包含这些来源的可读标签名，临时模式下生效
+00:00 +6: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_conversation_test.dart: 47号：localOnly:true 且不在正文打字时，promptTagNames 包含 aiLocalOnlyScopeTagName
+00:00 +7: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_conversation_test.dart: 47号：长期模式（persistSelections:true）下来源/本地限定标签同样折入 promptTagNames，不因长期/临时而有差异
+00:00 +8: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_conversation_test.dart: 05号：长期生效（来源+本地限定）但本轮未手动选中时，promptTagNames 仍应回显长期生效的标签（气泡展示与实际生效范围保持一致）
+00:00 +9: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_conversation_test.dart: 05号：长期生效来源为 jm，但本轮手动选中不同来源 eh 时，气泡应按本轮实际生效范围展示 搜eh，不应同时展示矛盾的 搜jm
+00:00 +10: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_conversation_test.dart: 05号：无长期生效状态且本轮未手动选中来源/本地限定时，气泡不回显任何范围类标签（保持47号计划前的原有行为不受影响）
+00:00 +11: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_conversation_test.dart: 重命名一个未打开的历史会话：直接操作 AiConversationStore，不依赖任何 controller 实例
+00:00 +12: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_conversation_test.dart: 46号：一轮回复内多个 download_comic 工具调用不再产生孤儿 tool_call 一轮回复同时返回2个 download_comic：入队顺序正确，且都确认后 _history 中每个 tool_call_id 恰好有一条对应的 tool 消息，不遗漏也不重复
+00:00 +13: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_conversation_test.dart: 46号：一轮回复内多个 download_comic 工具调用不再产生孤儿 tool_call 一轮回复只有1个 download_comic 时行为不受影响：入队1个，确认后队列清空
+00:00 +14: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_conversation_test.dart: 46号：一轮回复内多个 download_comic 工具调用不再产生孤儿 tool_call 一轮回复没有 download_comic 时行为不受影响：直接续跑（非等待确认状态）
+00:00 +15: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_conversation_test.dart: 02号：空/空白 content 不再产生空文本气泡 content 为 null 且无工具调用：不产生空文本气泡，改为轻量提示气泡
+00:00 +16: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_conversation_test.dart: 02号：空/空白 content 不再产生空文本气泡 content 为空字符串且无工具调用：不产生空文本气泡，改为轻量提示气泡
+00:00 +17: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_conversation_test.dart: 02号：空/空白 content 不再产生空文本气泡 content 为纯空白字符串且无工具调用：不产生空文本气泡，改为轻量提示气泡
+00:00 +18: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_conversation_test.dart: 02号：空/空白 content 不再产生空文本气泡 content 有实际内容且无工具调用：气泡内容与原文一致（回归保护）
+00:00 +19: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_conversation_test.dart: 02号：空/空白 content 不再产生空文本气泡 content 为空但本轮清单已即时展示：不追加轻量提示气泡
+00:00 +20: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_conversation_test.dart: 02号：空/空白 content 不再产生空文本气泡 清单工具失败交回模型后，修正调用只生成一次清单且不保留脏数据
+00:00 +21: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_conversation_test.dart: (tearDownAll)
+00:00 +21: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_auto_download_test.dart: (setUpAll)
+00:00 +21: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_auto_download_test.dart: 自动下载开启：单本直接执行，无待确认项并回填成功结果
+00:00 +22: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_auto_download_test.dart: 同轮多本和展示工具全部回填后才继续请求模型
+00:00 +23: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_auto_download_test.dart: 首本入队失败仍回填失败结果并处理下一本
+00:00 +24: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_auto_download_test.dart: 首本抛异常仍回填失败结果并处理下一本
+00:00 +25: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_auto_download_test.dart: 开关 122 关闭：总开关控制可见性，下载进入确认队列
+00:00 +26: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_auto_download_test.dart: 开关 149 关闭：总开关控制可见性，下载进入确认队列
+00:00 +27: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_auto_download_test.dart: 自动下载关闭：工具可见，用户确认后下载
+00:00 +28: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_auto_download_test.dart: 自动下载关闭：工具可见，用户取消不下载
+00:00 +29: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_auto_download_test.dart: 等待确认期间关闭下载总开关，确认也不能执行
+00:00 +30: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_auto_download_test.dart: 首本入队时关闭自动下载，剩余任务转入确认队列
+00:00 +31: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_auto_download_test.dart: (tearDownAll)
+00:00 +31: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_download_queue_test.dart: (setUpAll)
+00:00 +31: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_download_queue_test.dart: AiDownloadQueue.addItems 过滤非法 source source 非法或为空的条目不会入队，且计入跳过数
+00:00 +32: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_download_queue_test.dart: AiDownloadQueue.addItems 过滤非法 source 合法 source 全部正常入队，跳过数为 0
+00:00 +33: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_download_queue_test.dart: AiDownloadQueue.addItems 过滤非法 source 重复的 source:id 组合会被去重跳过
+00:00 +34: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_download_queue_test.dart: AiDownloadQueue.removeAll 批量移除 批量移除选中条目，未选中条目保留
+00:00 +35: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_download_queue_test.dart: AiDownloadQueue.removeAll 批量移除 空列表调用不触发保存/通知，队列不变
+00:00 +36: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_download_queue_test.dart: AiDownloadQueue.removeAll 批量移除 传入队列中不存在的条目不影响现有条目
+00:00 +37: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_download_queue_test.dart: 保存时复用 AiResultItem.toJson，文件形状保持七个规范字段
+00:00 +38: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_download_queue_test.dart: (tearDownAll)
+00:00 +38: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_reasoning_archive_test.dart: (setUpAll)
+00:00 +38: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_reasoning_archive_test.dart: AiChatMessage 存档 reasoningText toJson/fromJson 往返
+00:00 +39: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_reasoning_archive_test.dart: AiChatMessage 存档 无 reasoning 时不写该键；旧 JSON（无该键）→ null 不崩
+00:00 +40: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_reasoning_archive_test.dart: 会话存档 store 出入口（与 AiChatMessage.toJson 是独立的一对） serializeConversation → deserializeAiChatMessage 往返保留思考
+00:00 +41: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_reasoning_archive_test.dart: 会话存档 store 出入口（与 AiChatMessage.toJson 是独立的一对） 旧存档（无 reasoningText 键）反序列化 → null 不崩
+00:00 +42: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_reasoning_archive_test.dart: LlmMessage 存档与剥离副本 reasoning_content toJson/fromJson 往返
+00:00 +43: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_reasoning_archive_test.dart: LlmMessage 存档与剥离副本 旧存档无 reasoning_content → null
+00:00 +44: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_reasoning_archive_test.dart: LlmMessage 存档与剥离副本 stripImagesToPlaceholder 保留 reasoningContent
+00:00 +45: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_reasoning_archive_test.dart: LlmMessage 存档与剥离副本 stripReasoning 剥离；本来没有时返回自身
+00:00 +46: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_reasoning_archive_test.dart: _buildRequestMessages 剥离规则（决策B 契约） 纯文本 assistant 轮剥离 reasoning、带 tool_calls 的保留
+00:00 +47: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_reasoning_archive_test.dart: controller 集成 注入带 reasoningContent 的响应 → 气泡与历史都带上思考
+00:00 +48: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_reasoning_archive_test.dart: controller 集成 只有思考没有正文：保留思考气泡且不入 history
+00:00 +49: D:/Flutter_Projucts/PicaComic/PicaKeep/test/ai_reasoning_archive_test.dart: (tearDownAll)
+00:00 +49: All tests passed!

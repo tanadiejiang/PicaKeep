@@ -1,0 +1,21 @@
+Flutter assets will be downloaded from https://storage.flutter-io.cn. Make sure you trust this source!
+00:00 +0: loading D:/Flutter_Projucts/PicaComic/PicaKeep/test/illust_scroll_anchor_test.dart
+00:00 +0: D:/Flutter_Projucts/PicaComic/PicaKeep/test/illust_scroll_anchor_test.dart: idle size updates above a visible artwork keep its screen position
+00:00 +1: D:/Flutter_Projucts/PicaComic/PicaKeep/test/illust_scroll_anchor_test.dart: stale generation never forces scroll correction
+00:02 +2: D:/Flutter_Projucts/PicaComic/PicaKeep/test/illust_thumbnail_test.dart: (setUpAll)
+00:02 +2: D:/Flutter_Projucts/PicaComic/PicaKeep/test/illust_thumbnail_test.dart: real thumbnail uses width buckets and app-internal path; warm reuse
+00:03 +3: D:/Flutter_Projucts/PicaComic/PicaKeep/test/illust_thumbnail_test.dart: small images are not enlarged; long image stays complete within bounds
+00:03 +4: D:/Flutter_Projucts/PicaComic/PicaKeep/test/illust_thumbnail_test.dart: same-key requests share output, deletion and replacement regenerate
+00:03 +5: D:/Flutter_Projucts/PicaComic/PicaKeep/test/illust_thumbnail_test.dart: paused or failed generation exposes no half-file; retry succeeds
+00:03 +6: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_page_view_scope_test.dart: 标题随视图切换（33 号第 3 条） 从「我」页进图集页：初始「图集」→ 切插画 →「插画」→ 切回「图集」
+00:06 +7: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_page_view_scope_test.dart: 标题随视图切换（33 号第 3 条） `widget.title` 仍优先于 `albumOnly`（既有分支没被破坏）
+00:06 +8: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_page_view_scope_test.dart: 标题随视图切换（33 号第 3 条） 没有显式 title 时仍按 albumOnly 落到「资源库」（既有兜底）
+00:07 +9: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_page_view_scope_test.dart: 「资源库显示设置」入口与档位折叠区（36 号形态） 内容区顶部那行分段按钮已删除，设置入口在工具栏
+00:07 +10: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_page_view_scope_test.dart: 「资源库显示设置」入口与档位折叠区（36 号形态） 点按钮**直接**打开设置面板 —— 不再有中间菜单（36 号修复点）
+00:08 +11: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_page_view_scope_test.dart: 「资源库显示设置」入口与档位折叠区（36 号形态） 档位三档**直接平铺**在面板里，不需要再展开一次（36 号第二轮）
+00:09 +12: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_page_view_scope_test.dart: 「资源库显示设置」入口与档位折叠区（36 号形态） 远程不可用 → 后两档置灰并写明原因（而不是消失）
+00:10 +13: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_page_view_scope_test.dart: 「资源库显示设置」入口与档位折叠区（36 号形态） 置灰的档位点不动：远程不可用时点「远程」不会切档
+00:11 +14: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_page_view_scope_test.dart: 工具栏宽度：只能容下 4 个 action（窄屏不被挤爆） 320dp（最窄档）：标题仍有位置，且**不比改动前少**一个像素
+00:11 +15: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_page_view_scope_test.dart: 工具栏宽度：只能容下 4 个 action（窄屏不被挤爆） 360dp（最常见机型宽度）：切到插画后标题「插画」完整显示
+00:12 +16: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_page_view_scope_test.dart: (tearDownAll)
+00:12 +16: All tests passed!

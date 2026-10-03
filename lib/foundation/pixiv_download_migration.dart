@@ -163,13 +163,55 @@ bool _entityExists(String path) {
   return File(path).existsSync() || Directory(path).existsSync();
 }
 
+/// 把 [from] 的实体移动到 [to]。
+///
+/// ## 为什么不能只有 `rename`
+///
+/// `rename` 在**跨文件系统**时必然失败（`OS Error: Cross-device link, errno = 18`），
+/// 而 Pixiv 归位**恰好经常是跨设备的**：源常在内部存储
+///（`/data/user/0/<pkg>/files/download_pixiv`），目标常在外部存储
+///（`/storage/emulated/0/…`，FUSE 挂载点）。
+///
+/// 真机实测：3 项**全部**失败并报 `Cross-device link` ——
+/// 而 40 号那个通用目录迁移器（`download_directory_migration.dart`）
+/// 一直有"rename 失败退回复制"的退路，这个迁移器当初漏了。
+///
+/// 所以先试 `rename`（同分区时它是原子的、也最快），失败后退回
+/// **复制 + 删源** —— 语义仍是"移动"，只是慢一些。
 Future<void> _moveEntity(String from, String to) async {
   final directory = Directory(from);
-  if (directory.existsSync()) {
-    await directory.rename(to);
+  final isDirectory = directory.existsSync();
+  try {
+    if (isDirectory) {
+      await directory.rename(to);
+    } else {
+      await File(from).rename(to);
+    }
     return;
+  } on FileSystemException {
+    // 跨设备（EXDEV）/ 目标已存在 / 权限等：一律走复制 + 删源的退路。
+    // 复制成功才删源，所以最坏情况只是"目标多一份副本"，不会丢数据。
   }
-  await File(from).rename(to);
+  if (isDirectory) {
+    await _copyDirectoryRecursively(from, to);
+    await directory.delete(recursive: true);
+  } else {
+    await File(from).copy(to);
+    await File(from).delete();
+  }
+}
+
+/// 递归复制目录（[rename] 跨设备失败后的退路）。
+Future<void> _copyDirectoryRecursively(String from, String to) async {
+  await Directory(to).create(recursive: true);
+  await for (final entity in Directory(from).list(followLinks: false)) {
+    final target = p.join(to, p.relative(entity.path, from: from));
+    if (entity is Directory) {
+      await _copyDirectoryRecursively(entity.path, target);
+    } else if (entity is File) {
+      await entity.copy(target);
+    }
+  }
 }
 
 void _upsertRow(Database db, _PixivRow row, String newDirectory) {
@@ -250,25 +292,40 @@ Future<PixivMigrationResult> migratePixivDownloadEntries({
       onProgress?.call(i + 1, rows.length, row.title);
       // 让出事件循环：几百条记录时进度条才有机会刷新。
       await Future<void>.delayed(Duration.zero);
-      final baseName = p.basename(_normalize(row.directory));
+      // ⚠️ **db 里的 `directory` 是"相对根的单段名"，不是绝对路径。**
+      // 真机实测（设备 `download.db`）：
+      //   `是色兔子peko` / `墨心mc_稿件_149433791_p6.zip` / `Vodyanitska🎨` …
+      // 而读取侧（`local_library_scan.dart`）是把它 `p.join(root, directory)`
+      // 拼成绝对路径再用的。本函数第一版直接把 `row.directory` 当绝对路径，
+      // 后果是：`_entityExists` 恒为假（相对名当路径找 —— 相对 CWD）→ 实体一个
+      // 都不搬；而记录却被写进新库并**从旧库删除** ⇒ 内容变成孤儿
+      // （文件还躺在 `download/` 里，列表里再也看不到）。
+      final rawDirectory = row.directory.trim();
+      final baseName = p.basename(_normalize(rawDirectory));
       if (baseName.isEmpty) {
         failures.add('${row.title}（记录里的目录为空）');
         continue;
       }
+      // 老记录若存的是绝对路径就原样用，相对名则拼上源根。
+      final sourcePath =
+          p.isAbsolute(rawDirectory) ? rawDirectory : p.join(source, baseName);
       final targetPath = p.join(target, baseName);
       try {
-        if (!_entityExists(row.directory)) {
-          // 内容已经不在了（被删或进了回收站）：记录照搬并指向新路径，
+        if (!_entityExists(sourcePath)) {
+          // 内容已经不在了（被删或进了回收站）：记录照搬并指向新根，
           // 否则旧 db 里会永远留着一条打不开的记录。
           skipped++;
         } else if (_entityExists(targetPath)) {
           // 目标已有同名实体：**不覆盖**，只把记录指过去（可重入的基础）。
           skipped++;
         } else {
-          await _moveEntity(row.directory, targetPath);
+          await _moveEntity(sourcePath, targetPath);
           moved++;
         }
-        _upsertRow(targetDb, row, targetPath);
+        // **记录里写的仍然是相对名**（与写入侧 `_upsertDownloadRecord` 同口径）：
+        // 写绝对路径会让这条记录在"换根 / 根被重定位"后立刻失效，
+        // 而相对名天然跟着根走。
+        _upsertRow(targetDb, row, baseName);
         sourceDb.execute('delete from download where id = ?', <Object?>[row.id]);
       } catch (e) {
         failures.add('${row.title}：$e');

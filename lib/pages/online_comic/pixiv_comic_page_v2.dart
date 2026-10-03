@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:picakeep/pages/pixiv_folders_page.dart';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show Clipboard, ClipboardData;
@@ -6,7 +7,6 @@ import 'package:picakeep/comic_source/comic_source.dart';
 import 'package:picakeep/foundation/app_page_route.dart';
 import 'package:picakeep/foundation/history.dart';
 import 'package:picakeep/foundation/log.dart';
-import 'package:picakeep/foundation/online_download_manager.dart';
 import 'package:picakeep/network/pixiv_network/pixiv_network.dart';
 import 'package:picakeep/network/res.dart';
 import 'package:picakeep/pages/online_comic/base_online_comic_page.dart';
@@ -194,22 +194,13 @@ class PixivComicPageV2 extends BaseOnlineComicPage<PixivComicInfo> {
   /// 原图单页可达数十 MB，整套下载体积会成倍放大。
   /// 详情页打开失败前的空作品在这里先拦一道，避免入队后才失败。
   @override
-  Future<void> onDownload(BuildContext context, PixivComicInfo data) async {
-    if (data.pageCount <= 0) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('该作品没有可下载的页面')),
-      );
-      return;
-    }
-    final res = await OnlineDownloadManager.instance.enqueuePixiv(data);
-    if (!context.mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-            res.error ? '加入下载队列失败：${res.errorMessageWithoutNull}' : '已加入下载队列'),
-      ),
-    );
-  }
+  bool get supportsDownloadFolders => true;
+  @override
+  Future<void> onDownloadLongPress(BuildContext context, PixivComicInfo data) =>
+      downloadPixivToFolder(context, data, choose: true);
+  @override
+  Future<void> onDownload(BuildContext context, PixivComicInfo data) =>
+      downloadPixivToFolder(context, data, choose: false);
 
   // ── 收藏（平台书签 toggle）──────────────────────────────────────────────
 

@@ -97,4 +97,67 @@ void main() {
       '${App.dataPath}${Platform.pathSeparator}download',
     );
   });
+
+  group('pixivRelocationSourceRoots · 归位要检查哪些源根', () {
+    test('只设了默认根时：候选就是默认根，且不含生效的 Pixiv 根', () {
+      appdata.settings[pixivDownloadDirSettingIndex] = '';
+      appdata.settings[22] = '';
+      final roots = pixivRelocationSourceRoots();
+      expect(roots, contains(legacyPixivDownloadPath()));
+      expect(
+        roots,
+        isNot(contains(effectivePixivDownloadRoot())),
+        reason: '不把自己当归位源，否则会自己搬自己',
+      );
+    });
+
+    test('回归：自定义下载目录里的 Pixiv 也要被数到（真机踩过）', () {
+      // 真机经过：下载目录还是默认根时下了 Pixiv → 之后改到自定义位置 →
+      // "换下载目录"的迁移把 Pixiv 一起搬了过去 ⇒ 它在 settings[22] 里。
+      // 只查默认根会**永远数不到、也搬不走**（用户反馈"怎么还是丢在这里"）。
+      appdata.settings[pixivDownloadDirSettingIndex] = '';
+      appdata.settings[22] = '/custom/downloads';
+      expect(pixivRelocationSourceRoots(), contains('/custom/downloads'));
+    });
+
+    test('生效的 Pixiv 根自身永远不在源根里', () {
+      appdata.settings[22] = '/custom/downloads';
+      appdata.settings[pixivDownloadDirSettingIndex] = '/custom/downloads';
+      final roots = pixivRelocationSourceRoots();
+      expect(roots, isNot(contains('/custom/downloads')));
+      // 默认根仍然要在（它跟 Pixiv 根不是同一个）。
+      expect(roots, contains(legacyPixivDownloadPath()));
+    });
+
+    test('settings[22] 有脏值（空白）时不会混进一个空串源根', () {
+      appdata.settings[22] = '   ';
+      appdata.settings[pixivDownloadDirSettingIndex] = '';
+      expect(
+        pixivRelocationSourceRoots().where((root) => root.trim().isEmpty),
+        isEmpty,
+      );
+    });
+
+    test('回归：Pixiv 默认位置也要算源根（用户改过 settings[152] 时）', () {
+      // `settings[152]` 为空时生效根 = 默认位置；一旦用户把它设到别处，
+      // 之前落在默认位置的那些就**扫描不到了** —— 既不属于当前下载目录、
+      // 也不属于新的 Pixiv 根（真机实证：`files/download_pixiv` 里躺着 3 张）。
+      appdata.settings[22] = '/custom/downloads';
+      appdata.settings[pixivDownloadDirSettingIndex] = '/custom/pixiv';
+      expect(
+        pixivRelocationSourceRoots(),
+        contains(defaultPixivDownloadPath()),
+      );
+    });
+
+    test('生效根恰好是默认位置时，默认位置不再作为源根（避免自己搬自己）', () {
+      appdata.settings[22] = '';
+      appdata.settings[pixivDownloadDirSettingIndex] = '';
+      expect(
+        pixivRelocationSourceRoots(),
+        isNot(contains(defaultPixivDownloadPath())),
+      );
+      expect(pixivRelocationSourceRoots(), contains(legacyPixivDownloadPath()));
+    });
+  });
 }

@@ -1,0 +1,161 @@
+Flutter assets will be downloaded from https://storage.flutter-io.cn. Make sure you trust this source!
+00:00 +0: loading D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_card_test.dart
+00:00 +0: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_card_test.dart: 不裁切：图片用 contain 有 provider 时 fit 必须是 contain（cover 必然裁边）
+00:00 +1: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_card_test.dart: 不裁切：图片用 contain 格子比例 = 图片比例时，图片铺满格子（contain 不产生留白）
+00:00 +2: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_card_test.dart: 底部信息：由配置驱动 默认（不传 infoSpans）渲染标题 + 作者，与改动前一致
+00:00 +3: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_card_test.dart: 底部信息：由配置驱动 只勾标题 → 只有一行
+00:00 +4: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_card_test.dart: 底部信息：由配置驱动 勾了尺寸 → 显示 宽×高（真实比例那条链路的可见结果）
+00:00 +5: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_card_test.dart: 底部信息：由配置驱动 勾了页数 → 显示 p{N}（33 号：与下载命名同口径）
+00:00 +6: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_card_test.dart: 底部信息：由配置驱动 一个字段都没勾（空 spans）→ 底部不渲染任何文字
+00:01 +7: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_card_test.dart: 底部信息：由配置驱动 分隔符不是换行时，字段排在同一行
+00:01 +8: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_card_test.dart: 底部信息：由配置驱动 信息整体在图片下方
+00:01 +9: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_card_test.dart: 底部信息：由配置驱动 比例未知（占位 3:4）时信息照样在图片下方，高度由占位比例决定
+00:01 +10: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_card_test.dart: 降采样：contain 下按"实际显示宽度"算 cacheWidth 真实比例生效时，显示宽度 = 列宽 → cacheWidth ≈ 列宽 × DPR × 1.35
+00:01 +11: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_card_test.dart: 降采样：contain 下按"实际显示宽度"算 cacheWidth 比例不符（格子比图更宽）时按实际显示宽度降采样，不按列宽白解
+00:01 +12: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_card_test.dart: 降采样：contain 下按"实际显示宽度"算 cacheWidth 占位比例与真实比例不一致的那一帧：cacheWidth 小于列宽口径
+00:01 +13: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_card_test.dart: 降采样：contain 下按"实际显示宽度"算 cacheWidth 无 provider 时渲染占位图标，不抛异常
+00:01 +14: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_card_test.dart: 分区点击（36 号）：图片进阅读、信息进详情 点**图片** → 只触发图片回调
+00:01 +15: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_card_test.dart: 分区点击（36 号）：图片进阅读、信息进详情 点**信息区** → 只触发信息回调
+00:01 +16: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_card_test.dart: 分区点击（36 号）：图片进阅读、信息进详情 长按**两个区**都能触发（多选与点哪个区无关）
+00:01 +17: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_card_test.dart: 分区点击（36 号）：图片进阅读、信息进详情 不传 onInfoTap 时回落到 onTap（既有调用不失去点击）
+00:01 +18: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_card_test.dart: 分区点击（36 号）：图片进阅读、信息进详情 信息区为空（没勾任何字段）时不会挡住图片区的点击
+00:02 +19: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_view_test.dart: 插画视图设置项归一化 视图：只认 illust，其余落回 album（默认与改动前一致）
+00:02 +20: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_view_test.dart: 插画视图设置项归一化 瀑布流列数：夹到 2..3，脏值落回默认 3
+00:02 +21: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_view_test.dart: 插画视图设置项归一化 悬浮按钮位置：只认 left，其余靠右（= Flutter FAB 默认位）
+00:02 +22: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_view_test.dart: 插画视图设置项归一化 新设置项下标不落在 152/153/154 上（否则会顶掉 23 号计划占位）
+00:02 +23: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_view_test.dart: 插画过滤判据：sourceKey == pixiv 只取 pixiv，其它源一律不纳入
+00:02 +24: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_view_test.dart: 插画过滤判据：sourceKey == pixiv 不按 id 前缀猜：id 带 pixiv 前缀但 sourceKey 不是 pixiv 的不纳入
+00:02 +25: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_view_test.dart: 插画过滤判据：sourceKey == pixiv sourceKey 缺失 / json 是坏数据 → 跳过而不是猜
+00:02 +26: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_view_test.dart: 插画过滤判据：sourceKey == pixiv sourceKey 前后空白不影响判定（trim 后比较）
+00:02 +27: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_view_test.dart: 插画过滤判据：sourceKey == pixiv 空输入不抛异常
+00:02 +28: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_view_test.dart: 宽高降级：缺失不走 height=0 也不除零 正常宽高用真实比例
+00:02 +29: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_view_test.dart: 宽高降级：缺失不走 height=0 也不除零 null / 0 / 负数一律降级为占位比例，且恒为正有限数
+00:02 +30: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_view_test.dart: 宽高降级：缺失不走 height=0 也不除零 极端长条被夹住，绝不会算出 0 或无穷高度
+00:02 +31: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_view_test.dart: 宽高降级：缺失不走 height=0 也不除零 条目侧：json 里 width/height 缺失时条目仍被收录且比例可用
+00:02 +32: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_view_test.dart: 宽高降级：缺失不走 height=0 也不除零 条目侧：JSON 往返后宽高退化成 double 也能读出来
+00:02 +33: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_view_test.dart: 宽高降级：缺失不走 height=0 也不除零 条目侧：width 是 0 时降级（不能被当成"比例为 0"）
+00:02 +34: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_view_test.dart: 标签汇总与筛选 汇总去重 + 按出现次数降序，次数相同按名字升序（顺序稳定）
+00:02 +35: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_view_test.dart: 标签汇总与筛选 同一条目内重复标签只算一次
+00:02 +36: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_view_test.dart: 标签汇总与筛选 空标签 / 纯空白标签不进汇总
+00:02 +37: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_view_test.dart: 标签汇总与筛选 无标签时汇总为空（图集侧也不会因此出现空筛选条）
+00:02 +38: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_view_test.dart: 标签汇总与筛选 选中一个标签 → 只留含它的条目
+00:02 +39: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_view_test.dart: 标签汇总与筛选 多选是 AND：越多标签结果越少（与"筛选"直觉一致）
+00:02 +40: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_view_test.dart: 标签汇总与筛选 清空选择 → 恢复全量
+00:02 +41: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_view_test.dart: 标签汇总与筛选 无匹配 → 结果为空（交给 noTagMatch 空态）
+00:02 +42: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_view_test.dart: 标签汇总与筛选 标签来自 item.tags；item.tags 为空时回落到 json 里的 tags
+00:02 +43: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_view_test.dart: 三种空态要分开（不能共用"没有内容"） 加载中：转圈
+00:02 +44: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_view_test.dart: 三种空态要分开（不能共用"没有内容"） 没有内容：空态（不是转圈）
+00:02 +45: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_view_test.dart: 三种空态要分开（不能共用"没有内容"） 筛选无匹配：与"没有内容"是**不同**状态
+00:02 +46: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_view_test.dart: 三种空态要分开（不能共用"没有内容"） 有数据就渲染内容（后台刷新不把列表换成转圈）
+00:02 +47: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_view_test.dart: 瀑布流真实渲染：列数与变高 列数设置真的作用到 SliverMasonryGrid（2 列 / 3 列各断言一次）
+00:02 +48: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_view_test.dart: 瀑布流真实渲染：列数与变高 列数设置真的作用到 SliverMasonryGrid（2 列 / 3 列各断言一次）
+00:02 +49: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_view_test.dart: 瀑布流真实渲染：列数与变高 列数设置真的作用到 SliverMasonryGrid（2 列 / 3 列各断言一次）
+00:02 +50: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_view_test.dart: 瀑布流真实渲染：列数与变高 列数设置真的作用到 SliverMasonryGrid（2 列 / 3 列各断言一次）
+00:02 +51: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_view_test.dart: 瀑布流真实渲染：列数与变高 列数设置真的作用到 SliverMasonryGrid（2 列 / 3 列各断言一次）
+00:02 +52: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_view_test.dart: 瀑布流真实渲染：列数与变高 列数设置真的作用到 SliverMasonryGrid（2 列 / 3 列各断言一次）
+00:02 +53: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_view_test.dart: 瀑布流真实渲染：列数与变高 列数设置真的作用到 SliverMasonryGrid（2 列 / 3 列各断言一次）
+00:02 +54: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_view_test.dart: 瀑布流真实渲染：列数与变高 列数设置真的作用到 SliverMasonryGrid（2 列 / 3 列各断言一次）
+00:03 +55: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_view_test.dart: 瀑布流真实渲染：列数与变高 列数设置真的作用到 SliverMasonryGrid（2 列 / 3 列各断言一次）
+00:03 +56: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_view_test.dart: 瀑布流真实渲染：列数与变高 列数设置真的作用到 SliverMasonryGrid（2 列 / 3 列各断言一次）
+00:03 +57: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_view_test.dart: 瀑布流真实渲染：列数与变高 列数设置真的作用到 SliverMasonryGrid（2 列 / 3 列各断言一次）
+00:03 +58: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_view_test.dart: 瀑布流真实渲染：列数与变高 列数设置真的作用到 SliverMasonryGrid（2 列 / 3 列各断言一次）
+00:03 +59: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_view_test.dart: 瀑布流真实渲染：列数与变高 列数设置真的作用到 SliverMasonryGrid（2 列 / 3 列各断言一次）
+00:03 +60: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_view_test.dart: 瀑布流真实渲染：列数与变高 列数设置真的作用到 SliverMasonryGrid（2 列 / 3 列各断言一次）
+00:03 +61: D:/Flutter_Projucts/PicaComic/PicaKeep/test/illust_cover_size_test.dart: 缓存：按「路径 + 时间戳」命中，避免重复读文件头 没有改动时 save 不写盘（不产生无谓 IO）
+00:03 +62: D:/Flutter_Projucts/PicaComic/PicaKeep/test/illust_cover_size_test.dart: 页数：目录里的图片张数（排除封面） countIllustPageImages 排除 cover.*，只数正文
+00:03 +63: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_view_test.dart: 瀑布流真实渲染：列数与变高 同一列宽下，不同比例渲染出不同高度（瀑布流不是定高网格）
+00:03 +64: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_view_test.dart: 瀑布流真实渲染：列数与变高 同一列宽下，不同比例渲染出不同高度（瀑布流不是定高网格）
+00:03 +65: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_view_test.dart: 瀑布流真实渲染：列数与变高 同一列宽下，不同比例渲染出不同高度（瀑布流不是定高网格）
+00:03 +66: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_view_test.dart: 瀑布流真实渲染：列数与变高 同一列宽下，不同比例渲染出不同高度（瀑布流不是定高网格）
+00:03 +67: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_view_test.dart: 瀑布流真实渲染：列数与变高 同一列宽下，不同比例渲染出不同高度（瀑布流不是定高网格）
+00:03 +68: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_view_test.dart: 瀑布流真实渲染：列数与变高 同一列宽下，不同比例渲染出不同高度（瀑布流不是定高网格）
+00:03 +69: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_view_test.dart: 瀑布流真实渲染：列数与变高 同一列宽下，不同比例渲染出不同高度（瀑布流不是定高网格）
+00:03 +70: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_view_test.dart: 瀑布流真实渲染：列数与变高 同一列宽下，不同比例渲染出不同高度（瀑布流不是定高网格）
+00:03 +71: D:/Flutter_Projucts/PicaComic/PicaKeep/test/illust_cover_size_test.dart: 批量与并发 并发上限被遵守，且所有条目都被处理到
+00:03 +72: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_view_test.dart: 瀑布流真实渲染：列数与变高 卡片近无边框：留白显著小于定高网格的观感（≤ 4dp）
+00:03 +73: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_view_test.dart: 瀑布流真实渲染：列数与变高 卡片近无边框：留白显著小于定高网格的观感（≤ 4dp）
+00:03 +74: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_view_test.dart: 瀑布流真实渲染：列数与变高 卡片近无边框：留白显著小于定高网格的观感（≤ 4dp）
+00:03 +75: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_view_test.dart: 瀑布流真实渲染：列数与变高 卡片近无边框：留白显著小于定高网格的观感（≤ 4dp）
+00:03 +76: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_view_test.dart: 瀑布流真实渲染：列数与变高 卡片近无边框：留白显著小于定高网格的观感（≤ 4dp）
+00:03 +77: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_view_test.dart: 瀑布流真实渲染：列数与变高 卡片近无边框：留白显著小于定高网格的观感（≤ 4dp）
+00:03 +78: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_view_test.dart: 瀑布流真实渲染：列数与变高 卡片近无边框：留白显著小于定高网格的观感（≤ 4dp）
+00:03 +79: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_view_test.dart: 瀑布流真实渲染：列数与变高 卡片近无边框：留白显著小于定高网格的观感（≤ 4dp）
+00:03 +80: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_view_test.dart: 瀑布流真实渲染：列数与变高 卡片近无边框：留白显著小于定高网格的观感（≤ 4dp）
+00:03 +81: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_view_test.dart: 瀑布流真实渲染：列数与变高 卡片近无边框：留白显著小于定高网格的观感（≤ 4dp）
+00:03 +82: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_view_test.dart: 瀑布流真实渲染：列数与变高 卡片近无边框：留白显著小于定高网格的观感（≤ 4dp）
+00:03 +83: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_view_test.dart: 瀑布流真实渲染：列数与变高 卡片近无边框：留白显著小于定高网格的观感（≤ 4dp）
+00:03 +84: D:/Flutter_Projucts/PicaComic/PicaKeep/test/illust_cover_size_test.dart: 页数记忆：跨重新取数保住页数，且不反复列目录 record 只接受正数（数出 0 页等于没数出来）
+00:03 +85: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_view_test.dart: 瀑布流真实渲染：列数与变高 没有封面时渲染占位图标而不是抛异常（特权模式下 provider 可能为 null）
+00:03 +86: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_view_test.dart: 瀑布流真实渲染：列数与变高 没有封面时渲染占位图标而不是抛异常（特权模式下 provider 可能为 null）
+00:03 +87: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_view_test.dart: 瀑布流真实渲染：列数与变高 没有封面时渲染占位图标而不是抛异常（特权模式下 provider 可能为 null）
+00:03 +88: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_view_test.dart: 瀑布流真实渲染：列数与变高 没有封面时渲染占位图标而不是抛异常（特权模式下 provider 可能为 null）
+00:03 +89: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_view_test.dart: 瀑布流真实渲染：列数与变高 没有封面时渲染占位图标而不是抛异常（特权模式下 provider 可能为 null）
+00:03 +90: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_view_test.dart: 瀑布流真实渲染：列数与变高 没有封面时渲染占位图标而不是抛异常（特权模式下 provider 可能为 null）
+00:03 +91: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_view_test.dart: 瀑布流真实渲染：列数与变高 没有封面时渲染占位图标而不是抛异常（特权模式下 provider 可能为 null）
+00:03 +92: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_view_test.dart: 瀑布流真实渲染：列数与变高 没有封面时渲染占位图标而不是抛异常（特权模式下 provider 可能为 null）
+00:03 +93: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_view_test.dart: 瀑布流真实渲染：列数与变高 没有封面时渲染占位图标而不是抛异常（特权模式下 provider 可能为 null）
+00:03 +94: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_view_test.dart: 瀑布流真实渲染：列数与变高 信息在底部：标题与作者渲染在图片下方，且各自一行（文字 top ≥ 图片 bottom）
+00:03 +95: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_view_test.dart: 内容区三种状态的真实渲染 加载中只转圈，且不出现两类空态文案
+00:03 +96: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_view_test.dart: 内容区三种状态的真实渲染 没有内容：显示"暂无插画"，且不是转圈
+00:03 +97: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_view_test.dart: 内容区三种状态的真实渲染 筛选无匹配：走**另一个**空态，不是"没有内容"
+00:03 +98: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_view_test.dart: 标签筛选条真实渲染 汇总出的每个标签都渲染成可点芯片，并带出现次数
+00:03 +99: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_view_test.dart: 标签筛选条真实渲染 点标签会回调；未选中时不出现清除按钮
+00:03 +100: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_view_test.dart: 标签筛选条真实渲染 有选中标签时出现清除入口，点它会回调清除
+00:03 +101: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_view_test.dart: 标签筛选条真实渲染 筛选后只渲染筛过的条目（真渲染数量而非只测列表长度）
+00:04 +102: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_view_test.dart: 标签筛选条真实渲染 图集视图不显示筛选条：无标签时不渲染筛选条
+00:04 +103: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_view_test.dart: 视图切换按钮的显示判据（含与多选 FAB 的互斥） 图集根列表：显示
+00:04 +104: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_view_test.dart: 视图切换按钮的显示判据（含与多选 FAB 的互斥） 多选态：不显示（与多选 FAB 互斥）
+00:04 +105: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_view_test.dart: 视图切换按钮的显示判据（含与多选 FAB 的互斥） 操作进行中（删除遮罩）：不显示
+00:04 +106: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_view_test.dart: 视图切换按钮的显示判据（含与多选 FAB 的互斥） 非图集形态（资源库）：不显示
+00:04 +107: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_view_test.dart: 视图切换按钮的显示判据（含与多选 FAB 的互斥） 子页面（本地目录内 / 远程根内）：不显示 —— 与 _showSourceSelector 同口径
+00:04 +108: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_view_test.dart: 视图切换按钮的显示判据（含与多选 FAB 的互斥） 多个条件同时为真也只是不显示（不抛异常）
+00:04 +109: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_view_test.dart: 档位独立（决策 3 的核心：两个档位分别持久化，互不覆盖） 视图设置项与图集档位设置项是两个不同的下标
+00:04 +110: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_view_test.dart: 档位独立（决策 3 的核心：两个档位分别持久化，互不覆盖） 视图与档位的取值空间不重叠（一个是 album/illust，一个是 local/aggregate/remote）
+00:04 +111: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_view_test.dart: 档位独立（决策 3 的核心：两个档位分别持久化，互不覆盖） 模拟两侧独立切换：图集侧保持"聚合"，插画侧自己的状态不被互相覆盖
+00:04 +112: D:/Flutter_Projucts/PicaComic/PicaKeep/test/illust_archive_page_count_test.dart: 压缩包形态：读中央目录数页数 3 张页图 + 1 张 cover → 3 页（封面被排除）
+00:04 +113: D:/Flutter_Projucts/PicaComic/PicaKeep/test/illust_archive_page_count_test.dart: 压缩包形态：读中央目录数页数 封面缺失时按实际张数算
+00:04 +114: D:/Flutter_Projucts/PicaComic/PicaKeep/test/illust_archive_page_count_test.dart: 压缩包形态：读中央目录数页数 混入非图片条目（说明文件 / 目录项）不计入
+00:04 +115: D:/Flutter_Projucts/PicaComic/PicaKeep/test/illust_archive_page_count_test.dart: 压缩包形态：读中央目录数页数 只有封面 → 给不出页数（null，而不是 0）
+00:04 +116: D:/Flutter_Projucts/PicaComic/PicaKeep/test/illust_archive_page_count_test.dart: 压缩包形态：读中央目录数页数 不是合法 zip → null，且不抛（拿不到就只是不显示这一项）
+00:04 +117: D:/Flutter_Projucts/PicaComic/PicaKeep/test/illust_archive_page_count_test.dart: 压缩包形态：读中央目录数页数 zip 不存在 → null，且不抛
+00:05 +118: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folder_cover_integration_test.dart: (setUpAll)
+00:05 +118: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folder_cover_integration_test.dart: directory: registered folder -> scan -> real resized cover -> app cache
+00:06 +119: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: (setUpAll)
+00:06 +119 -1: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: (setUpAll)
+00:06 +119 -1: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folder_cover_integration_test.dart: single: registered folder -> scan -> real resized cover -> app cache [E]
+  Bad state: No element
+  dart:collection                                       ListBase.singleWhere
+  test\pixiv_folder_cover_integration_test.dart 133:26  main.<fn>
+  
+00:06 +119 -2: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: (setUpAll)
+00:06 +119 -2: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folder_cover_integration_test.dart: zip: registered folder -> scan -> real resized cover -> app cache [E]
+  Bad state: No element
+  dart:collection                                       ListBase.singleWhere
+  test\pixiv_folder_cover_integration_test.dart 133:26  main.<fn>
+  
+00:06 +119 -2: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folder_cover_integration_test.dart: copy keeps two independently addressable scanned instances
+00:06 +119 -3: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:06 +119 -3: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folder_cover_integration_test.dart: copy keeps two independently addressable scanned instances [E]
+  Expected: <2>
+    Actual: <0>
+  
+  package:matcher                                      expect
+  package:flutter_test/src/widget_tester.dart 473:18   expect
+  test\pixiv_folder_cover_integration_test.dart 160:5  main.<fn>
+  
+00:06 +120 -3: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:07 +120 -4: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:07 +120 -4: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folder_cover_integration_test.dart: root relocation preserves folders, records and redirects old task location [E]
+  Bad state: No element
+  dart:core                                             Iterable.single
+  test\pixiv_folder_cover_integration_test.dart 204:14  main.<fn>
+  
+00:07 +120 -4: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:11 +121 -4: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:17 +122 -4: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folder sorting is separate from its long-press menu and persists on back
+00:18 +123 -4: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: root folder offers default action but cannot be renamed or deleted
+00:19 +124 -4: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: illustration long press selects actual items and copies the batch to one folder
+00:29 +125 -4: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: download pill delivers long-press without running ordinary download
+00:29 +126 -4: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: (tearDownAll)
+Fixture cleanup deferred until process exit: C:\Users\tanad\AppData\Local\Temp\pk46_widgets_5a8d7534
+00:29 +126 -4: Some tests failed.

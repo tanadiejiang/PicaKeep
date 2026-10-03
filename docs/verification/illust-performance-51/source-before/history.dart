@@ -1,0 +1,756 @@
+// ignore_for_file: no_leading_underscores_for_local_identifiers
+
+import 'dart:io';
+
+import 'package:picakeep/foundation/local_data_source.dart';
+import 'package:sqlite3/sqlite3.dart';
+import '../foundation/state_controller.dart';
+
+const _legacyCustomHistorySourceKeys = <String>[
+  'copy_manga',
+  'Komiic',
+  'ikmmh',
+  'baozi',
+];
+
+String? _extractEhGalleryId(String target) {
+  final index = target.indexOf('/g/');
+  if (index == -1) return null;
+  final start = index + 3;
+  final end = target.indexOf('/', start);
+  if (end == -1) return null;
+  final id = target.substring(start, end).trim();
+  return id.isEmpty ? null : id;
+}
+
+String? _extractHitomiId(String target) {
+  final htmlMatch = RegExp(r'(\d+)(?=\.html(?:$|\?))').firstMatch(target);
+  if (htmlMatch != null) {
+    return htmlMatch.group(1);
+  }
+  final digitsOnly = RegExp(r'^\d+$').firstMatch(target.trim());
+  return digitsOnly?.group(0);
+}
+
+String? _preferredCustomHistorySourceKey(int type) {
+  final mapping = <int, String>{
+    'copy_manga'.hashCode: 'copy_manga',
+    'Komiic'.hashCode: 'Komiic',
+    'ikmmh'.hashCode: 'ikmmh',
+    'baozi'.hashCode: 'baozi',
+  };
+  return mapping[type];
+}
+
+const _currentManagedHistoryPrefix =
+    'local_download::current_download::';
+const _originalManagedHistoryPrefix =
+    'local_download::original_download::';
+
+void _addCandidate(Set<String> candidates, String value) {
+  final v = value.trim();
+  if (v.isNotEmpty) {
+    candidates.add(v);
+  }
+}
+
+void _addCustomHistoryCandidates(Set<String> candidates, String target,
+    [String? preferredSourceKey]) {
+  if (preferredSourceKey != null && preferredSourceKey.isNotEmpty) {
+    _addCandidate(candidates, '$preferredSourceKey-$target');
+  }
+  for (final key in _legacyCustomHistorySourceKeys) {
+    _addCandidate(candidates, '$key-$target');
+  }
+}
+
+List<String> _buildHistoryDownloadIdCandidates(String target, int type) {
+  final candidates = <String>{};
+  _addCandidate(candidates, target);
+
+  switch (type) {
+    case 1:
+      final ehId = _extractEhGalleryId(target);
+      if (ehId != null) {
+        _addCandidate(candidates, ehId);
+      }
+      break;
+    case 2:
+      _addCandidate(candidates, target.startsWith('jm') ? target : 'jm$target');
+      break;
+    case 3:
+      final hitomiId = _extractHitomiId(target);
+      if (target.startsWith('hitomi')) {
+        _addCandidate(candidates, target);
+      } else if (hitomiId != null) {
+        _addCandidate(candidates, 'hitomi$hitomiId');
+      }
+      break;
+    case 4:
+      if (target.startsWith('Ht') || target.startsWith('ht')) {
+        final suffix = target.substring(2);
+        _addCandidate(candidates, 'Ht$suffix');
+        _addCandidate(candidates, 'ht$suffix');
+      } else {
+        _addCandidate(candidates, 'Ht$target');
+        _addCandidate(candidates, 'ht$target');
+      }
+      break;
+    case 5:
+      _addCandidate(
+          candidates, target.startsWith('nhentai') ? target : 'nhentai$target');
+      break;
+    case 6:
+      _addCustomHistoryCandidates(candidates, target);
+      break;
+    case 7:
+      break;
+    default:
+      _addCustomHistoryCandidates(
+          candidates, target, _preferredCustomHistorySourceKey(type));
+      break;
+  }
+
+  return candidates.toList();
+}
+
+final class HistoryType {
+  static HistoryType get picacg => const HistoryType(0);
+  static HistoryType get ehentai => const HistoryType(1);
+  static HistoryType get jmComic => const HistoryType(2);
+  static HistoryType get hitomi => const HistoryType(3);
+  static HistoryType get htmanga => const HistoryType(4);
+  static HistoryType get nhentai => const HistoryType(5);
+
+  /// Generic local/custom source fallback used by PicaKeep.
+  static HistoryType get other => const HistoryType(6);
+  static HistoryType get localAlbum => const HistoryType(7);
+
+  /// 第十八轮新增：Pixiv 阅读历史类型（key=8 紧接图集之后）。
+  static HistoryType get pixiv => const HistoryType(8);
+
+  final int value;
+
+  String get name {
+    const nameMap = {
+      0: "picacg",
+      1: "ehentai",
+      2: "jm",
+      3: "hitomi",
+      4: "htmanga",
+      5: "nhentai",
+      6: "other",
+      7: "图集",
+      8: "pixiv",
+    };
+    return nameMap[value] ?? _preferredCustomHistorySourceKey(value) ?? "other";
+  }
+
+  const HistoryType(this.value);
+
+  @override
+  bool operator ==(Object other) =>
+      other is HistoryType && other.value == value;
+
+  @override
+  int get hashCode => value.hashCode;
+}
+
+class History {
+  HistoryType type;
+  DateTime time;
+  String title;
+  String subtitle;
+  String cover;
+  int ep;
+  int page;
+  String target;
+  Set<int> readEpisode;
+  int? maxPage;
+
+  History(this.type, this.time, this.title, this.subtitle, this.cover, this.ep,
+      this.page, this.target,
+      [this.readEpisode = const <int>{}, this.maxPage]);
+
+  Map<String, dynamic> toMap() => {
+        "type": type.value,
+        "time": time.millisecondsSinceEpoch,
+        "title": title,
+        "subtitle": subtitle,
+        "cover": cover,
+        "ep": ep,
+        "page": page,
+        "target": target,
+        "readEpisode": readEpisode.toList(),
+        "max_page": maxPage
+      };
+
+  History.fromMap(Map<String, dynamic> map)
+      : type = HistoryType(map["type"]),
+        time = DateTime.fromMillisecondsSinceEpoch(map["time"]),
+        title = map["title"],
+        subtitle = map["subtitle"],
+        cover = map["cover"],
+        ep = map["ep"],
+        page = map["page"],
+        target = map["target"],
+        readEpisode = Set<int>.from(
+            (map["readEpisode"] as List<dynamic>?)?.toSet() ?? const <int>{}),
+        maxPage = map["max_page"];
+
+  History.fromRow(Row row)
+      : type = HistoryType(row["type"]),
+        time = DateTime.fromMillisecondsSinceEpoch(row["time"]),
+        title = row["title"],
+        subtitle = row["subtitle"],
+        cover = row["cover"],
+        ep = row["ep"],
+        page = row["page"],
+        target = row["target"],
+        readEpisode = Set<int>.from((row["readEpisode"] as String)
+            .split(',')
+            .where((element) => element != "")
+            .map((e) => int.parse(e))),
+        maxPage = row["max_page"];
+
+  List<String> candidateDownloadIds() =>
+      _buildHistoryDownloadIdCandidates(target, type.value);
+
+  /// Ensure a DB row exists for this reading session ([ComicReadingPage] uses [target] == [readingData.id]).
+  static Future<History> ensureForLocalRead({
+    required String target,
+    required HistoryType type,
+    required String title,
+    required String subtitle,
+    required String cover,
+    Iterable<String> legacyTargets = const <String>[],
+    int ep = 0,
+    int page = 0,
+  }) async {
+    final manager = HistoryManager();
+    final existing = manager.findSync(target);
+    if (existing != null) {
+      return existing;
+    }
+    for (final legacyTarget in legacyTargets) {
+      if (legacyTarget == target) continue;
+      final migrated = manager.migrateLegacyTarget(
+        legacyTarget: legacyTarget,
+        newTarget: target,
+        type: type,
+        title: title,
+        subtitle: subtitle,
+        cover: cover,
+      );
+      if (migrated != null) {
+        return migrated;
+      }
+    }
+    final h = History(
+      type,
+      DateTime.now(),
+      title,
+      subtitle,
+      cover,
+      ep,
+      page,
+      target,
+    );
+    await manager.addHistory(h, legacyTargets: legacyTargets);
+    return manager.findSync(target)!;
+  }
+}
+
+class HistoryManager {
+  static HistoryManager? cache;
+
+  HistoryManager.create();
+
+  factory HistoryManager() =>
+      cache == null ? (cache = HistoryManager.create()) : cache!;
+
+  late Database _db;
+  Database? _secondaryDb;
+  bool _initialized = false;
+
+  bool get isInitialized => _initialized;
+
+  int get length => count();
+
+  /// Primary writable DB handle.
+  Database get database => _db;
+
+  /// Ordered DB handles used by the current source mode.
+  List<Database> get databases => [
+        _db,
+        if (_secondaryDb != null) _secondaryDb!,
+      ];
+
+  Map<String, bool>? _cachedHistory;
+
+  Future<void> init() async {
+    final roots = await getManagedDataRoots();
+    final primaryPath = managedDataFilePath(roots.first, 'history.db');
+    File(primaryPath).parent.createSync(recursive: true);
+
+    Database? previousDb;
+    try {
+      previousDb = _db;
+    } catch (_) {}
+    final previousSecondaryDb = _secondaryDb;
+
+    final nextDb = sqlite3.open(primaryPath);
+    _configureDatabase(nextDb);
+
+    _db = nextDb;
+    _secondaryDb = null;
+
+    Database? nextSecondaryDb;
+    if (roots.length > 1) {
+      final secondaryPath = managedDataFilePath(roots[1], 'history.db');
+      final secondaryFile = File(secondaryPath);
+      if (secondaryFile.existsSync()) {
+        final openedSecondaryDb = sqlite3.open(secondaryPath);
+        _configureDatabase(openedSecondaryDb);
+        nextSecondaryDb = openedSecondaryDb;
+      }
+    }
+    _secondaryDb = nextSecondaryDb;
+    _reconcileManagedHistoryStorage();
+    _cachedHistory = null;
+    _initialized = true;
+
+    if (!identical(previousDb, nextDb)) {
+      try {
+        previousDb?.dispose();
+      } catch (_) {}
+    }
+    if (!identical(previousSecondaryDb, nextSecondaryDb)) {
+      try {
+        previousSecondaryDb?.dispose();
+      } catch (_) {}
+    }
+  }
+
+  void dispose() {
+    try {
+      _db.dispose();
+    } catch (_) {}
+    try {
+      _secondaryDb?.dispose();
+    } catch (_) {}
+    _secondaryDb = null;
+    _cachedHistory = null;
+    _initialized = false;
+  }
+
+  void _configureDatabase(Database db) {
+    db.execute("""
+      create table if not exists history  (
+        target text primary key,
+        title text,
+        subtitle text,
+        cover text,
+        time int,
+        type int,
+        ep int,
+        page int,
+        readEpisode text,
+        max_page int
+      );
+    """);
+
+    final res = db.select("""
+      PRAGMA table_info(history);
+    """);
+    if (res.every((row) => row["name"] != "max_page")) {
+      db.execute("""
+        alter table history
+        add column max_page int;
+      """);
+    }
+
+    db.execute("""
+      CREATE TABLE IF NOT EXISTS image_favorites (
+        id TEXT,
+        title TEXT NOT NULL,
+        cover TEXT NOT NULL,
+        ep INTEGER NOT NULL,
+        page INTEGER NOT NULL,
+        other TEXT NOT NULL,
+        PRIMARY KEY (id, ep, page)
+      );
+    """);
+  }
+
+  bool _existsInDb(Database db, String target) {
+    final res = db.select(
+      """
+      select 1 from history
+      where target == ?
+      limit 1;
+    """,
+      [target],
+    );
+    return res.isNotEmpty;
+  }
+
+  History? _findInDb(Database db, String target) {
+    final res = db.select(
+      """
+      select * from history
+      where target == ?;
+    """,
+      [target],
+    );
+    if (res.isEmpty) {
+      return null;
+    }
+    return History.fromRow(res.first);
+  }
+
+  Database? _findDbContainingTarget(String target) {
+    for (final db in databases) {
+      if (_existsInDb(db, target)) {
+        return db;
+      }
+    }
+    return null;
+  }
+
+  void _upsertHistoryInDb(Database db, History item) {
+    db.execute("""
+      insert or replace into history
+        (target, title, subtitle, cover, time, type, ep, page, readEpisode, max_page)
+      values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+    """, [
+      item.target,
+      item.title,
+      item.subtitle,
+      item.cover,
+      item.time.millisecondsSinceEpoch,
+      item.type.value,
+      item.ep,
+      item.page,
+      item.readEpisode.join(','),
+      item.maxPage,
+    ]);
+  }
+
+  Database _preferredDbForHistoryTarget(
+    String target, {
+    Iterable<String> legacyTargets = const <String>[],
+  }) {
+    final normalizedTarget = target.trim();
+    final existingDb = _findDbContainingTarget(normalizedTarget);
+    if (existingDb != null) {
+      return existingDb;
+    }
+    for (final legacyTarget in legacyTargets) {
+      final normalizedLegacyTarget = legacyTarget.trim();
+      if (normalizedLegacyTarget.isEmpty) {
+        continue;
+      }
+      final legacyDb = _findDbContainingTarget(normalizedLegacyTarget);
+      if (legacyDb != null) {
+        return legacyDb;
+      }
+    }
+    if (normalizedTarget.startsWith(_originalManagedHistoryPrefix) &&
+        _secondaryDb != null) {
+      return _secondaryDb!;
+    }
+    return _db;
+  }
+
+  bool _shouldExposeHistoryTarget(String target) {
+    final normalizedTarget = target.trim();
+    switch (managedDataSourceMode) {
+      case managedDataSourceModeOriginalOnly:
+        return !normalizedTarget.startsWith(_currentManagedHistoryPrefix);
+      case managedDataSourceModeCurrentOnly:
+        return !normalizedTarget.startsWith(_originalManagedHistoryPrefix);
+      case managedDataSourceModeCurrentAndOriginal:
+        return true;
+      default:
+        return true;
+    }
+  }
+
+  void _reconcileManagedHistoryStorage() {
+    final secondaryDb = _secondaryDb;
+    if (secondaryDb == null) {
+      return;
+    }
+
+    void moveManagedRows({
+      required Database from,
+      required Database to,
+      required bool Function(String target) shouldMove,
+    }) {
+      final rows = from.select("""
+        select * from history;
+      """);
+      for (final row in rows) {
+        final item = History.fromRow(row);
+        if (!shouldMove(item.target)) {
+          continue;
+        }
+        final existing = _findInDb(to, item.target);
+        if (existing == null || item.time.isAfter(existing.time)) {
+          _upsertHistoryInDb(to, item);
+        }
+        from.execute("""
+          delete from history
+          where target == ?;
+        """, [item.target]);
+      }
+    }
+
+    moveManagedRows(
+      from: _db,
+      to: secondaryDb,
+      shouldMove: (target) =>
+          target.trim().startsWith(_originalManagedHistoryPrefix),
+    );
+    moveManagedRows(
+      from: secondaryDb,
+      to: _db,
+      shouldMove: (target) =>
+          target.trim().startsWith(_currentManagedHistoryPrefix),
+    );
+  }
+
+  Future<void> addHistory(
+    History newItem, {
+    Iterable<String> legacyTargets = const <String>[],
+  }) async {
+    final db = _preferredDbForHistoryTarget(
+      newItem.target,
+      legacyTargets: legacyTargets,
+    );
+    final res = db.select(
+      """
+      select * from history
+      where target == ?;
+    """,
+      [newItem.target],
+    );
+    if (res.isEmpty) {
+      _upsertHistoryInDb(db, newItem);
+    } else {
+      db.execute("""
+        update history
+        set time = ${DateTime.now().millisecondsSinceEpoch}
+        where target == ?;
+      """, [newItem.target]);
+    }
+    _cachedHistory = null;
+  }
+
+  History? migrateLegacyTarget({
+    required String legacyTarget,
+    required String newTarget,
+    required HistoryType type,
+    required String title,
+    required String subtitle,
+    required String cover,
+  }) {
+    if (legacyTarget == newTarget) {
+      return findSync(newTarget);
+    }
+    final existing = findSync(newTarget);
+    if (existing != null) {
+      return existing;
+    }
+    for (final db in databases) {
+      final legacy = _findInDb(db, legacyTarget);
+      if (legacy == null) {
+        continue;
+      }
+      final migrated = History(
+        type,
+        legacy.time,
+        title,
+        subtitle,
+        cover.isNotEmpty ? cover : legacy.cover,
+        legacy.ep,
+        legacy.page,
+        newTarget,
+        legacy.readEpisode,
+        legacy.maxPage,
+      );
+      db.execute("""
+        insert or replace into history (target, title, subtitle, cover, time, type, ep, page, readEpisode, max_page)
+        values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+      """, [
+        migrated.target,
+        migrated.title,
+        migrated.subtitle,
+        migrated.cover,
+        migrated.time.millisecondsSinceEpoch,
+        migrated.type.value,
+        migrated.ep,
+        migrated.page,
+        migrated.readEpisode.join(','),
+        migrated.maxPage,
+      ]);
+      db.execute("""
+        delete from history
+        where target == ?;
+      """, [legacyTarget]);
+      _cachedHistory = null;
+      return findSync(newTarget);
+    }
+    return null;
+  }
+
+  Future<void> saveReadHistory(History history,
+      [bool updateMePage = true]) async {
+    final db = _preferredDbForHistoryTarget(history.target);
+    db.execute("""
+      update history
+      set time = ${DateTime.now().millisecondsSinceEpoch}, ep = ?, page = ?, readEpisode = ?, max_page = ?
+      where target == ?;
+    """, [
+      history.ep,
+      history.page,
+      history.readEpisode.join(','),
+      history.maxPage,
+      history.target
+    ]);
+    _cachedHistory = null;
+    if (updateMePage) {
+      Future.microtask(() {
+        StateController.findOrNull<SimpleController>(tag: "me_page")?.update();
+      });
+    }
+  }
+
+  void readDataFromJson(dynamic json) {
+    if (json is List) {
+      for (var h in json) {
+        if (h is Map<String, dynamic>) {
+          final item = History.fromMap(h);
+          if (find(item.target) == null) {
+            addHistory(item);
+          }
+        }
+      }
+    }
+  }
+
+  void _notifyHistoryChanged() {
+    Future.microtask(() {
+      StateController.findOrNull<SimpleController>(tag: "me_page")?.update();
+    });
+  }
+
+  void clearHistory() {
+    for (final db in databases) {
+      db.execute("delete from history;");
+    }
+    _cachedHistory = null;
+    _notifyHistoryChanged();
+  }
+
+  void remove(String id) {
+    for (final db in databases) {
+      db.execute("""
+        delete from history
+        where target == ?;
+      """, [id]);
+    }
+    _cachedHistory = null;
+    _notifyHistoryChanged();
+  }
+
+  History? findSync(String target) {
+    return find(target);
+  }
+
+  History? find(String target) {
+    if (!_initialized) {
+      return null;
+    }
+    _cachedHistory ??= {
+      for (final item in getAll()) item.target: true,
+    };
+    if (!_cachedHistory!.containsKey(target)) {
+      return null;
+    }
+    return _findInDb(_db, target) ??
+        (_secondaryDb != null ? _findInDb(_secondaryDb!, target) : null);
+  }
+
+  Map<String, History> findManySync(Iterable<String> targets) {
+    if (!_initialized) {
+      return const <String, History>{};
+    }
+    final remaining = <String>{
+      for (final target in targets)
+        if (target.trim().isNotEmpty) target.trim(),
+    };
+    if (remaining.isEmpty) {
+      return const <String, History>{};
+    }
+    final result = <String, History>{};
+    for (final item in getAll()) {
+      if (!remaining.remove(item.target)) {
+        continue;
+      }
+      result[item.target] = item;
+      if (remaining.isEmpty) {
+        break;
+      }
+    }
+    return result;
+  }
+
+  List<History> getAll() {
+    if (!_initialized) {
+      return const <History>[];
+    }
+    final merged = <String, History>{};
+    for (final db in databases) {
+      final res = db.select("""
+        select * from history;
+      """);
+      for (final element in res) {
+        final item = History.fromRow(element);
+        if (!_shouldExposeHistoryTarget(item.target)) {
+          continue;
+        }
+        final existing = merged[item.target];
+        if (existing == null || item.time.isAfter(existing.time)) {
+          merged[item.target] = item;
+        }
+      }
+    }
+    final items = merged.values.toList()
+      ..sort((a, b) => b.time.compareTo(a.time));
+    return items;
+  }
+
+  /// 「我」页面历史卡片最多展示的条数。
+  static const int recentLimit = 20;
+
+  /// 最近记录 **+ 全量条数**，一次 [getAll] 同时给出两者。
+  ///
+  /// 之所以要一起返回：`getRecent()` 的列表被截断在 [recentLimit]，
+  /// 拿它的 `length` 当总数显示，数字会**永远停在 20**；而历史页用的是
+  /// [getAll]，两处数字会对不上。分两次调用又会白跑一遍全量查询。
+  ({List<History> recent, int total}) getRecentWithTotal() {
+    final items = getAll();
+    final recent = items.length <= recentLimit
+        ? items
+        : items.sublist(0, recentLimit);
+    return (recent: recent, total: items.length);
+  }
+
+  List<History> getRecent() => getRecentWithTotal().recent;
+
+  int count() {
+    return getAll().length;
+  }
+}

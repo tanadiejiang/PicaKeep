@@ -192,7 +192,9 @@ class DownloadMigrationController extends ChangeNotifier {
         shouldStop: () => _stopRequested,
       );
       // 只有旧目录真的空了才销账；否则保留记录供下次继续。
-      if (!await hasPendingDownloadEntries(from)) {
+      // 必须把 `to` 传进去：目标在源目录内部时，"通往目标的路径"会永远留在
+      // 源目录里，不排除它就永远判不出"搬完了"。
+      if (!await hasPendingDownloadEntries(from, to: to)) {
         await _savePending(null);
       }
       return result;

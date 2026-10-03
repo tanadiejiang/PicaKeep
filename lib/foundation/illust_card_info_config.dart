@@ -186,7 +186,7 @@ String encodeIllustCardInfoTemplate({
   return parseIllustCardInfoTemplate(normalizeIllustCardInfoTemplate(raw));
 }
 
-/// 「页数」的展示文案：**`p{N}`**（与 27/28 号下载命名同口径）。
+/// 「页数」的展示文案：**多图 `p{N}`、单图与未知一律空串（不显示）**。
 ///
 /// ## 为什么从 `'@pages 页'` 改成 `p{N}`
 ///
@@ -194,15 +194,23 @@ String encodeIllustCardInfoTemplate({
 /// `Vodyanitsa🎨 \n 1 页`，而同一个作品下载到盘上的名字是 `..._p0.jpg` ——
 /// 两处对不上，用户要求统一到**产物名的那套记号**。
 ///
-/// 三分支（单图 `p0` / 多图 `p{n}` / 未知空串）**不在本函数里重写**，直接转调
-/// [pixivPagesSuffix]。理由：那是用户拍板的命名约定，卡片与目录名必须是同一个
-/// 函数算出来的 —— 各写一份，改一处漏一处就会让"卡片上的页数"与"盘上的页数"
-/// 悄悄对不上，而且不报错。
+/// ## 为什么单图不显示（36 号追加反馈）
+///
+/// 用户原话：「p0 单图的就不用显示页数了」—— 一张图的作品标 `p0` 只是噪音。
+///
+/// ⚠️ **只改卡片这一侧**。下载目录名仍走 [pixivPagesSuffix]（单图 = `p0`），
+/// 那是 28 号拍板、且**已经写进 `download.db` 的命名约定**：目录名是记录的
+/// 一部分，跟着卡片观感一起改会让新旧下载变成两套命名。所以这里不再整体转调
+/// 那个函数，而是"单图先拦掉，其余仍交给它"——保证多图与未知两档的口径
+/// 与目录名**逐字一致**，只有单图这一档是卡片特有的省略。
 ///
 /// 顺带不再需要翻译：`p3` 是**语言无关的记号**，所以 `'@pages 页'` 那个 tlParams
 /// 占位符（以及它在 `assets/translation.json` 里的两条译文）在卡片侧不再被用到。
 /// "未知页数不显示"仍沿用卡片侧的空值跳过（见 [buildIllustCardInfoSpans]）。
 String illustCardInfoPageText(int pages) {
+  if (pages <= 1) {
+    return '';
+  }
   return pixivPagesSuffix(pages);
 }
 

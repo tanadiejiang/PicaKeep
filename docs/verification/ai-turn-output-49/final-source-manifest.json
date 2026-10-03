@@ -1,0 +1,18 @@
+{
+  "verifiedAt": "2026-10-02 17:03",
+  "root": "D:\\Flutter_Projucts\\PicaComic\\PicaKeep",
+  "branch": "main",
+  "committed": false,
+  "built": false,
+  "installed": false,
+  "targetedPass": 130,
+  "fullPass": 2174,
+  "fullSkip": 14,
+  "fullFail": 0,
+  "sourceSha256": {
+    "lib/foundation/ai/ai_conversation.dart": "f4e9545c2be97fc2a0e915a2a2554fbaf72087ef0b2cdedbac85fef06015c644",
+    "test/ai_conversation_test.dart": "064ce5f76c46fcbcb6dbc109a5e44f061a6bebb11846970ed92e8a5176965080",
+    "test/ai_turn_output_test.dart": "b331423e7752abdaf3400639a068a80b6f1ce9ac677192f7014798812dfac9cc",
+    "test/ai_chat_result_list_widget_test.dart": "de3684fe925e3e4714e693e211a6ca67216c35b8d7281ca6ce16e8c4b289a09f"
+  }
+}

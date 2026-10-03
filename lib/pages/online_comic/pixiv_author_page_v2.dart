@@ -18,16 +18,28 @@
 ///   资料挂了不该让作品列表也变成错误页（反之亦然），而且这样"哪一步失败"
 ///   在界面上就是可见的 —— 第 3 步（`profile/illusts`）尚未真机验证，
 ///   失败时的可诊断性比"一次做对"更现实。
-/// - **列表复用 `OnlineComicListItem`**：与搜索页/探索页同一张卡片，
-///   观感与"点开详情页"的行为完全一致，不为作者页另发明一套列表。
+/// - **作品列表用瀑布流**（36 号用户要求："把作者页的展示改为瀑布流的样式"）：
+///   与图集页「插画」视图同一套视觉。为此 [PixivComicBrief] 补上了
+///   `width` / `height`（响应里本来就有，之前没解析），并把封面 URL 用
+///   [pixivProportionalThumbUrl] 换成**保持比例**的缩略图 ——
+///   响应给的 `/c/250x250_80_a2/…_square1200.jpg` 是方图裁切版，
+///   直接放进瀑布流只能全部按 1:1 排（那就不是瀑布流了）。
 library;
 
 import 'package:flutter/material.dart';
+import 'package:flutter_staggered_grid_view/flutter_staggered_grid_view.dart';
 
+import 'package:picakeep/base.dart';
 import 'package:picakeep/comic_source/comic_source.dart';
+import 'package:picakeep/foundation/local_library_illust_view.dart'
+    show illustWaterfallColumnsSettingIndex, normalizeIllustWaterfallColumns;
 import 'package:picakeep/network/base_comic.dart';
 import 'package:picakeep/network/pixiv_network/pixiv_network.dart';
-import 'package:picakeep/pages/online_common/online_comic_list_item.dart';
+import 'package:picakeep/network/pixiv_network/pixiv_parsing.dart'
+    show pixivProportionalThumbUrl;
+import 'package:picakeep/pages/online_common/online_comic_list_item.dart'
+    show onlineCoverProvider, openOnlineComic;
+import 'package:picakeep/pages/online_common/online_waterfall_card.dart';
 
 /// Pixiv 图片（头像/封面）必须带的防盗链头。
 ///
@@ -156,6 +168,13 @@ class _PixivAuthorPageV2State extends State<PixivAuthorPageV2> {
 
   ComicSource? get _source => ComicSource.find('pixiv');
 
+  /// 瀑布流列数：与图集页「插画」视图**共用同一个设置**（`settings[156]`）。
+  ///
+  /// 两处都是"多列图片墙"，各配一个列数只会让用户在两个地方各调一次。
+  int get _columns => normalizeIllustWaterfallColumns(
+        appdata.settings[illustWaterfallColumnsSettingIndex],
+      );
+
   @override
   Widget build(BuildContext context) {
     final author = _author;
@@ -167,27 +186,59 @@ class _PixivAuthorPageV2State extends State<PixivAuthorPageV2> {
       ),
       body: RefreshIndicator(
         onRefresh: _refresh,
-        child: ListView.builder(
+        child: CustomScrollView(
           controller: _scrollController,
           // 内容不足一屏时也要能下拉刷新。
           physics: const AlwaysScrollableScrollPhysics(),
-          padding: const EdgeInsets.only(bottom: 24),
-          // 头部（作者资料 + 区块标题）+ 作品条目 + 尾部（加载中/错误/到底）
-          itemCount: _items.length + 2,
-          itemBuilder: (context, index) {
-            if (index == 0) return _buildHeader(context);
-            if (index == _items.length + 1) return _buildFooter(context);
-            final comic = _items[index - 1];
-            final source = _source;
-            if (source == null) {
-              // 理论上不可达（pixiv 是内置源）；留一行兜底，避免整页崩在
-              // 一个"源没注册"的环境问题上。
-              return ListTile(title: Text(comic.title));
-            }
-            return OnlineComicListItem(source: source, comic: comic);
-          },
+          slivers: <Widget>[
+            // 头部（作者资料 + 区块标题）与尾部（加载中/错误/到底）都是 sliver，
+            // 中间的作品墙才是瀑布流本身。
+            SliverToBoxAdapter(child: _buildHeader(context)),
+            SliverPadding(
+              // 与图集页插画瀑布流同样的左右各 2dp：卡片自带 3dp 外边距，
+              // 两者相加才是视觉上的块间距。
+              padding: const EdgeInsets.fromLTRB(2, 0, 2, 24),
+              sliver: SliverMasonryGrid.count(
+                crossAxisCount: _columns,
+                mainAxisSpacing: 0,
+                crossAxisSpacing: 0,
+                childCount: _items.length,
+                itemBuilder: (context, index) =>
+                    _buildWorkCard(context, _items[index]),
+              ),
+            ),
+            SliverToBoxAdapter(child: _buildFooter(context)),
+          ],
         ),
       ),
+    );
+  }
+
+  /// 一张作品卡片；点开进入该源的详情页（与搜索页/探索页同一个跳转函数）。
+  Widget _buildWorkCard(BuildContext context, BaseComic comic) {
+    final source = _source;
+    if (source == null) {
+      // 理论上不可达（pixiv 是内置源）；留一行兜底，避免整页崩在
+      // 一个"源没注册"的环境问题上。
+      return ListTile(title: Text(comic.title));
+    }
+    // 宽高 / 页数只有 [PixivComicBrief] 有。`_items` 声明成 `BaseComic` 只是
+    // 为了装 `Res<List<BaseComic>>` 的容器，实际元素恒为 `PixivComicBrief`
+    // （作者页只从 `getAuthorWorks` 取数）；这里做一次显式收窄，
+    // 拿不到就退回 `BaseComic` 能给的字段，不硬转。
+    final brief = comic is PixivComicBrief ? comic : null;
+    return OnlineWaterfallCard(
+      title: comic.title,
+      // **必须换掉方图缩略图**：响应给的 `_square1200` 是裁切版，
+      // 直接排进瀑布流会让每一格都变成 1:1。
+      cover: pixivProportionalThumbUrl(comic.cover),
+      imageHeaders:
+          source.imageHeadersBuilder?.call(comic) ?? pixivImageHeaders,
+      onTap: () => openOnlineComic(context, source, comic),
+      author: brief?.author ?? comic.subTitle,
+      pageCount: brief?.pageCount ?? 0,
+      width: brief?.width,
+      height: brief?.height,
     );
   }
 

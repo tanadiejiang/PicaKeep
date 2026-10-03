@@ -1,0 +1,275 @@
+Flutter assets will be downloaded from https://storage.flutter-io.cn. Make sure you trust this source!
+00:00 +0: loading D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_card_test.dart
+00:00 +0: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_card_test.dart: 语义保留阅读、详情、多选动作而不重复朗读装饰内容
+00:00 +1: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_page_view_scope_test.dart: 标题随视图切换（33 号第 3 条） 从「我」页进图集页：初始「图集」→ 切插画 →「插画」→ 切回「图集」
+00:00 +2: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_page_view_scope_test.dart: 标题随视图切换（33 号第 3 条） 从「我」页进图集页：初始「图集」→ 切插画 →「插画」→ 切回「图集」
+00:00 +3: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_page_view_scope_test.dart: 标题随视图切换（33 号第 3 条） 从「我」页进图集页：初始「图集」→ 切插画 →「插画」→ 切回「图集」
+00:01 +4: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_page_view_scope_test.dart: 标题随视图切换（33 号第 3 条） 从「我」页进图集页：初始「图集」→ 切插画 →「插画」→ 切回「图集」
+00:01 +5: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_page_view_scope_test.dart: 标题随视图切换（33 号第 3 条） 从「我」页进图集页：初始「图集」→ 切插画 →「插画」→ 切回「图集」
+00:01 +6: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_page_view_scope_test.dart: 标题随视图切换（33 号第 3 条） 从「我」页进图集页：初始「图集」→ 切插画 →「插画」→ 切回「图集」
+00:01 +7: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_page_view_scope_test.dart: 标题随视图切换（33 号第 3 条） 从「我」页进图集页：初始「图集」→ 切插画 →「插画」→ 切回「图集」
+00:01 +8: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_page_view_scope_test.dart: 标题随视图切换（33 号第 3 条） 从「我」页进图集页：初始「图集」→ 切插画 →「插画」→ 切回「图集」
+00:01 +9: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_page_view_scope_test.dart: 标题随视图切换（33 号第 3 条） 从「我」页进图集页：初始「图集」→ 切插画 →「插画」→ 切回「图集」
+00:01 +10: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_page_view_scope_test.dart: 标题随视图切换（33 号第 3 条） 从「我」页进图集页：初始「图集」→ 切插画 →「插画」→ 切回「图集」
+00:01 +11: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_page_view_scope_test.dart: 标题随视图切换（33 号第 3 条） 从「我」页进图集页：初始「图集」→ 切插画 →「插画」→ 切回「图集」
+00:01 +12: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_page_view_scope_test.dart: 标题随视图切换（33 号第 3 条） 从「我」页进图集页：初始「图集」→ 切插画 →「插画」→ 切回「图集」
+00:01 +13: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_page_view_scope_test.dart: 标题随视图切换（33 号第 3 条） 从「我」页进图集页：初始「图集」→ 切插画 →「插画」→ 切回「图集」
+00:01 +14: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_page_view_scope_test.dart: 标题随视图切换（33 号第 3 条） 从「我」页进图集页：初始「图集」→ 切插画 →「插画」→ 切回「图集」
+00:01 +15: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_page_view_scope_test.dart: 标题随视图切换（33 号第 3 条） 从「我」页进图集页：初始「图集」→ 切插画 →「插画」→ 切回「图集」
+00:01 +16: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_page_view_scope_test.dart: 标题随视图切换（33 号第 3 条） 从「我」页进图集页：初始「图集」→ 切插画 →「插画」→ 切回「图集」
+00:01 +17: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_page_view_scope_test.dart: 标题随视图切换（33 号第 3 条） 从「我」页进图集页：初始「图集」→ 切插画 →「插画」→ 切回「图集」
+00:01 +18: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_page_view_scope_test.dart: 标题随视图切换（33 号第 3 条） 从「我」页进图集页：初始「图集」→ 切插画 →「插画」→ 切回「图集」
+00:01 +19: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_page_view_scope_test.dart: 标题随视图切换（33 号第 3 条） 从「我」页进图集页：初始「图集」→ 切插画 →「插画」→ 切回「图集」
+00:01 +20: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_page_view_scope_test.dart: 标题随视图切换（33 号第 3 条） 从「我」页进图集页：初始「图集」→ 切插画 →「插画」→ 切回「图集」
+00:01 +21: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_page_view_scope_test.dart: 标题随视图切换（33 号第 3 条） 从「我」页进图集页：初始「图集」→ 切插画 →「插画」→ 切回「图集」
+00:01 +22: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_page_view_scope_test.dart: 标题随视图切换（33 号第 3 条） 从「我」页进图集页：初始「图集」→ 切插画 →「插画」→ 切回「图集」
+00:01 +23: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_page_view_scope_test.dart: 标题随视图切换（33 号第 3 条） 从「我」页进图集页：初始「图集」→ 切插画 →「插画」→ 切回「图集」
+00:01 +24: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_page_view_scope_test.dart: 标题随视图切换（33 号第 3 条） 从「我」页进图集页：初始「图集」→ 切插画 →「插画」→ 切回「图集」
+00:01 +25: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_page_view_scope_test.dart: 标题随视图切换（33 号第 3 条） 从「我」页进图集页：初始「图集」→ 切插画 →「插画」→ 切回「图集」
+00:01 +26: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_page_view_scope_test.dart: 标题随视图切换（33 号第 3 条） 从「我」页进图集页：初始「图集」→ 切插画 →「插画」→ 切回「图集」
+00:01 +27: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_page_view_scope_test.dart: 标题随视图切换（33 号第 3 条） 从「我」页进图集页：初始「图集」→ 切插画 →「插画」→ 切回「图集」
+00:01 +28: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_page_view_scope_test.dart: 标题随视图切换（33 号第 3 条） 从「我」页进图集页：初始「图集」→ 切插画 →「插画」→ 切回「图集」
+00:01 +29: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_page_view_scope_test.dart: 标题随视图切换（33 号第 3 条） 从「我」页进图集页：初始「图集」→ 切插画 →「插画」→ 切回「图集」
+00:01 +30: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_page_view_scope_test.dart: 标题随视图切换（33 号第 3 条） 从「我」页进图集页：初始「图集」→ 切插画 →「插画」→ 切回「图集」
+00:01 +31: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_page_view_scope_test.dart: 标题随视图切换（33 号第 3 条） 从「我」页进图集页：初始「图集」→ 切插画 →「插画」→ 切回「图集」
+00:01 +32: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_page_view_scope_test.dart: 标题随视图切换（33 号第 3 条） 从「我」页进图集页：初始「图集」→ 切插画 →「插画」→ 切回「图集」
+00:01 +33: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_page_view_scope_test.dart: 标题随视图切换（33 号第 3 条） 从「我」页进图集页：初始「图集」→ 切插画 →「插画」→ 切回「图集」
+00:01 +34: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_page_view_scope_test.dart: 标题随视图切换（33 号第 3 条） 从「我」页进图集页：初始「图集」→ 切插画 →「插画」→ 切回「图集」
+00:01 +35: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_page_view_scope_test.dart: 标题随视图切换（33 号第 3 条） 从「我」页进图集页：初始「图集」→ 切插画 →「插画」→ 切回「图集」
+00:01 +36: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_page_view_scope_test.dart: 标题随视图切换（33 号第 3 条） 从「我」页进图集页：初始「图集」→ 切插画 →「插画」→ 切回「图集」
+00:01 +37: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_page_view_scope_test.dart: 标题随视图切换（33 号第 3 条） 从「我」页进图集页：初始「图集」→ 切插画 →「插画」→ 切回「图集」
+00:01 +38: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_page_view_scope_test.dart: 标题随视图切换（33 号第 3 条） 从「我」页进图集页：初始「图集」→ 切插画 →「插画」→ 切回「图集」
+00:01 +39: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_page_view_scope_test.dart: 标题随视图切换（33 号第 3 条） 从「我」页进图集页：初始「图集」→ 切插画 →「插画」→ 切回「图集」
+00:01 +40: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_page_view_scope_test.dart: 标题随视图切换（33 号第 3 条） 从「我」页进图集页：初始「图集」→ 切插画 →「插画」→ 切回「图集」
+00:01 +41: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_page_view_scope_test.dart: 标题随视图切换（33 号第 3 条） 从「我」页进图集页：初始「图集」→ 切插画 →「插画」→ 切回「图集」
+00:01 +42: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_page_view_scope_test.dart: 标题随视图切换（33 号第 3 条） 从「我」页进图集页：初始「图集」→ 切插画 →「插画」→ 切回「图集」
+00:01 +43: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_page_view_scope_test.dart: 标题随视图切换（33 号第 3 条） 从「我」页进图集页：初始「图集」→ 切插画 →「插画」→ 切回「图集」
+00:01 +44: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_page_view_scope_test.dart: 标题随视图切换（33 号第 3 条） 从「我」页进图集页：初始「图集」→ 切插画 →「插画」→ 切回「图集」
+00:01 +45: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_page_view_scope_test.dart: 标题随视图切换（33 号第 3 条） 从「我」页进图集页：初始「图集」→ 切插画 →「插画」→ 切回「图集」
+00:01 +46: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_page_view_scope_test.dart: 标题随视图切换（33 号第 3 条） 从「我」页进图集页：初始「图集」→ 切插画 →「插画」→ 切回「图集」
+00:01 +47: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_page_view_scope_test.dart: 标题随视图切换（33 号第 3 条） 从「我」页进图集页：初始「图集」→ 切插画 →「插画」→ 切回「图集」
+00:01 +48: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_page_view_scope_test.dart: 标题随视图切换（33 号第 3 条） 从「我」页进图集页：初始「图集」→ 切插画 →「插画」→ 切回「图集」
+00:02 +49: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_view_test.dart: 瀑布流真实渲染：列数与变高 列数设置真的作用到 SliverMasonryGrid（2 列 / 3 列各断言一次）
+00:02 +50: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_illust_view_test.dart: 瀑布流真实渲染：列数与变高 列数设置真的作用到 SliverMasonryGrid（2 列 / 3 列各断言一次）
+00:02 +51: D:/Flutter_Projucts/PicaComic/PicaKeep/test/local_library_page_view_scope_test.dart: 标题随视图切换（33 号第 3 条） 没有显式 title 时仍按 albumOnly 落到「资源库」（既有兜底）
+00:02 +52: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:02 +53: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:02 +54: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:02 +55: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:02 +56: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:02 +57: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:02 +58: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:03 +59: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:03 +60: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:03 +61: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:03 +62: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:03 +63: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:03 +64: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:03 +65: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:03 +66: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:03 +67: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:03 +68: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:03 +69: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:03 +70: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:03 +71: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:03 +72: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:03 +73: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:03 +74: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:03 +75: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:03 +76: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:03 +77: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:03 +78: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:03 +79: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:04 +80: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:04 +81: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:04 +82: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:04 +83: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:04 +84: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:04 +85: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:04 +86: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:04 +87: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:04 +88: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:04 +89: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:04 +90: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:04 +91: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:04 +92: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:04 +93: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:04 +94: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:04 +95: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:04 +96: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:04 +97: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:04 +98: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:04 +99: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:04 +100: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:05 +101: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:05 +102: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:05 +103: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:05 +103: D:/Flutter_Projucts/PicaComic/PicaKeep/test/download_directory_visibility_test.dart: 已下载元数据加载 原值目录可见且图片可解码 "Book "
+  Skip: Windows cannot faithfully create trailing-space/control-character names
+00:05 +103 ~1: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:05 +103 ~1: D:/Flutter_Projucts/PicaComic/PicaKeep/test/download_directory_visibility_test.dart: 已下载元数据加载 原值目录可见且图片可解码 " Book\nName "
+  Skip: Windows cannot faithfully create trailing-space/control-character names
+00:05 +103 ~2: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:05 +103 ~2: D:/Flutter_Projucts/PicaComic/PicaKeep/test/download_directory_visibility_test.dart: 已下载元数据加载 原值目录可见且图片可解码 "   "
+  Skip: Windows cannot faithfully create trailing-space/control-character names
+00:05 +103 ~3: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:05 +104 ~3: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:05 +105 ~3: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:05 +106 ~3: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:05 +107 ~3: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:05 +108 ~3: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:05 +109 ~3: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:06 +110 ~3: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:06 +111 ~3: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:06 +112 ~3: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:06 +113 ~3: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:06 +114 ~3: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:06 +115 ~3: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:06 +116 ~3: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:06 +117 ~3: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:06 +118 ~3: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:06 +119 ~3: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:06 +120 ~3: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:06 +121 ~3: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:06 +122 ~3: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:06 +123 ~3: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:06 +124 ~3: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:06 +125 ~3: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:06 +126 ~3: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:06 +127 ~3: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:06 +128 ~3: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:06 +129 ~3: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:06 +130 ~3: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:06 +131 ~3: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:06 +132 ~3: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:06 +133 ~3: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:06 +134 ~3: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:06 +135 ~3: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:06 +136 ~3: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:06 +137 ~3: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:06 +138 ~3: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:06 +139 ~3: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:06 +140 ~3: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:06 +141 ~3: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:06 +142 ~3: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:06 +143 ~3: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:06 +144 ~3: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:06 +145 ~3: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:06 +146 ~3: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:06 +147 ~3: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:06 +148 ~3: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:06 +149 ~3: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:06 +150 ~3: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:06 +151 ~3: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:06 +152 ~3: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:06 +153 ~3: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:06 +154 ~3: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:06 +155 ~3: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:06 +156 ~3: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:06 +157 ~3: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:06 +158 ~3: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:06 +159 ~3: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:06 +160 ~3: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:06 +161 ~3: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:06 +162 ~3: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:06 +163 ~3: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:06 +164 ~3: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:06 +164 ~3: D:/Flutter_Projucts/PicaComic/PicaKeep/test/download_directory_visibility_test.dart: 已下载元数据加载 v1 缓存自动失效并重新加载 "Book " sentinel=false
+  Skip: Requires a filesystem supporting trailing spaces
+00:06 +164 ~4: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:06 +165 ~4: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:06 +166 ~4: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:06 +167 ~4: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:06 +168 ~4: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:06 +169 ~4: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:06 +170 ~4: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:06 +170 ~4: D:/Flutter_Projucts/PicaComic/PicaKeep/test/download_directory_visibility_test.dart: 已下载元数据加载 v1 缓存自动失效并重新加载 "Book " sentinel=true
+  Skip: Requires a filesystem supporting trailing spaces
+00:06 +170 ~5: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:06 +171 ~5: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:06 +172 ~5: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:06 +173 ~5: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:06 +174 ~5: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:06 +175 ~5: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:06 +176 ~5: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:06 +177 ~5: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:06 +178 ~5: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:06 +179 ~5: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:07 +180 ~5: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:07 +181 ~5: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:07 +182 ~5: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:07 +183 ~5: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:07 +184 ~5: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:07 +185 ~5: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folders show names/counts; long press opens single-folder menu
+00:07 +186 ~5: D:/Flutter_Projucts/PicaComic/PicaKeep/test/download_directory_visibility_test.dart: 已下载元数据加载 真实缺失记录继续过滤，显示全部时保留占位
+00:07 +187 ~5: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:07 +188 ~5: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:07 +188 ~5: D:/Flutter_Projucts/PicaComic/PicaKeep/test/download_directory_visibility_test.dart: 完整本地库扫描 原值目录可见且图片可解码 "Book "
+  Skip: Windows cannot faithfully create trailing-space/control-character names
+00:07 +188 ~6: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:07 +188 ~6: D:/Flutter_Projucts/PicaComic/PicaKeep/test/download_directory_visibility_test.dart: 完整本地库扫描 原值目录可见且图片可解码 " Book\nName "
+  Skip: Windows cannot faithfully create trailing-space/control-character names
+00:07 +188 ~7: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:07 +188 ~7: D:/Flutter_Projucts/PicaComic/PicaKeep/test/download_directory_visibility_test.dart: 完整本地库扫描 原值目录可见且图片可解码 "   "
+  Skip: Windows cannot faithfully create trailing-space/control-character names
+00:07 +188 ~8: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:07 +189 ~8: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:07 +190 ~8: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:07 +191 ~8: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:07 +192 ~8: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:08 +193 ~8: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:08 +194 ~8: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:08 +195 ~8: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:08 +196 ~8: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:08 +196 ~8: D:/Flutter_Projucts/PicaComic/PicaKeep/test/download_directory_visibility_test.dart: 完整本地库扫描 v1 缓存自动失效并重新加载 "Book " sentinel=false
+  Skip: Requires a filesystem supporting trailing spaces
+00:08 +196 ~9: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:08 +197 ~9: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:08 +197 ~9: D:/Flutter_Projucts/PicaComic/PicaKeep/test/download_directory_visibility_test.dart: 完整本地库扫描 v1 缓存自动失效并重新加载 "Book " sentinel=true
+  Skip: Requires a filesystem supporting trailing spaces
+00:08 +197 ~10: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:08 +198 ~10: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:08 +199 ~10: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:08 +200 ~10: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:08 +201 ~10: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:08 +202 ~10: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:08 +203 ~10: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:08 +204 ~10: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:08 +205 ~10: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:08 +206 ~10: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:09 +207 ~10: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:09 +207 ~10: D:/Flutter_Projucts/PicaComic/PicaKeep/test/download_directory_visibility_test.dart: DownloadManager 公共读取和补录 旧读取链路保留特殊目录 "Book "
+  Skip: Requires a filesystem supporting these names
+00:09 +207 ~11: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:09 +207 ~11: D:/Flutter_Projucts/PicaComic/PicaKeep/test/download_directory_visibility_test.dart: DownloadManager 公共读取和补录 旧读取链路保留特殊目录 " Book\nName "
+  Skip: Requires a filesystem supporting these names
+00:09 +207 ~12: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:09 +207 ~12: D:/Flutter_Projucts/PicaComic/PicaKeep/test/download_directory_visibility_test.dart: DownloadManager 公共读取和补录 旧读取链路保留特殊目录 "   "
+  Skip: Requires a filesystem supporting these names
+00:09 +207 ~13: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:09 +207 ~13: D:/Flutter_Projucts/PicaComic/PicaKeep/test/download_directory_visibility_test.dart: DownloadManager 公共读取和补录 原值与 trim 双目录均保留且读取各自图片
+[PicaKeep] Download path: C:\Users\tanad\AppData\Local\Temp\picakeep_pk02_8f388793\fixture_40
+[PicaKeep] getAll() loaded: 2 visible, 2 parsed, 0 failed, total 2
+00:09 +208 ~13: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:09 +208 ~13: D:/Flutter_Projucts/PicaComic/PicaKeep/test/download_directory_visibility_test.dart: DownloadManager 公共读取和补录 原值优先于 sanitize，失效时兼容历史 trim/sanitize
+[PicaKeep] Download path: C:\Users\tanad\AppData\Local\Temp\picakeep_pk02_8f388793\fixture_41
+00:09 +209 ~13: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:09 +209 ~13: D:/Flutter_Projucts/PicaComic/PicaKeep/test/download_directory_visibility_test.dart: DownloadManager 公共读取和补录 本地库重扫原值查重且真孤儿可以补录
+[PicaKeep] Download path: C:\Users\tanad\AppData\Local\Temp\picakeep_pk02_8f388793\fixture_42
+00:09 +210 ~13: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:09 +210 ~13: D:/Flutter_Projucts/PicaComic/PicaKeep/test/download_directory_visibility_test.dart: DownloadManager 公共读取和补录 旧管理器重扫原值查重且真孤儿可以补录
+[PicaKeep] Download path: C:\Users\tanad\AppData\Local\Temp\picakeep_pk02_8f388793\fixture_43
+00:09 +211 ~13: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:09 +212 ~13: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:10 +213 ~13: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:10 +214 ~13: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:10 +215 ~13: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:10 +216 ~13: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:10 +217 ~13: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: new folder uses entered physical name; cancellation creates nothing
+00:11 +218 ~13: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: folder sorting is separate from its long-press menu and persists on back
+00:12 +219 ~13: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: root folder offers default action but cannot be renamed or deleted
+00:13 +220 ~13: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: illustration long press selects actual items and copies the batch to one folder
+00:22 +221 ~13: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: download pill delivers long-press without running ordinary download
+00:22 +222 ~13: D:/Flutter_Projucts/PicaComic/PicaKeep/test/pixiv_folders_page_test.dart: (tearDownAll)
+Fixture cleanup deferred until process exit: C:\Users\tanad\AppData\Local\Temp\pk46_widgets_beb85196
+00:22 +222 ~13: All tests passed!

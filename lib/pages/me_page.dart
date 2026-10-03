@@ -12,6 +12,7 @@ import 'package:picakeep/foundation/download_author_resolver.dart';
 import 'package:picakeep/foundation/download_model.dart';
 import 'package:picakeep/foundation/local_data_source.dart';
 import 'package:picakeep/foundation/local_library.dart';
+import 'package:picakeep/foundation/local_library_illust_view.dart';
 import 'package:picakeep/foundation/remote_library_data_source.dart';
 import 'package:picakeep/foundation/service_data_source.dart';
 import 'package:picakeep/tools/translations.dart';
@@ -302,16 +303,23 @@ class _MePageState extends State<MePage> {
       appdata.settings[managedDataSourceModeSettingIndex],
     );
     if (mode == managedDataSourceModeCurrentOnly) {
+      // ⚠️ **这三条分支都要过滤 Pixiv**，不能只改最后一条。
+      // 38 号第一次只改了托管分支，真机上（currentOnly 档）走的却是前两条，
+      // 用户反馈「已下载外面依旧是 6 条」—— 同一个语义在三处各写一遍，
+      // 漏一处就是现在这种"改了但没生效"。
       final localLibraryManager = LocalLibraryManager();
       if (await localLibraryManager
           .shouldBypassDirectDownloadManagerForCurrentDownloads()) {
-        return (await localLibraryManager
-                .getCurrentDownloadsWithShizukuFallback())
-            .length;
+        final items =
+            await localLibraryManager.getCurrentDownloadsWithShizukuFallback();
+        return items.where((item) => !isPixivDownloadRecord(item)).length;
       }
       final manager = DownloadManager();
       await manager.init();
-      return manager.getAll().length;
+      return manager
+          .getAll()
+          .where((item) => !isPixivDownloadRecord(item))
+          .length;
     }
 
     if (forceRefresh) {
@@ -320,7 +328,12 @@ class _MePageState extends State<MePage> {
       await LocalLibraryManager().ensureLoaded();
     }
     final items = await LocalLibraryManager().getAll();
-    return items.where((item) => !item.isAlbum).length;
+    // 计数要与「已下载」页的**列表口径一致** —— 那个列表已按 37 号过滤掉 Pixiv，
+    // 计数不跟着过滤就会出现"里面 3 条、外面说 6 部"
+    // （用户真机反馈原话：「虽然里面不显示插画项了但还是显示外面的数量」）。
+    return items
+        .where((item) => !item.isAlbum && !isPixivDownloadRecord(item))
+        .length;
   }
 
   Future<void> _loadDownloadCount({bool forceRefresh = false}) async {

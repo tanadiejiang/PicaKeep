@@ -18,10 +18,12 @@
 /// 玩得转 —— 所以下面既测纯布局，也渲染真实的 `SettingsPage` 数线。
 library;
 
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider_platform_interface/path_provider_platform_interface.dart';
 import 'package:picakeep/base.dart';
@@ -48,6 +50,13 @@ class _Paths extends PathProviderPlatform {
   Future<String?> getApplicationSupportPath() => _dir('support');
 }
 
+Future<PackageInfo> _packageInfo() async => PackageInfo(
+      appName: 'PicaKeep',
+      packageName: 'lingxue.picakeep',
+      version: 'test',
+      buildNumber: '0',
+    );
+
 /// 把设置页的某一分页挂起来（与 `settings_about_page_test.dart` 同一套挂法）。
 Widget _settingsPage({required int page}) {
   return MaterialApp(
@@ -58,7 +67,10 @@ Widget _settingsPage({required int page}) {
           alignment: Alignment.topLeft,
           child: SizedBox(
             width: 360,
-            child: SettingsPage(initialPage: page),
+            child: SettingsPage(
+              initialPage: page,
+              packageInfoLoader: _packageInfo,
+            ),
           ),
         ),
       ),
@@ -251,6 +263,72 @@ void main() {
   });
 
   group('「下载」设置页：分区线一并统一且不会变成两条', () {
+    testWidgets('修正完成后点确定只关闭弹窗，重复操作仍停留在当前设置页',
+        (tester) async {
+      final oldDownloadPath = appdata.settings[22];
+      final oldPixivPath = appdata.settings[152];
+      appdata.settings[22] = p.join(workspace.path, 'download');
+      appdata.settings[152] = p.join(workspace.path, 'pixiv');
+      addTearDown(() {
+        appdata.settings[22] = oldDownloadPath;
+        appdata.settings[152] = oldPixivPath;
+      });
+      await tester.binding.setSurfaceSize(const Size(400, 900));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+
+      // 与应用一致：设置页在内层导航，showDialog 默认在外层导航。
+      final rootNavigator = GlobalKey<NavigatorState>();
+      final innerNavigator = GlobalKey<NavigatorState>();
+      await tester.pumpWidget(MaterialApp(
+        navigatorKey: rootNavigator,
+        home: Navigator(
+          key: innerNavigator,
+          onGenerateRoute: (_) => MaterialPageRoute<void>(
+            builder: (_) => const Scaffold(body: Text('设置入口')),
+          ),
+        ),
+      ));
+      unawaited(innerNavigator.currentState!.push<void>(
+        MaterialPageRoute<void>(
+          // 页 4 = 「应用设置」，「修正哔咔的旧文件夹名」现在挂在它的
+          // 「数据管理」区（原先在页 7「下载」里，已挪走 —— 那是历史数据
+          // 维护动作，不是下载参数）。
+          builder: (_) => const SettingsPage(
+            initialPage: 4,
+            packageInfoLoader: _packageInfo,
+          ),
+        ),
+      ));
+      await tester.pumpAndSettle();
+      final settingsState = tester.state(find.byType(SettingsPage));
+
+      for (var attempt = 0; attempt < 2; attempt++) {
+        final tile = tester.widget<ListTile>(
+          find.widgetWithText(ListTile, '修正哔咔的旧文件夹名'),
+        );
+        // 等待真实入口的异步任务；只检查测试临时根下的空目录。
+        // 避免 widget 测试的虚拟时钟阻塞 path_provider / 文件 IO。
+        await tester.runAsync(() async {
+          await (tile.onTap! as Future<void> Function())();
+        });
+        await tester.pumpAndSettle();
+        expect(find.text('修正完成'), findsOneWidget);
+        expect(find.text('已修正：0 个\n已跳过：0 个\n失败：0 个'), findsOneWidget);
+        expect(rootNavigator.currentState!.canPop(), isTrue);
+
+        await tester.tap(find.widgetWithText(TextButton, '确定'));
+        await tester.pumpAndSettle();
+
+        expect(find.byType(AlertDialog), findsNothing);
+        expect(rootNavigator.currentState!.canPop(), isFalse);
+        expect(innerNavigator.currentState!.canPop(), isTrue);
+        expect(find.text('修正哔咔的旧文件夹名'), findsOneWidget);
+        expect(find.text('设置入口'), findsNothing);
+        expect(tester.state(find.byType(SettingsPage)), same(settingsState));
+        expect(tester.takeException(), isNull);
+      }
+    });
+
     testWidgets('两个分区 → 恰好 2 条线（原来手写在标题前的细线已删掉）',
         (tester) async {
       await tester.pumpWidget(_settingsPage(page: 7));

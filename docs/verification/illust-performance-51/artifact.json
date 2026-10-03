@@ -1,0 +1,12 @@
+{
+  "path": "D:\\Flutter_Projucts\\PicaComic\\PicaKeep\\build\\app\\outputs\\flutter-apk\\app-profile.apk",
+  "bytes": 127314147,
+  "sha256": "6A762B2906BEDBD425DD18A307983BA29D99ECCBE1B486504E20EFF65F77BB07",
+  "builtAt": "2026-10-02T20:58:25",
+  "mode": "profile",
+  "installed": false,
+  "flutter": "3.41.6",
+  "dart": "3.11.4",
+  "devtools": "2.54.2",
+  "sourceManifest": "final-source-manifest.json"
+}

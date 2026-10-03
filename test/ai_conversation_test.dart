@@ -597,7 +597,7 @@ void main() {
       expect(assistantHistory.single.content, '正常内容');
     });
 
-    test('content 为空但存在待展示的工具结果（清单卡）时：不追加轻量提示气泡，只展示清单卡', () async {
+    test('content 为空但本轮清单已即时展示：不追加轻量提示气泡', () async {
       final ctrl = AiConversationController.restoreForTesting({
         'id': 'id-empty-content-with-pending-items',
         'title': '新会话',
@@ -607,8 +607,7 @@ void main() {
         'version': 2,
       });
 
-      // 先模拟一次 display_result_list 工具调用，返回非空清单项，产生待展示
-      // 清单卡（_pendingDisplayItems 非空）。
+      // 清单立即出卡，缓冲区已消费；手动注入收尾时不能继续请求真实模型。
       await ctrl.simulateToolCallRoundForTesting([
         const LlmToolCall(
           id: 'call-display-list',
@@ -619,15 +618,19 @@ void main() {
             ],
           },
         ),
-      ]);
+      ], continueWithLlm: false);
+
+      expect(
+          ctrl.displayMessages
+              .where((m) => m.type == AiChatMessageType.resultList),
+          hasLength(1));
 
       ctrl.simulateFinalTextResponseForTesting('');
 
       final assistantMessages = ctrl.displayMessages
           .where((m) => m.type == AiChatMessageType.assistant)
           .toList();
-      // 存在非空待展示清单项时，不应追加轻量提示气泡（避免与清单卡同时出现
-      // 造成冗余提示）。
+      // 本轮已经展示清单，不应再提示本轮没有内容。
       expect(assistantMessages, isEmpty);
 
       final resultListMessages = ctrl.displayMessages
@@ -703,6 +706,10 @@ void main() {
         ctrl.historyForTesting().where((message) => message.role == 'tool'),
         hasLength(2),
       );
+      expect(
+          ctrl.displayMessages
+              .where((message) => message.text == '（AI本轮未返回有效内容）'),
+          isEmpty);
     });
   });
 }

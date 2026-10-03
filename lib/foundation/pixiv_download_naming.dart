@@ -13,7 +13,7 @@
 /// - `{id}`     作品 ID
 /// - `{pages}`  页数，**渲染成 `p3` 这种形态**（见 [renderPixivDirectoryName]）
 ///
-/// 默认模板 `{title}`，与引入本功能之前的行为一致（那时目录名固定取标题）。
+/// 默认勾选标题和作品 ID；已有非空模板保持用户保存的值。
 library;
 
 import 'package:picakeep/foundation/template_field_order.dart';
@@ -112,8 +112,9 @@ List<String> reorderPixivDirNameFieldOrder(
   return reorderTemplateFieldOrder(order, oldIndex, newIndex);
 }
 
-/// 默认模板：与改动前的行为一致。
-const String kDefaultPixivDirNameTemplate = '{title}';
+/// 默认模板：标题在前、作品 ID 在后，沿用默认连字符分隔。
+const String kDefaultPixivDirNameTemplate =
+    '{title}$kDefaultPixivDirNameSeparator{id}';
 
 /// 归一化模板值：空白（含未设置）一律回落到 [kDefaultPixivDirNameTemplate]。
 ///
@@ -138,8 +139,8 @@ const List<String> kPixivDirNameVariables = <String>[
 /// 这个/以及下面的标签表是"设置页要列出哪些可勾选字段"。加第五个变量时三处要一起改，
 /// 所以字段表与标签表都放在本文件，避免 UI 与解析各改一半。
 const List<String> kPixivDirNameFieldKeys = <String>[
-  'title',
   'author',
+  'title',
   'id',
   'pages',
 ];
@@ -165,7 +166,7 @@ const List<String> kPixivDirNameSeparators = <String>['-', '_', ' ', ''];
 
 /// 按 [fields] 的顺序、用 [separator] 连接，生成目录名模板串。
 ///
-/// 空列表返回空串；空模板在 [renderPixivDirectoryName] 里会退回默认 `{title}`，
+/// 空列表返回空串；空模板在 [renderPixivDirectoryName] 里会退回默认模板，
 /// 所以调用方若要表达"一个字段都没选"，应自己拦在保存之前（设置页就是这么做的）。
 String buildPixivDirNameTemplate(List<String> fields, String separator) {
   return fields.map((key) => '{$key}').join(separator);
@@ -183,7 +184,7 @@ String buildPixivDirNameTemplate(List<String> fields, String separator) {
 /// - 重复出现的字段**保序去重**（`{title}_{title}` 只算一个 `title`）；
 /// - 分隔符取「第一个字段结束 → 第二个字段开始」之间的**原文**；
 ///   不足两个字段时分隔符无意义，返回 [kDefaultPixivDirNameSeparator]；
-/// - **一个字段都解析不出**（例如历史值是 `{foo}`）→ 退回只含 `title` 的默认规格。
+/// - **一个字段都解析不出**（例如历史值是 `{foo}`）→ 退回标题 + ID 的默认规格。
 ///   **不抛错、不返回空** —— 用户不该因为一个坏值看到弹窗变空、或把设置写坏。
 ({List<String> fields, String separator}) parsePixivDirNameTemplate(
   String template,
@@ -200,10 +201,7 @@ String buildPixivDirNameTemplate(List<String> fields, String separator) {
     }
   }
   if (fields.isEmpty) {
-    return (
-      fields: <String>['title'],
-      separator: kDefaultPixivDirNameSeparator,
-    );
+    return parsePixivDirNameTemplate(kDefaultPixivDirNameTemplate);
   }
   // 用 matches（而非去重后的 fields）取间隙：`{title}_{title}` 这种重复写法，
   // 间隙仍是 `_`，取它比取"去重后两字段之间的整段"更贴近用户写下的意图。

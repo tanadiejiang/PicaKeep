@@ -1,0 +1,25 @@
+Flutter assets will be downloaded from https://storage.flutter-io.cn. Make sure you trust this source!
+00:00 +0: loading D:/Flutter_Projucts/PicaComic/PicaKeep/test/illust_thumbnail_test.dart
+00:00 +0: real thumbnail uses width buckets and app-internal path; warm reuse
+00:00 +1: small images are not enlarged; long image stays complete within bounds
+00:00 +1 -1: small images are not enlarged; long image stays complete within bounds [E]
+  LateInitializationError: Field 'dataPath' has already been initialized.
+  dart:_internal                        LateError._throwFieldAlreadyInitialized
+  package:picakeep/foundation/app.dart  App.dataPath=
+  test\illust_thumbnail_test.dart 15:9  main.<fn>
+  
+00:00 +1 -1: same-key requests share output, deletion and replacement regenerate
+00:00 +1 -2: same-key requests share output, deletion and replacement regenerate [E]
+  LateInitializationError: Field 'dataPath' has already been initialized.
+  dart:_internal                        LateError._throwFieldAlreadyInitialized
+  package:picakeep/foundation/app.dart  App.dataPath=
+  test\illust_thumbnail_test.dart 15:9  main.<fn>
+  
+00:00 +1 -2: paused or failed generation exposes no half-file; retry succeeds
+00:00 +1 -3: paused or failed generation exposes no half-file; retry succeeds [E]
+  LateInitializationError: Field 'dataPath' has already been initialized.
+  dart:_internal                        LateError._throwFieldAlreadyInitialized
+  package:picakeep/foundation/app.dart  App.dataPath=
+  test\illust_thumbnail_test.dart 15:9  main.<fn>
+  
+00:00 +1 -3: Some tests failed.

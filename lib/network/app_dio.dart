@@ -184,12 +184,24 @@ class RetryHttpClientAdapter extends IOHttpClientAdapter {
             rethrow;
           }
           final code = error.response?.statusCode;
-          if (code != null && code >= 400 && code < 500) {
+          // 4xx 一律不重试 —— **但 429 必须排除在外**（43 号）。
+          //
+          // 404 / 403 这类"重试一百次也还是这个结果"，不重试是对的；
+          // 而 **429（Too Many Requests）恰恰是唯一"等一等就能好"的 4xx**：
+          // 站点在明说"你太快了"，正确反应是退避后重试，而不是当场失败。
+          //
+          // 旧写法的后果：被限流时用户看到"网络请求失败"，而且**重试按钮点了
+          // 也没用**（永远走这条 rethrow）。对比同类油猴脚本的做法 ——
+          // 它们在 429 时自动暂停 30 秒再继续。
+          final isTooManyRequests = code == 429;
+          if (code != null && code >= 400 && code < 500 && !isTooManyRequests) {
             rethrow;
           }
         }
         retry++;
-        if (retry >= 2) {
+        // 429 给更多机会：它是站点主动限流，退避久一点比立刻放弃合理。
+        final maxRetry = _isTooManyRequestsError(error) ? 3 : 2;
+        if (retry >= maxRetry) {
           rethrow;
         }
         LogManager.addLog(
@@ -200,9 +212,21 @@ class RetryHttpClientAdapter extends IOHttpClientAdapter {
             '${NetworkLogRedactor.redactText(error.toString())}\nRetrying...',
           ),
         );
-        await Future<void>.delayed(const Duration(seconds: 1));
+        // 429 用更长的退避（2s → 4s），其余错误保持原有的固定 1s。
+        final delay = _isTooManyRequestsError(error)
+            ? Duration(seconds: 2 * retry)
+            : const Duration(seconds: 1);
+        await Future<void>.delayed(delay);
       }
     }
+  }
+
+  /// 这个错误是不是"被限流"（HTTP 429）。
+  ///
+  /// 抽成小函数是为了让上面那段重试逻辑读起来能一眼看出
+  /// "429 走的是例外分支"。
+  static bool _isTooManyRequestsError(Object error) {
+    return error is DioException && error.response?.statusCode == 429;
   }
 }
 

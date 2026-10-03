@@ -14,6 +14,7 @@ import 'package:sqlite3/sqlite3.dart';
 import 'package:picakeep/base.dart';
 import 'package:picakeep/foundation/app.dart';
 import 'package:picakeep/foundation/download_model.dart';
+import 'package:picakeep/foundation/download_stream_file.dart';
 import 'package:picakeep/foundation/download_author_resolver.dart';
 import 'package:picakeep/foundation/image_loader/jm_image_recombine.dart';
 import 'package:picakeep/foundation/local_favorites.dart';
@@ -22,6 +23,9 @@ import 'package:picakeep/foundation/log.dart';
 import 'package:picakeep/foundation/pixiv_artifact.dart';
 import 'package:picakeep/foundation/pixiv_download_naming.dart';
 import 'package:picakeep/foundation/pixiv_download_root.dart';
+import 'package:picakeep/foundation/pixiv_library.dart';
+import 'package:picakeep/foundation/pixiv_library_locations.dart';
+import 'package:path/path.dart' as p;
 import 'package:picakeep/foundation/untranslated_tags/untranslated_tag_coordinator.dart';
 import 'package:picakeep/network/app_dio.dart';
 import 'package:picakeep/network/eh_network/eh_main_network.dart';
@@ -36,6 +40,7 @@ import 'package:picakeep/network/pixiv_network/pixiv_network.dart';
 import 'package:picakeep/network/res.dart';
 import 'package:picakeep/pages/reader/comic_reading_page.dart';
 import 'package:picakeep/tools/tags_translation.dart';
+import 'package:picakeep/tools/download_notification_controller.dart';
 import 'package:uuid/uuid.dart';
 
 class OnlineDownloadTask {
@@ -224,6 +229,7 @@ class OnlineDownloadTask {
   bool completed = false;
   bool cancelled = false;
   bool paused = false;
+  bool waitingForNetwork = false;
   String? error;
 
   // ehentai 专用：0=逐页，1=归档Original，2=归档Resample
@@ -264,7 +270,12 @@ class OnlineDownloadTask {
     currentSpeed = 0;
   }
 
-  String get id => taskId;
+  Map<String, String>? pixivTarget;
+  String? pixivBaseName;
+  String pixivOperationId = const Uuid().v4();
+  String get id => sourceKey == 'pixiv' && pixivTarget != null
+      ? '$taskId::${pixivTarget!['libraryId']}::${pixivTarget!['folderId']}::$pixivOperationId'
+      : taskId;
 
   double get progress {
     if (totalEps <= 0) {
@@ -284,7 +295,19 @@ String _onlineDownloadRecordSubtitle(DownloadedItem item) {
 }
 
 class OnlineDownloadManager {
-  OnlineDownloadManager._();
+  OnlineDownloadManager._() {
+    PixivLibrary.hasPendingDownloads = hasPixivFolderTasks;
+    final notices = DownloadNotificationController.instance;
+    notices.onNetworkChanged = handleDownloadNetworkChanged;
+    notices.onBackgroundProtectionLost = () {
+      final state = WidgetsBinding.instance.lifecycleState;
+      if (state != null && state != AppLifecycleState.resumed &&
+          _tasks.values.any((t) => !t.completed && !t.cancelled && !t.paused && t.error == null)) {
+        pauseAll();
+      }
+    };
+    unawaited(notices.initialize());
+  }
 
   static final OnlineDownloadManager instance = OnlineDownloadManager._();
 
@@ -293,10 +316,53 @@ class OnlineDownloadManager {
   bool _globalPaused = false;
   bool get isGloballyPaused => _globalPaused;
   bool _running = false; // 串行锁：同时只跑一个任务
+  OnlineDownloadTask? _activeTask;
+  bool _networkAvailable = true;
+  bool _queueLoaded = false;
+
+  /// Network loss is distinct from a user's pause. Only network waiters resume
+  /// automatically; folder/operation identity stays attached to the same task.
+  void handleDownloadNetworkChanged(bool online) {
+    _networkAvailable = online;
+    if (!online) {
+      final active = _activeTask;
+      if (active != null && !active.completed && !active.cancelled && !active.paused) {
+        active.waitingForNetwork = true;
+        active.cancelAllTokens();
+      }
+    } else {
+      for (final task in _tasks.values) {
+        if (task.waitingForNetwork && !identical(task, _activeTask)) {
+          task.waitingForNetwork = false;
+          task.cancelToken = null;
+        }
+      }
+      _scheduleNext();
+    }
+    _notify();
+  }
+
+  void _finishActiveTask(OnlineDownloadTask task) {
+    if (task.waitingForNetwork) {
+      // If connectivity returned while the cancelled stream was unwinding,
+      // retry only after its writes and tokens have been released.
+      task.waitingForNetwork = !_networkAvailable;
+      task.cancelToken = null;
+      if (!task.completed) task.error = null;
+    }
+    if (identical(_activeTask, task)) _activeTask = null;
+    _running = false;
+  }
 
   List<OnlineDownloadTask> get tasks => _tasks.values.toList(growable: false);
 
-  bool isDownloading(String id) => _tasks.containsKey(id);
+  /// Flush through the same serialized queue writer used by enqueue. Lifecycle
+  /// transitions and tests can await this without racing an older snapshot.
+  Future<void> persistQueue() => !_queueLoaded && _tasks.isEmpty
+      ? Future<void>.value()
+      : _saveQueue();
+
+  bool isDownloading(String id) => _tasks.values.any((t) => (t.id == id || t.taskId == id) && !t.completed && !t.cancelled);
 
   Future<List<DownloadedItem>> loadCompletedDownloads() async {
     final roots = await _effectiveDownloadRoots();
@@ -388,25 +454,57 @@ class OnlineDownloadManager {
     return dedupeDownloadItemsById(items);
   }
 
-  /// 按 [DownloadedItem.id] 去重、**保留先出现的那个**。
+  /// 按 [DownloadedItem.id] 去重，**同 id 时优先保留「实体真实存在」的那条**。
   ///
-  /// 为什么需要：同一个 id 可能同时出现在两个下载根里 —— 用户把 Pixiv 专属目录
-  /// 指到已有数据，或两个根各有一份同名记录。不去重的话列表里会出现"两本一模一样
-  /// 的漫画"，而用户无法分辨该删哪一个。
+  /// ## 为什么不是"保留先出现的"
   ///
-  /// 抽成 static 纯函数是为了能直接单测（`loadCompletedDownloads` 本身要真实
-  /// sqlite 与 path_provider，成本高）。
+  /// 同一个 id 可能同时出现在多个下载根里（用户改过下载目录、或把 Pixiv 专属
+  /// 目录指到已有数据时，**旧根里的 db 不会被清理**）。而根集合的插入顺序是
+  /// `{默认根, settings[22], settings[152]}` —— **默认根永远排在最前**，
+  /// 于是"保留先出现的"会**稳定地选中坏的那一条**。
+  ///
+  /// 真机实证（41 号）：`jm1476671` 在内部默认根里的记录拼出的路径
+  /// `/data/user/0/…/files/download/(C108)…` **根本不存在**，
+  /// 阅读时 `loadEpNetwork` 里 `dir.exists()` 为假 → 静默返回空 →
+  /// 界面只显示"未知错误"；而正确的那条（在 `settings[22]` 里）被这里丢掉了。
+  ///
+  /// 现在按"磁盘上真的有这个实体"来选；两条都在或都不在时保留先出现的
+  /// （退化为旧行为，不引入新的不确定性）。
   static List<DownloadedItem> dedupeDownloadItemsById(
     List<DownloadedItem> items,
   ) {
-    final seen = <String>{};
-    final deduped = <DownloadedItem>[];
+    final byId = <String, DownloadedItem>{};
     for (final item in items) {
-      if (seen.add(item.id)) {
-        deduped.add(item);
+      final existing = byId[item.id];
+      if (existing == null) {
+        byId[item.id] = item;
+        continue;
+      }
+      if (!downloadedItemEntityExists(existing) &&
+          downloadedItemEntityExists(item)) {
+        byId[item.id] = item;
       }
     }
-    return deduped;
+    // LinkedHashMap 保序：被替换的 key 位置不变，列表顺序与去重前一致。
+    return byId.values.toList(growable: false);
+  }
+
+  /// 这条记录的本地实体是否真的在磁盘上（去重与诊断共用）。
+  ///
+  /// 判据取 [DownloadedItem.fileSystemPath]：五个 `Online*` 包装类都把它实现成
+  /// `rootDirectoryPath`（即 `rootPath/directoryName`），而基类默认返回 `null`
+  /// —— 老家族（`download_model.dart` 里的 `DownloadedComic` 等）没有路径概念，
+  /// 一律视为"不存在"，去重时让位给有路径的那条。
+  static bool downloadedItemEntityExists(DownloadedItem item) {
+    final path = item.fileSystemPath?.trim() ?? '';
+    if (path.isEmpty) {
+      return false;
+    }
+    try {
+      return File(path).existsSync() || Directory(path).existsSync();
+    } catch (_) {
+      return false;
+    }
   }
 
   Future<void> _observeUntranslatedTags(
@@ -466,6 +564,7 @@ class OnlineDownloadManager {
     final task = _tasks[id];
     if (task == null || task.completed || task.cancelled || task.paused) return;
     task.paused = true;
+    task.cancelAllTokens();
     task.stopSpeedTimer();
     unawaited(_saveQueue());
     _notify();
@@ -504,7 +603,11 @@ class OnlineDownloadManager {
 
   void removeAll(List<String> ids) {
     for (final id in ids) {
-      _tasks.remove(id);
+      final task = _tasks.remove(id);
+      if (task != null && !task.completed) {
+        task.cancelled = true;
+        task.cancelAllTokens();
+      }
     }
     unawaited(_saveQueue());
     _notify();
@@ -515,6 +618,7 @@ class OnlineDownloadManager {
     for (final task in _tasks.values) {
       if (!task.completed && !task.cancelled && task.error == null) {
         task.paused = true;
+        task.cancelAllTokens();
         task.stopSpeedTimer();
       }
     }
@@ -617,18 +721,30 @@ class OnlineDownloadManager {
   ///
   /// 去重：同 `pixiv{illustId}` 标识不重复入队。totalEps 恒为 1；
   /// totalPages 先从详情页的 `pageCount` 预估，下载时以真实 pages 数为准。
-  Future<Res<bool>> enqueuePixiv(PixivComicInfo comic) async {
-    final key = 'pixiv${comic.id}';
-    if (_tasks.containsKey(key)) return const Res(true);
+  Future<Res<bool>> enqueuePixiv(PixivComicInfo comic, {PixivFolder? target}) async {
+    final library = PixivLibrary(target?.root ?? effectivePixivDownloadRoot());
+    await library.initialize();
+    target ??= library.defaultFolder;
     final task = OnlineDownloadTask.pixiv(pixivInfo: comic)
+      ..pixivTarget = target.toJson()
+      ..pixivBaseName = renderPixivDirectoryName(
+        template: appdata.settings[pixivDirNameTemplateSettingIndex], title: comic.title,
+        author: comic.author, id: comic.id, pages: comic.pageCount, fallback: comic.id)
+      ..paused = _globalPaused
       ..totalEps = 1
       ..totalPages = comic.pageCount;
+    if (_tasks.values.any((t) => t.sourceKey == 'pixiv' && t.taskId == task.taskId && !t.completed && !t.cancelled && t.pixivTarget?['libraryId'] == task.pixivTarget?['libraryId'] && t.pixivTarget?['folderId'] == task.pixivTarget?['folderId'])) return const Res(true);
     _tasks[task.id] = task;
     _notify();
-    unawaited(_saveQueue());
+    try { await _saveQueue(requireSuccess: true); }
+    catch (_) { _tasks.remove(task.id); _notify(); rethrow; }
     _scheduleNext();
     return const Res(true);
   }
+
+  bool hasPixivFolderTasks(PixivFolder folder) => tasks.any((t) =>
+      t.sourceKey == 'pixiv' && !t.completed && !t.cancelled &&
+      t.pixivTarget?['libraryId'] == folder.libraryId && t.pixivTarget?['folderId'] == folder.id);
 
   /// 入队一个 Komiic 作品（**有章节**）。供详情页下载按钮调用。
   ///
@@ -649,11 +765,17 @@ class OnlineDownloadManager {
   /// 找队列里第一个待下载的任务启动（若已有任务在跑则跳过）
   void _scheduleNext() {
     if (_running) return;
+    if (!_networkAvailable) {
+      _notify();
+      return;
+    }
     for (final task in _tasks.values) {
       if (!task.completed &&
           !task.cancelled &&
           !task.paused &&
           task.error == null) {
+        task.waitingForNetwork = false;
+        _activeTask = task;
         unawaited(_runTask(task));
         return;
       }
@@ -680,6 +802,7 @@ class OnlineDownloadManager {
     if (_running) return; // 已有任务在跑，跳过（_scheduleNext 会在完成后再调）
     _running = true;
     task.startSpeedTimer(_notify);
+    _notify();
     try {
       final downloadRoot = await _resolveOnlineDownloadRoot();
       final safeDirectory = _safeName(task.comic.title);
@@ -770,20 +893,22 @@ class OnlineDownloadManager {
       task.completed = true;
       App.notifyLocalDataChanged();
     } on _OnlineDownloadCancelled catch (_) {
-      if (task.paused) {
-        // paused 由 pauseAll 设置，不标 cancelled
+      if (task.paused || task.waitingForNetwork) {
+        // User pause / network loss must remain resumable.
       } else {
         task.cancelled = true;
       }
     } catch (error, stackTrace) {
-      task.error = error.toString();
+      if (!task.paused && !task.cancelled && !task.waitingForNetwork) {
+        task.error = error.toString();
+      }
       LogManager.addLog(
         LogLevel.error,
         'OnlineDownload',
         '$error\n$stackTrace',
       );
     } finally {
-      _running = false;
+      _finishActiveTask(task);
       task.stopSpeedTimer();
       unawaited(_saveQueue());
       _notify();
@@ -795,6 +920,7 @@ class OnlineDownloadManager {
     if (_running) return;
     _running = true;
     task.startSpeedTimer(_notify);
+    _notify();
     final info = task._jmInfo!;
     try {
       final downloadRoot = await _resolveOnlineDownloadRoot();
@@ -911,13 +1037,15 @@ class OnlineDownloadManager {
       task.completed = true;
       App.notifyLocalDataChanged();
     } on _OnlineDownloadCancelled catch (_) {
-      if (!task.paused) task.cancelled = true;
+      if (!task.paused && !task.waitingForNetwork) task.cancelled = true;
     } catch (error, stackTrace) {
-      task.error = error.toString();
+      if (!task.paused && !task.cancelled && !task.waitingForNetwork) {
+        task.error = error.toString();
+      }
       LogManager.addLog(
           LogLevel.error, 'OnlineDownload', '$error\n$stackTrace');
     } finally {
-      _running = false;
+      _finishActiveTask(task);
       task.stopSpeedTimer();
       unawaited(_saveQueue());
       _notify();
@@ -935,6 +1063,7 @@ class OnlineDownloadManager {
     if (_running) return;
     _running = true;
     task.startSpeedTimer(_notify);
+    _notify();
     final gallery = task._gallery!;
     try {
       final downloadRoot = await _resolveOnlineDownloadRoot();
@@ -1195,13 +1324,15 @@ class OnlineDownloadManager {
         App.notifyLocalDataChanged();
       }
     } on _OnlineDownloadCancelled catch (_) {
-      if (!task.paused) task.cancelled = true;
+      if (!task.paused && !task.waitingForNetwork) task.cancelled = true;
     } catch (error, stackTrace) {
-      task.error = error.toString();
+      if (!task.paused && !task.cancelled && !task.waitingForNetwork) {
+        task.error = error.toString();
+      }
       LogManager.addLog(
           LogLevel.error, 'OnlineDownload', '$error\n$stackTrace');
     } finally {
-      _running = false;
+      _finishActiveTask(task);
       task.stopSpeedTimer();
       unawaited(_saveQueue());
       _notify();
@@ -1218,6 +1349,7 @@ class OnlineDownloadManager {
     if (_running) return;
     _running = true;
     task.startSpeedTimer(_notify);
+    _notify();
     final comic = task._nhentaiComic!;
     try {
       final downloadRoot = await _resolveOnlineDownloadRoot();
@@ -1308,13 +1440,15 @@ class OnlineDownloadManager {
       task.completed = true;
       App.notifyLocalDataChanged();
     } on _OnlineDownloadCancelled catch (_) {
-      if (!task.paused) task.cancelled = true;
+      if (!task.paused && !task.waitingForNetwork) task.cancelled = true;
     } catch (error, stackTrace) {
-      task.error = error.toString();
+      if (!task.paused && !task.cancelled && !task.waitingForNetwork) {
+        task.error = error.toString();
+      }
       LogManager.addLog(
           LogLevel.error, 'OnlineDownload', '$error\n$stackTrace');
     } finally {
-      _running = false;
+      _finishActiveTask(task);
       task.stopSpeedTimer();
       unawaited(_saveQueue());
       _notify();
@@ -1329,44 +1463,39 @@ class OnlineDownloadManager {
   /// 落库（Komiic 的历史/收藏类型表已含 `komiic`，Pixiv 走通用的
   /// `CustomDownloadedItem` + `sourceKey='pixiv'`，无需新增模型）。
   ///
-  /// 图片使用 `regular` 档而非 `original`：原图体积可达数十 MB/页，整套作品
-  /// 下载会成倍放大；`regular` 已是 Pixiv 网页默认展示档。
+  /// 图片使用 **`original`（原图）档**，见 [_pixivPageUrl] 的注释：
+  /// 39 号按用户要求把起点从 `regular` 改成 `original` ——
+  /// 下载的意义就是拿到原图，下压缩档等于白下。
   Future<void> _runPixivTask(OnlineDownloadTask task) async {
     if (_running) return;
     _running = true;
     task.startSpeedTimer(_notify);
+    _notify();
     final comic = task._pixivInfo!;
+    String? lease;
     try {
-      // 36 号起 Pixiv 有自己的默认根（`<数据目录>/download_pixiv`，与 `download`
-      // 同级），解析统一走 `effectivePixivDownloadRoot()` ——
-      // **不要在这里直接读 `settings[152]`**：那样"空值"会被当成"没配置"而回落到
-      // 默认下载根，Pixiv 内容又会混进 `download` 里。
-      final downloadRoot = await _resolveOnlineDownloadRoot(
-        overrideRoot: effectivePixivDownloadRoot(),
-      );
-      // 目录名走模板渲染（`settings[153]`，空值由函数兜底成 `{title}`）。
-      //
-      // 为什么不用 `_safeName`：那个函数按 **240 字节**截断（留去重后缀余量），
-      // 而 `renderPixivDirectoryName` 内部是 **255 字节**（ext4/f2fs 单段上限），
-      // 且额外处理 rune 边界（不劈开 emoji）与结尾点。Pixiv 这一个来源走模板函数、
-      // 其余来源仍走 `_safeName`，两条上限不必也不该强行统一。
-      //
-      // ⚠️ 目录名一旦写进 download.db 就是记录的一部分：改模板**只影响新下载**，
-      // 绝不回头重命名已有目录 —— 重命名会让老记录找不到自己的内容。
-      final safeDirectory = renderPixivDirectoryName(
-        template: appdata.settings[pixivDirNameTemplateSettingIndex],
-        title: comic.title,
-        author: comic.author,
-        id: comic.id,
-        // 作品页数：`{pages}` 渲染成 `p3`。此处的目录名同时是**目录形态的目录名**
-        // 与**压缩包/单图形态的文件名基名**，两种形态共用一个名字。
-        pages: comic.pageCount,
-        fallback: comic.id,
-      );
-      final root =
-          Directory('$downloadRoot${Platform.pathSeparator}$safeDirectory');
+      final saved = task.pixivTarget;
+      if (saved == null) throw StateError('旧下载任务未保存目标，请重新选择下载文件夹');
+      final library = PixivLibrary(resolvePixivLibraryRoot(saved['root']!));
+      final folder = library.folder(saved['folderId']!, libraryId: saved['libraryId']);
+      final downloadRoot = folder.path;
+      _openDownloadDb(downloadRoot).dispose();
+      if (library.find(folder.id, task.taskId) case final existing?) {
+        await PixivLibrary.snapshotOf(existing.path);
+        task.completed = true;
+        return;
+      }
+      final reusable = library.copiesOf(task.taskId).where((r) => r.folder.id != folder.id).firstOrNull;
+      if (reusable != null) {
+        await library.transfer(reusable, folder.id, move: false);
+        task.completed = true;
+        App.notifyLocalDataChanged();
+        return;
+      }
+      lease = library.acquireLease(folder.id);
+      final safeDirectory = task.pixivBaseName!;
+      final root = Directory(p.join(downloadRoot, '.pixiv_download_${task.pixivOperationId}'));
       await root.create(recursive: true);
-
       // Pixiv 图片 CDN 有严格 Referer 防盗链，缺 Referer 会 403。
       const headers = {
         'Referer': 'https://www.pixiv.net/',
@@ -1435,7 +1564,7 @@ class OnlineDownloadManager {
       }
       await Future.wait(futures);
       _throwIfCancelled(task);
-      if (completedPages == 0) {
+      if (completedPages != pages.length) {
         throw Exception(
             errors.isNotEmpty ? errors.first : 'No page downloaded');
       }
@@ -1449,10 +1578,8 @@ class OnlineDownloadManager {
       // 那等于把内容截掉。`pageCount` 解析不出来时（0）退回本次页列表长度 ——
       // 那也是"计划的页数"，与某一页下载成功与否无关，不会误判。
       final artifactForm = resolvePixivArtifactForm(
-        zipEnabled: pixivMultiPageZipEnabled(
-          appdata.settings[pixivMultiPageZipSettingIndex],
-        ),
-        pageCount: comic.pageCount > 0 ? comic.pageCount : pages.length,
+        zipEnabled: true,
+        pageCount: pages.length,
       );
       var artifactDirectory = safeDirectory;
       var artifactSizeMb = _directoryMb(root);
@@ -1463,14 +1590,15 @@ class OnlineDownloadManager {
           downloadRoot: downloadRoot,
           baseName: safeDirectory,
         );
-        if (finalized != null) {
+        if (finalized == null) throw StateError('产物整理失败，已保留下载暂存，可重试');
+        {
           artifactDirectory = finalized.directoryName;
           artifactSizeMb = finalized.sizeMb;
         }
       }
 
       final item = CustomDownloadedItem(
-        id: task.id,
+        id: task.taskId,
         name: comic.title,
         subTitle: comic.author,
         tags: comic.tags,
@@ -1500,16 +1628,20 @@ class OnlineDownloadManager {
         // "下载成功但列表里看不到内容"。
         directory: artifactDirectory,
       );
+      await _deletePixivSourceDir(root);
       task.completed = true;
       App.notifyLocalDataChanged();
     } on _OnlineDownloadCancelled catch (_) {
-      if (!task.paused) task.cancelled = true;
+      if (!task.paused && !task.waitingForNetwork) task.cancelled = true;
     } catch (error, stackTrace) {
-      task.error = error.toString();
+      if (!task.paused && !task.cancelled && !task.waitingForNetwork) {
+        task.error = error.toString();
+      }
       LogManager.addLog(
           LogLevel.error, 'OnlineDownload', '$error\n$stackTrace');
     } finally {
-      _running = false;
+      if (lease != null) PixivLibrary.releaseLease(lease);
+      _finishActiveTask(task);
       task.stopSpeedTimer();
       unawaited(_saveQueue());
       _notify();
@@ -1551,12 +1683,17 @@ class OnlineDownloadManager {
           );
           await packagePixivDirectoryToStoreZip(
             sourceDir: sourceDir,
-            target: zipFile,
+            target: File(p.join(downloadRoot, '.pixiv_pending_$fileName')),
           );
           // 走到这里 = zip 已落地并**校验通过**：**从这一刻起产物就是这个包**，
           // 下面的删目录只是清理。清理失败（权限等）不算打包失败 ——
           // 包是完整的，记录就该指向包；最坏情况只是磁盘上多留一份原目录。
-          await _deletePixivSourceDir(sourceDir);
+          final staged = File(p.join(downloadRoot, '.pixiv_pending_$fileName'));
+          if (await zipFile.exists()) {
+            final expected = await PixivLibrary.snapshotOf(staged.path);
+            if (!await PixivLibrary.matchesSnapshot(zipFile.path, expected)) throw StateError('目标文件已存在且内容不同');
+            await staged.delete();
+          } else { await staged.rename(zipFile.path); }
           return (
             directoryName: fileName,
             sizeMb: await _fileMb(zipFile),
@@ -1581,11 +1718,15 @@ class OnlineDownloadManager {
           // 用"复制 + 校验 + 删目录"而不是 `rename`：`rename` 在"删掉目标 → 改名"
           // 之间有一段**目标不存在**的窗口（此时旧记录会指向一个不存在的路径），
           // 复制则是新文件先完整落地，任何时刻都至少有一份完整数据。
-          await page.copy(target.path);
-          if (await target.length() != await page.length()) {
+          final staged = File(p.join(downloadRoot, '.pixiv_pending_$fileName'));
+          await page.copy(staged.path);
+          if (await staged.length() != await page.length()) {
             throw StateError('single image artifact size mismatch');
           }
-          await _deletePixivSourceDir(sourceDir);
+          if (await target.exists()) {
+            if (!await PixivLibrary.matchesSnapshot(target.path, await PixivLibrary.snapshotOf(page.path))) throw StateError('目标文件已存在且内容不同');
+            await staged.delete();
+          } else { await staged.rename(target.path); }
           return (
             directoryName: fileName,
             sizeMb: await _fileMb(target),
@@ -1630,12 +1771,28 @@ class OnlineDownloadManager {
     }
   }
 
-  /// Pixiv 单页取 URL：`regular` 优先，空则退 `small` → `thumbMini`。
+  /// Pixiv 单页取 URL：**`original` 优先**，空则退 `regular` → `small` → `thumbMini`。
   ///
-  /// 抽成顶层语义的私有方法是为了让"档位回退"只有一处定义 —— 阅读器侧
-  /// （PixivReadingData）有同样的回退链，两处口径必须一致。
+  /// ## 为什么必须是 original（39 号修正）
+  ///
+  /// 此前这里取的是 `regular`（约 1200px 长边），理由是"原图可达数十 MB/页，
+  /// 整套作品会成倍放大"。用户明确否掉了这个取舍：
+  /// 「pixiv 的下载图不是原图？不然你以为为什么下载，不是直接阅读」——
+  /// **下载的意义就是拿到原图**：下 `regular` 的话，用户在阅读器里看到的
+  /// 与在线阅读没有区别，下载这件事本身就失去了价值。
+  ///
+  /// ## 回退链与阅读侧同构，但**起点不同**
+  ///
+  /// - 下载：`original` → `regular` → `small` → `thumbMini`
+  ///   （`parsePixivPages` 已把缺失的 `original` 预处理成 `regular`，
+  ///   所以老作品不下发原图时这里拿到的仍是可用的次一档）；
+  /// - 在线阅读（`PixivReadingData`）：默认仍从 `regular` 起
+  ///   （省流量；本地图的解码质量由「插画/图集高清模式」那个开关控制）。
+  ///
+  /// ⚠️ **体积是明确接受的代价**：原图单页可达数 MB 到数十 MB。
   String _pixivPageUrl(PixivPage page) {
     for (final candidate in <String>[
+      page.original,
       page.regular,
       page.small,
       page.thumbMini,
@@ -1655,6 +1812,7 @@ class OnlineDownloadManager {
     if (_running) return;
     _running = true;
     task.startSpeedTimer(_notify);
+    _notify();
     final comic = task._komiicInfo!;
     try {
       final downloadRoot = await _resolveOnlineDownloadRoot();
@@ -1790,13 +1948,15 @@ class OnlineDownloadManager {
       task.completed = true;
       App.notifyLocalDataChanged();
     } on _OnlineDownloadCancelled catch (_) {
-      if (!task.paused) task.cancelled = true;
+      if (!task.paused && !task.waitingForNetwork) task.cancelled = true;
     } catch (error, stackTrace) {
-      task.error = error.toString();
+      if (!task.paused && !task.cancelled && !task.waitingForNetwork) {
+        task.error = error.toString();
+      }
       LogManager.addLog(
           LogLevel.error, 'OnlineDownload', '$error\n$stackTrace');
     } finally {
-      _running = false;
+      _finishActiveTask(task);
       task.stopSpeedTimer();
       unawaited(_saveQueue());
       _notify();
@@ -1865,7 +2025,12 @@ class OnlineDownloadManager {
       extension = originalExtension;
     }
     final file = File('$basePath$extension');
-    await file.writeAsBytes(bytes, flush: true);
+    await writeDownloadStreamFile(
+      target: file,
+      stream: Stream.value(bytes),
+      checkCancelled: () => _throwIfCancelled(task),
+      expectedLength: bytes.length,
+    );
   }
 
   Future<Uint8List> _downloadJmBytes(
@@ -2023,24 +2188,20 @@ class OnlineDownloadManager {
           );
         }
       }
-      final sink = file.openWrite();
-      try {
-        // stream 模式下 receiveTimeout 对流内静默段无效，套 timeout 兜底
-        await for (final chunk in body.stream.timeout(
+      final encoding = response.headers.value('content-encoding');
+      await writeDownloadStreamFile(
+        target: file,
+        stream: body.stream.timeout(
           const Duration(seconds: 20),
           onTimeout: (_) => throw TimeoutException('stream timeout'),
-        )) {
-          _throwIfCancelled(task);
-          task.onData(chunk.length);
-          sink.add(chunk);
-        }
-        await sink.flush();
-      } catch (_) {
-        await sink.close();
-        if (await file.exists()) await file.delete();
-        rethrow;
-      }
-      await sink.close();
+        ),
+        checkCancelled: () => _throwIfCancelled(task),
+        onChunk: task.onData,
+        // Content-Length describes encoded bytes, not an auto-decoded stream.
+        expectedLength: encoding == null || encoding == 'identity'
+            ? int.tryParse(response.headers.value('content-length') ?? '')
+            : null,
+      );
     } finally {
       task.removeToken(cancelToken);
       EhNetwork().releaseEhgtSlot(url);
@@ -2048,7 +2209,7 @@ class OnlineDownloadManager {
   }
 
   void _throwIfCancelled(OnlineDownloadTask task) {
-    if (task.cancelled || task.paused) {
+    if (task.cancelled || task.paused || task.waitingForNetwork) {
       throw const _OnlineDownloadCancelled();
     }
   }
@@ -2098,25 +2259,23 @@ class OnlineDownloadManager {
 
   // ── 持久化 ──────────────────────────────────────────────
 
-  bool _isSaving = false;
-  bool _pendingSave = false;
+  Future<void> _queueSaveTail = Future<void>.value();
 
   String _queueFilePath(String rootPath) =>
       '$rootPath${Platform.pathSeparator}download_queue.json';
 
-  Future<void> _saveQueue() async {
-    if (_isSaving) {
-      // 当前正在写盘，标记"写完后再写一次"确保最新状态不丢
-      _pendingSave = true;
-      return;
-    }
-    _isSaving = true;
-    _pendingSave = false;
+  Future<void> _saveQueue({bool requireSuccess = false}) {
+    final next = _queueSaveTail.then((_) => _saveQueueNow(requireSuccess));
+    _queueSaveTail = next.catchError((Object _) {});
+    return next;
+  }
+
+  Future<void> _saveQueueNow(bool requireSuccess) async {
     try {
       final rootPath = await _defaultOnlineDownloadRoot();
       await Directory(rootPath).create(recursive: true);
       final pending = _tasks.values
-          .where((t) => !t.completed && !t.cancelled && t.error == null)
+          .where((t) => !t.completed && !t.cancelled)
           .map((t) {
         if (t.sourceKey == 'jm') {
           return {
@@ -2145,6 +2304,9 @@ class OnlineDownloadManager {
           return {
             'sourceKey': 'pixiv',
             'pixivJson': _pixivInfoToQueueJson(t._pixivInfo!),
+            'target': t.pixivTarget,
+            'baseName': t.pixivBaseName,
+            'operationId': t.pixivOperationId,
             'currentPage': t.currentPage,
             'paused': t.paused,
           };
@@ -2168,17 +2330,12 @@ class OnlineDownloadManager {
       final json = jsonEncode(pending);
       final path = _queueFilePath(rootPath);
       final tmp = File('$path.tmp');
-      await tmp.writeAsString(json);
+      await tmp.writeAsString(json, flush: true);
       await tmp.rename(path);
     } catch (e, s) {
       LogManager.addLog(
           LogLevel.warning, 'OnlineDownload', 'saveQueue error: $e\n$s');
-    } finally {
-      _isSaving = false;
-      if (_pendingSave) {
-        // 写盘期间有新变化，立即补一次
-        unawaited(_saveQueue());
-      }
+      if (requireSuccess) rethrow;
     }
   }
 
@@ -2231,9 +2388,10 @@ class OnlineDownloadManager {
             final pixivJson = (item['pixivJson'] as Map)
                 .map((k, v) => MapEntry(k.toString(), v));
             final info = _pixivInfoFromQueueJson(pixivJson);
-            final key = 'pixiv${info.id}';
-            if (_tasks.containsKey(key)) continue;
             final task = OnlineDownloadTask.pixiv(pixivInfo: info)
+              ..pixivTarget = item['target'] is Map ? Map<String,String>.from(item['target'] as Map) : null
+              ..pixivBaseName = item['baseName'] as String?
+              ..pixivOperationId = item['operationId'] as String? ?? const Uuid().v4()
               ..totalEps = 1
               ..totalPages = info.pageCount
               ..currentPage = (item['currentPage'] as int?) ?? 0
@@ -2270,11 +2428,29 @@ class OnlineDownloadManager {
     } catch (e, s) {
       LogManager.addLog(
           LogLevel.warning, 'OnlineDownload', 'loadQueue error: $e\n$s');
+    } finally {
+      _queueLoaded = true;
     }
   }
 
   void _notify() {
     version.value++;
+    DownloadNotificationController.instance.update(
+      DownloadNoticeSnapshot.fromTasks(
+        _tasks.values.map((task) => DownloadNoticeTask(
+          id: task.id,
+          title: task.taskTitle,
+          progress: task.progress,
+          bytesPerSecond: task.currentSpeed,
+          completed: task.completed,
+          cancelled: task.cancelled,
+          paused: task.paused,
+          error: task.error,
+        )),
+        activeId: _running ? _activeTask?.id : null,
+        networkAvailable: _networkAvailable,
+      ),
+    );
   }
 
   /// 解析在线下载根。
@@ -2328,11 +2504,10 @@ class OnlineDownloadManager {
   /// `settings[152]` 为空时**不再**让 Pixiv 跟随默认根：36 号起它有自己的默认位置
   /// （`<数据目录>/download_pixiv`），见 `effectivePixivDownloadRoot()`。
   Future<Set<String>> _effectiveDownloadRoots() async {
-    return effectiveDownloadRootsFrom(
+    return {...effectiveDownloadRootsFrom(
       defaultRoot: await _defaultOnlineDownloadRoot(),
-      configuredRoot: appdata.settings[22],
-      pixivRoot: effectivePixivDownloadRoot(),
-    );
+      configuredRoot: appdata.settings[22], pixivRoot: effectivePixivDownloadRoot()),
+      for(final root in pixivLibraryRoots(effectivePixivDownloadRoot())) ...PixivLibrary(root).folders().map((f) => f.path)};
   }
 
   /// [_effectiveDownloadRoots] 的**纯函数内核**：把"读设置"与"算集合"分开，
@@ -2394,55 +2569,7 @@ class OnlineDownloadManager {
     }
   }
 
-  Database _openDownloadDb(String rootPath) {
-    final dbPath = '$rootPath${Platform.pathSeparator}download.db';
-
-    // 检测并修复只读文件
-    final dbFile = File(dbPath);
-    if (dbFile.existsSync()) {
-      var needRebuild = false;
-      try {
-        // 尝试写测试：如果只读会抛异常
-        final raf = dbFile.openSync(mode: FileMode.append);
-        raf.closeSync();
-      } catch (e) {
-        // 文件只读或权限异常，尝试删除重建
-        LogManager.addLog(
-          LogLevel.warning,
-          'OnlineDownload',
-          'download.db is readonly or locked, trying to remove: $e',
-        );
-        needRebuild = true;
-      }
-      if (needRebuild) {
-        try {
-          dbFile.deleteSync();
-        } catch (delErr) {
-          // 删除失败（通常是 root 拥有的文件，应用无权删除）
-          // 必须明确抛错，否则后续 insert 会静默失败导致下载记录丢失
-          throw Exception(
-            '数据库文件无法写入且无法删除，可能被 root 权限污染。\n'
-            '请手动删除该文件后重试：\n$dbPath\n'
-            '原始错误: $delErr',
-          );
-        }
-      }
-    }
-
-    final db = sqlite3.open(dbPath);
-    db.execute('''
-      create table if not exists download (
-        id text primary key,
-        title text,
-        subtitle text,
-        time int,
-        directory text,
-        size int,
-        json text
-      )
-    ''');
-    return db;
-  }
+  Database _openDownloadDb(String rootPath) => PixivLibrary.openDownloads(rootPath);
 
   static Map<String, dynamic> _jmComicInfoToQueueJson(JmComicInfo info) => {
         'id': info.id,
@@ -2584,8 +2711,7 @@ class OnlineDownloadManager {
 
   /// 将旧式（纯ID）文件夹名修正为新式（标题），同步更新 DB 的 directory 字段。
   /// 返回 (fixed, failed, skipped) 三元组。
-  Future<({int fixed, int failed, int skipped})> fixDirectoryNames() async {
-    int fixed = 0, failed = 0, skipped = 0;
+  Future<({int fixed, int failed, int skipped})> fixDirectoryNames() async {    int fixed = 0, failed = 0, skipped = 0;
     final roots = await _effectiveDownloadRoots();
 
     for (final root in roots) {
@@ -2594,13 +2720,30 @@ class OnlineDownloadManager {
       Database? db;
       try {
         db = sqlite3.open(dbPath);
-        final rows =
-            db.select('select id, title, directory from download;').toList();
+        final rows = db
+            .select('select id, title, directory, json from download;')
+            .toList();
         for (final row in rows) {
           final id = row['id']?.toString() ?? '';
           final title = row['title']?.toString() ?? '';
           final oldDir = row['directory']?.toString() ?? '';
           if (id.isEmpty || title.isEmpty) {
+            skipped++;
+            continue;
+          }
+          // 本工具**只处理哔咔（picacg）的记录**（用户明确要求）。
+          //
+          // 它的由来：V1.9.32 引入 picacg 全链路时，那个源的下载目录名是
+          // **纯作品 id**，于是配了这个"改成标题"的补救工具。其它来源
+          //（jm / ehentai / nhentai / pixiv）从落地起就用标题或命名模板，
+          // **从来没有这个问题** —— 对它们生效只会造成意外改名：
+          // 例如把 Pixiv 的 `{author}_{title}_{id}_{pages}` 压成纯标题，
+          // 一口气丢掉 author / id / pages 三段信息。
+          //
+          // 判据用 `json` 里的 `sourceKey`（与本地库的分派同口径，见
+          // `local_library_static.dart` 的 `_downloadSourceKeyFor`），
+          // **不靠 id 前缀猜** —— 猜错的后果是对别的源做了写盘改名。
+          if (_sourceKeyOfDownloadRow(row['json']?.toString()) != 'picacg') {
             skipped++;
             continue;
           }
@@ -2672,6 +2815,30 @@ class OnlineDownloadManager {
     }
     App.notifyLocalDataChanged();
     return (fixed: fixed, failed: failed, skipped: skipped);
+  }
+
+  /// 从 `download.db` 的 `json` 列解析**来源标识**（只认 `sourceKey`）。
+  ///
+  /// 解析失败 / 字段缺失一律返回空串。调用方据此**跳过**该行，
+  /// **不得**退回"按 id 前缀猜来源" —— 猜错的后果是对别的源做写盘改名，
+  /// 而 `fixDirectoryNames` 会真的重命名磁盘目录。
+  ///
+  /// 与本地库分派同口径（`local_library_static.dart` 的 `_downloadSourceKeyFor`），
+  /// 避免两边对"这条记录属于哪个源"给出不同答案。
+  static String _sourceKeyOfDownloadRow(String? jsonText) {
+    final raw = jsonText?.trim() ?? '';
+    if (raw.isEmpty) {
+      return '';
+    }
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is Map) {
+        return decoded['sourceKey']?.toString().trim() ?? '';
+      }
+    } catch (_) {
+      // 坏 JSON 当作"没有来源信息"处理：跳过比误判安全。
+    }
+    return '';
   }
 }
 
@@ -3293,6 +3460,27 @@ class OnlineLocalReadingData extends ReadingData {
           : rootDirectoryPath,
     );
     if (!await dir.exists()) {
+      // 41 号：**这里原本是"静默返回空"** —— 直接 `return const []`。
+      //
+      // 后果是"这条记录指向的目录不存在"在界面上只表现为「未知错误」
+      // （`comic_reading_page.dart:499` 显示的是 `errorMessage ?? "未知错误"`，
+      // 而这里既不抛异常、也不留日志），排查时完全没有线索 ——
+      // 41 号查这个真机故障为此耗了很多轮。
+      //
+      // 现在记一条 warning。**注意返回值不变**（仍然返回空列表）：
+      // 目录真的不在是合法状态（内容被删、记录残留），不该因此抛错让阅读器崩，
+      // 只是必须留下可查的痕迹。
+      LogManager.addLog(
+        LogLevel.warning,
+        'OnlineDownload',
+        '本地阅读：目录不存在，将返回空页列表。\n'
+            '  id=$id  ep=$ep  hasEp=$hasEp\n'
+            '  rootDirectoryPath=$rootDirectoryPath\n'
+            '  期望目录=$dir\n'
+            '提示：这条记录可能来自一个**已被搬空的旧下载根**'
+            '（同一个 id 在多个下载根的 download.db 里各有一份时，'
+            '去重会优先保留实体真实存在的那条）。',
+      );
       return const <String>[];
     }
     final files = dir

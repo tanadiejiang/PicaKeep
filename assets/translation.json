@@ -1,6 +1,8 @@
 {
   "zh_TW": {
     "有可用更新": "有可用更新",
+    "漫画阅读高清模式": "漫畫閱讀高清模式",
+    "插画 / 图集阅读高清模式": "插畫 / 圖集閱讀高清模式",
     "下载管理器": "下載管理器",
     "继续未完成的下载?": "繼續未完成的下載?",
     "点击完成身份验证": "點擊完成身份驗證",
@@ -647,6 +649,8 @@
     "@pages 页": "@pages 頁"
   },
   "en_US": {
+    "漫画阅读高清模式": "High quality mode for comics",
+    "插画 / 图集阅读高清模式": "High quality mode for illustrations / albums",
     "有可用更新": "Updates available",
     "下载管理器": "Download manager",
     "继续未完成的下载?": "Continue unfinished download?",

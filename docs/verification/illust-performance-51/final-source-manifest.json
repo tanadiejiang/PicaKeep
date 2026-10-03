@@ -1,0 +1,42 @@
+{
+  "verifiedAt": "2026-10-02T20:56:36",
+  "root": "D:\\Flutter_Projucts\\PicaComic\\PicaKeep",
+  "branch": "main",
+  "committed": false,
+  "fullTests": {
+    "pass": 2193,
+    "skip": 14,
+    "fail": 0
+  },
+  "deviceOperations": false,
+  "sourceSha256": {
+    "lib/foundation/history.dart": "a1c49013cd0b3da218d2c085f20101ded489d722a0182a5f890269a6f697e691",
+    "lib/foundation/privileged_storage_access_flutter.dart": "7b2823fbca6e2e56cecf72ae16330405c0030bae0aa2948d964417c981c21628",
+    "lib/foundation/privileged_storage_access_io.dart": "28ce8e73a7079bebd4072de6546486c50708c42434343d5e4ac6288972aed706",
+    "lib/foundation/local_library.dart": "b78b9bebfd3c6bdfa9bc8d2ec24292c7808852c72edce090987c998f2a8abcd8",
+    "lib/foundation/local_library_query.dart": "772f721a624a2802f2cc5c2e4e4be5c49b56acbde91d70c9e3c44551b9d6cb5f",
+    "lib/foundation/local_library_scan.dart": "cb6b468d07eb60459de325c5235b5328e735377cad8f71af9a74416297850c3b",
+    "lib/foundation/local_library_static.dart": "7645d124d2303135b482d58c712b3d2ff6dc2ff69295abe9d0703e763d47bfc8",
+    "lib/foundation/local_library_illust_view.dart": "5799ad1f97041aa60a4d3244000073e3be63a24be5aedc077876f9b301c901f8",
+    "lib/foundation/download_snapshot_reader.dart": "24642412990b9de09b6b65a3fda0724476e9282f93cf1ec11ca509487e93d83f",
+    "lib/foundation/cover_thumbnail_cache.dart": "89fbc6bc4bf1fdcb24ec54431f8fa88bd2a620704c94b7b4c2be084e25458b51",
+    "lib/foundation/local_cover_cache.dart": "3224d87a41d400d6a71d7be5a47f0fe706eb0123c95df1881b385094b9075a92",
+    "lib/foundation/illust_cover_size.dart": "d2ec6a44ddd19e7ab3b4fe58fb99c78a565fc572aba0f9909f153e45efb1de57",
+    "lib/foundation/remote_library_data_source.dart": "7e1ce47ad3da55e82c1ebf482a949ed5664fb2f17dddac724459ce05cb94c207",
+    "lib/pages/local_library_page.dart": "86cdb58a389b6b01e9b49f917aeb779ccf02e06311b4372bb986da0cef41366f",
+    "lib/pages/local_library_illust_view.dart": "49a889b7f3800bda2a501ac101dac45d080dfe55cac7020d938d1e85eb83b7c4",
+    "lib/pages/local_library_illust_card.dart": "594a656f96795bed6c3a6bbf510fc693895756cb38f77a41c01c0dfb58fe7c73",
+    "lib/pages/illust_work_queue.dart": "a546b64a4e34de5a3e44a4b554b63f27434693761b089bfb03727ef9b3bc5995",
+    "lib/pages/illust_scroll_anchor.dart": "fe1f2329d1e7174e46dca535907bd6b1a2f3ae57931f49631e76c20adfc6fe6e",
+    "lib/pages/tools.dart": "b943d53dc28b0519008a84f6933d75cdab737f2c1b6b61d0b0b806728fa61240",
+    "lib/tools/io_tools.dart": "730241be6641fa9170941b5a64cbc5c7b2d4a64de8bd6c3a2c6c7eeb3bad894f",
+    "test/illust_thumbnail_test.dart": "52cde80777ce8934f9c9f395364a92e9e7937ea65513f8681c4fa18f3241f416",
+    "test/illust_work_queue_test.dart": "8d5034a5f4ee0203d53a86b28ba61dd9a38de360a73ec863b8d1736d06e15bca",
+    "test/illust_scroll_anchor_test.dart": "049b2f5d5a8f5bd37dfc6ddc2a1a225c4c3beb54f8f68ddb3f787d192071ee31",
+    "test/history_single_lookup_test.dart": "7fa24440bd64cb7f4240284d5b7df44751246f443201a4fdfba41b21f65fa207",
+    "test/local_library_page_view_scope_test.dart": "0aa6e4eba42c99d9b1ccada912287ecfa310a24ba69ce790c24fdf7f6dac28f0",
+    "test/local_library_illust_card_test.dart": "bf7af21d2232a2cb137915a26a1c8f911f2f7dbe14c1bd0740a8553be450a8f5",
+    "test/pixiv_folder_cover_integration_test.dart": "c3f82e8e54443a61e02c21efc4169712d59963e9c14e898ccd4316c7e5f82af0"
+  },
+  "ai49Unchanged": true
+}
