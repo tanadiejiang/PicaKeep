@@ -9,6 +9,15 @@
 # packages, and plugins designed to encourage good coding practices.
 include: package:flutter_lints/flutter.yaml
 
+analyzer:
+  exclude:
+    # 验证证据快照：这些 .dart 是某次重构「改造前」的源码存档，只作为交付
+    # 证据留档，不是可编译代码（缺私有成员定义、依赖已迁移的符号）。它们一旦
+    # 被分析器扫描，就会让 IDE 弹出 "Errors exist in your project." 并拦住
+    # Run/Debug，而 lib/ 与 test/ 本身是干净的。故排除，不参与静态分析。
+    - docs/verification/**
+    - Z-plan/**
+
 linter:
   # The lint rules applied to this project can be customized in the
   # section below to disable rules from the `package:flutter_lints/flutter.yaml`

@@ -8,6 +8,8 @@ import 'package:picakeep/network/res.dart';
 import 'package:picakeep/network/soutubot_network/soutubot_network.dart';
 
 import '../ai_tool.dart';
+import '../ai_settings.dart';
+import '../ai_tool_plugin_store.dart';
 
 /// 以图搜源工具（15轮05号计划步骤 8）。
 ///
@@ -18,8 +20,7 @@ import '../ai_tool.dart';
 ///
 /// Cloudflare 过盾触发链：`passCloudflare` 此前全库零调用点（05 计划核实的
 /// 事实），本工具是它的首次投产接线——命中 [CloudflareException] 时弹 webview
-/// 让用户人工过盾，成功后整流程重试一次（`searchByImage` 每次现抓 m，重新调用
-/// 即为「重新 GET 主页抠 m 起」的整流程重试）。桌面 DesktopWebview 分支用户
+/// 让用户人工过盾，成功后重新读取适配器并重试上传一次。桌面 DesktopWebview 分支用户
 /// 手动关窗时 `onFinished` 永不回调，180 秒超时兜底防止工具轮挂死。
 class SearchByImageTool extends AiTool {
   const SearchByImageTool();
@@ -86,27 +87,30 @@ class SearchByImageTool extends AiTool {
     }
     final resolver = context.resolveAttachmentPath;
     if (resolver == null) {
-      return const AiToolResult.failure(
-          '当前执行环境没有图片附件语境，无法搜图；请让用户在对话中发送图片后重试');
+      return const AiToolResult.failure('当前执行环境没有图片附件语境，无法搜图；请让用户在对话中发送图片后重试');
     }
     final path = resolver(ref);
     if (path == null) {
-      return AiToolResult.failure(
-          '图片引用 "$ref" 不存在或已过期，请让用户重新发送图片后再试');
+      return AiToolResult.failure('图片引用 "$ref" 不存在或已过期，请让用户重新发送图片后再试');
     }
     final file = File(path);
     if (!await file.exists()) {
       return const AiToolResult.failure('该图片文件已被清理，请让用户重新发送图片');
     }
     if (await file.length() > _maxImageBytes) {
-      return const AiToolResult.failure(
-          '图片超过 10MB 上限，请让用户换一张更小的图片（如单页截图）再试');
+      return const AiToolResult.failure('图片超过 10MB 上限，请让用户换一张更小的图片（如单页截图）再试');
     }
+    final plugins = AiToolPluginStore.instance;
+    await plugins.load();
+    if (!isAiCapabilityEnabled('search_by_image')) {
+      return const AiToolResult.failure('以图搜源能力或搜图插件已关闭');
+    }
+    final adapter = plugins.record(builtinImagePluginId)!.plugin.adapter;
     final bytes = await file.readAsBytes();
 
     Res<SoutubotSearchResult> res;
     try {
-      res = await SoutubotNetwork().searchByImage(bytes);
+      res = await SoutubotNetwork().searchByImage(bytes, adapter: adapter);
     } catch (e) {
       final cf = _asCloudflareException(e);
       if (cf == null) {
@@ -116,9 +120,14 @@ class SearchByImageTool extends AiTool {
       if (!passed) {
         return const AiToolResult.failure(_cfFailureMessage);
       }
-      // 过盾成功后整流程重试一次（UA/cookie 已更新）；重试仍 CF → 失败收口。
+      // 人工验证期间能力/版本可能变化，重试重新读取而不沿用旧授权或适配。
+      if (!isAiCapabilityEnabled('search_by_image')) {
+        return const AiToolResult.failure('验证期间以图搜源能力或插件已关闭，未继续上传');
+      }
+      final retryAdapter = plugins.record(builtinImagePluginId)!.plugin.adapter;
       try {
-        res = await SoutubotNetwork().searchByImage(bytes);
+        res =
+            await SoutubotNetwork().searchByImage(bytes, adapter: retryAdapter);
       } catch (retryError) {
         if (_asCloudflareException(retryError) != null) {
           return const AiToolResult.failure(_cfFailureMessage);
@@ -175,7 +184,7 @@ class SearchByImageTool extends AiTool {
           'hidden_count': 0,
         },
         '未找到任何相似结果。可建议用户换一张更清晰的漫画内页原图'
-            '（避免截图边框、水印、封面裁切）再试',
+        '（避免截图边框、水印、封面裁切）再试',
       );
     }
 
@@ -216,14 +225,14 @@ class SearchByImageTool extends AiTool {
   /// 网络层 Res.errorMessage → 引导模型正确应对的 failure（禁止裸异常字符串）。
   AiToolResult _mapNetworkFailure(String message) {
     if (message.contains('拒绝了请求')) {
-      // 401/403 非质询：签名算法可能已变更。
+      // Permission failures should not be misdiagnosed as a signature change.
       return const AiToolResult.failure(
-          'soutubot 拒绝了请求，可能其接口签名已变更，该功能暂时不可用。请如实告知用户，不要重试');
+          'soutubot 拒绝了请求，当前无法完成搜图。请如实告知用户，可检查插件诊断，不要连续自动重试');
     }
     if (message.startsWith('网络错误')) {
       return AiToolResult.failure('$message。可提示用户检查网络后重试');
     }
-    // 'soutubot 返回错误：xxx'、m 解析失败、响应无法解析等——网络层措辞已是
+    // 图片格式、体积、响应解析等错误——网络层措辞已是
     // 面向模型的引导性描述，原样透传。
     return AiToolResult.failure(message);
   }

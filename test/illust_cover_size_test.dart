@@ -493,6 +493,9 @@ void main() {
         readStamp: (_) async => 'm1',
         listDirectory: (path) async {
           listedPaths.add(path);
+          if (path.endsWith('/sub')) {
+            return const [LocalDirectoryEntry(name: 'readme.txt', path: '/tmp/pagecount/sub/readme.txt', isDirectory: false)];
+          }
           return const <LocalDirectoryEntry>[
             LocalDirectoryEntry(
                 name: '1.jpg',
@@ -516,7 +519,7 @@ void main() {
         },
         cache: IllustCoverSizeCache.inMemory(),
       );
-      expect(listedPaths, <String>['/tmp/pagecount']);
+      expect(listedPaths, <String>['/tmp/pagecount', '/tmp/pagecount/sub']);
       final info = resolved[entry.id]!;
       expect(info.pageCount, 3);
       expect(info.width, _realWidth);
@@ -953,4 +956,3 @@ void main() {
     });
   });
 }
-

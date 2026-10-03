@@ -124,6 +124,8 @@ void main() {
       comicSize: 3.44,
       width: 1200,
       height: 1600,
+      pageCount: 2,
+      authorId: '12345',
     );
   }
 
@@ -172,6 +174,8 @@ void main() {
       expect(wrapped.comicSize, 3.44);
       expect(wrapped.width, 1200);
       expect(wrapped.height, 1600);
+      expect(wrapped.pageCount, 2);
+      expect(wrapped.authorId, '12345');
       expect(wrapped.tags, item.tags);
     });
 

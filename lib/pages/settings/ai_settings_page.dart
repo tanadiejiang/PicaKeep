@@ -44,16 +44,19 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
 
   bool get _anyCapabilityEnabled {
     return [
-      aiCapabilitySearchOnlineSettingIndex,
-      aiCapabilityDownloadComicSettingIndex,
-      aiCapabilitySearchLocalSettingIndex,
-      aiCapabilityQueryLocalLibrarySettingIndex,
-      aiCapabilityResolveLocalItemsSettingIndex,
-      aiCapabilityGetDownloadStatusSettingIndex,
-      aiCapabilityQueryRemoteLibrarySettingIndex,
-      aiCapabilityGetComicDetailSettingIndex,
-      aiCapabilitySearchByImageSettingIndex,
-    ].any((idx) => appdata.settings[idx] == '1');
+          aiCapabilitySearchOnlineSettingIndex,
+          aiCapabilityDownloadComicSettingIndex,
+          aiCapabilitySearchLocalSettingIndex,
+          aiCapabilityQueryLocalLibrarySettingIndex,
+          aiCapabilityResolveLocalItemsSettingIndex,
+          aiCapabilityGetDownloadStatusSettingIndex,
+          aiCapabilityQueryRemoteLibrarySettingIndex,
+          aiCapabilityGetComicDetailSettingIndex,
+          aiCapabilitySearchByImageSettingIndex,
+        ].any((idx) => appdata.settings[idx] == '1') ||
+        AiToolPluginStore.loadedRecords.any(
+            (record) => record.enabled && record.plugin.kind == 'http_json') ||
+        AiToolPluginStore.instance.maintenanceEnabled;
   }
 
   void _setSetting(int index, String value) {
@@ -605,6 +608,9 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
   void initState() {
     super.initState();
     unawaited(_initializePromptTagSettings());
+    AiToolPluginStore.instance.load().then((_) {
+      if (mounted) setState(() {});
+    });
   }
 
   Future<void> _initializePromptTagSettings() async {
@@ -1008,6 +1014,18 @@ class _AiSettingsPageState extends State<AiSettingsPage> {
                 .tl,
         settingIndex: aiCapabilitySearchByImageSettingIndex,
         leading: const Icon(Icons.image_search_outlined),
+      ),
+      ListTile(
+        leading: const Icon(Icons.extension_outlined),
+        title: const Text('AI 工具插件'),
+        subtitle: const Text('导入工具、诊断连接与恢复版本'),
+        trailing: const Icon(Icons.chevron_right),
+        onTap: () async {
+          await Navigator.of(context).push(MaterialPageRoute<void>(
+            builder: (_) => const AiToolPluginsPage(),
+          ));
+          if (mounted) setState(() {});
+        },
       ),
       _buildMaxToolRoundsTile(),
       const Divider(),

@@ -1,0 +1,89 @@
+{
+  "recordedAt": "2026-10-03T18:11:05+08:00",
+  "checkout": "D:\\Flutter_Projucts\\PicaComic\\PicaKeep",
+  "branch": "main",
+  "baseCommit": "f195aa575e7f9707d20ef5d94a671eb95f0042c9",
+  "notes": "Includes uncommitted plan54 and plan55 changes. analysis_options.yaml was modified by others before plan55 and was not changed here.",
+  "files": [
+    {
+      "path": "analysis_options.yaml",
+      "sha256": "ED5D9AFA9E1EE1DAB52CA49A611BE959FE711D4BE70B267018FC6D21885259FD"
+    },
+    {
+      "path": "lib/foundation/cover_thumbnail_cache.dart",
+      "sha256": "3CE7A53EEF95979DCBA028347412334AE2E5CCFD5842CFBBD2BAE3932B7B48E8"
+    },
+    {
+      "path": "lib/foundation/illust_card_info_config.dart",
+      "sha256": "A6C78DCB72B8025A1BB28F53EBEB2F5958B905E9353E9157C070E770A4DA5830"
+    },
+    {
+      "path": "lib/foundation/illust_cover_diagnostics.dart",
+      "sha256": "E740177332FD098EB5D9CEF55F8EE1225CA4A116FEBC00E9393D0FDE92CFC327"
+    },
+    {
+      "path": "lib/foundation/local_cover_cache.dart",
+      "sha256": "2CCE0E2A9E986D283144E32BE7C4D0FDEDA1C1C4DD6B9D0F4DEDF3C31BDAB360"
+    },
+    {
+      "path": "lib/foundation/local_library_illust_view.dart",
+      "sha256": "0FE354DE3083F79BA1924E8AB254500C7BF152A9B24D434D83CA9A06CEF4121F"
+    },
+    {
+      "path": "lib/foundation/local_library.dart",
+      "sha256": "5168E4463AF92293599AE59C7857248BF123EC91C3EE66315318574DB014DCF4"
+    },
+    {
+      "path": "lib/foundation/remote_library_data_source.dart",
+      "sha256": "306D612E6AE4A2EB2C6964949A1293D30D59320DCABA843092A456678778C0C2"
+    },
+    {
+      "path": "lib/pages/illust_work_queue.dart",
+      "sha256": "20BA4960D2806337DF571E29ABA52FE91FBF04ECBC073C19EE98A1A5B68B387F"
+    },
+    {
+      "path": "lib/pages/local_library_illust_card.dart",
+      "sha256": "C11B0B47291B97303F0E572E8EC332682682927C76D0F19DB923E5DA053511EC"
+    },
+    {
+      "path": "lib/pages/local_library_page.dart",
+      "sha256": "EAD2CE2D1BDA8B631C625D82060FF6D485B48362F8032C4BA8A0C270E85E959B"
+    },
+    {
+      "path": "pubspec.lock",
+      "sha256": "2309C73B055B6878DE3C0CB5548CDE9778490FC10A90793CF1CC6F815D09518B"
+    },
+    {
+      "path": "pubspec.yaml",
+      "sha256": "CDBEFEFC0F741651085FCF7A14B04DAF3215BFEC5B59B2B529D62040BD1E786F"
+    },
+    {
+      "path": "test/illust_card_info_config_test.dart",
+      "sha256": "808CCCAD25D0177A29F1C01D4A6DD060F08FFF746D2DBDB78E550063B5A97BA4"
+    },
+    {
+      "path": "test/illust_thumbnail_test.dart",
+      "sha256": "28239529AC5E233D61CC886672BAF13EB8F7F6AFE530A78ECA2AF023AEDB57FF"
+    },
+    {
+      "path": "test/illust_work_queue_test.dart",
+      "sha256": "D85DBECAF4DC2C0870089FD0D425918EE12635FF71E6E446E1286F22C2794418"
+    },
+    {
+      "path": "test/local_cover_cache_test.dart",
+      "sha256": "BFADEA8B19D028261BCAB5BCEC93A8FE1FCABF2D2DEC057D5AF5BCF6E1C9FA47"
+    },
+    {
+      "path": "test/local_library_illust_card_test.dart",
+      "sha256": "502104249716200943762B2B5D62D565E5903F505292ED37DE504BA69FC0BA63"
+    },
+    {
+      "path": "test/local_library_illust_view_test.dart",
+      "sha256": "8C91870C50E804D0B7C48D3B6C94E272735D2EF63DD3079AAABC51B02F9FCC3A"
+    },
+    {
+      "path": "test/pixiv_folder_cover_integration_test.dart",
+      "sha256": "BA2A65556B493785E7BB7D2A49C340809DBA2375375D736161EBE9334D9695BF"
+    }
+  ]
+}

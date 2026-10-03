@@ -27,6 +27,7 @@
 ///    一大截。见 [IllustCard._decodeWidthFor] 里对 `displayWidth` 的推导。
 library;
 
+import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter/material.dart';
 
 import 'package:picakeep/foundation/illust_card_info_config.dart';
@@ -62,6 +63,8 @@ class IllustCard extends StatelessWidget {
     required this.onLongPress,
     this.onInfoTap,
     this.infoSpans,
+    this.infoFields,
+    this.infoSeparator = kDefaultIllustCardInfoSeparator,
     this.locationLabel,
     this.selected = false,
     this.selecting = false,
@@ -94,6 +97,10 @@ class IllustCard extends StatelessWidget {
   /// 一张没有说明文字的图；生产路径由页面显式传入设置里的配置。
   final List<IllustCardInfoSpan>? infoSpans;
 
+  /// 实际模板，用于为未知页数/尺寸预留空间。仅传 [infoSpans] 的旧调用保持原行为。
+  final List<String>? infoFields;
+  final String infoSeparator;
+
   /// 多选态下是否已选中。
   final String? locationLabel;
 
@@ -106,8 +113,8 @@ class IllustCard extends StatelessWidget {
       infoSpans ??
       illustrateCardInfoSpansFor(
         entry: entry,
-        fields: kDefaultIllustCardInfoFields,
-        separator: kDefaultIllustCardInfoSeparator,
+        fields: infoFields ?? kDefaultIllustCardInfoFields,
+        separator: infoSeparator,
       );
 
   @override
@@ -157,19 +164,25 @@ class IllustCard extends StatelessWidget {
               ),
             ),
           ),
-          if (spans.isNotEmpty) ...[
-            const SizedBox(height: 4),
-            _tappable(
-              onTap: onInfoTap ?? onTap,
-              label:
-                  '详情与管理：${spans.map((s) => s.text).join()}${locationLabel == null ? "" : "，$locationLabel"}',
-              child: Padding(
-                // 上边距取 1 而不是 2：信息块整体要"轻"，把纵向空间让给图片。
-                padding: const EdgeInsets.symmetric(horizontal: 2),
-                child: _buildInfoText(theme, spans),
+          _IllustInfoLayout(
+            entry: entry,
+            fields: infoFields,
+            separator: infoSeparator,
+            spans: spans,
+            builder: (layoutSpans) => Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: _tappable(
+                onTap: onInfoTap ?? onTap,
+                label:
+                    '详情与管理：${spans.map((s) => s.text).join()}${locationLabel == null ? "" : "，$locationLabel"}',
+                child: Padding(
+                  // 上边距取 1 而不是 2：信息块整体要"轻"，把纵向空间让给图片。
+                  padding: const EdgeInsets.symmetric(horizontal: 2),
+                  child: _buildInfoText(theme, spans, layoutSpans),
+                ),
               ),
             ),
-          ],
+          ),
           if (locationLabel != null)
             ExcludeSemantics(
                 child: Padding(
@@ -226,7 +239,8 @@ class IllustCard extends StatelessWidget {
   /// `maxLines` 取"字段值片段数"：每个字段最多占一行，用户配了 4 个长字段也不会
   /// 把卡片撑得比图片还高；超出部分省略。默认两个字段 = 换行分隔，
   /// 效果与改动前的"标题一行 + 作者一行、各自 `maxLines: 1`"完全一致。
-  Widget _buildInfoText(ThemeData theme, List<IllustCardInfoSpan> spans) {
+  Widget _buildInfoText(ThemeData theme, List<IllustCardInfoSpan> spans,
+      List<IllustCardInfoSpan>? layoutSpans) {
     final emphasisStyle = theme.textTheme.bodySmall?.copyWith(
       fontWeight: FontWeight.w600,
       height: 1.2,
@@ -238,19 +252,42 @@ class IllustCard extends StatelessWidget {
     // 分隔符片段不计入行数上限（换行分隔符本身"就是"那个换行，不该再占一行额度；
     // `' - '` 这种可见分隔符同理）。所以要按 isSeparator 判，不能按文本是否为空判。
     final valueCount = spans.where((span) => !span.isSeparator).length;
-    return Text.rich(
-      TextSpan(
-        children: [
-          for (final span in spans)
-            TextSpan(
-              text: span.text,
-              style: span.emphasized ? emphasisStyle : secondaryStyle,
-            ),
-        ],
-      ),
+    TextSpan textSpanFor(List<IllustCardInfoSpan> values) => TextSpan(
+          children: [
+            for (final span in values)
+              TextSpan(
+                text: span.text,
+                style: span.emphasized ? emphasisStyle : secondaryStyle,
+              ),
+          ],
+        );
+    final text = Text.rich(
+      textSpanFor(spans),
       maxLines: valueCount < 1 ? 1 : valueCount,
       overflow: TextOverflow.ellipsis,
     );
+    if (layoutSpans == null) return text;
+    return LayoutBuilder(builder: (context, constraints) {
+      final layoutValueCount =
+          layoutSpans.where((span) => !span.isSeparator).length;
+      final defaults = DefaultTextStyle.of(context);
+      final painter = TextPainter(
+        text: TextSpan(
+            style: defaults.style, children: [textSpanFor(layoutSpans)]),
+        textDirection: Directionality.of(context),
+        textScaler: MediaQuery.textScalerOf(context),
+        textWidthBasis: defaults.textWidthBasis,
+        locale: Localizations.maybeLocaleOf(context),
+        maxLines: layoutValueCount < 1 ? 1 : layoutValueCount,
+        ellipsis: '\u2026',
+      )..layout(maxWidth: constraints.maxWidth);
+      final height = painter.height;
+      painter.dispose();
+      return ConstrainedBox(
+        constraints: BoxConstraints(minHeight: height),
+        child: spans.isEmpty ? const SizedBox.shrink() : text,
+      );
+    });
   }
 
   Widget _buildImage(BuildContext context) {
@@ -342,5 +379,67 @@ class IllustCard extends StatelessWidget {
         color: colorScheme.onSecondaryContainer,
       ),
     );
+  }
+}
+
+/// 未知异步信息预留空间；确认单图后立即释放页数空行。
+/// 多图保留测量宽度以减少文字折行变化，不能让单图一直等离屏重建才收缩。
+class _IllustInfoLayout extends StatefulWidget {
+  const _IllustInfoLayout({
+    required this.entry,
+    required this.fields,
+    required this.separator,
+    required this.spans,
+    required this.builder,
+  });
+
+  final IllustLibraryEntry entry;
+  final List<String>? fields;
+  final String separator;
+  final List<IllustCardInfoSpan> spans;
+  final Widget Function(List<IllustCardInfoSpan>? layoutSpans) builder;
+
+  @override
+  State<_IllustInfoLayout> createState() => _IllustInfoLayoutState();
+}
+
+class _IllustInfoLayoutState extends State<_IllustInfoLayout> {
+  late Set<String> _reservedFields;
+
+  void _resetReservation() {
+    _reservedFields = illustCardInfoPendingFieldsFor(
+        entry: widget.entry, fields: widget.fields ?? const []);
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _resetReservation();
+  }
+
+  @override
+  void didUpdateWidget(covariant _IllustInfoLayout oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.entry.id != widget.entry.id ||
+        oldWidget.separator != widget.separator ||
+        !listEquals(oldWidget.fields, widget.fields)) {
+      _resetReservation();
+    }
+    if (widget.entry.pageCount == 1) _reservedFields.remove('pages');
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final layoutSpans = _reservedFields.isEmpty
+        ? null
+        : illustCardInfoLayoutSpansFor(
+            entry: widget.entry,
+            fields: widget.fields!,
+            separator: widget.separator,
+            reservedFields: _reservedFields);
+    if (widget.spans.isEmpty && (layoutSpans?.isEmpty ?? true)) {
+      return const SizedBox.shrink();
+    }
+    return widget.builder(layoutSpans);
   }
 }

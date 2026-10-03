@@ -44,7 +44,21 @@ android/build/
 android/app/build/
 .tmp_remote/
 .tmp_*.py
+# 临时排查脚本 / 探针（用完即弃，与上面 .tmp_*.py 同性质）
+tool/_tmp_*
 publish/
+
+# 验收证据目录：只入库「说明 + 身份清单」，大体积日志与截图留在本地。
+# 入库的四类是交接文档的链接目标（三份文档共 28 处引用），也是"验收跑的
+# 是哪份代码"的凭据（source-manifest.json 存构建源 SHA256 与 HEAD）。
+# 注：否定规则必须先放行子目录本身，否则 git 不会进入被排除的目录。
+# 注：此前已入库的 6 个证据目录仍被跟踪，不受影响。
+docs/verification/**
+!docs/verification/*/
+!docs/verification/*/README.md
+!docs/verification/*/source-manifest.json
+!docs/verification/*/artifact.json
+!docs/verification/*/apk-metadata.json
 
 # Symbolication related
 app.*.symbols

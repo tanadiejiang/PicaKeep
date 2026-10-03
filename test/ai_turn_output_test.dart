@@ -191,6 +191,8 @@ void main() {
     test('A07 $tool keeps explicit zero-result feedback without fallback',
         () async {
       if (tool == 'search_by_image') {
+        // 此用例验证已授权工具的空结果反馈；关闭能力由插件接线回归单独验证。
+        appdata.settings[aiCapabilitySearchByImageSettingIndex] = '1';
         AiCapabilities.registry.register(_FixtureTool(tool,
             (_) => const AiToolResult.success({'items': []}, '未找到任何相似结果。')));
       }
@@ -571,6 +573,7 @@ void main() {
 
   test('A15 image-search whitelist produces immediate independent cards',
       () async {
+    appdata.settings[aiCapabilitySearchByImageSettingIndex] = '1';
     AiCapabilities.registry.register(_FixtureTool(
         'search_by_image',
         (_) => const AiToolResult.success({

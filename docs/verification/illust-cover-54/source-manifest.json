@@ -1,0 +1,61 @@
+{
+  "recordedAt": "2026-10-03T16:05:17+08:00",
+  "checkout": "D:\\Flutter_Projucts\\PicaComic\\PicaKeep",
+  "branch": "main",
+  "baseCommit": "f195aa575e7f9707d20ef5d94a671eb95f0042c9",
+  "sourceState": "Uncommitted main changes; hashes identify the profile build inputs changed in plan 54.",
+  "files": [
+    {
+      "path": "lib/foundation/cover_thumbnail_cache.dart",
+      "sha256": "3CE7A53EEF95979DCBA028347412334AE2E5CCFD5842CFBBD2BAE3932B7B48E8"
+    },
+    {
+      "path": "lib/foundation/illust_cover_diagnostics.dart",
+      "sha256": "E740177332FD098EB5D9CEF55F8EE1225CA4A116FEBC00E9393D0FDE92CFC327"
+    },
+    {
+      "path": "lib/foundation/local_cover_cache.dart",
+      "sha256": "2CCE0E2A9E986D283144E32BE7C4D0FDEDA1C1C4DD6B9D0F4DEDF3C31BDAB360"
+    },
+    {
+      "path": "lib/foundation/local_library.dart",
+      "sha256": "5168E4463AF92293599AE59C7857248BF123EC91C3EE66315318574DB014DCF4"
+    },
+    {
+      "path": "lib/foundation/remote_library_data_source.dart",
+      "sha256": "306D612E6AE4A2EB2C6964949A1293D30D59320DCABA843092A456678778C0C2"
+    },
+    {
+      "path": "lib/pages/illust_work_queue.dart",
+      "sha256": "36F69AAEAEAB4289504FE70F722936D011FE45C7F7F099F2EC64097D160DA4DF"
+    },
+    {
+      "path": "lib/pages/local_library_page.dart",
+      "sha256": "1095F646DAC07AEAD31465F1D059D3EDA4F217993D165F2D4CE0738914B6AF6C"
+    },
+    {
+      "path": "test/illust_thumbnail_test.dart",
+      "sha256": "28239529AC5E233D61CC886672BAF13EB8F7F6AFE530A78ECA2AF023AEDB57FF"
+    },
+    {
+      "path": "test/illust_work_queue_test.dart",
+      "sha256": "17FB83B9FF2EF090D01DDEB59C379DF0BA76BE2D2A4EC930AAC9AA7431492895"
+    },
+    {
+      "path": "test/local_cover_cache_test.dart",
+      "sha256": "BFADEA8B19D028261BCAB5BCEC93A8FE1FCABF2D2DEC057D5AF5BCF6E1C9FA47"
+    },
+    {
+      "path": "test/pixiv_folder_cover_integration_test.dart",
+      "sha256": "BA2A65556B493785E7BB7D2A49C340809DBA2375375D736161EBE9334D9695BF"
+    },
+    {
+      "path": "pubspec.yaml",
+      "sha256": "CDBEFEFC0F741651085FCF7A14B04DAF3215BFEC5B59B2B529D62040BD1E786F"
+    },
+    {
+      "path": "pubspec.lock",
+      "sha256": "2309C73B055B6878DE3C0CB5548CDE9778490FC10A90793CF1CC6F815D09518B"
+    }
+  ]
+}

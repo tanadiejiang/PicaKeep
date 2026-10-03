@@ -93,7 +93,7 @@ void main() {
   group('buildSoutubotMultipartBody', () {
     test('产物包含完整的 part 头、factor 字段与结束线', () {
       const boundary = '----WebKitFormBoundaryAAAABBBBCCCCDDDD';
-      final imageBytes = [0x89, 0x50, 0x4E, 0x47, 0x00, 0xFF, 0x0D, 0x0A];
+      final imageBytes = [0x89, 0x50, 0x4E, 0x47, 13, 10, 26, 10, 0, 255];
       final body = buildSoutubotMultipartBody(
         imageBytes: imageBytes,
         boundary: boundary,
@@ -104,19 +104,20 @@ void main() {
       expect(
         text,
         contains(
-            'Content-Disposition: form-data; name="file"; filename="image"\r\n'),
+            'Content-Disposition: form-data; name="file"; filename="image.png"\r\n'),
       );
-      expect(text, contains('Content-Type: application/octet-stream\r\n\r\n'));
+      expect(text, contains('Content-Type: image/png\r\n\r\n'));
       expect(
         text,
-        contains('Content-Disposition: form-data; name="factor"\r\n\r\n1.2\r\n'),
+        contains(
+            'Content-Disposition: form-data; name="factor"\r\n\r\n1.2\r\n'),
       );
       expect(text, endsWith('--$boundary--\r\n'));
     });
 
     test('图片字节原样嵌入请求体', () {
       const boundary = '----WebKitFormBoundaryAAAABBBBCCCCDDDD';
-      final imageBytes = [0x89, 0x50, 0x4E, 0x47, 0x00, 0xFF, 0x0D, 0x0A];
+      final imageBytes = [0x89, 0x50, 0x4E, 0x47, 13, 10, 26, 10, 0, 255];
       final body = buildSoutubotMultipartBody(
         imageBytes: imageBytes,
         boundary: boundary,
@@ -124,8 +125,8 @@ void main() {
       // 图片字节紧跟在头部空行之后。
       final headerLength = latin1
           .encode('--$boundary\r\n'
-              'Content-Disposition: form-data; name="file"; filename="image"\r\n'
-              'Content-Type: application/octet-stream\r\n'
+              'Content-Disposition: form-data; name="file"; filename="image.png"\r\n'
+              'Content-Type: image/png\r\n'
               '\r\n')
           .length;
       expect(
@@ -137,7 +138,7 @@ void main() {
     test('factor 可覆盖', () {
       const boundary = '----WebKitFormBoundaryAAAABBBBCCCCDDDD';
       final body = buildSoutubotMultipartBody(
-        imageBytes: const [1, 2, 3],
+        imageBytes: const [0xff, 0xd8, 0xff, 0xe0],
         boundary: boundary,
         factor: '2.0',
       );

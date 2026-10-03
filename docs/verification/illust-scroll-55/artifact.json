@@ -1,0 +1,29 @@
+{
+  "recordedAt": "2026-10-03T18:11:05+08:00",
+  "mode": "profile",
+  "command": "flutter build apk --profile --no-pub --dart-define=PIKAKEEP_COVER_DIAGNOSTICS=true",
+  "path": "D:\\Flutter_Projucts\\PicaComic\\PicaKeep\\build\\verification\\illust-scroll-55\\app-after55-profile.apk",
+  "bytes": 132933859,
+  "sha256": "1E30F8301414444328820A1B83825A764B10830375D50C7F2183144ED6285AD6",
+  "badging": [
+    "package: name='lingxue.picakeep' versionCode='5' versionName='1.9.88' platformBuildVersionName='16' platformBuildVersionCode='36' compileSdkVersion='36' compileSdkVersionCodename='16'",
+    "sdkVersion:'24'",
+    "targetSdkVersion:'36'",
+    "native-code: 'arm64-v8a' 'armeabi-v7a' 'x86_64'"
+  ],
+  "signature": [
+    "Signer #1 certificate DN: C=US, O=Android, CN=Android Debug",
+    "Signer #1 certificate SHA-256 digest: 31b4434516ccc1f58add7cc5cd4b6786e995c957d5891d3685e4c75a7a58d7c7",
+    "Signer #1 certificate SHA-1 digest: 6f954982a3ca09196710275faf454d47eaf5de40",
+    "Signer #1 certificate MD5 digest: cc909c8b3b014c8eff30c977a5af0d3d"
+  ],
+  "installed": false,
+  "device": "192.168.5.9:5555 (online at 18:05; no installation or device interactions performed)",
+  "tests": {
+    "failed": 0,
+    "passed": 2224,
+    "skipped": 14
+  },
+  "analysis": "No issues found",
+  "realDeviceAcceptance": "Pending"
+}

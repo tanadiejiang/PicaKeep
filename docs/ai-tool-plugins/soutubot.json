@@ -1,0 +1,52 @@
+{
+  "schemaVersion": 1,
+  "id": "soutubot",
+  "name": "搜图 Bot",
+  "version": "2026.10.03",
+  "kind": "image_search",
+  "endpoint": "https://soutubot.moe/api/search",
+  "fileField": "file",
+  "fields": {
+    "factor": "1.2",
+    "metadata_mode": "display"
+  },
+  "response": {
+    "format": "soutubot_v2",
+    "resultsPath": "results",
+    "segmentsPath": "path_segments",
+    "scorePath": "score",
+    "idPath": "result_id",
+    "fieldPaths": {
+      "source": [
+        "metadata.source.key",
+        "metadata.post.source_key",
+        "source_key"
+      ],
+      "sourceId": [
+        "metadata.source.id",
+        "metadata.post.post_id",
+        "external_id"
+      ],
+      "title": [
+        "metadata.title.primary",
+        "metadata.title"
+      ],
+      "url": [
+        "source_url",
+        "links.source_url"
+      ],
+      "thumbnail": [
+        "thumbnail_url",
+        "links.thumbnail_url"
+      ],
+      "page": [
+        "page_no"
+      ],
+      "language": [
+        "metadata.language",
+        "metadata.facts.language",
+        "language"
+      ]
+    }
+  }
+}

@@ -23,6 +23,7 @@ import 'download_author_resolver.dart';
 import 'download_snapshot_reader.dart';
 import 'cover_thumbnail_cache.dart';
 import 'local_cover_cache.dart';
+import 'illust_cover_diagnostics.dart';
 import 'local_data_source.dart';
 import 'local_favorites.dart';
 import 'local_library_settings.dart';
@@ -315,6 +316,7 @@ class LocalLibraryComicItem extends DownloadedItem {
   final List<int> _downloadedEps;
   final List<String> _eps;
   String? _localCoverPath;
+  String? _coverSourceFingerprint;
   final bool _localStorageExists;
   final bool _canDelete;
   final List<String> aliases;
@@ -702,6 +704,16 @@ class LocalLibraryManager {
   Future<void>? _refreshTask;
   int _databaseSnapshotSequence = 0;
   final Map<String, Future<String?>> _coverResolutions = {};
+  final Map<String, _IllustCoverStage> _illustCoverStages = {};
+  int _coverSession = 0;
+
+  /// A new page/permission session may retry failed reads without discarding
+  /// successfully cached covers or touching any downloaded content.
+  Future<void> beginIllustCoverSession() async {
+    _coverSession++;
+    await LocalCoverCache.clearNegatives();
+  }
+
   Future<List<LocalLibraryComicItem>>? _managedDownloadsLoadTask;
   List<LocalLibraryComicItem>? _managedDownloadsSnapshot;
   String? _managedDownloadsVersion;
@@ -1026,15 +1038,8 @@ class LocalLibraryManager {
     String? existingCachePath,
   ) async {
     final entryKey = _coverCacheEntryKey(item);
-    final sourceFile = File(item.fileSystemPath!);
-    var sourceFingerprint = '${sourceFile.path}|0|0';
-    try {
-      final stamp = await sourceFile.stat();
-      sourceFingerprint =
-          '${sourceFile.path}|${stamp.size}|${stamp.modified.millisecondsSinceEpoch}';
-    } catch (_) {
-      // An unprivileged stat failure must not bypass root/Shizuku resolution.
-    }
+    final sourceFingerprint = item._coverSourceFingerprint ??
+        await LocalCoverCache.fingerprintForAsync(File(item.fileSystemPath!));
     if (await LocalCoverCache.isKnownMissing(entryKey,
         fingerprint: sourceFingerprint)) {
       return null;
@@ -1046,21 +1051,24 @@ class LocalLibraryManager {
         await _hasUsableManagedCoverCache(item, known)) {
       return known;
     }
-    final sourcePath = await _resolveManagedDownloadSourceCoverPath(item);
+    final sourcePath = await IllustCoverDiagnostics.measure(
+        'source.resolve', () => _resolveManagedDownloadSourceCoverPath(item));
     if (sourcePath == null || sourcePath.isEmpty) {
-      // 源侧确实没有封面：记**短期**负缓存（不再是永久否定）。
-      await _persistManagedDownloadCoverCachePath(item, noCoverSentinel);
+      // Storage helpers collapse permission errors and empty listings to null.
+      // This is not proof of absence: keep only a short retryable failure.
       await LocalCoverCache.markMissing(entryKey,
-          fingerprint: sourceFingerprint);
+          fingerprint: sourceFingerprint, transient: true);
       return null;
     }
-    final bytes = await _readFileBytes(sourcePath);
+    final bytes = await IllustCoverDiagnostics.measure(
+        'source.read', () => _readFileBytes(sourcePath));
+    IllustCoverDiagnostics.event('source.bytes',
+        arguments: {'bytes': bytes?.length ?? 0});
     if (bytes == null || bytes.isEmpty) {
       // 读取失败通常是**暂时**的（权限/占用/特权通道瞬时故障），
       // 同样只记短期负缓存。
-      await _persistManagedDownloadCoverCachePath(item, noCoverSentinel);
       await LocalCoverCache.markMissing(entryKey,
-          fingerprint: sourceFingerprint);
+          fingerprint: sourceFingerprint, transient: true);
       return null;
     }
     // plan/12：字节落进**统一封面缓存**（`App.dataPath/local_library_cache/covers`），
@@ -1193,15 +1201,16 @@ class LocalLibraryManager {
     // 一直在走的那条链路。
     if (isArchivePath(dirPath)) {
       try {
-        final index = await ArchiveReadingService.instance.getIndex(dirPath);
+        final index = await IllustCoverDiagnostics.measure('archive.index',
+            () => ArchiveReadingService.instance.getIndex(dirPath));
         final coverEntry = pickArchiveCoverEntry(index);
         if (coverEntry == null) {
           return null;
         }
-        return await ArchiveReadingService.instance.extractCoverToCache(
-          dirPath,
-          coverEntry,
-        );
+        return await IllustCoverDiagnostics.measure(
+            'archive.extract',
+            () => ArchiveReadingService.instance
+                .extractCoverToCache(dirPath, coverEntry));
       } catch (_) {
         // 包损坏 / 无权限：按"没有封面"处理，不让列表整体报错。
         return null;
@@ -1259,6 +1268,8 @@ class LocalLibraryManager {
         cached != null &&
         cached.isNotEmpty &&
         cached != noCoverSentinel) {
+      // Preserve the ordinary-access file-buffer fast path for album grids.
+      // The factory performs no synchronous existence/stat probes.
       return imageProviderForLocalPath(cached);
     }
     return StreamImageProvider(
@@ -1270,7 +1281,11 @@ class LocalLibraryManager {
         final bytes = await _readFileBytes(resolved);
         return Stream<List<int>>.value(bytes ?? const <int>[]);
       },
-      'local_cover::${item.id}::${LocalCoverCache.fingerprintFor(File(item.fileSystemPath!))}',
+      'local_cover::${App.dataPath}::${item.id}::${item.fileSystemPath}::'
+      '${item._coverSourceFingerprint ?? item.sourceRowTimeMillis}::'
+      '$_managedDownloadsGeneration::'
+      '${App.localDataVersion.value}::${App.serviceConfigVersion.value}::'
+      '${App.serviceRuntimeVersion.value}',
     );
   }
 
@@ -1279,20 +1294,72 @@ class LocalLibraryManager {
       LocalLibraryComicItem item, int width,
       {required bool Function() canContinue}) async {
     if (!canContinue()) return null;
-    final cover = await resolveCoverPathForItem(item);
+    var cover = await resolveCoverPathForItem(item);
     if (cover == null || !canContinue()) return null;
-    if (_isUnifiedLocalCoverPath(cover)) {
-      final prepared = await CoverThumbnailCache.prepareDisplay(cover, width,
-          canContinue: canContinue);
-      if (!canContinue()) return null;
-      // FileImage uses a file-backed ImmutableBuffer and no Dart raw-byte cache.
-      return FileImage(File(prepared ?? cover));
+    if (!_isUnifiedLocalCoverPath(cover)) {
+      cover = await _stageIllustCover(item, cover, canContinue);
     }
-    return _PreparedLocalCoverProvider(() async {
-      if (!canContinue()) return Stream<List<int>>.value(const []);
-      final bytes = await _readFileBytes(cover);
-      return Stream<List<int>>.value(bytes ?? const []);
-    }, 'prepared-local::$cover::${item.sourceRowTimeMillis}');
+    if (cover == null || !canContinue()) return null;
+    final prepared = await CoverThumbnailCache.prepareDisplay(cover, width,
+        canContinue: canContinue);
+    if (!canContinue()) return null;
+    IllustCoverDiagnostics.event('provider.ready');
+    // Only an application-internal file reaches FileImage; privileged external
+    // storage was read through the storage helper exactly once on a cache miss.
+    if (prepared != null && prepared != cover) return FileImage(File(prepared));
+    // Large-width / decode-failure fallback can be overwritten in place by the
+    // cover store. FileImage(path) alone would keep the old decoded pixels.
+    final fingerprint = await LocalCoverCache.fingerprintForAsync(File(cover));
+    if (!canContinue()) return null;
+    return _VersionedCoverFileImage(File(cover), fingerprint);
+  }
+
+  Future<String?> _stageIllustCover(LocalLibraryComicItem item, String source,
+      bool Function() canContinue) async {
+    if (!canContinue()) return null;
+    final fingerprint = await LocalCoverCache.fingerprintForAsync(File(source));
+    if (!canContinue()) return null;
+    final key = LocalCoverCache.entryKeyFor(
+        sourceId: 'illust::${item.id}',
+        originalId: item.originalId,
+        sourceRelative: source);
+    final taskKey = '${App.dataPath}::$key::$fingerprint';
+    final active = _illustCoverStages[taskKey];
+    if (active != null) {
+      active.consumers.add(canContinue);
+      final result = await active.result;
+      return canContinue() ? result : null;
+    }
+    final task = _IllustCoverStage()..consumers.add(canContinue);
+    task.result = () async {
+      final known = await LocalCoverCache.lookup(key, fingerprint: fingerprint);
+      if (known != null) return known;
+      if (!task.canContinue) return null;
+      final bytes = await IllustCoverDiagnostics.measure(
+          'source.read', () => _readFileBytes(source));
+      IllustCoverDiagnostics.event('source.bytes',
+          arguments: {'bytes': bytes?.length ?? 0});
+      if (bytes == null || bytes.isEmpty || !task.canContinue) return null;
+      if (await LocalCoverCache.fingerprintForAsync(File(source)) !=
+          fingerprint) {
+        return null;
+      }
+      if (!task.canContinue) return null;
+      return LocalCoverCache.storeBytes(
+          entryKey: key,
+          bytes: bytes,
+          fingerprint: fingerprint,
+          extension: _coverCacheExtensionForPath(source));
+    }();
+    _illustCoverStages[taskKey] = task;
+    try {
+      final result = await task.result;
+      return canContinue() ? result : null;
+    } finally {
+      if (identical(_illustCoverStages[taskKey], task)) {
+        _illustCoverStages.remove(taskKey);
+      }
+    }
   }
 
   ImageProvider<Object> imageProviderForLocalPath(String path) {
@@ -1305,12 +1372,7 @@ class LocalLibraryManager {
     // dart:io 优先、读到空再回退特权通道（见第六轮修正），full-access / 应用
     // 沙箱内仍走 dart:io 命中，无回归；root/shizuku 下才真正落到特权通道。
     if (!_isAndroidPrivilegedAccessEnabled()) {
-      try {
-        final file = File(path);
-        if (file.existsSync()) {
-          return FileImage(file);
-        }
-      } catch (_) {}
+      return FileImage(File(path));
     }
     return StreamImageProvider(
       () async {
@@ -1322,9 +1384,16 @@ class LocalLibraryManager {
   }
 
   Future<String?> resolveCoverPathForItem(LocalLibraryComicItem item) async {
-    final key = '${item.id}::${item.fileSystemPath}';
+    final key =
+        '${App.dataPath}::${item.id}::${item.fileSystemPath}::$_coverSession';
     final task = _coverResolutions.putIfAbsent(
-        key, () => _resolveCoverPathForItem(item));
+        key,
+        () => IllustCoverDiagnostics.measure('resolve', () async {
+              item._coverSourceFingerprint =
+                  await LocalCoverCache.fingerprintForAsync(
+                      File(item.fileSystemPath!));
+              return _resolveCoverPathForItem(item);
+            }));
     try {
       final result = await task;
       if (result != null && result.isNotEmpty) item._localCoverPath = result;
@@ -1359,7 +1428,10 @@ class LocalLibraryManager {
       // _ensureManagedDownloadCoverCache 已在失败时持久化 noCoverSentinel，
       // 后续 fallback 对同目录做相同探测不会有不同结果，跳过。
       return null;
-    } else if (cached != null && cached.isNotEmpty) {
+    } else if (cached != null &&
+        cached.isNotEmpty &&
+        cached != noCoverSentinel &&
+        await _fileExists(cached)) {
       return cached;
     }
     final dirPath = item.fileSystemPath;
@@ -1518,10 +1590,25 @@ class LocalLibraryManager {
   }
 }
 
-class _PreparedLocalCoverProvider extends StreamImageProvider {
-  _PreparedLocalCoverProvider(super.loader, super.imageKey);
+class _IllustCoverStage {
+  final List<bool Function()> consumers = [];
+  late final Future<String?> result;
+  bool get canContinue => consumers.any((isActive) => isActive());
+}
+
+class _VersionedCoverFileImage extends FileImage {
+  const _VersionedCoverFileImage(super.file, this.fingerprint);
+  final String fingerprint;
+
   @override
-  bool get cacheRawBytes => false;
+  bool operator ==(Object other) =>
+      other is _VersionedCoverFileImage &&
+      other.file.path == file.path &&
+      other.scale == scale &&
+      other.fingerprint == fingerprint;
+
+  @override
+  int get hashCode => Object.hash(file.path, scale, fingerprint);
 }
 
 class _Semaphore {

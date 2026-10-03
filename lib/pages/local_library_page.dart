@@ -45,6 +45,10 @@ import 'local_library_illust_card.dart';
 import 'local_library_illust_switcher.dart';
 import 'local_library_illust_view.dart';
 import 'illust_work_queue.dart';
+import 'illust_search_panel.dart';
+import 'illust_folder_selector.dart';
+import 'package:picakeep/foundation/illust_folder_preferences.dart';
+import 'package:picakeep/foundation/illust_page_count_cache.dart';
 import 'illust_scroll_anchor.dart';
 
 String _formatLocalLibrarySize(double sizeMb) {
@@ -752,16 +756,14 @@ class _LocalLibraryPageState extends State<LocalLibraryPage>
 
   List<PixivFolder> _pixivFolders = [];
   String? _pixivFolderFilter;
+  String? _pixivFolderScope;
+  int _folderSelectionRevision = 0;
   bool _illustTransferRunning = false;
   bool _illustLoading = false;
   String? _illustErrorText;
   List<IllustLibraryEntry> _illustEntries = const <IllustLibraryEntry>[];
   List<IllustTagSummary> _illustTags = const <IllustTagSummary>[];
   final Set<String> _selectedIllustTags = <String>{};
-
-  /// 页数记忆：页数只能靠列目录数出来，而 `_loadIllust` 每次都会重建条目
-  /// （`pageCount` 恒为 null），所以必须跨次记住，否则刷新一次页数就消失。
-  /// 详见 `foundation/illust_cover_size.dart` 的 `IllustPageCountMemo`。
 
   /// 页面内容区是否正在滚动（驱动视图切换悬浮按钮的半透明）。
   final _scrollInteracting = ValueNotifier<bool>(false);
@@ -791,6 +793,23 @@ class _LocalLibraryPageState extends State<LocalLibraryPage>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     _illustAppActive = state == AppLifecycleState.resumed;
+    if (_illustAppActive && _isIllustView && mounted) {
+      final generation = _illustGeneration;
+      _illustWork.setActive(false);
+      unawaited(_manager.beginIllustCoverSession().then((_) {
+        if (!mounted ||
+            !_isIllustView ||
+            generation != _illustGeneration ||
+            !_illustAppActive) {
+          return;
+        }
+        _illustCoverRetried.clear();
+        _illustWork.reset();
+        _illustWork.setVisible(_illustLaidOut);
+        _updateIllustWorkState();
+      }));
+      return;
+    }
     _updateIllustWorkState();
   }
 
@@ -815,6 +834,18 @@ class _LocalLibraryPageState extends State<LocalLibraryPage>
         entry.item, _illustThumbWidth,
         canContinue: canContinue);
     if (!canContinue()) return null;
+    // Publish the prepared image before any directory count / ZIP inspection.
+    // Metadata runs as a lower-priority stage under the same queue limit.
+    return (entry: entry, cover: cover);
+  }
+
+  Future<({IllustLibraryEntry entry, ImageProvider<Object>? cover})?>
+      _resolveIllustDetails(
+          String id,
+          ({IllustLibraryEntry entry, ImageProvider<Object>? cover}) value,
+          bool Function() canContinue) async {
+    if (!canContinue()) return null;
+    final entry = value.entry;
     final info = await resolveIllustEntryInfo(
         entries: [entry],
         concurrency: 1,
@@ -828,7 +859,7 @@ class _LocalLibraryPageState extends State<LocalLibraryPage>
           width: resolved?.width,
           height: resolved?.height,
           pageCount: resolved?.pageCount),
-      cover: cover
+      cover: value.cover
     );
   }
 
@@ -837,9 +868,12 @@ class _LocalLibraryPageState extends State<LocalLibraryPage>
           values) {
     if (!mounted) return;
     final generation = _illustGeneration;
+    final filteredSnapshot = _filteredIllustEntries;
     final media = MediaQuery.of(context);
-    final anchor = values.values.any((value) =>
-            value.entry.aspectRatio != _illustById[value.entry.id]?.aspectRatio)
+    // Metadata can alter text wrapping as well as image aspect ratio. Covers
+    // alone keep geometry unchanged and never need scroll correction.
+    final anchor = values.values.any(
+            (value) => !identical(value.entry, _illustById[value.entry.id]))
         ? _illustAnchor.capture(
             _illustLaidOut,
             media.padding.top + kToolbarHeight,
@@ -865,6 +899,7 @@ class _LocalLibraryPageState extends State<LocalLibraryPage>
         isCurrent: () =>
             mounted &&
             generation == _illustGeneration &&
+            identical(filteredSnapshot, _filteredIllustEntries) &&
             !_scrollInteracting.value &&
             _illustAppActive &&
             _illustRouteActive);
@@ -1196,6 +1231,11 @@ class _LocalLibraryPageState extends State<LocalLibraryPage>
   Future<void> _loadIllust(
       {bool showLoadingState = false, bool forceRefresh = false}) async {
     final generation = ++_illustGeneration;
+    final selectionRevision = _folderSelectionRevision;
+    String? nextFolderScope;
+    String? restoredFolder;
+    if (forceRefresh) await invalidateIllustPageCounts();
+    if (!mounted || generation != _illustGeneration) return;
     _illustWork.reset();
     _illustCoverRetried.clear();
     if (mounted) {
@@ -1213,12 +1253,32 @@ class _LocalLibraryPageState extends State<LocalLibraryPage>
     List<PixivFolder> folders = const [];
     String? errorText;
     try {
+      await _manager.beginIllustCoverSession();
+      if (!mounted || generation != _illustGeneration) return;
       folders = await readPixivFolders([effectivePixivDownloadRoot()]);
       final downloads = await _manager.getManagedDownloads(
           forceRefresh: forceRefresh, cacheSnapshot: true);
       final prepared = await prepareIllustEntries(downloads);
-      entries = prepared.entries;
+      entries = await hydrateIllustPageCounts(prepared.entries);
       tags = prepared.tags;
+      await IllustFolderPreferences.instance.load();
+      if (folders.isNotEmpty) {
+        nextFolderScope = IllustFolderPreferences.scope(
+            folders.first.root, folders.first.libraryId);
+        final remembered =
+            IllustFolderPreferences.instance.selection(nextFolderScope);
+        restoredFolder = folders.any((folder) => folder.id == remembered)
+            ? remembered
+            : null;
+        if (remembered != null &&
+            restoredFolder == null &&
+            mounted &&
+            generation == _illustGeneration &&
+            selectionRevision == _folderSelectionRevision) {
+          await IllustFolderPreferences.instance
+              .remember(nextFolderScope, null);
+        }
+      }
     } catch (e) {
       errorText = _operationErrorText(e);
     }
@@ -1228,7 +1288,12 @@ class _LocalLibraryPageState extends State<LocalLibraryPage>
     setState(() {
       _illustEntries = entries;
       _illustTags = tags;
-      _pixivFolders = folders;
+      _pixivFolders = countIllustFolders(folders, entries);
+      if (nextFolderScope != _pixivFolderScope ||
+          selectionRevision == _folderSelectionRevision) {
+        _pixivFolderFilter = restoredFolder;
+      }
+      _pixivFolderScope = nextFolderScope;
       _illustErrorText = errorText;
       _illustLoading = false;
       // 数据变了，之前选的标签可能已经不存在（例如刚删掉某个作品）。
@@ -1252,24 +1317,33 @@ class _LocalLibraryPageState extends State<LocalLibraryPage>
     });
   }
 
-  void _clearIllustTags() {
-    if (_selectedIllustTags.isEmpty) {
-      return;
-    }
-    setState(_selectedIllustTags.clear);
+  void _clearIllustSearch({bool includeFolder = false}) {
+    _searchController.clear();
+    setState(() {
+      _selectedIllustTags.clear();
+      if (includeFolder) _selectPixivFolder(null);
+    });
   }
+
+  Widget _buildIllustSearch() => IllustSearchPanel(
+        expanded: _searchMode,
+        controller: _searchController,
+        tags: _illustTags,
+        selectedTags: _selectedIllustTags,
+        resultCount: _filteredIllustEntries.length,
+        onToggleTag: _toggleIllustTag,
+        onClear: _clearIllustSearch,
+        onExpand: () => setState(() => _searchMode = true),
+      );
 
   @override
   void initState() {
     super.initState();
     _illustWork = IllustWorkQueue(
         resolve: _resolveIllustDecoration,
+        resolveDetails: _resolveIllustDetails,
         publish: _publishIllustDecorations,
-        isComplete: (value) =>
-            value.cover != null &&
-            value.entry.hasRealSize &&
-            (!_illustCardInfoSpec.fields.contains('pages') ||
-                value.entry.pageCount != null));
+        isComplete: (value) => value.cover != null);
     WidgetsBinding.instance.addObserver(this);
     App.localDataVersion.addListener(_handleLocalDataChanged);
     App.serviceConfigVersion.addListener(_handleServiceConfigChanged);
@@ -1763,6 +1837,7 @@ class _LocalLibraryPageState extends State<LocalLibraryPage>
                       // 默认收起，收起时副标题已写明当前档位。
                       if (_viewScopeMenu.tiersApplicable)
                         _buildTierSection(setDialogState: setDialogState),
+                      if (_isIllustView) const IllustFolderRetentionTile(),
                       SwitchListTile(
                         value: albumOnly,
                         title: Text('仅显示图集'.tl),
@@ -2320,7 +2395,7 @@ class _LocalLibraryPageState extends State<LocalLibraryPage>
       );
 
   Widget _buildTitle() {
-    if (_searchMode && !_selecting) {
+    if (_searchMode && !_selecting && !_isIllustView) {
       return TextField(
         controller: _searchController,
         autofocus: true,
@@ -2663,49 +2738,43 @@ class _LocalLibraryPageState extends State<LocalLibraryPage>
         : FloatingActionButtonLocation.endFloat;
   }
 
-  Widget _buildPixivFolderBar() {
-    final folders = _pixivFolders;
-    if (!folders.any((f) => f.id == _pixivFolderFilter)) {
-      _pixivFolderFilter = null;
+  void _selectPixivFolder(String? id) {
+    setState(() {
+      _folderSelectionRevision++;
+      _pixivFolderFilter = id;
+    });
+    final scope = _pixivFolderScope;
+    if (scope != null) {
+      unawaited(IllustFolderPreferences.instance
+          .remember(scope, id)
+          .catchError((Object _) {
+        if (mounted) {
+          ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+              const SnackBar(content: Text('当前选择已生效，但未能保存文件夹记忆')));
+        }
+      }));
     }
-    return Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-        child: Row(children: [
-          const Icon(Icons.folder_outlined),
-          const SizedBox(width: 10),
-          Expanded(
-              child: DropdownButton<String>(
-                  isExpanded: true,
-                  value: _pixivFolderFilter ?? '',
-                  underline: const SizedBox.shrink(),
-                  items: [
-                    const DropdownMenuItem(value: '', child: Text('全部文件夹')),
-                    for (final f in folders)
-                      DropdownMenuItem(
-                          value: f.id,
-                          child: Text(f.name, overflow: TextOverflow.ellipsis))
-                  ],
-                  onChanged: _selecting || _isOperationRunning
-                      ? null
-                      : (id) => setState(
-                          () => _pixivFolderFilter = id == '' ? null : id))),
-          TextButton(
-              onPressed: _selecting || _isOperationRunning
-                  ? null
-                  : () async {
-                      final selected = await Navigator.push<String>(
-                          context,
-                          MaterialPageRoute(
-                              builder: (_) => const PixivFoldersPage()));
-                      if (!mounted) return;
-                      if (selected != null) {
-                        setState(() => _pixivFolderFilter = selected);
-                      }
-                      await _loadIllust();
-                    },
-              child: const Text('管理')),
-        ]));
   }
+
+  Widget _buildPixivFolderBar() => IllustFolderSelector(
+        folders: _pixivFolders,
+        totalCount: _illustEntries.length,
+        selectedId: _pixivFolderFilter,
+        onSelected: _selecting || _isOperationRunning || _illustLoading
+            ? null
+            : _selectPixivFolder,
+        onManage: _selecting || _isOperationRunning
+            ? null
+            : () async {
+                final selected = await Navigator.push<String>(
+                    context,
+                    MaterialPageRoute(
+                        builder: (_) => const PixivFoldersPage()));
+                if (!mounted) return;
+                if (selected != null) _selectPixivFolder(selected);
+                await _loadIllust();
+              },
+      );
 
   Future<void> _onIllustSelectionAction(String action) async {
     if (_isOperationRunning) return;
@@ -2742,6 +2811,7 @@ class _LocalLibraryPageState extends State<LocalLibraryPage>
     return LocalLibraryIllustSlivers(
       allEntries: _illustEntries,
       entries: entries,
+      showTagFilter: false,
       tags: _illustTags,
       selectedTags: _selectedIllustTags,
       loading: _illustLoading,
@@ -2757,7 +2827,7 @@ class _LocalLibraryPageState extends State<LocalLibraryPage>
         if (!_selecting) _toggleIllustTag(tag);
       },
       onClearTags: () {
-        if (!_selecting) _clearIllustTags();
+        if (!_selecting) _clearIllustSearch(includeFolder: true);
       },
     );
   }
@@ -2807,6 +2877,8 @@ class _LocalLibraryPageState extends State<LocalLibraryPage>
       // 底部信息随 `settings[illustCardInfoSettingIndex]` 变化（32 号）。
       // 取值与拼接走 foundation 层的纯函数，卡片控件不读全局设置。
       infoSpans: _illustInfo[entry.id]!.spans,
+      infoFields: _illustCardInfoSpec.fields,
+      infoSeparator: _illustCardInfoSpec.separator,
       selecting: _selecting,
       selected: _isItemSelected(item),
       // 36 号：图片与信息**分区响应** —— 看图的人想马上翻，管理的人才会点文字。
@@ -2999,11 +3071,11 @@ class _LocalLibraryPageState extends State<LocalLibraryPage>
                             IconButton(
                               icon: Icon(
                                   _searchMode ? Icons.close : Icons.search),
-                              tooltip: _searchMode ? '关闭搜索'.tl : '搜索'.tl,
+                              tooltip: _searchMode ? '收起搜索'.tl : '搜索'.tl,
                               onPressed: () {
                                 setState(() {
                                   _searchMode = !_searchMode;
-                                  if (!_searchMode) {
+                                  if (!_searchMode && !_isIllustView) {
                                     _searchController.clear();
                                   }
                                 });
@@ -3022,6 +3094,8 @@ class _LocalLibraryPageState extends State<LocalLibraryPage>
                   // 图集侧的 items / 定时器 / 选择框一概不参与。
                   if (_isIllustView)
                     SliverToBoxAdapter(child: _buildPixivFolderBar()),
+                  if (_isIllustView && !_selecting)
+                    SliverToBoxAdapter(child: _buildIllustSearch()),
                   if (_isIllustView)
                     _buildIllustContent()
                   else if (items.isEmpty)

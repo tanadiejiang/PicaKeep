@@ -11,6 +11,7 @@ import 'package:picakeep/network/pixiv_network/pixiv_network.dart';
 import 'package:picakeep/network/res.dart';
 import 'package:picakeep/pages/online_comic/base_online_comic_page.dart';
 import 'package:picakeep/pages/online_comic/online_comic_page_components.dart';
+import 'package:picakeep/pages/online_comic/pixiv_author_link.dart';
 import 'package:picakeep/pages/online_search/online_search_result_page.dart';
 import 'package:picakeep/pages/reader/comic_reading_page.dart';
 
@@ -254,6 +255,17 @@ class PixivComicPageV2 extends BaseOnlineComicPage<PixivComicInfo> {
       null;
 
   // ── 自定义区块：作品页面预览 ────────────────────────────────────────────
+
+  @override
+  Widget buildCustomSection(BuildContext context, PixivComicInfo data) {
+    return PixivAuthorLink(
+      destination: PixivAuthorDestination(
+        authorId: data.authorId,
+        comicId: data.id,
+      ),
+      authorName: data.author,
+    );
+  }
 
   /// 通过基类钩子插入「作品页面预览」，位置在**简介之后**。
   ///

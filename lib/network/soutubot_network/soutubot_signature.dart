@@ -46,25 +46,68 @@ String randomWebKitBoundary([Random? random]) {
   return '----WebKitFormBoundary$suffix';
 }
 
-/// 手工拼 multipart/form-data 请求体。
-/// 不用 dio 的 FormData：项目锁定 dio 5.4.1，FormData 不支持自定义 boundary
-/// （boundaryName 参数 5.4.2 才加入），且需要精确控制 part 头形状：
-/// file 部分必须是 name="file"; filename="image" + Content-Type: application/octet-stream。
+/// Detect the upload type from bytes, never a caller-supplied file extension.
+/// The current service rejects the legacy application/octet-stream file part.
+/// This only identifies the container; attachment import validates decoding.
+({String extension, String mime})? detectSoutubotImageType(List<int> bytes) {
+  bool matches(List<int> prefix, [int offset = 0]) {
+    if (bytes.length < offset + prefix.length) return false;
+    for (var i = 0; i < prefix.length; i++) {
+      if (bytes[offset + i] != prefix[i]) return false;
+    }
+    return true;
+  }
+
+  if (matches(const [0xff, 0xd8, 0xff])) {
+    return (extension: 'jpg', mime: 'image/jpeg');
+  }
+  if (matches(const [0x89, 0x50, 0x4e, 0x47, 13, 10, 26, 10])) {
+    return (extension: 'png', mime: 'image/png');
+  }
+  if (matches(const [71, 73, 70, 56, 55, 97]) ||
+      matches(const [71, 73, 70, 56, 57, 97])) {
+    return (extension: 'gif', mime: 'image/gif');
+  }
+  if (matches(const [82, 73, 70, 70]) && matches(const [87, 69, 66, 80], 8)) {
+    return (extension: 'webp', mime: 'image/webp');
+  }
+  if (matches(const [66, 77])) {
+    return (extension: 'bmp', mime: 'image/bmp');
+  }
+  return null;
+}
+
+/// 手工拼 multipart/form-data，文件 part 与当前浏览器 File 上传协议一致。
+/// 固定安全文件名不泄露原始附件名；MIME 与扩展名由图片签名确定。
 Uint8List buildSoutubotMultipartBody({
   required List<int> imageBytes,
   required String boundary,
   String factor = '1.2',
+  String fileField = 'file',
+  Map<String, String>? fields,
 }) {
+  final imageType = detectSoutubotImageType(imageBytes);
+  if (imageType == null) {
+    throw const FormatException('Unsupported image upload format');
+  }
+  final effectiveFields = fields ?? {'factor': factor};
+  final fieldName = RegExp(r'^[A-Za-z][A-Za-z0-9_-]{0,63}$');
+  if (!fieldName.hasMatch(fileField) ||
+      effectiveFields.keys
+          .any((key) => !fieldName.hasMatch(key) || key == fileField)) {
+    throw const FormatException('Invalid multipart field name');
+  }
   final header = '--$boundary\r\n'
-      'Content-Disposition: form-data; name="file"; filename="image"\r\n'
-      'Content-Type: application/octet-stream\r\n'
+      'Content-Disposition: form-data; name="$fileField"; filename="image.${imageType.extension}"\r\n'
+      'Content-Type: ${imageType.mime}\r\n'
       '\r\n';
-  final tail = '\r\n'
-      '--$boundary\r\n'
-      'Content-Disposition: form-data; name="factor"\r\n'
-      '\r\n'
-      '$factor\r\n'
-      '--$boundary--\r\n';
+  final tail = StringBuffer('\r\n');
+  for (final entry in effectiveFields.entries) {
+    tail.write('--$boundary\r\n'
+        'Content-Disposition: form-data; name="${entry.key}"\r\n'
+        '\r\n${entry.value}\r\n');
+  }
+  tail.write('--$boundary--\r\n');
   return Uint8List.fromList(
-      [...utf8.encode(header), ...imageBytes, ...utf8.encode(tail)]);
+      [...utf8.encode(header), ...imageBytes, ...utf8.encode(tail.toString())]);
 }

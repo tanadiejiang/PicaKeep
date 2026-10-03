@@ -25,6 +25,8 @@ import 'package:picakeep/base.dart';
 import 'package:picakeep/components/components.dart';
 import 'package:picakeep/foundation/app.dart';
 import 'package:picakeep/foundation/app_runtime_mode.dart';
+import 'package:picakeep/foundation/illust_page_count_cache.dart';
+import 'package:picakeep/foundation/illust_folder_preferences.dart';
 import 'package:picakeep/foundation/local_data_source.dart';
 import 'package:picakeep/foundation/local_library_illust_view.dart';
 import 'package:picakeep/foundation/local_library_settings.dart';
@@ -84,6 +86,13 @@ void main() {
     workspace = await Directory.systemTemp.createTemp('picakeep_pk33_page_');
     PathProviderPlatform.instance = _Paths(workspace);
     await App.init(dataPathOverride: p.join(workspace.path, 'data'));
+    // These application-wide caches retain their completed initialization
+    // futures. Create them in the suite's real async zone, not the first
+    // widget test's disposable FakeAsync zone: a later test cannot pump that
+    // old zone when awaiting the same future. This is fixture lifetime setup,
+    // not extra waiting or bypassing the page's real storage behavior.
+    await sharedIllustPageCountCache();
+    await IllustFolderPreferences.instance.load();
   });
 
   setUp(() async {

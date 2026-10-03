@@ -22,7 +22,7 @@ publish_to: 'none'
 #
 # 本轮曾因误用 split 装出 4002，为覆盖它把基准临时抬到 4003；现已卸载重装，
 # 基准回到 1 重新开始。
-version: 1.9.88+5
+version: 1.9.89+6
 
 environment:
   sdk: '>=3.3.0'

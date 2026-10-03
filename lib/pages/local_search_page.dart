@@ -5,107 +5,29 @@ import 'package:picakeep/components/comic_tile.dart';
 import 'package:picakeep/components/layout.dart';
 import 'package:picakeep/foundation/app.dart';
 import 'package:picakeep/foundation/download.dart';
-import 'package:picakeep/foundation/download_author_resolver.dart';
 import 'package:picakeep/foundation/download_model.dart';
-import 'package:picakeep/foundation/local_favorites.dart';
 import 'package:picakeep/foundation/local_library.dart';
-import 'package:picakeep/foundation/local_search_core.dart';
+import 'package:picakeep/foundation/local_search_data_source.dart';
+
 import 'package:picakeep/tools/tags_translation.dart';
 import 'package:picakeep/tools/translations.dart';
 import 'favorites/local_favorites.dart';
 import 'local_comic_detail_page.dart';
 
-enum LocalSearchType { favoritesOnly, downloadsOnly, all }
-
-String _localSearchAuthor(DownloadedItem item) {
-  if (item is LocalLibraryComicItem) {
-    return resolveDownloadedAuthors(item).join(', ');
-  }
-  return item.subTitle.trim();
-}
-
-/// 异步收集所有本地漫画的唯一标签和作者，返回 chip 标签列表。
-///
-/// 作者条目格式为 `'作者: <name>'`；标签条目使用原始字符串。
-/// 结果按出现频次降序排列，作者类在前；显示上限由调用侧 take(50) 控制。
-Future<List<String>> _collectLocalChips() async {
-  final tagFreq = <String, int>{};
-  final authorFreq = <String, int>{};
-
-  // --- 已下载漫画 ---
-  final localManager = LocalLibraryManager();
-  await localManager.ensureLoaded();
-  for (final item in await localManager.getAll()) {
-    for (final tag in item.tags) {
-      final t = tag.trim();
-      if (t.isNotEmpty) tagFreq[t] = (tagFreq[t] ?? 0) + 1;
-    }
-    final author = _localSearchAuthor(item).trim();
-    if (author.isNotEmpty) {
-      authorFreq[author] = (authorFreq[author] ?? 0) + 1;
-    }
-  }
-
-  // --- 收藏漫画 ---
-  final favManager = LocalFavoritesManager();
-  await favManager.init();
-  for (final fav in favManager.allComics()) {
-    final comic = fav.comic;
-    for (final tag in comic.tags) {
-      final t = tag.trim();
-      if (t.isNotEmpty) tagFreq[t] = (tagFreq[t] ?? 0) + 1;
-    }
-    final author = comic.author.trim();
-    if (author.isNotEmpty) {
-      authorFreq[author] = (authorFreq[author] ?? 0) + 1;
-    }
-  }
-
-  // 按频次降序排列
-  final sortedAuthors = authorFreq.entries.toList()
-    ..sort((a, b) => b.value.compareTo(a.value));
-  final sortedTags = tagFreq.entries.toList()
-    ..sort((a, b) => b.value.compareTo(a.value));
-
-  final chips = <String>[];
-  for (final e in sortedAuthors) {
-    chips.add('作者: ${e.key}');
-  }
-  for (final e in sortedTags) {
-    chips.add(e.key);
-  }
-  return chips;
-}
-
-class _SearchResult {
-  final String title;
-  final String author;
-  final String sourceLabel;
-  final List<String> tags;
-  final DownloadedItem? downloadItem;
-  final DownloadedItem? localItem;
-  final FavoriteItemWithFolderInfo? favoriteItem;
-
-  const _SearchResult({
-    required this.title,
-    required this.author,
-    required this.sourceLabel,
-    this.tags = const [],
-    this.downloadItem,
-    this.localItem,
-    this.favoriteItem,
-  });
-}
+export 'package:picakeep/foundation/local_search_data_source.dart'
+    show LocalSearchType;
 
 class LocalSearchPage extends StatefulWidget {
   const LocalSearchPage({
     this.searchType = LocalSearchType.all,
     this.initialKeyword = '',
+    this.dataSource = const LocalSearchDataSource(),
     super.key,
   });
 
   final LocalSearchType searchType;
   final String initialKeyword;
+  final LocalSearchDataSource dataSource;
 
   @override
   State<LocalSearchPage> createState() => _LocalSearchPageState();
@@ -113,7 +35,14 @@ class LocalSearchPage extends StatefulWidget {
 
 class _LocalSearchPageState extends State<LocalSearchPage> {
   final _controller = TextEditingController();
-  List<_SearchResult> _results = [];
+  List<LocalSearchResult> _results = [];
+  late LocalSearchType _scope;
+  int _searchRevision = 0;
+  int _chipsRevision = 0;
+  String? _searchError;
+  String _lastSubmitted = '';
+  List<String> _lastAliases = const [];
+  bool _editing = true;
   bool _hasSearched = false;
   bool _isSearching = false;
   List<String> _chips = [];
@@ -124,23 +53,14 @@ class _LocalSearchPageState extends State<LocalSearchPage> {
   @override
   void initState() {
     super.initState();
-    _controller.addListener(() => setState(() {}));
-    // 异步加载 chips（不阻塞页面打开）
-    Future.microtask(() async {
-      final chips = await _collectLocalChips();
-      if (mounted) {
-        setState(() {
-          _chips = chips;
-          _chipsReady = true;
-        });
-        // chips 加载完成后，若输入框已有内容则立即刷新一次建议，避免先输入后加载的间隙
-        if (_controller.text.isNotEmpty) _updateSuggestions(_controller.text);
-      }
-    });
+    _scope = widget.searchType;
+    _loadChips();
     // 懒加载中文标签翻译表（对齐在线搜索页 _tagsReady 模式）；
     // 加载失败时静默保持 false，不影响英文直配与热门回退
     loadTagTranslations().then((_) {
-      if (mounted) setState(() => _tagTranslationsReady = true);
+      if (!mounted) return;
+      _tagTranslationsReady = true;
+      if (_editing) _updateSuggestions(_controller.text);
     }).catchError((_) {});
     final initialKeyword = widget.initialKeyword.trim();
     if (initialKeyword.isNotEmpty) {
@@ -159,142 +79,96 @@ class _LocalSearchPageState extends State<LocalSearchPage> {
     super.dispose();
   }
 
-  void _onSearchTextChanged(String v) {
-    // 对齐在线搜索：输入只更新建议（建议列表停留占满内容区，不自动消失），
-    // 搜索由点击建议或键盘搜索键（onSubmitted）触发，不做自动搜索
-    _updateSuggestions(v);
-    if (v.trim().isEmpty) {
+  Future<void> _loadChips() async {
+    final revision = ++_chipsRevision;
+    try {
+      final chips = await widget.dataSource.collectChips(_scope);
+      if (!mounted || revision != _chipsRevision) return;
       setState(() {
-        _results = [];
-        _hasSearched = false;
-        _isSearching = false;
-        // 输入为空时同时清空建议与结果，回到正常区域
-        _suggestions = [];
+        _chips = chips;
+        _chipsReady = true;
       });
-      return;
+      if (_editing) _updateSuggestions(_controller.text);
+    } catch (_) {
+      // Suggestions are optional; a failed suggestion read must not block search.
+      if (!mounted || revision != _chipsRevision) return;
+      setState(() {
+        _chips = [];
+        _chipsReady = true;
+      });
     }
+  }
+
+  void _changeScope(LocalSearchType scope) {
+    if (_scope == scope) return;
+    final query = _controller.text.trim();
+    final aliases = query == _lastSubmitted ? _lastAliases : const <String>[];
+    ++_searchRevision;
+    setState(() {
+      _scope = scope;
+      _results = [];
+      _suggestions = [];
+      _chips = [];
+      _chipsReady = false;
+      _searchError = null;
+      _hasSearched = false;
+      _isSearching = false;
+      _editing = query.isEmpty;
+    });
+    _loadChips();
+    if (query.isNotEmpty) _search(query, aliases: aliases);
+  }
+
+  void _onSearchTextChanged(String value) {
+    // Editing or clearing a query also invalidates any in-flight search.
+    ++_searchRevision;
+    setState(() {
+      _editing = true;
+      _results = [];
+      _hasSearched = false;
+      _isSearching = false;
+      _searchError = null;
+      _suggestions = [];
+    });
+    _updateSuggestions(value);
   }
 
   Future<void> _search(String keyword,
       {List<String> aliases = const []}) async {
-    // 搜索开始时收起建议列表，避免结果被遮蔽
-    if (_suggestions.isNotEmpty) setState(() => _suggestions = []);
     final normalizedKeyword = keyword.trim();
+    final revision = ++_searchRevision;
     if (normalizedKeyword.isEmpty) {
-      setState(() {
-        _results = [];
-        _hasSearched = false;
-      });
+      _onSearchTextChanged('');
       return;
     }
-    setState(() => _isSearching = true);
-
-    final results = <_SearchResult>[];
-    final seenIds = <String>{};
-    final favManager = LocalFavoritesManager();
-    final localManager = LocalLibraryManager();
-
-    await favManager.init();
-    await localManager.ensureLoaded();
-    final showAllDatabaseRecords = localManager.showAllDatabaseRecords;
-
-    if (widget.searchType != LocalSearchType.downloadsOnly) {
-      final favResults = favManager.search(normalizedKeyword, aliases: aliases);
-      for (final fav in favResults) {
-        final comic = fav.comic;
-        final localItem =
-            localManager.findCachedByCandidates(comic.candidateDownloadIds());
-        final idKey = localItem != null
-            ? 'local_${localItem.id}'
-            : 'fav_${comic.type.key}_${comic.target}';
-        if (seenIds.contains(idKey)) continue;
-        seenIds.add(idKey);
-        results.add(
-          _SearchResult(
-            title: comic.name,
-            author: comic.author,
-            sourceLabel: '${comic.type.name} · ${fav.folder}',
-            tags: comic.tags,
-            localItem: localItem,
-            favoriteItem: fav,
-          ),
-        );
-      }
-    }
-
-    if (widget.searchType != LocalSearchType.favoritesOnly) {
-      for (final item in await localManager.getAll()) {
-        if (_shouldHideDownloadedItem(item, showAllDatabaseRecords)) {
-          continue;
-        }
-        final idKey = 'local_${item.id}';
-        if (seenIds.contains(idKey)) continue;
-        if (_matches(item, normalizedKeyword, aliases: aliases)) {
-          seenIds.add(idKey);
-          results.add(
-            _SearchResult(
-              title: item.name,
-              author: _localSearchAuthor(item),
-              sourceLabel: _downloadLabel(item),
-              tags: item.tags,
-              downloadItem: item,
-            ),
-          );
-        }
-      }
-    }
-
-    if (!mounted) return;
+    FocusScope.of(context).unfocus();
     setState(() {
-      _results = results;
-      _hasSearched = true;
-      _isSearching = false;
+      _editing = false;
+      _lastSubmitted = normalizedKeyword;
+      _lastAliases = List.of(aliases);
+      _suggestions = [];
+      _searchError = null;
+      _isSearching = true;
     });
-  }
-
-  bool _matches(DownloadedItem item, String keyword,
-          {List<String> aliases = const []}) =>
-      matchesLocalDownloadedItem(item, keyword, aliases: aliases);
-
-  bool _shouldHideDownloadedItem(
-    DownloadedItem item,
-    bool showAllDatabaseRecords,
-  ) {
-    return !showAllDatabaseRecords &&
-        item is LocalLibraryComicItem &&
-        item.isManagedDownloadItem &&
-        !item.localStorageExists;
-  }
-
-  String _downloadLabel(DownloadedItem item) {
-    if (item is LocalLibraryComicItem) {
-      if (item.isAlbum) {
-        return '图集 · 本地';
-      }
-      final source = item.sourceDisplayName.trim();
-      return source.isEmpty ? '本地下载' : '$source · 本地';
-    }
-    switch (item.type) {
-      case DownloadType.picacg:
-        return 'Picacg · 下载';
-      case DownloadType.ehentai:
-        return 'E-Hentai · 下载';
-      case DownloadType.jm:
-        return '禁漫 · 下载';
-      case DownloadType.hitomi:
-        return 'Hitomi · 下载';
-      case DownloadType.htmanga:
-        return '绅士漫画 · 下载';
-      case DownloadType.nhentai:
-        return 'NHentai · 下载';
-      case DownloadType.copyManga:
-        return '拷贝漫画 · 下载';
-      case DownloadType.komiic:
-        return 'Komiic · 下载';
-      case DownloadType.pixiv:
-        return 'Pixiv · 下载';
-      default:
-        return '下载';
+    try {
+      final results = await widget.dataSource.search(
+        normalizedKeyword,
+        _scope,
+        aliases: aliases,
+      );
+      if (!mounted || revision != _searchRevision) return;
+      setState(() {
+        _results = results;
+        _hasSearched = true;
+        _isSearching = false;
+      });
+    } catch (_) {
+      if (!mounted || revision != _searchRevision) return;
+      setState(() {
+        _results = [];
+        _searchError = '读取本地内容失败，请重试';
+        _isSearching = false;
+      });
     }
   }
 
@@ -318,14 +192,14 @@ class _LocalSearchPageState extends State<LocalSearchPage> {
     return DownloadManager().getCover(item.id);
   }
 
-  Widget _buildGridTile(_SearchResult result) {
+  Widget _buildGridTile(LocalSearchResult result) {
     if (result.downloadItem != null) {
       final item = result.downloadItem!;
       return Padding(
         padding: const EdgeInsets.all(2),
         child: DownloadedComicTile(
           name: item.name,
-          author: _localSearchAuthor(item),
+          author: localSearchAuthor(item),
           imagePath: _coverForDownloadedItem(item),
           type: result.sourceLabel,
           tag: item.tags,
@@ -384,16 +258,16 @@ class _LocalSearchPageState extends State<LocalSearchPage> {
   /// 输入为空时清空建议；否则按包含匹配（不区分大小写）过滤，
   /// 保留 '作者: ' 前缀的完整条目，结果取前 50 条作为上限，防止建议列表过长。
   /// 本地标签/作者多为日文英文，中文输入通过翻译层（[tags_translation]）逆查
-  /// 命中对应英文标签；仍匹配不到时回退展示热门建议（频次最高的前 50 条），
-  /// 保证"输入非空即有提示"。
+  /// 命中对应英文标签；没有匹配时保留关键词输入，不展示无关建议。
   void _updateSuggestions(String input) {
     // chips（建议数据源）尚未加载完成前不提供建议
     if (!_chipsReady) return;
-    if (input.isEmpty) {
+    final normalizedInput = input.trim();
+    if (normalizedInput.isEmpty) {
       if (_suggestions.isNotEmpty) setState(() => _suggestions = []);
       return;
     }
-    final candidates = _candidatesForInput(input);
+    final candidates = _candidatesForInput(normalizedInput);
     setState(() {
       _suggestions = candidates.take(50).toList();
     });
@@ -433,9 +307,8 @@ class _LocalSearchPageState extends State<LocalSearchPage> {
     for (final chip in _chips) {
       // '作者: ' 前缀只影响展示与点击解前缀，不影响匹配；
       // 作者条目没有翻译层，但始终参与直配（中文作者名/拼音可命中）
-      final body = chip.startsWith('作者: ')
-          ? chip.substring('作者: '.length).trim()
-          : chip;
+      final body =
+          chip.startsWith('作者: ') ? chip.substring('作者: '.length).trim() : chip;
       final bodyLower = body.toLowerCase();
       if (bodyLower.contains(keyword)) {
         candidates.add(chip);
@@ -452,8 +325,7 @@ class _LocalSearchPageState extends State<LocalSearchPage> {
   }
 
   /// 输入是否包含中文字符（决定是否启用翻译表逆查）。
-  bool _isChineseText(String input) =>
-      RegExp(r'[一-鿿]').hasMatch(input);
+  bool _isChineseText(String input) => RegExp(r'[一-鿿]').hasMatch(input);
 
   /// 构建占满内容区的建议列表（在线搜索样式）。
   ///
@@ -465,7 +337,7 @@ class _LocalSearchPageState extends State<LocalSearchPage> {
     return Column(
       children: [
         SizedBox(
-          height: 36,
+          height: 48,
           child: Row(
             children: [
               const SizedBox(width: 20),
@@ -506,9 +378,8 @@ class _LocalSearchPageState extends State<LocalSearchPage> {
                 ),
                 onTap: () {
                   // 作者条目去掉 "作者: " 前缀，填入原始作者名以匹配 _matches() 逻辑
-                  final query = isAuthor
-                      ? label.substring('作者: '.length).trim()
-                      : label;
+                  final query =
+                      isAuthor ? label.substring('作者: '.length).trim() : label;
                   _controller.text = query;
                   _controller.selection = TextSelection.fromPosition(
                     TextPosition(offset: query.length),
@@ -533,6 +404,82 @@ class _LocalSearchPageState extends State<LocalSearchPage> {
     );
   }
 
+  Widget _buildScopeSelector() {
+    final colors = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
+      child: Material(
+        color: colors.surfaceContainerLow,
+        borderRadius: BorderRadius.circular(20),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(12, 12, 12, 10),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Wrap(
+                spacing: 8,
+                runSpacing: 4,
+                children: [
+                  for (final scope in LocalSearchType.values)
+                    ChoiceChip(
+                      key: ValueKey('local-search-scope-${scope.name}'),
+                      avatar: Icon(
+                          switch (scope) {
+                            LocalSearchType.favoritesOnly =>
+                              Icons.bookmarks_outlined,
+                            LocalSearchType.downloadsOnly =>
+                              Icons.download_done_rounded,
+                            LocalSearchType.all => Icons.layers_outlined,
+                          },
+                          size: 18),
+                      label: Text(switch (scope) {
+                        LocalSearchType.favoritesOnly => '收藏',
+                        LocalSearchType.downloadsOnly => '已下载',
+                        LocalSearchType.all => '全部',
+                      }),
+                      selected: _scope == scope,
+                      onSelected: (_) => _changeScope(scope),
+                      showCheckmark: false,
+                      materialTapTargetSize: MaterialTapTargetSize.padded,
+                    ),
+                ],
+              ),
+              const SizedBox(height: 4),
+              Text(
+                switch (_scope) {
+                  LocalSearchType.favoritesOnly => '搜索所有本地收藏夹中的作品',
+                  LocalSearchType.downloadsOnly => '搜索本地已下载与导入的作品',
+                  LocalSearchType.all => '合并搜索本地收藏与已下载，重复作品只显示一次',
+                },
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: colors.onSurfaceVariant,
+                    ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSearchError() => Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(_searchError!, textAlign: TextAlign.center),
+              const SizedBox(height: 12),
+              FilledButton.tonalIcon(
+                onPressed: () => _search(_lastSubmitted, aliases: _lastAliases),
+                icon: const Icon(Icons.refresh),
+                label: const Text('重试'),
+              ),
+            ],
+          ),
+        ),
+      );
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -540,10 +487,14 @@ class _LocalSearchPageState extends State<LocalSearchPage> {
         title: TextField(
           controller: _controller,
           autofocus: widget.initialKeyword.trim().isEmpty,
-          decoration: const InputDecoration(
-            hintText: '搜索本地漫画...',
+          decoration: InputDecoration(
+            hintText: switch (_scope) {
+              LocalSearchType.favoritesOnly => '搜索收藏',
+              LocalSearchType.downloadsOnly => '搜索已下载',
+              LocalSearchType.all => '搜索本地内容',
+            },
             border: InputBorder.none,
-            prefixIcon: Icon(Icons.search),
+            prefixIcon: const Icon(Icons.search),
           ),
           textInputAction: TextInputAction.search,
           onSubmitted: _search,
@@ -552,14 +503,11 @@ class _LocalSearchPageState extends State<LocalSearchPage> {
         actions: [
           if (_controller.text.isNotEmpty)
             IconButton(
+              tooltip: '清空搜索',
               icon: const Icon(Icons.clear),
               onPressed: () {
                 _controller.clear();
-                setState(() {
-                  _results = [];
-                  _hasSearched = false;
-                  _suggestions = [];
-                });
+                _onSearchTextChanged('');
               },
             ),
         ],
@@ -567,6 +515,7 @@ class _LocalSearchPageState extends State<LocalSearchPage> {
       body: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          _buildScopeSelector(),
           Expanded(
             // 输入框有内容且有匹配建议时，建议列表占满内容区（在线搜索模式）；
             // 输入清空或建议清空时，回到正常的搜索结果区
@@ -574,44 +523,48 @@ class _LocalSearchPageState extends State<LocalSearchPage> {
                 ? _buildSuggestionList()
                 : _isSearching
                     ? const Center(child: CircularProgressIndicator())
-                    : !_hasSearched
-                        ? Center(
-                            child: Column(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Icon(
-                                  Icons.search,
-                                  size: 64,
-                                  color: Theme.of(context).colorScheme.outline,
+                    : _searchError != null
+                        ? _buildSearchError()
+                        : !_hasSearched
+                            ? Center(
+                                child: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Icon(
+                                      Icons.search,
+                                      size: 64,
+                                      color:
+                                          Theme.of(context).colorScheme.outline,
+                                    ),
+                                    const SizedBox(height: 16),
+                                    Text(
+                                      _scope == LocalSearchType.favoritesOnly
+                                          ? '输入关键词搜索收藏夹漫画'
+                                          : _scope ==
+                                                  LocalSearchType.downloadsOnly
+                                              ? '输入关键词搜索本地已下载漫画'
+                                              : '输入关键词搜索本地收藏和下载',
+                                      style: TextStyle(
+                                        color: Theme.of(context)
+                                            .colorScheme
+                                            .outline,
+                                      ),
+                                    ),
+                                  ],
                                 ),
-                                const SizedBox(height: 16),
-                                Text(
-                                  widget.searchType ==
-                                          LocalSearchType.favoritesOnly
-                                      ? '输入关键词搜索收藏夹漫画'
-                                      : widget.searchType ==
-                                              LocalSearchType.downloadsOnly
-                                          ? '输入关键词搜索本地已下载漫画'
-                                          : '输入关键词搜索本地收藏和下载',
-                                  style: TextStyle(
-                                    color: Theme.of(context)
-                                        .colorScheme
-                                        .outline,
+                              )
+                            : _results.isEmpty
+                                ? const Center(child: Text('未找到匹配的漫画'))
+                                : GridView.builder(
+                                    key: ValueKey(
+                                        'local-search-results-${_scope.name}'),
+                                    padding: const EdgeInsets.all(4),
+                                    gridDelegate:
+                                        SliverGridDelegateWithComics(),
+                                    itemCount: _results.length,
+                                    itemBuilder: (ctx, i) =>
+                                        _buildGridTile(_results[i]),
                                   ),
-                                ),
-                              ],
-                            ),
-                          )
-                        : _results.isEmpty
-                            ? const Center(child: Text('未找到匹配的漫画'))
-                            : GridView.builder(
-                                padding: const EdgeInsets.all(4),
-                                gridDelegate:
-                                    SliverGridDelegateWithComics(),
-                                itemCount: _results.length,
-                                itemBuilder: (ctx, i) =>
-                                    _buildGridTile(_results[i]),
-                              ),
           ),
         ],
       ),

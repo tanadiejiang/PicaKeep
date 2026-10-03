@@ -1,4 +1,5 @@
 import '../../base.dart';
+import 'ai_tool_plugin_store.dart';
 
 // AI Tab 可见性
 const showAiTabSettingIndex = 120;
@@ -85,6 +86,19 @@ int? aiCapabilitySettingIndex(String toolName) {
 
 /// 能力是否已开启。
 bool isAiCapabilityEnabled(String toolName) {
+  if (toolName == 'manage_tool_plugin') {
+    return AiToolPluginStore.instance.maintenanceEnabled;
+  }
+  if (toolName.startsWith('plugin_')) {
+    final record = AiToolPluginStore.instance.record(toolName.substring(7));
+    return record != null &&
+        record.enabled &&
+        record.plugin.kind == 'http_json';
+  }
+  if (toolName == 'search_by_image' &&
+      !AiToolPluginStore.instance.enabled(builtinImagePluginId)) {
+    return false;
+  }
   final idx = aiCapabilitySettingIndex(toolName);
   if (idx == null) return false;
   return appdata.settings[idx] == '1';

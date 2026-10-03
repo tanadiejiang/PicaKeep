@@ -11,6 +11,7 @@
 library;
 
 import 'dart:io';
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -209,6 +210,28 @@ void main() {
     test('TTL 是有限值（不得改成永久）', () {
       expect(kLocalCoverNegativeTtl.inMinutes, greaterThan(0));
       expect(kLocalCoverNegativeTtl.inMinutes, lessThanOrEqualTo(60));
+    });
+
+    test(
+        'temporary read failure expires before known absence, including reload',
+        () async {
+      await LocalCoverCache.markMissing('temporary',
+          fingerprint: 'fp', transient: true);
+      await LocalCoverCache.markMissing('absent', fingerprint: 'fp');
+      final index = File(p.join(
+          App.dataPath, 'local_library_cache', kLocalCoverCacheIndexName));
+      final data =
+          jsonDecode(await index.readAsString()) as Map<String, dynamic>;
+      final aged = DateTime.now()
+          .subtract(const Duration(seconds: 5))
+          .millisecondsSinceEpoch;
+      for (final key in ['temporary', 'absent']) {
+        (data['missing'][key] as Map)['at'] = aged;
+      }
+      await index.writeAsString(jsonEncode(data));
+      LocalCoverCache.debugResetForTest();
+      expect(await LocalCoverCache.isKnownMissing('temporary'), isFalse);
+      expect(await LocalCoverCache.isKnownMissing('absent'), isTrue);
     });
   });
 

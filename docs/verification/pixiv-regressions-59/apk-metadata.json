@@ -1,0 +1,11 @@
+{
+  "time": "2026-10-03 22:05",
+  "mode": "profile",
+  "path": "D:\\Flutter_Projucts\\PicaComic\\PicaKeep\\build\\verification\\pixiv-regressions-59\\app-after59-profile.apk",
+  "bytes": 132933859,
+  "sha256": "EAE0D0E678E5480C968275C62A5EDD0201CEC2F6BEECA761BFEB913D87E8B5F7",
+  "package": "lingxue.picakeep",
+  "version": "1.9.88+5",
+  "certificate_sha256": "31b4434516ccc1f58add7cc5cd4b6786e995c957d5891d3685e4c75a7a58d7c7",
+  "installed": false
+}

@@ -1,5 +1,7 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
+import 'package:flutter/foundation.dart';
 
 import 'package:dio/dio.dart';
 import 'package:picakeep/base.dart';
@@ -38,11 +40,20 @@ class SoutubotNetwork {
         'X-Requested-With': 'XMLHttpRequest',
       },
       sendTimeout: const Duration(seconds: 60),
+      connectTimeout: const Duration(seconds: 20),
       receiveTimeout: const Duration(seconds: 60),
     ));
     dio.interceptors.add(CookieManagerSql(SingleInstanceCookieJar.instance!));
     dio.interceptors.add(CloudflareInterceptor());
   }
+
+  @visibleForTesting
+  SoutubotNetwork.forTesting(Dio client, {String userAgent = webUA})
+      : _testUA = userAgent {
+    dio = client;
+  }
+
+  String? _testUA;
 
   static SoutubotNetwork? _instance;
 
@@ -53,12 +64,11 @@ class SoutubotNetwork {
 
   late final Dio dio;
 
-  /// 签名的 uaLen 与实际发送的 User-Agent 必须同源：每次请求把本值显式写入
-  /// headers，并用同一字符串的 `.length` 参与签名（Dart `String.length` 与 JS
-  /// `navigator.userAgent.length` 同为 UTF-16 计数，UA 是 ASCII，无差异）。
+  /// 使用人工过盾时保存的 UA，使 cf_clearance 和请求身份一致。
   /// `CloudflareInterceptor.onRequest` 在 cookie 含 cf_clearance 时会把 UA 覆盖
-  /// 为 `appdata.implicitData[3]` —— 与本值同源，幂等，不会造成签名/发送不一致。
+  /// 为 `appdata.implicitData[3]`；新版搜图无需旧签名算法。
   String get _effectiveUA {
+    if (_testUA != null) return _testUA!;
     final ua = appdata.implicitData[3];
     return ua.isNotEmpty ? ua : _fallbackUA;
   }
@@ -74,68 +84,139 @@ class SoutubotNetwork {
   ///
   /// 命中 Cloudflare 质询时原样 rethrow [CloudflareException]；其余失败一律
   /// 收敛为带 errorMessage 的 [Res]。
-  Future<Res<SoutubotSearchResult>> searchByImage(Uint8List imageBytes) async {
+  Future<Res<SoutubotSearchResult>> searchByImage(Uint8List imageBytes,
+      {Map<String, Object?>? adapter}) async {
+    final cancellation = CancelToken();
+    final deadline = Timer(const Duration(seconds: 90),
+        () => cancellation.cancel('Soutubot request deadline exceeded'));
     try {
-      final ua = _effectiveUA;
-      // 每次搜索现抓 m，不缓存：搜图低频、主页 GET 便宜，
-      // 避免站点重新部署后 m 过期导致的隐性 401。
-      final homeResponse = await dio.get<String>(
-        '$baseUrl/',
-        options: Options(
-          responseType: ResponseType.plain,
-          headers: {'user-agent': ua},
-        ),
-      );
-      final m = extractSoutubotGlobalM(homeResponse.data ?? '');
-      if (m == null) {
-        return const Res(
-          null,
-          errorMessage: '无法从 soutubot 主页解析签名参数 m，页面结构可能已变更',
-        );
+      if (imageBytes.isEmpty || imageBytes.length > 10 * 1024 * 1024) {
+        return const Res.error('图片不能为空或超过 10MB',
+            errorCode: ResErrorCode.invalidArgument);
       }
-      final unixSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
-      final apiKey = calcSoutubotApiKey(unixSec, ua.length, m);
+      if (detectSoutubotImageType(imageBytes) == null) {
+        return const Res.error('无法识别图片格式，请使用 PNG、JPEG、WebP、GIF 或 BMP 图片',
+            errorCode: ResErrorCode.invalidArgument);
+      }
+      final endpoint = Uri.tryParse(
+          adapter?['endpoint']?.toString() ?? '$baseUrl/api/search');
+      if (endpoint == null ||
+          endpoint.scheme != 'https' ||
+          endpoint.host != 'soutubot.moe' ||
+          endpoint.port != 443 ||
+          endpoint.userInfo.isNotEmpty ||
+          endpoint.hasFragment) {
+        return const Res.error('搜图适配器目标必须是 https://soutubot.moe',
+            errorCode: ResErrorCode.invalidArgument);
+      }
+      final ua = _effectiveUA;
+      // 2026-10公开前端直接 POST multipart，不再获取 GLOBAL.m 或计算旧签名。
       final boundary = randomWebKitBoundary();
+      final rawFields = adapter?['fields'] ??
+          const {'factor': '1.2', 'metadata_mode': 'display'};
+      if (rawFields is! Map ||
+          rawFields.length > 16 ||
+          rawFields.entries.any((entry) =>
+              entry.key is! String ||
+              entry.value is! String ||
+              (entry.value as String).length > 1024)) {
+        return const Res.error('搜图适配器表单字段无效',
+            errorCode: ResErrorCode.invalidArgument);
+      }
       final body = buildSoutubotMultipartBody(
         imageBytes: imageBytes,
         boundary: boundary,
+        fileField: adapter?['fileField']?.toString() ?? 'file',
+        fields: Map<String, String>.from(rawFields),
       );
       // dio 5.4.1 的 FormData 无自定义 boundary 入口，手拼字节体直接 POST
       // （dio 对 Uint8List data 原样透传并自动补 content-length）。
-      final response = await dio.post<dynamic>(
-        '$baseUrl/api/search',
+      final response = await dio.post<ResponseBody>(
+        endpoint.toString(),
         data: body,
+        cancelToken: cancellation,
         options: Options(
+          responseType: ResponseType.stream,
+          followRedirects: false,
+          receiveDataWhenStatusError: false,
+          sendTimeout: const Duration(seconds: 60),
+          receiveTimeout: const Duration(seconds: 60),
           headers: {
             'user-agent': ua,
-            'x-api-key': apiKey,
+            'Accept': 'application/json',
             'content-type': 'multipart/form-data; boundary=$boundary',
           },
         ),
       );
-      final payload = _asJsonMap(response.data);
+      final bytes = BytesBuilder(copy: false);
+      final stream = response.data?.stream;
+      if (stream == null) {
+        throw const FormatException('Empty soutubot response');
+      }
+      await for (final chunk in stream.timeout(const Duration(seconds: 60))) {
+        if (bytes.length + chunk.length > 8 * 1024 * 1024) {
+          throw const FormatException('soutubot response exceeds 8MB');
+        }
+        bytes.add(chunk);
+      }
+      final payload = _asJsonMap(utf8.decode(bytes.takeBytes()));
       if (payload == null) {
-        return const Res(null, errorMessage: 'soutubot 返回了无法解析的响应');
+        return const Res(null,
+            errorMessage: 'soutubot 返回了无法解析的响应', errorCode: ResErrorCode.parse);
       }
-      // 失败判定：payload 不含 'data' 键，取 message 组错误信息。
-      if (!payload.containsKey('data')) {
-        final message = payload['message']?.toString() ?? '未知错误';
-        return Res(null, errorMessage: 'soutubot 返回错误：$message');
-      }
-      return Res(SoutubotSearchResult.fromJson(payload));
+      final rawResponse = adapter?['response'];
+      return Res(SoutubotSearchResult.fromJson(payload,
+          response: rawResponse is Map
+              ? Map<String, Object?>.from(rawResponse)
+              : null));
     } on DioException catch (e) {
       if (_isCloudflare(e)) rethrow;
       final status = e.response?.statusCode;
       if (status == 401 || status == 403) {
         return Res(
           null,
-          errorMessage: 'soutubot 拒绝了请求（HTTP $status），可能是接口签名算法已变更',
+          errorMessage: 'soutubot 拒绝了请求（HTTP $status），请检查站点访问权限',
+          errorCode: ResErrorCode.accessDenied,
+          statusCode: status,
         );
       }
-      return Res(null, errorMessage: '网络错误：${e.message ?? e.toString()}');
+      if (status == 429) {
+        return const Res.error('soutubot 请求过于频繁，请稍后重试（HTTP 429）',
+            errorCode: ResErrorCode.network, statusCode: 429);
+      }
+      if (status == 413) {
+        return const Res.error('soutubot 拒绝了过大的图片（HTTP 413）',
+            errorCode: ResErrorCode.invalidArgument, statusCode: 413);
+      }
+      if (status == 415) {
+        return const Res.error(
+            'soutubot 不支持当前图片格式（HTTP 415），请转换为 PNG 或 JPEG 后重试',
+            errorCode: ResErrorCode.invalidArgument,
+            statusCode: 415);
+      }
+      if (status == 400 || status == 422) {
+        return Res.error('soutubot 不接受当前图片或请求参数（HTTP $status）',
+            errorCode: ResErrorCode.invalidArgument, statusCode: status);
+      }
+      if (status != null && status >= 300 && status < 400) {
+        return Res.error('soutubot 接口发生重定向，请更新适配器后重试',
+            errorCode: ResErrorCode.unsupported, statusCode: status);
+      }
+      return Res(null,
+          errorMessage: status == null
+              ? 'soutubot 网络连接失败或超时，请稍后重试'
+              : 'soutubot 服务异常（HTTP $status）',
+          errorCode: ResErrorCode.network,
+          statusCode: status);
+    } on FormatException {
+      return const Res.error('soutubot 响应结构与当前适配器不匹配，请诊断或更新适配器',
+          errorCode: ResErrorCode.parse);
     } catch (e) {
       if (_isCloudflare(e)) rethrow;
-      return Res(null, errorMessage: '网络错误：$e');
+      return const Res.error('soutubot 网络请求失败，请稍后重试',
+          errorCode: ResErrorCode.network);
+    } finally {
+      deadline.cancel();
     }
   }
 

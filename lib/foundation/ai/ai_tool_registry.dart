@@ -1,4 +1,6 @@
 import 'ai_tool.dart';
+import 'ai_tool_plugin_store.dart';
+import 'ai_tool_plugin_runtime.dart';
 import 'package:uuid/uuid.dart';
 
 class AiToolRegistry {
@@ -18,15 +20,35 @@ class AiToolRegistry {
     }
   }
 
-  List<Map<String, Object?>> toolSchemas() =>
-      _tools.values.map((tool) => tool.toSchema()).toList(growable: false);
+  List<Map<String, Object?>> toolSchemas() => [
+        ..._tools.values.map((tool) => tool.toSchema()),
+        const AiManageToolPluginTool().toSchema(),
+        for (final record in AiToolPluginStore.loadedRecords)
+          if (record.plugin.kind == 'http_json' && record.enabled)
+            AiHttpJsonPluginTool(record.plugin).toSchema(),
+      ];
 
   Future<AiToolResult> dispatch(
     String name,
     Map args, {
     AiToolExecutionContext? context,
   }) async {
-    final tool = _tools[name];
+    AiTool? tool = _tools[name];
+    if (tool == null &&
+        (name == 'manage_tool_plugin' || name.startsWith('plugin_'))) {
+      await AiToolPluginStore.instance.load();
+      final record = AiToolPluginStore.instance.records
+          .where((r) =>
+              r.plugin.kind == 'http_json' &&
+              r.plugin.toolName == name &&
+              r.enabled)
+          .firstOrNull;
+      tool = name == 'manage_tool_plugin'
+          ? const AiManageToolPluginTool()
+          : record == null
+              ? null
+              : AiHttpJsonPluginTool(record.plugin);
+    }
     if (tool == null) {
       return AiToolResult.failure('Unknown AI tool: $name');
     }

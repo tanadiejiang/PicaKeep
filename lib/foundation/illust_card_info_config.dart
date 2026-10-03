@@ -82,7 +82,13 @@ const String kDefaultIllustCardInfoTemplate = '{title}\n{author}';
 /// 分隔符候选（第一项为默认）。`''` = 字段之间不加任何字符。
 ///
 /// 顺序即设置页里 chip 的排列顺序，默认项在前。
-const List<String> kIllustCardInfoSeparators = <String>['\n', ' ', '-', '_', ''];
+const List<String> kIllustCardInfoSeparators = <String>[
+  '\n',
+  ' ',
+  '-',
+  '_',
+  ''
+];
 
 /// 预览用的样例值。
 ///
@@ -325,19 +331,48 @@ List<IllustCardInfoSpan> illustrateCardInfoSpansFor({
   required List<String> fields,
   required String separator,
 }) {
-  final item = entry.item;
   return buildIllustCardInfoSpans(
     fields: fields,
     separator: separator,
-    values: <String, String>{
-      'title': item.name.trim(),
-      'author': item.subTitle.trim(),
+    values: _illustCardInfoValues(entry),
+  );
+}
+
+Map<String, String> _illustCardInfoValues(IllustLibraryEntry entry) => {
+      'title': entry.item.name.trim(),
+      'author': entry.item.subTitle.trim(),
       'pages': entry.pageCount == null
           ? ''
           : illustCardInfoPageText(entry.pageCount!),
       'size': illustCardInfoSizeText(entry.width, entry.height),
-    },
-  );
+    };
+
+/// 只为已勾选、仍未知的异步字段预留布局空间。已知单图不需要页数行。
+Set<String> illustCardInfoPendingFieldsFor({
+  required IllustLibraryEntry entry,
+  required List<String> fields,
+}) =>
+    {
+      if (fields.contains('pages') && entry.pageCount == null) 'pages',
+      if (fields.contains('size') && !entry.hasRealSize) 'size',
+    };
+
+/// 仅供 TextPainter 测量的片段，不能绘制或放进语义树。
+///
+/// [reservedFields] 来自卡片初次显示时的未知字段；解析为单图时调用方立即
+/// 释放页数预留，避免留白一直持续到离屏重建。
+/// 非换行模板仍按原分隔符拼接；示例宽度只提供最小高度，极端长数值可以折行。
+List<IllustCardInfoSpan> illustCardInfoLayoutSpansFor({
+  required IllustLibraryEntry entry,
+  required List<String> fields,
+  required String separator,
+  required Set<String> reservedFields,
+}) {
+  final values = _illustCardInfoValues(entry);
+  if (reservedFields.contains('pages')) values['pages'] = 'p88';
+  if (reservedFields.contains('size')) values['size'] = '88888×88888';
+  return buildIllustCardInfoSpans(
+      fields: fields, separator: separator, values: values);
 }
 
 /// 卡片底部信息的字段顺序调整（设置页 `onReorder` 调它）。

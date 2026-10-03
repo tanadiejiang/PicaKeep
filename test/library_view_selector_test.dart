@@ -47,6 +47,102 @@ List<LibraryViewSelectorEntry<_Tier>> _entries({
     ];
 
 void main() {
+  Widget anchoredHost({
+    required GlobalKey buttonKey,
+    required double top,
+    required List<_Tier?> picked,
+    double textScale = 1,
+  }) {
+    return MaterialApp(
+      builder: (context, child) => MediaQuery(
+        data: MediaQuery.of(context).copyWith(
+          textScaler: TextScaler.linear(textScale),
+        ),
+        child: child!,
+      ),
+      home: Scaffold(
+        body: Builder(
+          builder: (context) => Stack(
+            children: [
+              Positioned(
+                top: top,
+                right: 12,
+                width: 56,
+                height: 82,
+                child: TextButton(
+                  key: buttonKey,
+                  onPressed: () async {
+                    picked.add(await showLibraryViewSelector<_Tier>(
+                      context: context,
+                      anchorContext: buttonKey.currentContext,
+                      title: '收藏 · 档位',
+                      entries: _entries(),
+                      selected: _Tier.local,
+                    ));
+                  },
+                  child: const Text('open'),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  group('抽屉工具栏的实际按钮锚点', () {
+    for (final top in <double>[160, 420]) {
+      testWidgets('按钮在 $top 时菜单紧贴按钮下方并可选档', (tester) async {
+        tester.view.physicalSize = const Size(393, 850);
+        tester.view.devicePixelRatio = 1;
+        addTearDown(tester.view.reset);
+        final buttonKey = GlobalKey();
+        final picked = <_Tier?>[];
+        await tester.pumpWidget(
+          anchoredHost(buttonKey: buttonKey, top: top, picked: picked),
+        );
+        final button = tester.getRect(find.byKey(buttonKey));
+        await tester.tap(find.text('open'));
+        await tester.pumpAndSettle();
+        final popup = tester.getRect(find.byType(PopupMenuItem<_Tier>));
+        expect(popup.top, closeTo(button.bottom + 4, 1));
+        expect(popup.right, closeTo(button.right, 1));
+        await tester.tap(find.text('远程 · 图集'));
+        await tester.pumpAndSettle();
+        expect(picked, [_Tier.remote]);
+        expect(find.text('收藏 · 档位'), findsNothing);
+        expect(find.text('open'), findsOneWidget);
+      });
+    }
+
+    testWidgets('窄屏大字按钮靠下时菜单保持在安全区且返回只关闭菜单', (tester) async {
+      tester.view.physicalSize = const Size(320, 640);
+      tester.view.devicePixelRatio = 1;
+      tester.view.padding = const FakeViewPadding(top: 24, bottom: 30);
+      addTearDown(tester.view.reset);
+      final picked = <_Tier?>[];
+      await tester.pumpWidget(anchoredHost(
+        buttonKey: GlobalKey(),
+        top: 520,
+        picked: picked,
+        textScale: 1.8,
+      ));
+      await tester.tap(find.text('open'));
+      await tester.pumpAndSettle();
+      final popup = tester.getRect(find.byType(PopupMenuItem<_Tier>));
+      expect(popup.left, greaterThanOrEqualTo(8));
+      expect(popup.right, lessThanOrEqualTo(312));
+      expect(popup.top, greaterThanOrEqualTo(32));
+      expect(popup.bottom, lessThanOrEqualTo(602));
+      expect(tester.takeException(), isNull);
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+      expect(picked, [null]);
+      expect(find.text('收藏 · 档位'), findsNothing);
+      expect(find.text('open'), findsOneWidget);
+    });
+  });
+
   /// 直接走 [showLibraryViewSelector] 的宿主；返回值写进 [picked]。
   Widget panelHost({
     required List<_Tier?> picked,
@@ -93,7 +189,8 @@ void main() {
     });
 
     testWidgets('选中项打勾，且只有一个对勾', (tester) async {
-      await tester.pumpWidget(panelHost(picked: <_Tier?>[], selected: _Tier.remote));
+      await tester
+          .pumpWidget(panelHost(picked: <_Tier?>[], selected: _Tier.remote));
       await tester.tap(find.text('open'));
       await tester.pumpAndSettle();
 

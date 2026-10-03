@@ -36,6 +36,7 @@ import 'package:picakeep/pages/online_comic/eh_content_warning.dart';
 import 'package:picakeep/pages/online_comic/jm_comic_page_v2.dart';
 import 'package:picakeep/pages/online_comic/picacg_comic_page_v2.dart';
 import 'package:picakeep/pages/online_comic/nhentai_comic_page_v2.dart';
+import 'package:picakeep/pages/online_comic/pixiv_author_link.dart';
 import 'package:picakeep/tools/tags_translation.dart';
 import 'package:picakeep/tools/translations.dart';
 import 'package:uuid/uuid.dart';
@@ -2814,6 +2815,9 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
           _buildActionItem('分享', Icons.share, () => _copyText(comic.name)),
           if (supportsVisitOnline(_comic))
             _buildActionItem('在线详情', Icons.public, _onVisitOnline),
+          if (PixivAuthorDestination.fromDownloadedItem(comic)
+              case final destination?)
+            PixivAuthorLink(destination: destination, compact: true),
           if (comic is LocalLibraryComicItem &&
               comic.isArchiveItem &&
               comic.archivePasswordMatched)

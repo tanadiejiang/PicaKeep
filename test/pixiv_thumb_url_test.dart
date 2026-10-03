@@ -56,6 +56,17 @@ void main() {
       expect(result, isNot(contains('_custom1200')));
     });
 
+    test('custom-thumb asset directory changes together with its filename', () {
+      // Public example in Ocrosoft/PixivPreviewer, commit 6142d321, line 1179.
+      const custom = 'https://i.pximg.net/c/128x128/custom-thumb/img/'
+          '2021/01/31/20/35/53/87426718_p0_custom1200.jpg';
+      expect(
+        pixivProportionalThumbUrl(custom),
+        'https://i.pximg.net/c/$kPixivProportionalThumbFrame/img-master/img/'
+        '2021/01/31/20/35/53/87426718_p0_master1200.jpg',
+      );
+    });
+
     test('已经是 master1200 的只换前缀，文件名不动', () {
       final result = pixivProportionalThumbUrl(
         'https://i.pximg.net/c/480x960/img-master/img/2026/09/21/12/02/19/'

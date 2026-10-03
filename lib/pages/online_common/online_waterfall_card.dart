@@ -36,6 +36,7 @@ class OnlineWaterfallCard extends StatelessWidget {
     super.key,
     required this.title,
     required this.cover,
+    this.fallbackCover,
     required this.imageHeaders,
     required this.onTap,
     this.author = '',
@@ -49,6 +50,9 @@ class OnlineWaterfallCard extends StatelessWidget {
   /// 封面 URL。**调用方应已用 `pixivProportionalThumbUrl` 换成保持比例的版本**，
   /// 否则方图会被 `contain` 缩在格子中间（四周留白）。
   final String cover;
+
+  /// Original API thumbnail, tried once if a derived proportional URL fails.
+  final String? fallbackCover;
 
   /// 防盗链头（Pixiv 的 `i.pximg.net` 缺 Referer 会直接 403）。
   final Map<String, String> imageHeaders;
@@ -139,31 +143,44 @@ class OnlineWaterfallCard extends StatelessWidget {
         final cacheWidth = width.isFinite && width > 0
             ? (width * devicePixelRatio * _decodeQualityScale).round()
             : null;
-        final provider = onlineCoverProvider(
-          url: cover,
-          headers: imageHeaders,
-        );
-        return Image(
-          image: cacheWidth == null
-              ? provider
-              : ResizeImage.resizeIfNeeded(cacheWidth, null, provider),
-          fit: BoxFit.contain,
-          gaplessPlayback: true,
-          filterQuality: FilterQuality.medium,
-          errorBuilder: (context, error, stackTrace) => _placeholder(context),
-        );
+        Widget imageFor(String url, {bool allowFallback = false}) {
+          final provider = onlineCoverProvider(url: url, headers: imageHeaders);
+          return Image(
+            image: cacheWidth == null
+                ? provider
+                : ResizeImage.resizeIfNeeded(cacheWidth, null, provider),
+            fit: BoxFit.contain,
+            gaplessPlayback: true,
+            filterQuality: FilterQuality.medium,
+            frameBuilder: (context, child, frame, wasSynchronouslyLoaded) =>
+                frame != null || wasSynchronouslyLoaded
+                    ? child
+                    : _placeholder(context, loading: true),
+            errorBuilder: (context, error, stackTrace) {
+              final fallback = fallbackCover?.trim() ?? '';
+              return allowFallback && fallback.isNotEmpty && fallback != url
+                  ? imageFor(fallback)
+                  : _placeholder(context);
+            },
+          );
+        }
+
+        return imageFor(cover, allowFallback: true);
       },
     );
   }
 
-  Widget _placeholder(BuildContext context) {
+  Widget _placeholder(BuildContext context, {bool loading = false}) {
     final colorScheme = Theme.of(context).colorScheme;
-    return ColoredBox(
-      color: colorScheme.secondaryContainer,
-      child: Icon(
-        Icons.image_not_supported_outlined,
-        size: 22,
-        color: colorScheme.onSecondaryContainer,
+    return Semantics(
+      label: loading ? '正在加载封面' : '封面加载失败',
+      child: ColoredBox(
+        color: colorScheme.secondaryContainer,
+        child: Icon(
+          loading ? Icons.image_outlined : Icons.image_not_supported_outlined,
+          size: 22,
+          color: colorScheme.onSecondaryContainer,
+        ),
       ),
     );
   }

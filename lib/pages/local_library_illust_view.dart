@@ -17,6 +17,7 @@
 library;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_staggered_grid_view/flutter_staggered_grid_view.dart';
 
 import 'package:picakeep/foundation/local_library.dart';
@@ -79,6 +80,7 @@ class LocalLibraryIllustSlivers extends StatelessWidget {
     required this.onToggleTag,
     required this.onClearTags,
     this.onLayoutRange,
+    this.showTagFilter = true,
   });
 
   /// 筛前全量（用于区分"没有内容"与"筛选无匹配"）。
@@ -89,6 +91,7 @@ class LocalLibraryIllustSlivers extends StatelessWidget {
 
   final List<IllustTagSummary> tags;
   final Set<String> selectedTags;
+  final bool showTagFilter;
   final bool loading;
   final String? errorText;
   final int columns;
@@ -123,7 +126,7 @@ class LocalLibraryIllustSlivers extends StatelessWidget {
     );
     return SliverMainAxisGroup(
       slivers: [
-        if (tags.isNotEmpty)
+        if (showTagFilter && tags.isNotEmpty)
           SliverToBoxAdapter(
             child: _IllustTagFilterBar(
               key: tagFilterBarKey,
@@ -151,8 +154,8 @@ class LocalLibraryIllustSlivers extends StatelessWidget {
               key: noTagMatchKey,
               hasScrollBody: false,
               child: _IllustEmptyState(
-                title: '没有匹配的标签'.tl,
-                description: '试试取消几个标签'.tl,
+                title: '没有匹配的作品'.tl,
+                description: '试试调整关键词、标签或文件夹'.tl,
                 action: TextButton(
                   onPressed: onClearTags,
                   child: Text('清除筛选'.tl),
@@ -161,20 +164,30 @@ class LocalLibraryIllustSlivers extends StatelessWidget {
             ),
           IllustContentState.content => SliverPadding(
               padding: const EdgeInsets.fromLTRB(2, 0, 2, 96),
-              sliver: SliverMasonryGrid(
-                key: waterfallKey,
-                gridDelegate: SliverSimpleGridDelegateWithFixedCrossAxisCount(
-                    crossAxisCount: columns),
-                mainAxisSpacing: illustWaterfallSpacing,
-                crossAxisSpacing: illustWaterfallSpacing,
-                delegate: _IllustLayoutDelegate(
-                  (context, index) => KeyedSubtree(
-                      key: ValueKey(entries[index].id),
-                      child: itemBuilder(context, entries[index])),
-                  childCount: entries.length,
-                  findChildIndexCallback: (key) =>
-                      indexes[(key as ValueKey).value],
-                  onLayoutRange: onLayoutRange,
+              // Masonry caches column positions / heights by child index.
+              // Remapping keyed children after filtering does not invalidate
+              // that cache: surviving cards can leave holes or truncate the
+              // scroll extent. Reset only when the ordered identities change;
+              // cover arrivals and ordinary parent rebuilds keep the layout.
+              sliver: KeyedSubtree(
+                key: _IllustOrderKey([
+                  for (final entry in entries) entry.id,
+                ]),
+                child: SliverMasonryGrid(
+                  key: waterfallKey,
+                  gridDelegate: SliverSimpleGridDelegateWithFixedCrossAxisCount(
+                      crossAxisCount: columns),
+                  mainAxisSpacing: illustWaterfallSpacing,
+                  crossAxisSpacing: illustWaterfallSpacing,
+                  delegate: _IllustLayoutDelegate(
+                    (context, index) => KeyedSubtree(
+                        key: ValueKey(entries[index].id),
+                        child: itemBuilder(context, entries[index])),
+                    childCount: entries.length,
+                    findChildIndexCallback: (key) =>
+                        indexes[(key as ValueKey).value],
+                    onLayoutRange: onLayoutRange,
+                  ),
                 ),
               ),
             ),
@@ -192,17 +205,48 @@ class LocalLibraryIllustSlivers extends StatelessWidget {
   }
 }
 
+class _IllustOrderKey extends LocalKey {
+  const _IllustOrderKey(this.ids);
+
+  final List<String> ids;
+
+  @override
+  bool operator ==(Object other) =>
+      other is _IllustOrderKey && listEquals(ids, other.ids);
+
+  @override
+  int get hashCode => Object.hashAll(ids);
+}
+
 class _IllustLayoutDelegate extends SliverChildBuilderDelegate {
   _IllustLayoutDelegate(super.builder,
       {required super.childCount,
       required super.findChildIndexCallback,
       this.onLayoutRange});
   final void Function(int, int)? onLayoutRange;
+  (int, int)? _publishedRange;
+  (int, int)? _pendingRange;
+  bool _notificationScheduled = false;
+
   @override
   void didFinishLayout(int firstIndex, int lastIndex) {
     super.didFinishLayout(firstIndex, lastIndex);
-    WidgetsBinding.instance.addPostFrameCallback(
-        (_) => onLayoutRange?.call(firstIndex, lastIndex));
+    if (onLayoutRange == null) return;
+    final range = (firstIndex, lastIndex);
+    _pendingRange = range;
+    // Pixel scrolling often lays out the same children again. Notify only when
+    // that range changes, and use the final range if layout corrects itself
+    // more than once in a frame. A new delegate starts fresh, so a parent
+    // refresh / queue reset still receives its initial visible range.
+    if (_notificationScheduled || range == _publishedRange) return;
+    _notificationScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _notificationScheduled = false;
+      final latest = _pendingRange!;
+      if (latest == _publishedRange) return;
+      _publishedRange = latest;
+      onLayoutRange!(latest.$1, latest.$2);
+    });
   }
 }
 

@@ -1,3 +1,4 @@
+import 'ai_tool_plugin_store.dart';
 import 'dart:convert';
 import 'dart:math';
 
@@ -292,7 +293,10 @@ bool isToolAllowedByScope(
   required bool effectiveOnlineOnly,
 }) {
   if (effectiveLocalOnly &&
-      (toolName == 'search_online' || toolName == 'search_by_image')) {
+      (toolName == 'search_online' ||
+          toolName == 'search_by_image' ||
+          toolName.startsWith('plugin_') ||
+          toolName == 'manage_tool_plugin')) {
     return false;
   }
   if (effectiveOnlineOnly && localLibraryToolNames.contains(toolName)) {
@@ -389,7 +393,10 @@ AiToolResult? disallowedScopeResult(
     return null;
   }
   if (effectiveLocalOnly &&
-      (toolName == 'search_online' || toolName == 'search_by_image')) {
+      (toolName == 'search_online' ||
+          toolName == 'search_by_image' ||
+          toolName.startsWith('plugin_') ||
+          toolName == 'manage_tool_plugin')) {
     return AiToolResult.failure(
       '当前会话/本轮范围限定为仅本地，工具 $toolName 不可用。',
     );
@@ -1252,7 +1259,8 @@ class AiConversationController extends ChangeNotifier {
       return _RunLoopOutcome.finished;
     }
 
-    final tools = _getEnabledToolSchemas();
+    final tools = await _getEnabledToolSchemas();
+    if (!_isActiveOutput(turnOutput)) return _RunLoopOutcome.finished;
     final requestMessages = _buildRequestMessages();
     // Each request owns its token; cancellation finishes the user turn before
     // another tool subround starts. Late callbacks cannot clear a newer token.
@@ -1423,7 +1431,14 @@ class AiConversationController extends ChangeNotifier {
         continue;
       }
 
-      final blockedResult = disallowedScopeResult(
+      final pluginCapabilityClosed = (toolName == 'search_by_image' ||
+              toolName == 'manage_tool_plugin' ||
+              toolName.startsWith('plugin_')) &&
+          !isAiCapabilityEnabled(toolName);
+      final blockedResult = (pluginCapabilityClosed
+              ? const AiToolResult.failure('该工具能力已关闭，请先在设置中开启')
+              : null) ??
+          disallowedScopeResult(
             toolName,
             effectiveLocalOnly,
             effectiveOnlineOnly,
@@ -1648,7 +1663,8 @@ class AiConversationController extends ChangeNotifier {
   }
 
   /// 获取启用的工具 schema
-  List<Map<String, Object?>> _getEnabledToolSchemas() {
+  Future<List<Map<String, Object?>>> _getEnabledToolSchemas() async {
+    await AiToolPluginStore.instance.load();
     AiCapabilities.ensureRegistered();
     final localOnly = effectiveLocalOnly;
     final onlineOnly = effectiveOnlineOnly;

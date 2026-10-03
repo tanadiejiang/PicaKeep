@@ -56,12 +56,60 @@ IllustLibraryEntry _entry({
 }
 
 void main() {
+  group('布局预留独立于可见文本', () {
+    test('只选已未知的动态字段；已知单图无需页数占位', () {
+      final entry = _entry();
+      expect(
+          illustCardInfoPendingFieldsFor(
+              entry: entry, fields: const ['title', 'author']),
+          isEmpty);
+      expect(
+          illustCardInfoPendingFieldsFor(
+              entry: entry, fields: const ['pages', 'size']),
+          {'pages', 'size'});
+      expect(
+          illustCardInfoPendingFieldsFor(
+              entry: entry.withResolvedInfo(pageCount: 1),
+              fields: const ['pages', 'size']),
+          {'size'});
+    });
+
+    test('布局片段尊重顺序与分隔符，预留值不进入可见文本', () {
+      final entry = _entry();
+      const fields = ['pages', 'title', 'size'];
+      final reserved =
+          illustCardInfoPendingFieldsFor(entry: entry, fields: fields);
+      final before = illustCardInfoLayoutSpansFor(
+          entry: entry,
+          fields: fields,
+          separator: ' / ',
+          reservedFields: reserved);
+      final single =
+          entry.withResolvedInfo(pageCount: 1, width: 600, height: 800);
+      final after = illustCardInfoLayoutSpansFor(
+          entry: single,
+          fields: fields,
+          separator: ' / ',
+          reservedFields: reserved);
+      expect(before.map((s) => s.text), after.map((s) => s.text));
+      expect(before.map((s) => s.text).join(), 'p88 / 作品标题 / 88888×88888');
+      expect(
+          illustrateCardInfoTextFor(
+              entry: entry, fields: fields, separator: ' / '),
+          '作品标题');
+      expect(
+          illustrateCardInfoTextFor(
+              entry: single, fields: fields, separator: ' / '),
+          '作品标题 / 600×800');
+    });
+  });
   group('默认值：与改动前的卡片观感逐字一致', () {
     test('settings 下标与 24 号占用区不冲突（≥158）', () {
       expect(illustCardInfoSettingIndex, 158);
       // 24 号（图集页视图 / 瀑布流列数 / 按钮位置）与 23 号（多图打包）的占用
       expect(illustCardInfoSettingIndex, greaterThan(157));
-      expect(illustCardInfoSettingIndex, greaterThan(pixivMultiPageZipSettingIndex));
+      expect(illustCardInfoSettingIndex,
+          greaterThan(pixivMultiPageZipSettingIndex));
       expect(
         illustCardInfoSettingIndex,
         greaterThan(illustViewSwitcherPositionSettingIndex),
@@ -230,8 +278,8 @@ void main() {
       // 至少要提供计划点名的四类字段
       expect(
         kIllustCardInfoFieldKeys.toSet().containsAll(
-              <String>{'title', 'author', 'pages', 'size'},
-            ),
+          <String>{'title', 'author', 'pages', 'size'},
+        ),
         isTrue,
       );
     });
@@ -267,7 +315,8 @@ void main() {
       final order = <String>['a', 'b', 'c'];
       expect(reorderIllustCardInfoFieldOrder(order, -1, 1), order);
       expect(reorderIllustCardInfoFieldOrder(order, 9, 0), order);
-      expect(reorderIllustCardInfoFieldOrder(order, 0, -5), <String>['a', 'b', 'c']);
+      expect(reorderIllustCardInfoFieldOrder(order, 0, -5),
+          <String>['a', 'b', 'c']);
       // 原列表不被原地修改
       expect(order, <String>['a', 'b', 'c']);
     });
@@ -282,11 +331,14 @@ void main() {
       ];
       for (final c in cases) {
         expect(
-          reorderIllustCardInfoFieldOrder(<String>['a', 'b', 'c', 'd'], c[0], c[1]),
-          reorderPixivDirNameFieldOrder(<String>['a', 'b', 'c', 'd'], c[0], c[1]),
+          reorderIllustCardInfoFieldOrder(
+              <String>['a', 'b', 'c', 'd'], c[0], c[1]),
+          reorderPixivDirNameFieldOrder(
+              <String>['a', 'b', 'c', 'd'], c[0], c[1]),
         );
         expect(
-          reorderIllustCardInfoFieldOrder(<String>['a', 'b', 'c', 'd'], c[0], c[1]),
+          reorderIllustCardInfoFieldOrder(
+              <String>['a', 'b', 'c', 'd'], c[0], c[1]),
           reorderTemplateFieldOrder(<String>['a', 'b', 'c', 'd'], c[0], c[1]),
         );
       }
@@ -496,7 +548,8 @@ void main() {
         kDefaultIllustCardInfoFields,
         kDefaultIllustCardInfoSeparator,
       );
-      expect(preview, '$kPixivDirNamePreviewTitle\n$kPixivDirNamePreviewAuthor');
+      expect(
+          preview, '$kPixivDirNamePreviewTitle\n$kPixivDirNamePreviewAuthor');
     });
 
     test('勾了尺寸时预览里能看到尺寸样例', () {

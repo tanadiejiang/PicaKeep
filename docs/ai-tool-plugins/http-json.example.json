@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "id": "public_catalog",
+  "name": "公开目录查询示例",
+  "version": "1.0.0",
+  "kind": "http_json",
+  "description": "根据关键词查询公开目录，返回匹配条目。导入前把示例地址替换成你使用的接口。",
+  "endpoint": "https://example.org/api/search",
+  "parameters": {
+    "query": "检索关键词"
+  },
+  "query": {
+    "q": "{query}",
+    "limit": "10"
+  },
+  "resultPath": "items"
+}

@@ -50,6 +50,8 @@ const int kLocalCoverCacheIndexVersion = 1;
 /// 让"用户刚补上封面文件/刚恢复权限"能在一次页面重进或手动刷新后生效。
 /// **不得改成"永久"** —— 那正是本模块要消灭的行为。
 const Duration kLocalCoverNegativeTtl = Duration(minutes: 10);
+// Less than the page queue's 5s bounded retry interval.
+const Duration kLocalCoverReadFailureTtl = Duration(seconds: 4);
 
 /// 缓存根目录名（位于 `App.dataPath` 下）。
 const String kLocalCoverCacheDirName = 'covers';
@@ -153,6 +155,17 @@ class LocalCoverCache {
       final stat = file.statSync();
       return '${file.path}|${stat.size}|${stat.modified.millisecondsSinceEpoch}';
     } catch (_) {
+      return '${file.path}|0|0';
+    }
+  }
+
+  /// Use during preparation, never synchronously probe storage from a builder.
+  static Future<String> fingerprintForAsync(File file) async {
+    try {
+      final stat = await file.stat();
+      return '${file.path}|${stat.size}|${stat.modified.millisecondsSinceEpoch}';
+    } catch (_) {
+      // The privileged channel may still be able to read this source.
       return '${file.path}|0|0';
     }
   }
@@ -407,7 +420,9 @@ class LocalCoverCache {
       // 源变了，旧结论不再适用。
       return false;
     }
-    if (DateTime.now().difference(rec.at) > kLocalCoverNegativeTtl) {
+    final ttl =
+        rec.transient ? kLocalCoverReadFailureTtl : kLocalCoverNegativeTtl;
+    if (DateTime.now().difference(rec.at) >= ttl) {
       // 过期：**允许重试**（这正是取代 `__no_cover__` 永久短路的地方）。
       _negatives?.remove(entryKey);
       await _save();
@@ -420,11 +435,13 @@ class LocalCoverCache {
   static Future<void> markMissing(
     String entryKey, {
     String fingerprint = '',
+    bool transient = false,
   }) async {
     await _ensureLoaded();
     _negatives?[entryKey] = _NegativeRecord(
       fingerprint: fingerprint,
       at: DateTime.now(),
+      transient: transient,
     );
     await _save();
   }
@@ -630,14 +647,17 @@ class LocalCoverCache {
 
 /// 负缓存记录。
 class _NegativeRecord {
-  const _NegativeRecord({required this.fingerprint, required this.at});
+  const _NegativeRecord(
+      {required this.fingerprint, required this.at, this.transient = false});
 
   final String fingerprint;
   final DateTime at;
+  final bool transient;
 
   Map<String, Object?> toJson() => <String, Object?>{
         'fp': fingerprint,
         'at': at.millisecondsSinceEpoch,
+        'transient': transient,
       };
 
   static _NegativeRecord? fromJson(Object? raw) {
@@ -648,6 +668,7 @@ class _NegativeRecord {
     return _NegativeRecord(
       fingerprint: raw['fp']?.toString() ?? '',
       at: DateTime.fromMillisecondsSinceEpoch(at is int ? at : 0),
+      transient: raw['transient'] == true,
     );
   }
 }

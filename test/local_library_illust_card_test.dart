@@ -66,20 +66,28 @@ IllustLibraryEntry _entry({
 Widget _harness({
   required IllustLibraryEntry entry,
   List<IllustCardInfoSpan>? infoSpans,
+  List<String>? infoFields,
+  String infoSeparator = '\n',
+  TextScaler textScaler = TextScaler.noScaling,
   double columnWidth = 120,
 }) {
   return MaterialApp(
     home: Scaffold(
-      body: Align(
-        alignment: Alignment.topLeft,
-        child: SizedBox(
-          width: columnWidth,
-          child: IllustCard(
-            entry: entry,
-            imageProvider: null,
-            infoSpans: infoSpans,
-            onTap: () {},
-            onLongPress: () {},
+      body: MediaQuery(
+        data: MediaQueryData(textScaler: textScaler),
+        child: Align(
+          alignment: Alignment.topLeft,
+          child: SizedBox(
+            width: columnWidth,
+            child: IllustCard(
+              entry: entry,
+              imageProvider: null,
+              infoSpans: infoSpans,
+              infoFields: infoFields,
+              infoSeparator: infoSeparator,
+              onTap: () {},
+              onLongPress: () {},
+            ),
           ),
         ),
       ),
@@ -91,6 +99,114 @@ Widget _harness({
 Image _imageIn(WidgetTester tester) => tester.widget<Image>(find.byType(Image));
 
 void main() {
+  group('异步信息补齐的布局预留', () {
+    testWidgets('未知页数变为 p2 不推动卡片下方，占位不渲染或朗读', (tester) async {
+      final semantics = tester.ensureSemantics();
+      final entry = _entry(width: 600, height: 800);
+      const fields = ['title', 'author', 'pages'];
+      await tester.pumpWidget(_harness(entry: entry, infoFields: fields));
+      final before = tester.getSize(find.byType(IllustCard));
+      expect(tester.widget<Text>(find.byType(Text)).textSpan!.toPlainText(),
+          '作品标题\n作者名');
+      expect(find.bySemanticsLabel(RegExp('p88')), findsNothing);
+      await tester.pumpWidget(_harness(
+          entry: entry.withResolvedInfo(pageCount: 2), infoFields: fields));
+      expect(tester.widget<Text>(find.byType(Text)).textSpan!.toPlainText(),
+          '作品标题\n作者名\np2');
+      expect(tester.getSize(find.byType(IllustCard)), before);
+      semantics.dispose();
+    });
+
+    testWidgets('未知变单图立即释放页数空行，不必离屏重建', (tester) async {
+      final entry = _entry(width: 600, height: 800);
+      const fields = ['title', 'author', 'pages'];
+      await tester.pumpWidget(_harness(entry: entry, infoFields: fields));
+      final before = tester.getSize(find.byType(IllustCard));
+      final single = entry.withResolvedInfo(pageCount: 1);
+      await tester.pumpWidget(_harness(entry: single, infoFields: fields));
+      final after = tester.getSize(find.byType(IllustCard));
+      expect(after.height, lessThan(before.height));
+      expect(tester.widget<Text>(find.byType(Text)).textSpan!.toPlainText(),
+          '作品标题\n作者名');
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pumpWidget(_harness(entry: single, infoFields: fields));
+      expect(tester.getSize(find.byType(IllustCard)), after);
+    });
+
+    testWidgets('未勾动态字段时，与旧 spans 调用同高', (tester) async {
+      final entry = _entry();
+      await tester.pumpWidget(_harness(entry: entry));
+      final before = tester.getSize(find.byType(IllustCard));
+      await tester.pumpWidget(
+          _harness(entry: entry, infoFields: const ['title', 'author']));
+      expect(tester.getSize(find.byType(IllustCard)), before);
+      await tester.pumpWidget(_harness(entry: entry, infoFields: const []));
+      expect(find.byType(Text), findsNothing);
+    });
+
+    testWidgets('换行字段重排、页数与尺寸一起补齐、大字体仍保持信息高度', (tester) async {
+      final entry = _entry();
+      const fields = ['size', 'pages', 'title', 'author'];
+      await tester.pumpWidget(_harness(
+          entry: entry,
+          infoFields: fields,
+          columnWidth: 240,
+          textScaler: const TextScaler.linear(1.8)));
+      final before = tester.getSize(find.byType(IllustCard));
+      final imageBefore = tester.getSize(find.byType(AspectRatio));
+      await tester.pumpWidget(_harness(
+          entry: entry.withResolvedInfo(width: 600, height: 800, pageCount: 2),
+          infoFields: fields,
+          columnWidth: 240,
+          textScaler: const TextScaler.linear(1.8)));
+      final text = tester.widget<Text>(find.byType(Text));
+      expect(text.textSpan!.toPlainText(), '600×800\np2\n作品标题\n作者名');
+      expect(tester.getSize(find.byType(AspectRatio)), imageBefore);
+      expect(tester.getSize(find.byType(IllustCard)), before);
+    });
+
+    testWidgets('紧凑分隔符保持串接，不改成每字段一行', (tester) async {
+      final entry = _entry(name: 'T', author: 'A', width: 600, height: 800);
+      const fields = ['title', 'pages', 'author'];
+      await tester.pumpWidget(_harness(
+          entry: entry,
+          infoFields: fields,
+          infoSeparator: ' / ',
+          columnWidth: 240));
+      final before = tester.getSize(find.byType(IllustCard));
+      expect(tester.widget<Text>(find.byType(Text)).textSpan!.toPlainText(),
+          'T / A');
+      await tester.pumpWidget(_harness(
+          entry: entry.withResolvedInfo(pageCount: 2),
+          infoFields: fields,
+          infoSeparator: ' / ',
+          columnWidth: 240));
+      expect(tester.widget<Text>(find.byType(Text)).textSpan!.toPlainText(),
+          'T / p2 / A');
+      expect(tester.getSize(find.byType(IllustCard)), before);
+    });
+
+    testWidgets('只选未知页数预留空间，解析单图移除整个空信息区', (tester) async {
+      final entry = _entry(width: 600, height: 800);
+      const fields = ['pages'];
+      await tester.pumpWidget(_harness(entry: entry, infoFields: fields));
+      final before = tester.getSize(find.byType(IllustCard));
+      expect(find.byType(Text), findsNothing);
+      await tester.pumpWidget(_harness(
+          entry: entry.withResolvedInfo(pageCount: 1), infoFields: fields));
+      expect(tester.getSize(find.byType(IllustCard)).height, lessThan(before.height));
+      expect(find.byType(Text), findsNothing);
+      await tester.pumpWidget(_harness(
+          entry: entry.withResolvedInfo(pageCount: 2), infoFields: fields));
+      expect(tester.getSize(find.byType(IllustCard)), before);
+      expect(
+          tester.widget<Text>(find.byType(Text)).textSpan!.toPlainText(), 'p2');
+      await tester
+          .pumpWidget(_harness(entry: entry, infoFields: const ['title']));
+      expect(tester.widget<Text>(find.byType(Text)).textSpan!.toPlainText(),
+          '作品标题');
+    });
+  });
   testWidgets('语义保留阅读、详情、多选动作而不重复朗读装饰内容', (tester) async {
     final semantics = tester.ensureSemantics();
     var read = 0, detail = 0, selected = 0;

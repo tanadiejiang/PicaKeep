@@ -75,6 +75,7 @@ class _MainFavoritesPageState extends State<MainFavoritesPage> {
   final _favoritesManager = LocalFavoritesManager();
   final _selectedComics = <FavoriteItem>[];
   final _foldersScrollController = ScrollController();
+  final _viewSelectorKey = GlobalKey();
   final RemoteLibraryClient? _remoteClient =
       RemoteLibraryClient.tryFromCurrentSettings();
 
@@ -555,37 +556,48 @@ class _MainFavoritesPageState extends State<MainFavoritesPage> {
   void _openFavoritesSearch() {
     Navigator.of(context)
         .push(
-          MaterialPageRoute(
-            builder: (_) => const LocalSearchPage(
-              searchType: LocalSearchType.favoritesOnly,
-            ),
-          ),
-        )
-        .then((_) => _loadFolders());
+      MaterialPageRoute(
+        builder: (_) => const LocalSearchPage(
+          searchType: LocalSearchType.favoritesOnly,
+        ),
+      ),
+    )
+        .then((_) {
+      if (mounted) _loadFolders();
+    });
   }
 
-  void _openDownloadedSearch() {
-    Navigator.of(context)
-        .push(
-          MaterialPageRoute(
-            builder: (_) => const LocalSearchPage(
-              searchType: LocalSearchType.downloadsOnly,
-            ),
+  Future<void> _selectLibraryView() async {
+    final picked = await showLibraryViewSelector<FavoritesView>(
+      context: context,
+      anchorContext: _viewSelectorKey.currentContext,
+      title: '收藏 · 档位',
+      entries: [
+        for (final view in FavoritesView.values)
+          LibraryViewSelectorEntry(
+            value: view,
+            label: _favoritesViewLabel(view),
+            icon: _favoritesViewIcon(view),
           ),
-        )
-        .then((_) => _loadFolders());
+      ],
+      selected: _view,
+    );
+    if (!mounted || picked == null || picked == _view) return;
+    await _setView(picked);
   }
 
   void _openReorderPage() {
     Navigator.of(context)
         .push(
-          MaterialPageRoute(
-            builder: (_) => _FoldersReorderPage(
-              folders: List<String>.from(_folders),
-            ),
-          ),
-        )
-        .then((_) => _loadFolders());
+      MaterialPageRoute(
+        builder: (_) => _FoldersReorderPage(
+          folders: List<String>.from(_folders),
+        ),
+      ),
+    )
+        .then((_) {
+      if (mounted) _loadFolders();
+    });
   }
 
   /// 「更新卡片信息」入口（操作区）。
@@ -606,7 +618,8 @@ class _MainFavoritesPageState extends State<MainFavoritesPage> {
 
   /// 选一个收藏夹（「更新卡片信息」在操作区触发时用）。
   Future<String?> _pickFolderForUpdate() {
-    final candidates = _isRemoteView ? const <String>[] : List<String>.of(_folders);
+    final candidates =
+        _isRemoteView ? const <String>[] : List<String>.of(_folders);
     if (candidates.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('还没有收藏夹'.tl)),
@@ -759,41 +772,7 @@ class _MainFavoritesPageState extends State<MainFavoritesPage> {
                   const SliverToBoxAdapter(child: SizedBox(height: 8)),
                 ],
 
-                // ── 本地/远程工具栏行 ───────────────────────────────────────
-                SliverToBoxAdapter(
-                  child: Padding(
-                    padding: const EdgeInsets.fromLTRB(20, 4, 20, 8),
-                    child: Row(
-                      children: [
-                        // 36 号：这一行原来的 `SegmentedButton` 换成与图集页同一套的
-                        // 档位选择器（图标按钮 → 圆角面板 → 平铺选项）。
-                        //
-                        // 本页**没有 AppBar**（内容全在 Sliver 里，导航靠 Drawer），
-                        // 所以按钮就留在这一行，不能像已下载页那样挪到工具栏上。
-                        LibraryViewSelectorAction<FavoritesView>(
-                          title: '收藏 · 档位',
-                          entries: <LibraryViewSelectorEntry<FavoritesView>>[
-                            for (final view in FavoritesView.values)
-                              LibraryViewSelectorEntry<FavoritesView>(
-                                value: view,
-                                label: _favoritesViewLabel(view),
-                                icon: _favoritesViewIcon(view),
-                              ),
-                          ],
-                          selected: _view,
-                          onSelected: (view) => unawaited(_setView(view)),
-                        ),
-                        const Spacer(),
-                        if (_isRemoteView)
-                          IconButton(
-                            tooltip: '重新加载'.tl,
-                            onPressed: _triggerManualRemoteRefresh,
-                            icon: const Icon(Icons.refresh),
-                          ),
-                      ],
-                    ),
-                  ),
-                ),
+                // ── 本地/远程工具栏：档位紧跟更新信息 ─────────────────────
                 SliverToBoxAdapter(
                   child: Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 12),
@@ -807,13 +786,8 @@ class _MainFavoritesPageState extends State<MainFavoritesPage> {
                           ),
                           FavoritesActionItem(
                             icon: Icons.search,
-                            label: '搜索收藏'.tl,
+                            label: '搜索'.tl,
                             onTap: _openFavoritesSearch,
-                          ),
-                          FavoritesActionItem(
-                            icon: Icons.manage_search,
-                            label: '搜索全部'.tl,
-                            onTap: _openDownloadedSearch,
                           ),
                           FavoritesActionItem(
                             icon: Icons.reorder,
@@ -842,6 +816,13 @@ class _MainFavoritesPageState extends State<MainFavoritesPage> {
                             onTap: _triggerManualRemoteRefresh,
                           ),
                         ],
+                        FavoritesActionItem(
+                          key: _viewSelectorKey,
+                          icon: _favoritesViewIcon(_view),
+                          label: '档位'.tl,
+                          tooltip: '收藏 · 档位：${_favoritesViewLabel(_view)}',
+                          onTap: _selectLibraryView,
+                        ),
                       ],
                     ),
                   ),
@@ -1257,7 +1238,9 @@ class FavoritesActionRow extends StatelessWidget {
             for (final action in actions)
               SizedBox(
                 width: itemWidth,
-                height: itemHeight,
+                height: itemHeight *
+                    (MediaQuery.textScalerOf(context).scale(12) / 12)
+                        .clamp(1, double.infinity),
                 child: action,
               ),
           ],
@@ -1300,7 +1283,9 @@ class FavoritesActionItem extends StatelessWidget {
             color: Theme.of(context).colorScheme.primary,
           ),
           const SizedBox(height: 10),
-          Text(label, style: const TextStyle(fontSize: 12)),
+          Text(label,
+              textAlign: TextAlign.center,
+              style: const TextStyle(fontSize: 12)),
         ],
       ),
     );

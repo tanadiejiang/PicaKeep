@@ -50,8 +50,7 @@ class _ActionSpec {
 /// 本地收藏视图操作区的五个按钮（与页面里那五个条目一一对应）。
 const List<_ActionSpec> _localActions = <_ActionSpec>[
   _ActionSpec(icon: Icons.create_new_folder_outlined, label: '新建'),
-  _ActionSpec(icon: Icons.search, label: '搜索收藏'),
-  _ActionSpec(icon: Icons.manage_search, label: '搜索全部'),
+  _ActionSpec(icon: Icons.search, label: '搜索'),
   _ActionSpec(icon: Icons.reorder, label: '排序'),
   // 文案为放下一行收成 4 个字，完整语义交给 tooltip。
   _ActionSpec(
@@ -59,12 +58,14 @@ const List<_ActionSpec> _localActions = <_ActionSpec>[
     label: '更新信息',
     tooltip: '更新卡片信息',
   ),
+  _ActionSpec(icon: Icons.folder_outlined, label: '档位'),
 ];
 
-/// 远程收藏视图操作区的两个按钮（只有两个，不应被拉宽）。
+/// 远程收藏视图操作区的三个按钮（不应被拉宽）。
 const List<_ActionSpec> _remoteActions = <_ActionSpec>[
   _ActionSpec(icon: Icons.create_new_folder_outlined, label: '新建'),
   _ActionSpec(icon: Icons.refresh, label: '重新加载'),
+  _ActionSpec(icon: Icons.cloud_outlined, label: '档位'),
 ];
 
 /// 把某个逻辑宽度固定给测试视图。
@@ -79,9 +80,16 @@ void _setScreenWidth(WidgetTester tester, double width) {
 Widget _buildRow(
   List<_ActionSpec> specs, {
   void Function(String label)? onTap,
+  double textScale = 1,
 }) {
   return MaterialApp(
     debugShowCheckedModeBanner: false,
+    builder: (context, child) => MediaQuery(
+      data: MediaQuery.of(context).copyWith(
+        textScaler: TextScaler.linear(textScale),
+      ),
+      child: child!,
+    ),
     home: Scaffold(
       body: Padding(
         padding: const EdgeInsets.symmetric(
@@ -174,7 +182,7 @@ void main() {
       );
     });
 
-    testWidgets('远程视图只有两个按钮，不会被拉宽', (tester) async {
+    testWidgets('远程视图三个按钮不会被拉宽', (tester) async {
       _setScreenWidth(tester, 412);
 
       await tester.pumpWidget(_buildRow(_remoteActions));
@@ -183,12 +191,23 @@ void main() {
       expect(
         tester.getSize(find.byType(FavoritesActionItem).first).width,
         closeTo(FavoritesActionRow.itemMaxWidth, 0.5),
-        reason: '条目宽度应以原宽度 72 dp 封顶，均分逻辑不能把两个条目拉宽',
+        reason: '条目宽度应以原宽度 72 dp 封顶，均分逻辑不能把较少条目拉宽',
       );
     });
   });
 
   group('按钮仍可点', () {
+    testWidgets('320 dp 与大字体允许文案换行且不裁剪操作', (tester) async {
+      _setScreenWidth(tester, 320);
+      await tester.pumpWidget(_buildRow(_localActions, textScale: 2));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+      expect(_rowHeight(tester), greaterThan(FavoritesActionRow.itemHeight));
+      for (final action in _localActions) {
+        expect(find.text(action.label), findsOneWidget);
+      }
+    });
+
     testWidgets('最窄的 320 dp 下可点区域也不小于 $minTapTarget dp', (tester) async {
       _setScreenWidth(tester, _screenWidths.first);
 

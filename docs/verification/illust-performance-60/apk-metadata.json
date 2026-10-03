@@ -1,0 +1,17 @@
+{
+  "time": "2026-10-04 00:05",
+  "mode": "profile",
+  "path": "D:\\Flutter_Projucts\\PicaComic\\PicaKeep\\build\\verification\\illust-performance-60-61\\app-after60-61-profile.apk",
+  "bytes": 132933859,
+  "sha256": "5FC8006E80E5223B489F761CD50D4FBFC04F6DD29C6F6824F719AE0BFDE00F90",
+  "package": "lingxue.picakeep",
+  "version": "1.9.88+5",
+  "certificate_sha256": "31b4434516ccc1f58add7cc5cd4b6786e995c957d5891d3685e4c75a7a58d7c7",
+  "installed": false,
+  "source_inputs_unchanged": true,
+  "native_sha256": {
+    "lib/arm64-v8a/libapp.so": "7ea584fc5470e5dc552bb540e1592e643bf3c511c4f40aa822ecd5bb57943d26",
+    "lib/armeabi-v7a/libapp.so": "7ec4b7a467ded058190d3dd76ac449fa1c45d97538d0a70dd790f3de17dda22f",
+    "lib/x86_64/libapp.so": "5096eae93c795ee3539751781a4cd858c8e3e1b745d7e211cacfbad6715baeee"
+  }
+}

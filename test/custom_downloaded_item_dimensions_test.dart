@@ -3,7 +3,9 @@ import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:picakeep/foundation/download_model.dart';
 
-CustomDownloadedItem _item({int? width, int? height}) => CustomDownloadedItem(
+CustomDownloadedItem _item(
+        {int? width, int? height, int? pageCount, String? authorId}) =>
+    CustomDownloadedItem(
       id: 'pixiv79837313',
       name: '标题',
       subTitle: '作者',
@@ -15,9 +17,32 @@ CustomDownloadedItem _item({int? width, int? height}) => CustomDownloadedItem(
       downloadedEps: const <int>[0],
       width: width,
       height: height,
+      pageCount: pageCount,
+      authorId: authorId,
     );
 
 void main() {
+  test('已下载页数与作者标识通过 JSON 往返，旧记录保持未知', () {
+    final restored = CustomDownloadedItem.fromJson(
+        jsonDecode(jsonEncode(_item(pageCount: 2, authorId: '12345').toJson()))
+            as Map<String, dynamic>);
+    expect(restored.pageCount, 2);
+    expect(restored.authorId, '12345');
+    final legacy = _item().toJson()
+      ..remove('pageCount')
+      ..remove('authorId');
+    expect(CustomDownloadedItem.fromJson(legacy).pageCount, isNull);
+    expect(CustomDownloadedItem.fromJson(legacy).authorId, isNull);
+    for (final invalid in [0, -1, 1.5, 'bad', null]) {
+      expect(
+          CustomDownloadedItem.fromJson({...legacy, 'pageCount': invalid})
+              .pageCount,
+          isNull);
+    }
+    expect(
+        CustomDownloadedItem.fromJson({...legacy, 'pageCount': 2.0}).pageCount,
+        2);
+  });
   group('CustomDownloadedItem · 宽高序列化', () {
     test('toJson 含 width / height 键', () {
       final json = _item(width: 1200, height: 1600).toJson();

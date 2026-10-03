@@ -35,6 +35,7 @@ LocalLibraryComicItem _item({
   int? height,
   String? rawJson,
   double? comicSize,
+  String? fileSystemPath,
 }) {
   final json = rawJson ??
       '{"comicSize":$comicSize,"downloadedEps":[0],"chapters":null,'
@@ -51,7 +52,7 @@ LocalLibraryComicItem _item({
     subTitle: author,
     tags: tags,
     sourceDisplayName: sourceKey,
-    fileSystemPath: '/tmp/$id',
+    fileSystemPath: fileSystemPath ?? '/tmp/$id',
     episodeFiles: const <int, List<String>>{},
     downloadedEps: const <int>[0],
     eps: const <String>['全部'],
@@ -67,6 +68,302 @@ String _jsonList(List<String> values) =>
     '[${values.map((v) => '"$v"').join(',')}]';
 
 void main() {
+  group('瀑布流范围通知', () {
+    final entries = buildIllustEntries([
+      for (var i = 0; i < 30; i++)
+        _item(id: 'pixiv-range-$i', sourceKey: 'pixiv'),
+    ]);
+
+    Widget harness(ScrollController controller, List<(int, int)> ranges) =>
+        MaterialApp(
+          home: Scaffold(
+            body: CustomScrollView(
+              controller: controller,
+              cacheExtent: 0,
+              slivers: [
+                LocalLibraryIllustSlivers(
+                  allEntries: entries,
+                  entries: entries,
+                  tags: const [],
+                  selectedTags: const {},
+                  loading: false,
+                  errorText: null,
+                  columns: 2,
+                  itemBuilder: (_, entry) => SizedBox(
+                    height: 1000,
+                    child: Text(entry.id),
+                  ),
+                  onToggleTag: (_) {},
+                  onClearTags: () {},
+                  onLayoutRange: (first, last) => ranges.add((first, last)),
+                ),
+              ],
+            ),
+          ),
+        );
+
+    void setViewport(WidgetTester tester) {
+      tester.view.physicalSize = const Size(390, 600);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+    }
+
+    testWidgets('实际滚动在相同条目内不重复通知，跨条目后通知', (tester) async {
+      setViewport(tester);
+      final controller = ScrollController();
+      addTearDown(controller.dispose);
+      final ranges = <(int, int)>[];
+      await tester.pumpWidget(harness(controller, ranges));
+      await tester.pumpAndSettle();
+      expect(ranges, isNotEmpty);
+      final initial = ranges.single;
+      for (var i = 0; i < 3; i++) {
+        await tester.drag(find.byType(CustomScrollView), const Offset(0, -60));
+        await tester.pumpAndSettle();
+      }
+      expect(controller.offset, greaterThan(100));
+      expect(ranges, [initial], reason: '真实滑动产生的重复布局不应反复派发可见队列');
+
+      controller.jumpTo(2200);
+      await tester.pumpAndSettle();
+      expect(ranges.length, 2);
+      expect(ranges.last.$1, greaterThan(initial.$1));
+      expect(ranges.last.$2, greaterThan(initial.$2));
+    });
+
+    testWidgets('同帧多次布局只通知最终范围，回到已发布范围不重发', (tester) async {
+      setViewport(tester);
+      final controller = ScrollController();
+      addTearDown(controller.dispose);
+      final ranges = <(int, int)>[];
+      await tester.pumpWidget(harness(controller, ranges));
+      await tester.pumpAndSettle();
+      final delegate = tester
+          .widget<SliverMasonryGrid>(
+              find.byKey(LocalLibraryIllustSlivers.waterfallKey))
+          .delegate;
+      ranges.clear();
+      delegate.didFinishLayout(4, 8);
+      delegate.didFinishLayout(6, 10);
+      delegate.didFinishLayout(8, 12);
+      expect(ranges, isEmpty);
+      tester.binding.scheduleFrame();
+      await tester.pump();
+      expect(ranges, [(8, 12)]);
+
+      delegate.didFinishLayout(10, 14);
+      delegate.didFinishLayout(8, 12);
+      tester.binding.scheduleFrame();
+      await tester.pump();
+      expect(ranges, [(8, 12)]);
+      delegate.didFinishLayout(8, 12);
+      tester.binding.scheduleFrame();
+      await tester.pump();
+      expect(ranges, [(8, 12)]);
+    });
+
+    testWidgets('父重建的新 delegate 即使范围相同仍发首次通知', (tester) async {
+      setViewport(tester);
+      final controller = ScrollController();
+      addTearDown(controller.dispose);
+      final ranges = <(int, int)>[];
+      await tester.pumpWidget(harness(controller, ranges));
+      await tester.pumpAndSettle();
+      final finder = find.byKey(LocalLibraryIllustSlivers.waterfallKey);
+      final previousDelegate =
+          tester.widget<SliverMasonryGrid>(finder).delegate;
+      final previousRender = tester.renderObject(finder);
+      final initial = ranges.single;
+
+      await tester.pumpWidget(harness(controller, ranges));
+      await tester.pumpAndSettle();
+      expect(tester.widget<SliverMasonryGrid>(finder).delegate,
+          isNot(same(previousDelegate)));
+      expect(tester.renderObject(finder), same(previousRender),
+          reason: '普通重建保留 59 号的相同条目布局');
+      expect(ranges, [initial, initial], reason: '刷新清空工作队列后，相同范围也必须能重新调度');
+    });
+  });
+
+  group('筛选变化后的瀑布流布局', () {
+    for (final mode in [
+      'subset',
+      'prefix',
+      'middle',
+      'reverse',
+      'tail',
+      'first'
+    ]) {
+      for (final initialOffset in [0.0, 2300.0]) {
+        testWidgets('$mode 在 $initialOffset 处过滤后没有沿用旧列偏移且末项可达', (tester) async {
+          tester.view.physicalSize = const Size(390, 600);
+          tester.view.devicePixelRatio = 1;
+          addTearDown(tester.view.reset);
+          final all = buildIllustEntries([
+            for (var i = 0; i < 70; i++)
+              _item(id: 'pixiv$i', sourceKey: 'pixiv'),
+          ]);
+          final heights = {
+            for (var i = 0; i < all.length; i++)
+              all[i].id: 80.0 + (i * 97 % 360),
+          };
+          final anchors = {for (final entry in all) entry.id: GlobalKey()};
+          final shown = ValueNotifier(all);
+          final controller = ScrollController();
+          addTearDown(shown.dispose);
+          addTearDown(controller.dispose);
+          await tester.pumpWidget(MaterialApp(
+            home: Scaffold(
+              body: ValueListenableBuilder<List<IllustLibraryEntry>>(
+                valueListenable: shown,
+                builder: (context, entries, _) => CustomScrollView(
+                  controller: controller,
+                  slivers: [
+                    LocalLibraryIllustSlivers(
+                      allEntries: all,
+                      entries: entries,
+                      tags: const [],
+                      selectedTags: const {},
+                      loading: false,
+                      errorText: null,
+                      columns: 2,
+                      itemBuilder: (_, entry) => KeyedSubtree(
+                        key: anchors[entry.id],
+                        child: SizedBox(
+                          key: ValueKey('card-${entry.id}'),
+                          height: heights[entry.id],
+                          child: Text(entry.id),
+                        ),
+                      ),
+                      onToggleTag: (_) {},
+                      onClearTags: () {},
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ));
+          await tester.pumpAndSettle();
+          if (initialOffset != 0) {
+            controller.jumpTo(initialOffset);
+            await tester.pumpAndSettle();
+          }
+          final renderBefore = tester
+              .renderObject(find.byKey(LocalLibraryIllustSlivers.waterfallKey));
+          shown.value = [...all];
+          await tester.pumpAndSettle();
+          expect(
+              tester.renderObject(
+                  find.byKey(LocalLibraryIllustSlivers.waterfallKey)),
+              same(renderBefore),
+              reason: '普通重建不能丢弃瀑布流布局缓存');
+          expect(controller.offset, closeTo(initialOffset, 0.1));
+
+          // Remove the first item and many interior items, preserving identities
+          // of survivors just as changing the selected download folder does.
+          final filtered = switch (mode) {
+            'prefix' => all.sublist(1),
+            'middle' => [...all.take(3), ...all.skip(4)],
+            'reverse' => all.reversed.toList(),
+            'tail' => all.sublist(40, 46),
+            'first' => [all.first, ...all.skip(30)],
+            _ => [
+                for (var i = 1; i < 44; i++)
+                  if (i % 3 != 0) all[i],
+              ],
+          };
+          shown.value = filtered;
+          await tester.pumpAndSettle();
+          expect(tester.takeException(), isNull);
+          final expectedColumns = [0.0, 0.0];
+          for (final entry in filtered) {
+            final column = expectedColumns[0] <= expectedColumns[1] ? 0 : 1;
+            final card = find.byKey(ValueKey('card-${entry.id}'));
+            if (card.evaluate().isNotEmpty) {
+              expect(tester.getTopLeft(card).dy + controller.offset,
+                  closeTo(expectedColumns[column], 0.1),
+                  reason: '筛选后仍在屏幕附近的 ${entry.id} 应使用新布局位置');
+            }
+            expectedColumns[column] += heights[entry.id]!;
+          }
+          controller.jumpTo(0);
+          await tester.pumpAndSettle();
+          for (final entry in filtered.take(2)) {
+            expect(
+              tester.getTopLeft(find.byKey(ValueKey('card-${entry.id}'))).dy,
+              closeTo(0, 0.1),
+              reason: '每列第一张作品应从顶部开始，不保留旧作品占用的空洞',
+            );
+          }
+
+          final last = find.byKey(ValueKey('card-${filtered.last.id}'));
+          for (var i = 0; i < 80; i++) {
+            controller.jumpTo((controller.offset + 400)
+                .clamp(0, controller.position.maxScrollExtent));
+            await tester.pumpAndSettle();
+            if (last.evaluate().isNotEmpty &&
+                controller.position.extentAfter < 0.1) {
+              break;
+            }
+          }
+          expect(last, findsOneWidget, reason: '末项必须实际布局，不能提前到底');
+          expect(
+              tester
+                  .getRect(last)
+                  .overlaps(const Rect.fromLTWH(0, 0, 390, 600)),
+              isTrue);
+          final columnHeights = [0.0, 0.0];
+          for (final entry in filtered) {
+            final column = columnHeights[0] <= columnHeights[1] ? 0 : 1;
+            columnHeights[column] += heights[entry.id]!;
+          }
+          final contentHeight = columnHeights.reduce((a, b) => a > b ? a : b);
+          expect(controller.position.maxScrollExtent,
+              closeTo(contentHeight + 96 - 600, 0.1),
+              reason: '滚动范围应只由筛选后的作品高度决定');
+          expect(tester.takeException(), isNull);
+        });
+      }
+    }
+  });
+
+  test('页数直接来自下载数据库，旧目录不猜文件名或章节数', () {
+    for (final path in ['/old/作品_p0', '/old/作品.zip', '/old/作品.jpg']) {
+      final item = _item(
+          id: 'pixiv1',
+          sourceKey: 'pixiv',
+          fileSystemPath: path,
+          rawJson: '{"sourceKey":"pixiv","pageCount":2}');
+      expect(buildIllustEntries([item]).single.pageCount, 2);
+    }
+    final invalid = _item(
+        id: 'pixiv1',
+        sourceKey: 'pixiv',
+        rawJson: '{"sourceKey":"pixiv","pageCount":0}');
+    expect(buildIllustEntries([invalid]).single.pageCount, isNull);
+  });
+  test(
+      'single image artifacts have an immediate page count without filesystem IO',
+      () {
+    for (final extension in ['JPG', 'jpeg', 'png', 'gif', 'webp']) {
+      final item = _item(
+          id: 'pixiv1',
+          sourceKey: 'pixiv',
+          fileSystemPath: '/not-existing/作品.$extension');
+      expect(buildIllustEntries([item]).single.pageCount, 1);
+    }
+    for (final path in [
+      '/not-existing/作品_p2',
+      '/not-existing/作品_p2.zip',
+      '/not-existing/作品.cbz'
+    ]) {
+      final item =
+          _item(id: 'pixiv1', sourceKey: 'pixiv', fileSystemPath: path);
+      expect(buildIllustEntries([item]).single.pageCount, isNull,
+          reason: 'Do not infer a directory/archive count from its filename');
+    }
+  });
+
   group('插画视图设置项归一化', () {
     test('视图：只认 illust，其余落回 album（默认与改动前一致）', () {
       expect(normalizeIllustLibraryView('illust'), 'illust');
@@ -144,7 +441,8 @@ void main() {
         _item(id: 'k1', sourceKey: 'Komiic'),
       ];
       final entries = buildIllustEntries(items);
-      expect(entries.map((e) => e.originalId).toList(), <String>['pixiv1', 'pixiv2']);
+      expect(entries.map((e) => e.originalId).toList(),
+          <String>['pixiv1', 'pixiv2']);
     });
 
     test('不按 id 前缀猜：id 带 pixiv 前缀但 sourceKey 不是 pixiv 的不纳入', () {
@@ -284,8 +582,7 @@ void main() {
         <String>['オリジナル'],
       ]);
       final tags = summarizeIllustTags(entries);
-      expect(tags.map((t) => t.tag).toList(),
-          <String>['オリジナル', '女の子', '風景']);
+      expect(tags.map((t) => t.tag).toList(), <String>['オリジナル', '女の子', '風景']);
       expect(tags.map((t) => t.count).toList(), <int>[3, 1, 1]);
     });
 
@@ -322,7 +619,8 @@ void main() {
       ]);
       final filtered =
           filterIllustEntriesByTags(entries, <String>{'A'}).toList();
-      expect(filtered.map((e) => e.originalId).toList(), <String>['pixiv0', 'pixiv1']);
+      expect(filtered.map((e) => e.originalId).toList(),
+          <String>['pixiv0', 'pixiv1']);
     });
 
     test('多选是 AND：越多标签结果越少（与"筛选"直觉一致）', () {
@@ -358,8 +656,7 @@ void main() {
         _item(
           id: 'pixivJson',
           sourceKey: 'pixiv',
-          rawJson:
-              '{"id":"pixivJson","sourceKey":"pixiv","tags":["来自json"]}',
+          rawJson: '{"id":"pixivJson","sourceKey":"pixiv","tags":["来自json"]}',
         ),
       ]);
       expect(fromJson.single.tags, <String>['来自json']);
@@ -460,8 +757,7 @@ void main() {
       ]);
     }
 
-    testWidgets('列数设置真的作用到 SliverMasonryGrid（2 列 / 3 列各断言一次）',
-        (tester) async {
+    testWidgets('列数设置真的作用到 SliverMasonryGrid（2 列 / 3 列各断言一次）', (tester) async {
       final entries = entriesWithRatios(<double>[0.75, 0.75, 0.75]);
 
       for (final columns in <int>[2, 3]) {
@@ -478,8 +774,7 @@ void main() {
           isA<SliverSimpleGridDelegateWithFixedCrossAxisCount>(),
         );
         expect(
-          (grid.gridDelegate
-                  as SliverSimpleGridDelegateWithFixedCrossAxisCount)
+          (grid.gridDelegate as SliverSimpleGridDelegateWithFixedCrossAxisCount)
               .crossAxisCount,
           columns,
         );
@@ -491,8 +786,7 @@ void main() {
       }
     });
 
-    testWidgets('同一列宽下，不同比例渲染出不同高度（瀑布流不是定高网格）',
-        (tester) async {
+    testWidgets('同一列宽下，不同比例渲染出不同高度（瀑布流不是定高网格）', (tester) async {
       // 一张竖图 + 一张方图。定高网格下两者等高；瀑布流下高度必须不同。
       final entries = entriesWithRatios(<double>[0.5, 1.0]);
       await tester.pumpWidget(harness(all: entries, shown: entries));
@@ -529,8 +823,7 @@ void main() {
       expect(illustCardGap, lessThanOrEqualTo(4));
     });
 
-    testWidgets('没有封面时渲染占位图标而不是抛异常（特权模式下 provider 可能为 null）',
-        (tester) async {
+    testWidgets('没有封面时渲染占位图标而不是抛异常（特权模式下 provider 可能为 null）', (tester) async {
       final entries = entriesWithRatios(<double>[0.75]);
       await tester.pumpWidget(harness(all: entries, shown: entries));
       await tester.pump();
@@ -538,8 +831,7 @@ void main() {
       expect(find.byIcon(Icons.image_not_supported_outlined), findsOneWidget);
     });
 
-    testWidgets('信息在底部：标题与作者渲染在图片下方，且各自一行（文字 top ≥ 图片 bottom）',
-        (tester) async {
+    testWidgets('信息在底部：标题与作者渲染在图片下方，且各自一行（文字 top ≥ 图片 bottom）', (tester) async {
       final entries = buildIllustEntries(<LocalLibraryComicItem>[
         _item(
           id: 'pixiv1',
@@ -648,7 +940,7 @@ void main() {
         find.byKey(LocalLibraryIllustSlivers.noTagMatchKey),
         findsOneWidget,
       );
-      expect(find.text('没有匹配的标签'), findsOneWidget);
+      expect(find.text('没有匹配的作品'), findsOneWidget);
       expect(find.byKey(LocalLibraryIllustSlivers.emptyKey), findsNothing);
       expect(find.text('暂无插画'), findsNothing);
     });
@@ -753,8 +1045,7 @@ void main() {
       expect(cleared, isTrue);
     });
 
-    testWidgets('筛选后只渲染筛过的条目（真渲染数量而非只测列表长度）',
-        (tester) async {
+    testWidgets('筛选后只渲染筛过的条目（真渲染数量而非只测列表长度）', (tester) async {
       final all = buildIllustEntries(<LocalLibraryComicItem>[
         _item(id: 'pixiv1', sourceKey: 'pixiv', tags: <String>['A']),
         _item(id: 'pixiv2', sourceKey: 'pixiv', tags: <String>['B']),
@@ -821,8 +1112,7 @@ void main() {
       expect(show(albumOnly: false), isFalse);
     });
 
-    test('子页面（本地目录内 / 远程根内）：不显示 —— 与 _showSourceSelector 同口径',
-        () {
+    test('子页面（本地目录内 / 远程根内）：不显示 —— 与 _showSourceSelector 同口径', () {
       expect(show(isLocalRootPage: true), isFalse);
       expect(show(isRemoteRootPage: true), isFalse);
     });
@@ -852,8 +1142,7 @@ void main() {
       );
     });
 
-    test('视图与档位的取值空间不重叠（一个是 album/illust，一个是 local/aggregate/remote）',
-        () {
+    test('视图与档位的取值空间不重叠（一个是 album/illust，一个是 local/aggregate/remote）', () {
       for (final view in IllustLibraryView.values) {
         final raw = illustLibraryViewToSetting(view);
         // 若某天有人把插画塞进 normalizeLocalLibraryView，这里会立刻炸：
@@ -865,8 +1154,7 @@ void main() {
       }
     });
 
-    test('模拟两侧独立切换：图集侧保持"聚合"，插画侧自己的状态不被互相覆盖',
-        () {
+    test('模拟两侧独立切换：图集侧保持"聚合"，插画侧自己的状态不被互相覆盖', () {
       // 用一个假的 settings 数组模拟 appdata.settings。
       final settings = List<String>.filled(160, '0', growable: true);
       settings[localLibraryViewSettingIndex] = 'aggregate'; // 图集侧选了聚合

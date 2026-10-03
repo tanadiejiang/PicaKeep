@@ -3,6 +3,9 @@ import 'package:image/image.dart' as img;
 import 'package:picakeep/pages/local_library_page.dart';
 import 'package:picakeep/pages/local_library_illust_card.dart';
 import 'package:picakeep/foundation/local_library.dart';
+import 'package:picakeep/foundation/illust_page_count_cache.dart';
+import 'package:picakeep/foundation/illust_folder_preferences.dart';
+import 'package:picakeep/pages/illust_folder_selector.dart';
 import 'package:picakeep/foundation/local_data_source.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:ffi';
@@ -46,6 +49,9 @@ void main() {
     workspace = await Directory.systemTemp.createTemp('pk46_widgets_');
     PathProviderPlatform.instance = _Paths(workspace.path);
     await App.init(dataPathOverride: p.join(workspace.path, 'app'));
+    SharedPreferences.setMockInitialValues({});
+    await sharedIllustPageCountCache();
+    await IllustFolderPreferences.instance.load();
     library = PixivLibrary(p.join(workspace.path, 'library'));
     await library.initialize();
     await library.createFolder('壁纸');
@@ -94,6 +100,43 @@ void main() {
                     child: const Text('管理'))))));
     await tester.tap(find.text('管理'));
     await settleIO(tester);
+  }
+
+  Future<void> expectFolderCounts(
+      WidgetTester tester, Map<String, int> counts) async {
+    // Real file events and fake-async continuations alternate. Wait for the
+    // expected page snapshot (not only the spinner, which may not exist while
+    // clear-cache / refresh awaits before it sets loading).
+    for (var attempt = 0; attempt < 400; attempt++) {
+      final selector = tester
+          .widget<IllustFolderSelector>(find.byType(IllustFolderSelector));
+      if (selector.onSelected != null && selector.totalCount == counts['全部文件夹']) {
+        break;
+      }
+      await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 5)));
+      await tester.pump(const Duration(milliseconds: 50));
+    }
+    expect(
+        tester
+            .widget<IllustFolderSelector>(find.byType(IllustFolderSelector))
+            .onSelected,
+        isNotNull,
+        reason:
+            'all background folder operations must finish before opening menu');
+    await tester.tap(find.byTooltip('选择插画文件夹'));
+    await tester.pumpAndSettle();
+    for (final entry in counts.entries) {
+      expect(
+          find.descendant(
+              of: find.widgetWithText(PopupMenuItem<String>, entry.key),
+              matching: find.text('${entry.value}')),
+          findsOneWidget,
+          reason:
+              '${entry.key} must count the actual loaded illustrations; actual menu: ${tester.widgetList<Text>(find.descendant(of: find.byType(PopupMenuItem<String>), matching: find.byType(Text))).map((text) => text.data).toList()}');
+    }
+    await tester.tap(find.widgetWithText(PopupMenuItem<String>, '全部文件夹'));
+    await tester.pumpAndSettle();
   }
 
   testWidgets('folders show names/counts; long press opens single-folder menu',
@@ -167,7 +210,6 @@ void main() {
   testWidgets(
       'illustration long press selects actual items and copies the batch to one folder',
       (tester) async {
-    SharedPreferences.setMockInitialValues({});
     late PixivFolder target;
     await tester.runAsync(() async {
       target = await library.createFolder('批量目标');
@@ -210,6 +252,8 @@ void main() {
         .pumpWidget(const MaterialApp(home: LocalLibraryPage(albumOnly: true)));
     await settleIO(tester);
     expect(find.byType(IllustCard), findsNWidgets(2));
+    await expectFolderCounts(
+        tester, {'全部文件夹': 2, '主目录': 2, '批量目标': 0, '风景': 0});
     await tester.longPress(find.byType(IllustCard).first);
     await tester.pumpAndSettle();
     expect(find.text('已选择 1 个项目'), findsOneWidget);
@@ -231,6 +275,27 @@ void main() {
     await settleIO(tester);
     expect(library.records(target).length, 2);
     expect(library.records(library.folder('root')).length, 2);
+    await expectFolderCounts(
+        tester, {'全部文件夹': 4, '主目录': 2, '批量目标': 2, '风景': 0});
+    await tester.tap(find.byTooltip('选择插画文件夹'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(PopupMenuItem<String>, '批量目标'));
+    await settleIO(tester);
+    expect(find.byType(IllustCard), findsNWidgets(2));
+
+    // Simulate a removed download record, then use the real page refresh.
+    await tester.runAsync(() async {
+      final db = PixivLibrary.openDownloads(target.path);
+      try {
+        db.execute('DELETE FROM download WHERE id = ?', ['pixivwidget1']);
+      } finally {
+        db.dispose();
+      }
+    });
+    await tester.tap(find.byIcon(Icons.refresh).first);
+    await settleIO(tester);
+    await expectFolderCounts(
+        tester, {'全部文件夹': 3, '主目录': 2, '批量目标': 1, '风景': 0});
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox.shrink());
     await settleIO(tester);

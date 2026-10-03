@@ -34,6 +34,7 @@ import 'package:picakeep/comic_source/comic_source.dart';
 import 'package:picakeep/foundation/local_library_illust_view.dart'
     show illustWaterfallColumnsSettingIndex, normalizeIllustWaterfallColumns;
 import 'package:picakeep/network/base_comic.dart';
+import 'package:picakeep/network/res.dart';
 import 'package:picakeep/network/pixiv_network/pixiv_network.dart';
 import 'package:picakeep/network/pixiv_network/pixiv_parsing.dart'
     show pixivProportionalThumbUrl;
@@ -44,9 +45,8 @@ import 'package:picakeep/pages/online_common/online_waterfall_card.dart';
 /// Pixiv 图片（头像/封面）必须带的防盗链头。
 ///
 /// 与 `comic_source/built_in/pixiv.dart` 的 `imageHeadersBuilder` **同口径**：
-/// UA 必须是 [PixivNetwork.pixivWebUA]，不能图省事用通用 `webUA` ——
-/// Pixiv 会校验 UA 与 Referer 的组合一致性，UA 不一致时图片被拒，
-/// 表现为"头像/封面全空白"。
+/// 保持与 [PixivNetwork.pixivWebUA] 一致。Referer 是现有图片链路所需；
+/// 是否还严格校验 UA 并未单独验证，不从图片加载失败推断额外站点契约。
 const Map<String, String> pixivImageHeaders = <String, String>{
   'Referer': 'https://www.pixiv.net/',
   'User-Agent': PixivNetwork.pixivWebUA,
@@ -54,18 +54,27 @@ const Map<String, String> pixivImageHeaders = <String, String>{
 
 /// Pixiv 作者页。入参 [uid] 是纯数字的作者 uid（由 ID 直跳区清洗后传来）。
 class PixivAuthorPageV2 extends StatefulWidget {
-  const PixivAuthorPageV2(this.uid, {super.key});
+  const PixivAuthorPageV2(this.uid,
+      {super.key, this.loadAuthor, this.loadWorks});
 
   /// 作者 uid（Pixiv 的 `userId`）。
   final String uid;
+
+  /// Injectable boundaries keep refresh/paging tests independent of HTTP.
+  final Future<Res<PixivAuthor>> Function(String uid)? loadAuthor;
+  final Future<Res<List<PixivComicBrief>>> Function(String uid, int page)?
+      loadWorks;
 
   @override
   State<PixivAuthorPageV2> createState() => _PixivAuthorPageV2State();
 }
 
 class _PixivAuthorPageV2State extends State<PixivAuthorPageV2> {
-  final PixivNetwork _network = PixivNetwork();
+  late final PixivNetwork _network = PixivNetwork();
   final ScrollController _scrollController = ScrollController();
+  int _generation = 0;
+  int _authorRequest = 0;
+  bool _commentExpanded = false;
 
   // ── 作者资料区（第 1 步，独立成败）──
   PixivAuthor? _author;
@@ -92,6 +101,7 @@ class _PixivAuthorPageV2State extends State<PixivAuthorPageV2> {
 
   @override
   void dispose() {
+    _generation++;
     _scrollController.removeListener(_onScroll);
     _scrollController.dispose();
     super.dispose();
@@ -99,7 +109,7 @@ class _PixivAuthorPageV2State extends State<PixivAuthorPageV2> {
 
   /// 触底前 400px 预加载下一页：与搜索页的续页手感一致（不等用户真的滑到底）。
   void _onScroll() {
-    if (!_scrollController.hasClients) return;
+    if (!_scrollController.hasClients || _worksError != null) return;
     final position = _scrollController.position;
     if (position.pixels >= position.maxScrollExtent - 400) {
       _loadNextPage();
@@ -108,12 +118,22 @@ class _PixivAuthorPageV2State extends State<PixivAuthorPageV2> {
 
   Future<void> _loadAuthor() async {
     if (!mounted) return;
+    final generation = _generation;
+    final request = ++_authorRequest;
     setState(() {
       _authorLoading = true;
       _authorError = null;
     });
-    final res = await _network.getAuthorInfo(widget.uid);
-    if (!mounted) return;
+    Res<PixivAuthor> res;
+    try {
+      res = await (widget.loadAuthor?.call(widget.uid) ??
+          _network.getAuthorInfo(widget.uid));
+    } catch (_) {
+      res = const Res.error('暂时无法连接 Pixiv，请检查网络后重试');
+    }
+    if (!mounted || generation != _generation || request != _authorRequest) {
+      return;
+    }
     setState(() {
       _authorLoading = false;
       if (res.error) {
@@ -131,12 +151,20 @@ class _PixivAuthorPageV2State extends State<PixivAuthorPageV2> {
     final total = _totalPages;
     if (total != null && _loadedPages >= total) return; // 已到底，不再请求
     if (!mounted) return;
+    final generation = _generation;
+    final page = _loadedPages + 1;
     setState(() {
       _worksLoading = true;
       _worksError = null;
     });
-    final res = await _network.getAuthorWorks(widget.uid, page: _loadedPages + 1);
-    if (!mounted) return;
+    Res<List<PixivComicBrief>> res;
+    try {
+      res = await (widget.loadWorks?.call(widget.uid, page) ??
+          _network.getAuthorWorks(widget.uid, page: page));
+    } catch (_) {
+      res = const Res.error('暂时无法连接 Pixiv，请检查网络后重试');
+    }
+    if (!mounted || generation != _generation) return;
     setState(() {
       _worksLoading = false;
       if (res.error) {
@@ -145,8 +173,9 @@ class _PixivAuthorPageV2State extends State<PixivAuthorPageV2> {
       }
       final totalPages = _asInt(res.subData);
       if (totalPages != null) _totalPages = totalPages;
-      _loadedPages += 1;
-      _items.addAll(res.data);
+      _loadedPages = page;
+      final existing = _items.map((item) => item.id).toSet();
+      _items.addAll(res.data.where((item) => existing.add(item.id)));
     });
   }
 
@@ -157,13 +186,26 @@ class _PixivAuthorPageV2State extends State<PixivAuthorPageV2> {
   }
 
   Future<void> _refresh() async {
+    if (!mounted) return;
     setState(() {
+      _generation++;
+      _worksLoading = false;
       _items.clear();
       _loadedPages = 0;
       _totalPages = null;
       _worksError = null;
     });
     await Future.wait(<Future<void>>[_loadAuthor(), _loadNextPage()]);
+  }
+
+  @override
+  void didUpdateWidget(covariant PixivAuthorPageV2 oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.uid != widget.uid) {
+      _author = null;
+      _commentExpanded = false;
+      _refresh();
+    }
   }
 
   ComicSource? get _source => ComicSource.find('pixiv');
@@ -183,6 +225,13 @@ class _PixivAuthorPageV2State extends State<PixivAuthorPageV2> {
         title: Text(
           (author?.name.isNotEmpty ?? false) ? author!.name : '作者页',
         ),
+        actions: [
+          IconButton(
+            tooltip: '刷新作者页',
+            onPressed: _refresh,
+            icon: const Icon(Icons.refresh),
+          ),
+        ],
       ),
       body: RefreshIndicator(
         onRefresh: _refresh,
@@ -232,10 +281,13 @@ class _PixivAuthorPageV2State extends State<PixivAuthorPageV2> {
       // **必须换掉方图缩略图**：响应给的 `_square1200` 是裁切版，
       // 直接排进瀑布流会让每一格都变成 1:1。
       cover: pixivProportionalThumbUrl(comic.cover),
+      fallbackCover: comic.cover,
       imageHeaders:
           source.imageHeadersBuilder?.call(comic) ?? pixivImageHeaders,
       onTap: () => openOnlineComic(context, source, comic),
-      author: brief?.author ?? comic.subTitle,
+      // The whole wall belongs to the displayed author; do not repeat their
+      // name under every image. Page counts still use the shared card rule.
+      author: '',
       pageCount: brief?.pageCount ?? 0,
       width: brief?.width,
       height: brief?.height,
@@ -256,39 +308,108 @@ class _PixivAuthorPageV2State extends State<PixivAuthorPageV2> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              _AuthorAvatar(url: author?.avatar ?? '', size: 64),
-              const SizedBox(width: 12),
-              Expanded(child: _buildAuthorTexts(context)),
-            ],
-          ),
-          if (comment.isNotEmpty) ...[
-            const SizedBox(height: 12),
-            // 简介可能很长（有的作者写了十几行）：限行 + 省略，避免把作品列表
-            // 挤出首屏。本轮不做"展开全文"（属交互增量，见计划的未覆盖项）。
-            Text(
-              comment,
-              maxLines: 6,
-              overflow: TextOverflow.ellipsis,
-              style: theme.textTheme.bodySmall
-                  ?.copyWith(color: colorScheme.onSurfaceVariant),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: colorScheme.surfaceContainerLow,
+              borderRadius: BorderRadius.circular(24),
+              border: Border.all(color: colorScheme.outlineVariant),
             ),
-          ],
-          const SizedBox(height: 16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _AuthorAvatar(url: author?.avatar ?? '', size: 64),
+                    const SizedBox(width: 14),
+                    Expanded(child: _buildAuthorTexts(context)),
+                  ],
+                ),
+                if (comment.isNotEmpty) ...[
+                  const SizedBox(height: 16),
+                  Text(
+                    comment,
+                    maxLines: _commentExpanded ? null : 3,
+                    overflow: _commentExpanded ? null : TextOverflow.ellipsis,
+                    style: theme.textTheme.bodyMedium
+                        ?.copyWith(color: colorScheme.onSurfaceVariant),
+                  ),
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: TextButton.icon(
+                      onPressed: () =>
+                          setState(() => _commentExpanded = !_commentExpanded),
+                      icon: Icon(_commentExpanded
+                          ? Icons.expand_less
+                          : Icons.expand_more),
+                      label: Text(_commentExpanded ? '收起简介' : '展开简介'),
+                    ),
+                  ),
+                ],
+                if (_authorLoading && author != null) ...[
+                  const SizedBox(height: 12),
+                  const LinearProgressIndicator(),
+                ],
+                if (_authorError != null && author != null) ...[
+                  const SizedBox(height: 8),
+                  Text('资料更新失败，正在显示上次加载的资料',
+                      style: theme.textTheme.bodySmall
+                          ?.copyWith(color: colorScheme.error)),
+                  TextButton(onPressed: _loadAuthor, child: const Text('重试资料')),
+                ],
+              ],
+            ),
+          ),
+          const SizedBox(height: 20),
           Row(
             children: [
-              Text('作品', style: theme.textTheme.titleSmall),
-              const Spacer(),
-              if (_items.isNotEmpty)
-                Text(
-                  _totalPages != null && _loadedPages >= _totalPages!
-                      ? '共 ${_items.length} 件'
-                      : '已加载 ${_items.length} 件',
-                  style: theme.textTheme.bodySmall
-                      ?.copyWith(color: colorScheme.onSurfaceVariant),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('作品', style: theme.textTheme.titleMedium),
+                    if (_items.isNotEmpty)
+                      Text(
+                        _totalPages != null && _loadedPages >= _totalPages!
+                            ? '共 ${_items.length} 件'
+                            : '已加载 ${_items.length} 件',
+                        style: theme.textTheme.bodySmall
+                            ?.copyWith(color: colorScheme.onSurfaceVariant),
+                      ),
+                  ],
                 ),
+              ),
+              PopupMenuButton<int>(
+                tooltip: '作品列数',
+                initialValue: _columns,
+                onSelected: (value) {
+                  setState(() => appdata
+                      .settings[illustWaterfallColumnsSettingIndex] = '$value');
+                  appdata.writeData();
+                },
+                itemBuilder: (_) => [
+                  for (final columns in [2, 3])
+                    CheckedPopupMenuItem<int>(
+                      value: columns,
+                      checked: _columns == columns,
+                      child: Text('$columns 列'),
+                    ),
+                ],
+                child: Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(Icons.view_column_outlined, size: 20),
+                      const SizedBox(width: 6),
+                      Text('$_columns 列'),
+                      const Icon(Icons.expand_more, size: 18),
+                    ],
+                  ),
+                ),
+              ),
             ],
           ),
           const SizedBox(height: 4),
@@ -319,8 +440,8 @@ class _PixivAuthorPageV2State extends State<PixivAuthorPageV2> {
         children: [
           Text(
             '作者资料加载失败',
-            style: theme.textTheme.bodyMedium
-                ?.copyWith(color: colorScheme.error),
+            style:
+                theme.textTheme.bodyMedium?.copyWith(color: colorScheme.error),
           ),
           const SizedBox(height: 2),
           SelectableText(
@@ -436,7 +557,16 @@ class _PixivAuthorPageV2State extends State<PixivAuthorPageV2> {
         ),
       );
     }
-    return const SizedBox(height: 16);
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 16),
+      child: Center(
+        child: TextButton.icon(
+          onPressed: _loadNextPage,
+          icon: const Icon(Icons.expand_more),
+          label: const Text('加载更多作品'),
+        ),
+      ),
+    );
   }
 }
 

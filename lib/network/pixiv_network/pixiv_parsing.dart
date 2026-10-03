@@ -347,6 +347,9 @@ String pixivProportionalThumbUrl(String url) {
         RegExp(r'/c/[^/]+/'),
         '/c/$kPixivProportionalThumbFrame/',
       )
+      // Custom crop assets live under custom-thumb; the proportional master
+      // lives under img-master. Changing only the suffix produces a 404.
+      .replaceFirst('/custom-thumb/', '/img-master/')
       .replaceAll('_square1200.', '_master1200.')
       .replaceAll('_custom1200.', '_master1200.');
   return result;
@@ -846,4 +849,3 @@ String describePixivJsonShape(dynamic value, {int maxKeys = 10}) {
   }
   return '${value.runtimeType}';
 }
-

@@ -23,9 +23,11 @@ library;
 
 import 'dart:convert';
 import 'dart:isolate';
+import 'package:path/path.dart' as p;
 
 import 'package:picakeep/foundation/download_model.dart';
 import 'package:picakeep/foundation/local_library.dart';
+import 'package:picakeep/foundation/pixiv_library.dart';
 
 /// `settings[]` 下标：图集页当前视图（`'album'` / `'illust'`）。
 ///
@@ -195,9 +197,9 @@ class IllustLibraryEntry {
 
   /// 作品图片张数；给不出时为 null（卡片不渲染「页数」那一项）。
   ///
-  /// 不进 [buildIllustEntries]：扫描链路里的 `episodeFiles` 只在"目录被真正列过"
-  /// 时才有值（真机三条 Pixiv 记录里两条为空），所以页数只能与宽高一起在
-  /// **运行时补齐**（见 `foundation/illust_cover_size.dart`）。
+  /// 优先采用下载记录的完整页数；旧记录的单图片产物可确定为 1，
+  /// 旧目录与压缩包再运行时统计。
+  /// 不使用不完整的扫描 `episodeFiles`，也不从目录命名猜页数。
   final int? pageCount;
 
   String get id => item.id;
@@ -282,6 +284,8 @@ List<IllustLibraryEntry> buildIllustEntries(
     }
     final width = _positiveInt(data['width']);
     final height = _positiveInt(data['height']);
+    final singleImage = const {'.jpg', '.jpeg', '.png', '.gif', '.webp'}
+        .contains(p.extension(item.fileSystemPath ?? '').toLowerCase());
     entries.add(
       IllustLibraryEntry(
         item: item,
@@ -289,6 +293,7 @@ List<IllustLibraryEntry> buildIllustEntries(
         tags: illustTagsForEntry(item, data),
         width: width,
         height: height,
+        pageCount: _positiveInt(data['pageCount']) ?? (singleImage ? 1 : null),
       ),
     );
   }
@@ -300,6 +305,32 @@ Future<({List<IllustLibraryEntry> entries, List<IllustTagSummary> tags})>
           final entries = buildIllustEntries(items);
           return (entries: entries, tags: summarizeIllustTags(entries));
         });
+
+/// Use the displayed snapshot, not the registry's optional database counts.
+/// A multi-page work is one entry; copies in different folders remain separate.
+/// Run once per load, with no extra filesystem queries during menu/scroll builds.
+List<PixivFolder> countIllustFolders(
+    List<PixivFolder> folders, List<IllustLibraryEntry> entries) {
+  final counts = <String, int>{};
+  for (final entry in entries) {
+    final path = entry.item.fileSystemPath;
+    if (path == null || path.isEmpty) continue;
+    final parent = p.canonicalize(p.dirname(path));
+    counts[parent] = (counts[parent] ?? 0) + 1;
+  }
+  return [
+    for (final folder in folders)
+      PixivFolder(
+        root: folder.root,
+        libraryId: folder.libraryId,
+        id: folder.id,
+        name: folder.name,
+        relativePath: folder.relativePath,
+        isDefault: folder.isDefault,
+        count: counts[p.canonicalize(folder.path)] ?? 0,
+      ),
+  ];
+}
 
 /// 解析 `download.db` 的 `json` 列文本。
 ///
@@ -480,6 +511,7 @@ List<IllustLibraryEntry> filterIllustEntriesByTags(
 }
 
 int? _positiveInt(Object? raw) {
+  if (raw is num && (!raw.isFinite || raw != raw.round())) return null;
   final value = raw is num ? raw.toInt() : int.tryParse(raw?.toString() ?? '');
   if (value == null || value <= 0) {
     return null;

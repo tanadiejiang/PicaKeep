@@ -4,8 +4,11 @@ import 'dart:io';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 
+import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 
+import 'package:picakeep/foundation/app.dart';
+import 'package:picakeep/foundation/illust_cover_diagnostics.dart';
 import 'package:picakeep/foundation/local_cover_cache.dart';
 import 'package:picakeep/foundation/remote_library_data_source.dart';
 
@@ -30,14 +33,60 @@ class _CoverThumbnailTask {
   final Completer<String?> completer;
 }
 
+class _DisplayThumbnailTask {
+  final List<bool Function()> requests = [];
+  late final Future<String?> result;
+
+  // A request leaving the viewport must not cancel another visible consumer.
+  bool get canContinue => requests.any((request) => request());
+}
+
 class CoverThumbnailCache {
   static final Queue<_CoverThumbnailTask> _queue = Queue<_CoverThumbnailTask>();
   static final Map<String, Future<String?>> _pending =
       <String, Future<String?>>{};
   static bool _running = false;
 
-  static final Map<String, Future<String?>> _displayPending = {};
+  static final Map<String, _DisplayThumbnailTask> _displayPending = {};
   static Future<void> _displayTail = Future.value();
+  static Future<void>? _maintenance;
+  static final List<VoidCallback> _maintenanceProtections = [];
+
+  @visibleForTesting
+  static Future<void> Function(String protectedPath)? maintenanceForTesting;
+
+  @visibleForTesting
+  static Future<void> waitForMaintenanceForTesting() async {
+    await _maintenance;
+  }
+
+  static void _scheduleMaintenance(String path) {
+    _maintenanceProtections.add(RemoteLibraryDataSource.protectCacheFile(path));
+    if (_maintenance != null) return;
+    final dataRoot = App.dataPath;
+    final cacheRoot = App.cachePath;
+    final maintenance = maintenanceForTesting;
+    // Schedule on the next event turn: returning a prepared image and releasing
+    // the serial decoder never waits for a full-cache quota scan.
+    _maintenance = Future<void>(() async {
+      try {
+        if (App.dataPath != dataRoot || App.cachePath != cacheRoot) return;
+        if (maintenance != null) {
+          await maintenance(path);
+        } else {
+          await RemoteLibraryDataSource.trimCacheToLimit(protectedPath: path);
+        }
+      } catch (_) {
+        // Quota maintenance is best effort, not an image failure.
+      } finally {
+        for (final release in _maintenanceProtections) {
+          release();
+        }
+        _maintenanceProtections.clear();
+        _maintenance = null;
+      }
+    });
+  }
 
   /// Prepared off the build path. Only application-internal resolved covers
   /// belong here; external privileged sources must first use the manager.
@@ -61,27 +110,41 @@ class CoverThumbnailCache {
     final key = LocalCoverCache.stableHashForFileName(
         '$coverPath|$stamp|$bucket|thumb-v2');
     final destination = File(p.join(_thumbRoot().path, '$key.png'));
-    if (await destination.exists() && await destination.length() > 0) {
+    final cached = await destination.stat();
+    if (!canContinue()) return null;
+    if (cached.type == FileSystemEntityType.file && cached.size > 0) {
+      IllustCoverDiagnostics.event('thumbnail.hit');
       return destination.path;
     }
-    final pending = _displayPending[key];
-    if (pending != null) return pending;
+    // Include the destination root so a data-directory switch cannot join an
+    // in-flight task writing a previous application's cache.
+    final taskKey = destination.path;
+    final pending = _displayPending[taskKey];
+    if (pending != null) {
+      pending.requests.add(canContinue);
+      final result = await pending.result;
+      return canContinue() ? result : null;
+    }
+    final task = _DisplayThumbnailTask()..requests.add(canContinue);
+    _displayPending[taskKey] = task;
     final previous = _displayTail;
     final done = Completer<void>();
     _displayTail = done.future;
-    late final Future<String?> task;
-    task = () async {
-      await previous;
+    task.result =
+        IllustCoverDiagnostics.measure('thumbnail.generate', () async {
+      await IllustCoverDiagnostics.measure('thumbnail.wait', () => previous);
       ui.ImmutableBuffer? buffer;
       ui.ImageDescriptor? descriptor;
       ui.Codec? codec;
       ui.Image? image;
       File? temporary;
       try {
-        if (!canContinue()) return null;
-        buffer = await ui.ImmutableBuffer.fromFilePath(coverPath);
-        if (!canContinue()) return null;
-        descriptor = await ui.ImageDescriptor.encoded(buffer);
+        if (!task.canContinue) return null;
+        final sourceBuffer = await IllustCoverDiagnostics.measure(
+            'thumbnail.read', () => ui.ImmutableBuffer.fromFilePath(coverPath));
+        buffer = sourceBuffer;
+        if (!task.canContinue) return null;
+        descriptor = await ui.ImageDescriptor.encoded(sourceBuffer);
         final scale = math.min(
             1.0,
             math.min(
@@ -92,29 +155,31 @@ class CoverThumbnailCache {
                         1024 *
                         1024 /
                         (descriptor.width * descriptor.height)))));
-        if (!canContinue()) return null;
+        if (!task.canContinue) return null;
         codec = await descriptor.instantiateCodec(
             targetWidth: math.max(1, (descriptor.width * scale).round()),
             targetHeight: math.max(1, (descriptor.height * scale).round()));
-        image = (await codec.getNextFrame()).image;
-        final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
-        if (bytes == null || !canContinue()) return null;
-        final after = await source.stat();
-        if ('${after.size}|${after.modified.microsecondsSinceEpoch}' != stamp) {
-          return null;
-        }
+        if (!task.canContinue) return null;
+        image = (await IllustCoverDiagnostics.measure(
+                'thumbnail.decode', codec.getNextFrame))
+            .image;
+        if (!task.canContinue) return null;
+        final bytes = await IllustCoverDiagnostics.measure('thumbnail.encode',
+            () => image!.toByteData(format: ui.ImageByteFormat.png));
+        if (bytes == null || !task.canContinue) return null;
         await destination.parent.create(recursive: true);
         temporary = File(
             '${destination.path}.${DateTime.now().microsecondsSinceEpoch}.part');
         await temporary.writeAsBytes(bytes.buffer.asUint8List(), flush: true);
-        if (!canContinue()) return null;
+        final after = await source.stat();
+        if (!task.canContinue ||
+            after.type != FileSystemEntityType.file ||
+            '${after.size}|${after.modified.microsecondsSinceEpoch}' != stamp) {
+          return null;
+        }
         await temporary.rename(destination.path);
-        // Existing global quota, throttled and preserving the just-published file.
-        // Quota work is not a condition for successfully showing the thumbnail.
-        try {
-          await RemoteLibraryDataSource.trimCacheToLimit(
-              protectedPath: destination.path);
-        } catch (_) {}
+        temporary = null;
+        _scheduleMaintenance(destination.path);
         return destination.path;
       } catch (_) {
         return null;
@@ -131,12 +196,12 @@ class CoverThumbnailCache {
           descriptor?.dispose();
           buffer?.dispose();
           done.complete();
-          _displayPending.remove(key);
+          _displayPending.remove(taskKey);
         }
       }
-    }();
-    _displayPending[key] = task;
-    return task;
+    });
+    final result = await task.result;
+    return canContinue() ? result : null;
   }
 
   /// 缩略图路径：**统一缓存根下的 `thumbs/` 子目录**（plan/12）。

@@ -3,7 +3,7 @@
 /// 覆盖用户实测后提出的三点：
 /// 1. **预览区位置**：从「标签之后、简介之前」移到**简介之后**。
 ///    判据是钩子归属——必须走 `buildSectionAfterDescription`，
-///    `buildCustomSection` 必须返回 null（否则又跑回简介前面去）。
+///    `buildCustomSection` 可展示作者入口，但不能再次放预览。
 /// 2. **信息区补 ID**：`extractTags` 必须包含 `ID` 桶且值为裸数字。
 /// 3. **ID 行不可拿去搜索**：ID 是纯数字，当关键词搜只会得到无关结果。
 ///    （该行为由 `onTagTap` 的 `category == 'ID'` 分支实现，本文件锁"ID 在
@@ -16,6 +16,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:picakeep/network/pixiv_network/pixiv_network.dart';
 import 'package:picakeep/pages/online_comic/pixiv_comic_page_v2.dart';
+import 'package:picakeep/pages/online_comic/pixiv_author_link.dart';
 
 PixivComicInfo _info({
   String id = '100412238',
@@ -85,7 +86,7 @@ void main() {
   });
 
   group('预览区位置：必须在简介之后', () {
-    testWidgets('走 after-description 钩子，且不再占用 custom 插槽', (tester) async {
+    testWidgets('预览走 after-description，简介前仅展示作者入口', (tester) async {
       const page = PixivComicPageV2('100412238');
       final data = _info();
 
@@ -101,12 +102,11 @@ void main() {
         ),
       );
 
-      // custom 插槽在**简介之前**：改用 after-description 后这里必须为空，
-      // 否则预览会同时出现在两处（或回到简介前面）。
+      // 56号在简介前新增作者入口，预览仍只能位于简介后。
       expect(
         page.buildCustomSection(ctx, data),
-        isNull,
-        reason: 'custom 插槽在简介之前，预览不应再用它',
+        isA<PixivAuthorLink>(),
+        reason: '简介前提供作者入口，不重复展示预览',
       );
 
       // after-description 插槽在**简介之后**：这里必须有内容。
@@ -115,6 +115,8 @@ void main() {
         isNotNull,
         reason: '预览应挂在简介之后的插槽',
       );
+      expect(page.buildSectionAfterDescription(ctx, data),
+          isNot(isA<PixivAuthorLink>()));
     });
   });
 

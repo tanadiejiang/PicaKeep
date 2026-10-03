@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
 import 'package:picakeep/foundation/image_loader/stream_image_provider.dart';
 import 'package:picakeep/network/app_dio.dart';
 import 'package:picakeep/network/online_image/online_image_cache.dart';
@@ -17,11 +18,14 @@ class OnlineImageLoadResult {
 }
 
 class OnlineImageManager {
-  OnlineImageManager._();
+  OnlineImageManager._() : _dio = logDio();
+
+  @visibleForTesting
+  OnlineImageManager.forTesting(this._dio);
 
   static final OnlineImageManager instance = OnlineImageManager._();
 
-  final Dio _dio = logDio();
+  final Dio _dio;
   final _inFlight = <String, Future<List<int>>>{};
 
   Future<StreamImageLoadResult> getImage(
@@ -77,6 +81,13 @@ class OnlineImageManager {
         completeError,
   }) async {
     final cancelToken = CancelToken();
+    Future<List<int>>? ownedDownload;
+    var streamDelivered = false;
+    void deliver(StreamImageLoadResult result) {
+      streamDelivered = true;
+      complete(result);
+    }
+
     StreamSubscription<void>? abortSubscription;
     if (abortSignal != null) {
       abortSubscription = abortSignal.aborted.asStream().listen((_) {
@@ -89,8 +100,7 @@ class OnlineImageManager {
     try {
       final existing = _inFlight[url];
       if (existing != null) {
-        complete(StreamImageLoadResult(stream: Stream.fromFuture(existing)));
-        await abortSubscription?.cancel();
+        deliver(StreamImageLoadResult(stream: Stream.fromFuture(existing)));
         return;
       }
 
@@ -99,21 +109,29 @@ class OnlineImageManager {
         headers: headers,
         cancelToken: cancelToken,
         controller: controller,
-        complete: complete,
+        complete: deliver,
       );
+      ownedDownload = future;
       _inFlight[url] = future;
       await future;
     } catch (error, stackTrace) {
-      if (!controller.isClosed) {
-        await controller.close();
-      }
-      if (!cancelToken.isCancelled) {
-        completeError(error, stackTrace);
-      } else {
-        completeError(StateError('Image load aborted'), stackTrace);
+      final failure =
+          cancelToken.isCancelled ? StateError('Image load aborted') : error;
+      if (!streamDelivered) {
+        // HTTP errors occur before anyone can subscribe to controller.stream.
+        // Awaiting close() here would wait forever and hide the error from Image.
+        completeError(failure, stackTrace);
+      } else if (!controller.isClosed) {
+        // Once headers were delivered, report a body/network failure on the
+        // stream. Completing the result future again throws and loses the error.
+        controller.addError(failure, stackTrace);
       }
     } finally {
-      _inFlight.remove(url);
+      unawaited(controller.close());
+      // A subscriber sharing this download must not remove its owner's entry.
+      if (ownedDownload != null && identical(_inFlight[url], ownedDownload)) {
+        _inFlight.remove(url);
+      }
       await abortSubscription?.cancel();
     }
   }
@@ -149,7 +167,7 @@ class OnlineImageManager {
       builder.add(chunk);
       controller.add(chunk);
     }
-    await controller.close();
+    unawaited(controller.close());
     final bytes = builder.takeBytes();
     await OnlineImageCache.instance.put(
       url,

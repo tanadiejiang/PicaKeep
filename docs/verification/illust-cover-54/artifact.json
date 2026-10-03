@@ -1,0 +1,20 @@
+{
+  "recordedAt": "2026-10-03T16:05:17+08:00",
+  "packageName": "lingxue.picakeep",
+  "versionName": "1.9.88",
+  "versionCode": 5,
+  "buildMode": "profile",
+  "command": "flutter build apk --profile --no-pub --dart-define=PIKAKEEP_COVER_DIAGNOSTICS=true",
+  "diagnosticEventsEnabled": true,
+  "apk": "D:\\Flutter_Projucts\\PicaComic\\PicaKeep\\build\\verification\\illust-cover-54\\app-after54-profile.apk",
+  "bytes": 119465307,
+  "sha256": "D110E7B9ED380BAC287CA10A87CE4F7F04BBE0E644A6E008EC4A8482E5F455EC",
+  "certificateSha256": "31b4434516ccc1f58add7cc5cd4b6786e995c957d5891d3685e4c75a7a58d7c7",
+  "signatureVerification": "apksigner verify --print-certs exited 0",
+  "baselineApk": "D:\\Flutter_Projucts\\PicaComic\\PicaKeep\\build\\verification\\illust-cover-54\\app-before54-profile.apk",
+  "baselineSha256": "6A762B2906BEDBD425DD18A307983BA29D99ECCBE1B486504E20EFF65F77BB07",
+  "installed": false,
+  "deviceStatus": "adb devices -l returned no attached devices at 2026-10-03 16:02 +08:00",
+  "realDeviceAcceptance": "Pending; no new device timing, frame or memory measurements.",
+  "sourceManifest": "source-manifest.json"
+}

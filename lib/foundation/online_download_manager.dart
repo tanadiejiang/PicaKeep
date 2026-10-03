@@ -1617,6 +1617,8 @@ class OnlineDownloadManager {
         // 而逐页存会把 `json` 撑大且消费侧还得决定用哪一页。
         width: comic.width,
         height: comic.height,
+        pageCount: pages.length,
+        authorId: comic.authorId,
       )
         ..directory = artifactDirectory
         ..time = DateTime.now();
@@ -3263,6 +3265,8 @@ class OnlineDownloadedCustom extends CustomDownloadedItem {
     super.comicSize,
     super.width,
     super.height,
+    super.pageCount,
+    super.authorId,
   });
 
   factory OnlineDownloadedCustom.fromCustomDownloadedItem(
@@ -3286,6 +3290,8 @@ class OnlineDownloadedCustom extends CustomDownloadedItem {
       comicSize: item.comicSize,
       width: item.width,
       height: item.height,
+      pageCount: item.pageCount,
+      authorId: item.authorId,
     )
       ..time = item.time
       ..directory = directoryName;

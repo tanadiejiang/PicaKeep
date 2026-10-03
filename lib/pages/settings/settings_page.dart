@@ -1,3 +1,5 @@
+import 'package:picakeep/foundation/ai/ai_tool_plugin_store.dart';
+import 'package:picakeep/pages/illust_folder_selector.dart';
 import 'dart:async';
 import 'package:picakeep/foundation/pixiv_library.dart';
 import 'package:picakeep/foundation/pixiv_library_locations.dart';
@@ -54,6 +56,7 @@ import 'package:picakeep/foundation/ai/ai_prompt_tags.dart';
 import 'package:picakeep/foundation/ai/ai_settings.dart';
 import 'package:picakeep/foundation/ai/model_list_client.dart';
 import 'package:picakeep/pages/ai/ai_page.dart';
+import 'package:picakeep/pages/ai/ai_tool_plugins_page.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 

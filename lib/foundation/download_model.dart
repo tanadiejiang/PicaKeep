@@ -1034,8 +1034,7 @@ FavoriteType customDownloadedFavoriteType(String sourceKey) {
 /// 来源标识（`sourceKey` / `sourceName`）是不是 Pixiv。
 ///
 /// 大小写与空白不敏感：来源标识不是枚举，写入侧可能带脏值。
-bool isPixivSourceLabel(String value) =>
-    value.trim().toLowerCase() == 'pixiv';
+bool isPixivSourceLabel(String value) => value.trim().toLowerCase() == 'pixiv';
 
 /// 下载记录 id 是否带 Pixiv 前缀（`pixiv150034783`）。
 ///
@@ -1124,6 +1123,12 @@ class CustomDownloadedItem extends DownloadedItem {
   final int? width;
   final int? height;
 
+  /// 已完整下载的作品页数；旧记录未知时为空，不能按章节数或文件名推断。
+  final int? pageCount;
+
+  /// 来源作者标识（Pixiv userId）。作者显示名不具有唯一性。
+  final String? authorId;
+
   CustomDownloadedItem({
     this.comicSize,
     required this.downloadedEps,
@@ -1138,6 +1143,8 @@ class CustomDownloadedItem extends DownloadedItem {
     required this.comicId,
     this.width,
     this.height,
+    this.pageCount,
+    this.authorId,
   });
 
   @override
@@ -1168,6 +1175,8 @@ class CustomDownloadedItem extends DownloadedItem {
         "comicId": comicId,
         "width": width,
         "height": height,
+        "pageCount": pageCount,
+        "authorId": authorId,
       };
 
   CustomDownloadedItem.fromJson(Map<String, dynamic> json)
@@ -1187,7 +1196,22 @@ class CustomDownloadedItem extends DownloadedItem {
         // 老记录没有这两个键 → null（而不是 0）。
         // 用 `as num?` 再 toInt：JSON 往返后整型可能退化成 double。
         width = (json["width"] as num?)?.toInt(),
-        height = (json["height"] as num?)?.toInt();
+        height = (json["height"] as num?)?.toInt(),
+        pageCount = _positivePageCount(json['pageCount']),
+        authorId = json['authorId']?.toString().trim().isNotEmpty == true
+            ? json['authorId'].toString().trim()
+            : null;
+
+  static int? _positivePageCount(Object? value) {
+    final number = value is num ? value : num.tryParse(value?.toString() ?? '');
+    if (number == null ||
+        !number.isFinite ||
+        number <= 0 ||
+        number != number.round()) {
+      return null;
+    }
+    return number.toInt();
+  }
 
   @override
   Widget createReadingPage({int? ep, int? page}) {

@@ -37,6 +37,7 @@ import 'package:archive/archive_io.dart';
 import 'package:picakeep/foundation/app.dart';
 
 import 'package:picakeep/foundation/image_header_size.dart';
+import 'package:picakeep/foundation/illust_page_count_cache.dart';
 import 'package:picakeep/foundation/local_library.dart';
 import 'package:picakeep/foundation/local_library_illust_view.dart';
 import 'package:picakeep/foundation/privileged_storage_access.dart';
@@ -370,6 +371,8 @@ Future<Map<String, IllustResolvedInfo>> resolveIllustEntryInfo({
   IllustStampReader? readStamp,
   IllustDirectoryLister? listDirectory,
   IllustCoverSizeCache? cache,
+  IllustPageCountCache? pageCountCache,
+  IllustPageCountStampReader readCountStamp = readIllustPageCountStamp,
   int concurrency = 4,
 }) async {
   if (entries.isEmpty) {
@@ -379,6 +382,9 @@ Future<Map<String, IllustResolvedInfo>> resolveIllustEntryInfo({
   final headReader = readHead ?? readFileHeadBytes;
   final stampReader = readStamp ?? readFileStamp;
   final lister = listDirectory ?? PrivilegedStorageAccess.listDirectoryEntries;
+  final counts = needPageCount
+      ? pageCountCache ?? await sharedIllustPageCountCache()
+      : null;
 
   final results = <String, IllustResolvedInfo>{};
   await _forEachConcurrent<IllustLibraryEntry>(
@@ -412,7 +418,11 @@ Future<Map<String, IllustResolvedInfo>> resolveIllustEntryInfo({
       }
 
       if (needPageCount) {
-        pageCount = await _resolvePageCount(entry, listDirectory: lister);
+        pageCount = entry.pageCount ??
+            await _resolvePageCount(entry,
+                listDirectory: lister,
+                cache: counts!,
+                readStamp: readCountStamp);
       }
 
       final info = IllustResolvedInfo(
@@ -426,6 +436,7 @@ Future<Map<String, IllustResolvedInfo>> resolveIllustEntryInfo({
     },
   );
   unawaited(effectiveCache.save());
+  if (counts != null) unawaited(counts.save());
   return results;
 }
 
@@ -477,28 +488,55 @@ Future<ImageHeaderSize?> _resolveSizeForPath(
 Future<int?> _resolvePageCount(
   IllustLibraryEntry entry, {
   required IllustDirectoryLister listDirectory,
+  required IllustPageCountCache cache,
+  required IllustPageCountStampReader readStamp,
 }) async {
   final item = entry.item;
   final path = (item.fileSystemPath ?? '').trim();
   if (path.isEmpty) {
     return null;
   }
-  final lower = path.toLowerCase();
-  if (lower.endsWith('.zip') || lower.endsWith('.cbz')) {
-    return countArchivePageImages(path);
-  }
-  if (isIllustImageFileName(lower)) {
-    return 1;
-  }
   try {
-    final entries = await listDirectory(path);
-    if (entries.isEmpty) {
-      return null;
+    final cached = await cache.lookup(entry, readStamp: readStamp);
+    if (cached != null) return cached;
+    final generation = cache.generation;
+    final stamps = <String, String?>{path: await readStamp(path)};
+    final lower = path.toLowerCase();
+    int? count;
+    if (lower.endsWith('.zip') || lower.endsWith('.cbz')) {
+      count = await countArchivePageImages(path);
+    } else if (isIllustImageFileName(lower)) {
+      count = 1;
+    } else {
+      final entries = await listDirectory(path);
+      if (entries.isEmpty) return null;
+      final rootCount = countIllustPageImages(
+          entries.where((e) => !e.isDirectory).map((e) => e.name));
+      var chapterCount = 0;
+      // 老下载目录可能是 root/0/1.jpg 或 root/1/1.jpg。与阅读链路同样
+      // 只看直接章节目录，不无限递归；章节内有正文时以章节内容为准。
+      for (final directory
+          in entries.where((e) => e.isDirectory && !e.name.startsWith('.'))) {
+        stamps[directory.path] = await readStamp(directory.path);
+        final children = await listDirectory(directory.path);
+        // 特权列目录的空结果无法区分空目录与读取被拒绝，不能把不完整的
+        // 两个章节统计成一页并永久缓存。未知留给刷新/权限恢复后重试。
+        if (children.isEmpty) return null;
+        chapterCount += countIllustPageImages(
+            children.where((e) => !e.isDirectory).map((e) => e.name));
+      }
+      count = chapterCount > 0 ? chapterCount : rootCount;
     }
-    final count = countIllustPageImages(
-      entries.where((e) => !e.isDirectory).map((e) => e.name),
-    );
-    return count > 0 ? count : null;
+    if (count == null || count <= 0) return null;
+    // 文件在统计过程中改变时不发布混合结果，留给下一次有界重试。
+    for (final stamp in stamps.entries) {
+      if (stamp.value != null && await readStamp(stamp.key) != stamp.value) {
+        return null;
+      }
+    }
+    if (cache.generation != generation) return null;
+    cache.store(entry, count, stamps, generation: generation);
+    return count;
   } catch (_) {
     return null;
   }

@@ -24,8 +24,8 @@
 ///
 /// 探索页那个是 `PopupMenuButton` + 自定义 `PopupMenuItem`，但它的选项**不需要**
 /// 禁用态与禁用原因。而档位在"远程不可用"时必须**置灰 + 写明原因**而不是消失
-/// （36 号真机反馈的教训：藏起来等于功能不存在）。用 `Dialog` + 普通 `InkWell`
-/// 才能自由控制禁用渲染，也便于在 widget 测试里逐项断言。
+/// （36 号真机反馈的教训：藏起来等于功能不存在）。选项用普通 `InkWell` 自行
+/// 控制禁用渲染；默认放在 `Dialog`，有按钮锚点时放在弹出菜单路由中。
 library;
 
 import 'package:flutter/material.dart';
@@ -152,13 +152,13 @@ class LibraryViewSelectorTile<T> extends StatelessWidget {
                         color: titleColor,
                       ),
                     ),
-                    if (!entry.enabled && (entry.disabledReason ?? '').isNotEmpty)
+                    if (!entry.enabled &&
+                        (entry.disabledReason ?? '').isNotEmpty)
                       Text(
                         entry.disabledReason!.tl,
                         style: TextStyle(
                           fontSize: 11,
-                          color:
-                              colors.onSurfaceVariant.withValues(alpha: 0.7),
+                          color: colors.onSurfaceVariant.withValues(alpha: 0.7),
                         ),
                       ),
                   ],
@@ -186,17 +186,89 @@ class LibraryViewSelectorTile<T> extends StatelessWidget {
 }
 
 /// 弹出档位面板，返回用户选中的值（点外部/返回键取消时为 null）。
+/// [anchorContext] 用于抽屉内的工具栏：面板跟随实际按钮，而非固定在页顶。
 Future<T?> showLibraryViewSelector<T>({
   required BuildContext context,
+  BuildContext? anchorContext,
   required String title,
   required List<LibraryViewSelectorEntry<T>> entries,
   required T selected,
 }) {
+  Widget content(BuildContext panelContext) {
+    final colors = Theme.of(panelContext).colorScheme;
+    return SingleChildScrollView(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: <Widget>[
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+            child: Text(
+              title.tl,
+              style: TextStyle(
+                color: colors.onSurfaceVariant,
+                fontSize: 12,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ),
+          for (final entry in entries)
+            LibraryViewSelectorTile<T>(
+              entry: entry,
+              selected: entry.value == selected,
+              onTap: () => Navigator.of(panelContext).pop(entry.value),
+            ),
+          const SizedBox(height: 8),
+        ],
+      ),
+    );
+  }
+
+  if (anchorContext != null) {
+    final overlay = Navigator.of(context, rootNavigator: true)
+        .overlay!
+        .context
+        .findRenderObject()! as RenderBox;
+    return showMenu<T>(
+      context: context,
+      useRootNavigator: true,
+      // Re-evaluate the actual button after layout / viewport changes. The
+      // popup route also clamps the panel to the screen's safe area.
+      positionBuilder: (context, constraints) {
+        final button = anchorContext.findRenderObject()! as RenderBox;
+        final origin = button.localToGlobal(Offset.zero, ancestor: overlay);
+        return RelativeRect.fromRect(
+          Rect.fromLTWH(origin.dx, origin.dy + button.size.height + 4,
+              button.size.width, 0),
+          Offset.zero & overlay.size,
+        );
+      },
+      color: Theme.of(context).colorScheme.surface,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+      menuPadding: EdgeInsets.zero,
+      constraints: BoxConstraints(
+        maxWidth: libraryViewSelectorPanelMaxWidth,
+        maxHeight: MediaQuery.sizeOf(context).height *
+            libraryViewSelectorPanelMaxHeightFactor,
+      ),
+      items: [
+        PopupMenuItem<T>(
+          enabled: false,
+          padding: EdgeInsets.zero,
+          height: 0,
+          child: SizedBox(
+            width: libraryViewSelectorPanelMaxWidth,
+            child: Builder(builder: content),
+          ),
+        ),
+      ],
+    );
+  }
+
   return showDialog<T>(
     context: context,
     barrierColor: Colors.transparent,
     builder: (dialogContext) {
-      final colors = Theme.of(dialogContext).colorScheme;
       return Dialog(
         insetPadding: libraryViewSelectorPanelInset,
         alignment: Alignment.topRight,
@@ -207,32 +279,7 @@ Future<T?> showLibraryViewSelector<T>({
             maxHeight: MediaQuery.of(dialogContext).size.height *
                 libraryViewSelectorPanelMaxHeightFactor,
           ),
-          child: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: <Widget>[
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
-                  child: Text(
-                    title.tl,
-                    style: TextStyle(
-                      color: colors.onSurfaceVariant,
-                      fontSize: 12,
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
-                ),
-                for (final entry in entries)
-                  LibraryViewSelectorTile<T>(
-                    entry: entry,
-                    selected: entry.value == selected,
-                    onTap: () => Navigator.of(dialogContext).pop(entry.value),
-                  ),
-                const SizedBox(height: 8),
-              ],
-            ),
-          ),
+          child: content(dialogContext),
         ),
       );
     },

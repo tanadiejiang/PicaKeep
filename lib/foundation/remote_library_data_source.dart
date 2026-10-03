@@ -5,11 +5,13 @@ import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
+import 'package:path/path.dart' as p;
 import 'package:picakeep/base.dart';
 import 'package:picakeep/foundation/app.dart';
 import 'package:picakeep/foundation/app_runtime_mode.dart';
 import 'package:picakeep/foundation/archive/archive_models.dart';
 import 'package:picakeep/foundation/download_model.dart';
+import 'package:picakeep/foundation/cache_file_inventory.dart';
 import 'package:picakeep/foundation/image_favorites.dart';
 import 'package:picakeep/foundation/image_loader/base_image_provider.dart';
 import 'package:picakeep/foundation/image_loader/stream_image_provider.dart';
@@ -1024,7 +1026,25 @@ class _RemoteLibraryCoverDiskCache {
   /// burst of full-tree disk scans on the event loop.
   static const Duration _trimMinInterval = Duration(seconds: 30);
   static bool _trimInFlight = false;
+  static Completer<void>? _trimDone;
   static DateTime? _lastTrimAt;
+  static final Map<String, int> _protectedFiles = {};
+
+  static VoidCallback protectFile(String path) {
+    final key = _normalizePath(path);
+    _protectedFiles.update(key, (count) => count + 1, ifAbsent: () => 1);
+    var released = false;
+    return () {
+      if (released) return;
+      released = true;
+      final remaining = (_protectedFiles[key] ?? 1) - 1;
+      if (remaining == 0) {
+        _protectedFiles.remove(key);
+      } else {
+        _protectedFiles[key] = remaining;
+      }
+    };
+  }
 
   static bool _isInFailureWindow(String url) {
     final until = _failureUntil[url];
@@ -1142,14 +1162,18 @@ class _RemoteLibraryCoverDiskCache {
   /// 也没有 protectedPath（非下载场景无正在写入的文件）。
   static Future<void> trimToLimitNow() async {
     if (_trimInFlight) {
+      await _trimDone?.future;
       return;
     }
     _trimInFlight = true;
+    final done = _trimDone = Completer<void>();
     try {
       await _trimToLimitInner(protectedPath: '');
     } finally {
       _lastTrimAt = DateTime.now();
       _trimInFlight = false;
+      _trimDone = null;
+      done.complete();
     }
   }
 
@@ -1164,6 +1188,9 @@ class _RemoteLibraryCoverDiskCache {
     // per interval. Trimming is best-effort eviction, so a slightly stale run is
     // harmless.
     if (_trimInFlight) {
+      // Detached thumbnail maintenance holds leases until the active scan has
+      // actually finished; an early return would release them during deletion.
+      await _trimDone?.future;
       return;
     }
     final lastTrim = _lastTrimAt;
@@ -1172,16 +1199,21 @@ class _RemoteLibraryCoverDiskCache {
       return;
     }
     _trimInFlight = true;
+    final done = _trimDone = Completer<void>();
     try {
       await _trimToLimitInner(protectedPath: protectedPath);
     } finally {
       _lastTrimAt = DateTime.now();
       _trimInFlight = false;
+      _trimDone = null;
+      done.complete();
     }
   }
 
   static Future<void> _trimToLimitInner({required String protectedPath}) async {
     final limitBytes = appdata.appSettings.cacheLimit * 1024 * 1024;
+    final cacheRoot = App.cachePath;
+    final dataRoot = App.dataPath;
     if (limitBytes <= 0) {
       return;
     }
@@ -1189,84 +1221,31 @@ class _RemoteLibraryCoverDiskCache {
     // 而非只远程封面目录——否则占大头的 App.cachePath 图片缓存够不着，
     // 缓存会一直超限不降。全局按修改时间 LRU，从最旧删到刚好低于限制即停，
     // 保留较新的，不清空。protectedPath（正在使用的文件）始终保留。
-    final files = <File>[];
-    var totalBytes = await _directorySize(
-      Directory(App.cachePath),
-      collectFilesUnder: App.cachePath,
-      collectedFiles: files,
-    );
-    totalBytes += await _directorySize(
-      Directory('${App.dataPath}${Platform.pathSeparator}cache'),
-      collectFilesUnder: '${App.dataPath}${Platform.pathSeparator}cache',
-      collectedFiles: files,
-    );
-    final thumbs = '${App.dataPath}${Platform.pathSeparator}local_library_cache'
-        '${Platform.pathSeparator}covers${Platform.pathSeparator}thumbs';
-    totalBytes += await _directorySize(Directory(thumbs),
-        collectFilesUnder: thumbs, collectedFiles: files);
-    if (totalBytes <= limitBytes || files.isEmpty) {
-      return;
-    }
-
+    final inventory = await scanCacheFiles([
+      cacheRoot,
+      '$dataRoot${Platform.pathSeparator}cache',
+      '$dataRoot${Platform.pathSeparator}local_library_cache'
+          '${Platform.pathSeparator}covers${Platform.pathSeparator}thumbs',
+    ]);
     final normalizedProtected = _normalizePath(protectedPath);
-    final removableFiles = <({File file, DateTime modified, int size})>[];
-    for (final file in files) {
-      try {
-        if (_normalizePath(file.path) == normalizedProtected || file.path.endsWith('.part')) {
-          continue;
-        }
-        final stat = await file.stat();
-        if (stat.type == FileSystemEntityType.file && stat.size > 0) {
-          removableFiles
-              .add((file: file, modified: stat.modified, size: stat.size));
-        }
-      } catch (_) {}
-    }
-    removableFiles.sort((a, b) => a.modified.compareTo(b.modified));
-    for (final entry in removableFiles) {
-      if (totalBytes <= limitBytes) {
-        break;
-      }
-      try {
-        await entry.file.delete();
-        totalBytes -= entry.size;
-      } catch (_) {}
-    }
-  }
-
-  static Future<int> _directorySize(
-    Directory directory, {
-    String? collectFilesUnder,
-    List<File>? collectedFiles,
-  }) async {
-    if (!await directory.exists()) {
-      return 0;
-    }
-    final normalizedCollectRoot = collectFilesUnder == null
-        ? null
-        : '${_normalizePath(collectFilesUnder)}${Platform.pathSeparator}';
-    var totalBytes = 0;
-    await for (final entity in directory.list(
-      recursive: true,
-      followLinks: false,
-    )) {
-      if (entity is! File) {
-        continue;
-      }
-      try {
-        totalBytes += await entity.length();
-        if (normalizedCollectRoot != null &&
-            '${_normalizePath(entity.parent.path)}${Platform.pathSeparator}'
-                .startsWith(normalizedCollectRoot)) {
-          collectedFiles?.add(entity);
-        }
-      } catch (_) {}
-    }
-    return totalBytes;
+    await trimCacheInventory(
+      inventory,
+      limitBytes: limitBytes,
+      isCurrent: () =>
+          App.dataPath == dataRoot &&
+          App.cachePath == cacheRoot &&
+          appdata.appSettings.cacheLimit * 1024 * 1024 == limitBytes,
+      isProtected: (path) {
+        final key = _normalizePath(path);
+        return key == normalizedProtected || _protectedFiles.containsKey(key);
+      },
+    );
   }
 
   static String _normalizePath(String path) {
-    return path.trim().replaceAll('\\', Platform.pathSeparator);
+    if (path.trim().isEmpty) return '';
+    final normalized = p.normalize(p.absolute(path.trim()));
+    return Platform.isWindows ? normalized.toLowerCase() : normalized;
   }
 
   static Future<bool> _isUsable(File file) async {
@@ -1363,13 +1342,19 @@ class _RemoteLibraryCoverImageProvider
 class RemoteLibraryDataSource {
   const RemoteLibraryDataSource();
 
+  /// Keeps an in-use cache file out of automatic/manual quota scans until the
+  /// caller releases it. Explicit user cache clearing is intentionally separate.
+  static VoidCallback protectCacheFile(String path) =>
+      _RemoteLibraryCoverDiskCache.protectFile(path);
+
   /// 手动按 cacheLimit 清理全部缓存目录（LRU 删最旧的到限制内）。
   /// 供工具页"缓存管理"等非远程浏览场景主动触发——平时 trim 只在远程封面
   /// 下载后跑，不浏览远程时缓存会一直超限不降，这里提供一个独立入口。
   static Future<void> trimCacheToLimit({String? protectedPath}) {
     return protectedPath == null
         ? _RemoteLibraryCoverDiskCache.trimToLimitNow()
-        : _RemoteLibraryCoverDiskCache._trimToLimit(protectedPath: protectedPath);
+        : _RemoteLibraryCoverDiskCache._trimToLimit(
+            protectedPath: protectedPath);
   }
 
   Future<List<RemoteLibraryComicItem>> fetchItems({
