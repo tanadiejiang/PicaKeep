@@ -190,6 +190,8 @@ PixivComicInfo parsePixivComicInfo(Map<String, dynamic> body) {
     body['illustComment'],
     body['description'],
   ]);
+  final bookmarkData = body['bookmarkData'];
+  final bookmarkId = bookmarkData is Map ? _idStr(bookmarkData['id']) : '';
 
   return PixivComicInfo(
     id: id,
@@ -212,6 +214,30 @@ PixivComicInfo parsePixivComicInfo(Map<String, dynamic> body) {
     createDate: _str(body['createDate']),
     uploadDate: _str(body['uploadDate']),
     userId: _str(body['userId']),
+    isBookmarked: bookmarkData is Map,
+    bookmarkId: bookmarkId.isEmpty ? null : bookmarkId,
+  );
+}
+
+/// 收藏写入前使用的严格状态解析；未知或损坏的状态不能当成未收藏。
+PixivBookmarkState parsePixivBookmarkState(Map<String, dynamic> body) {
+  if (!body.containsKey('bookmarkData')) {
+    throw const FormatException('Pixiv 详情响应缺少收藏状态');
+  }
+  final data = body['bookmarkData'];
+  if (data != null) {
+    if (data is! Map) {
+      throw const FormatException('Pixiv 收藏状态格式异常');
+    }
+    final id = _idStr(data['id']);
+    if (!RegExp(r'^[0-9]+$').hasMatch(id) || (int.tryParse(id) ?? 0) <= 0) {
+      throw const FormatException('Pixiv 收藏状态缺少有效书签 ID');
+    }
+  }
+  final capability = body['isBookmarkable'];
+  return PixivBookmarkState(
+    isBookmarked: data is Map,
+    isBookmarkable: capability == true || capability == 1 || capability == '1',
   );
 }
 
@@ -281,6 +307,11 @@ PixivComicBrief? _parseBriefItem(Map<String, dynamic> item) {
     _map(item['urls'])['mini'],
     _map(item['urls'])['small'],
   ]);
+  final bookmarkData = item['bookmarkData'];
+  final bookmarkId =
+      bookmarkData is Map ? _positiveIntOrNull(bookmarkData['id']) : null;
+  final bookmarkStateKnown = item.containsKey('bookmarkData') &&
+      (bookmarkData == null || bookmarkId != null);
 
   return PixivComicBrief(
     id: id,
@@ -293,6 +324,12 @@ PixivComicBrief? _parseBriefItem(Map<String, dynamic> item) {
     // 宽高**缺失必须是 null 而不是 0**（`0` 会算出错误比例甚至除零）。
     width: _positiveIntOrNull(item['width']),
     height: _positiveIntOrNull(item['height']),
+    authorId: _idStr(item['userId']),
+    authorAvatar: _str(item['profileImageUrl']),
+    isBookmarked: bookmarkId != null,
+    isBookmarkable: _bool(item['isBookmarkable']),
+    bookmarkStateKnown: bookmarkStateKnown,
+    canLoadBookmarkState: !bookmarkStateKnown,
   );
 }
 
@@ -489,8 +526,8 @@ int? parsePixivSearchMaxPage(Map<String, dynamic> body) {
 ///
 /// 该接口与 Ajax 搜索不同：**`contents` 直接是顶层数组**（不是 `body` 子对象），
 /// 条目字段为 `illust_id` / `title` / `url` / `tags` / `illust_type` /
-/// `illust_page_count` / `user_id` / `user_name` —— 下划线风格，不能复用搜索的
-/// 驼峰取值，这里做字段名映射（源字段名见 Pixiv 排行榜 JSON）。
+/// `illust_page_count` / `user_id` / `user_name` / `profile_img` —— 下划线风格，
+/// 不能复用搜索的驼峰取值，这里做字段名映射（源字段名见 Pixiv 排行榜 JSON）。
 List<PixivComicBrief> parsePixivRankingItems(Map<String, dynamic> body) {
   final contents = body['contents'];
   if (contents is! List) return const <PixivComicBrief>[];
@@ -511,6 +548,11 @@ List<PixivComicBrief> parsePixivRankingItems(Map<String, dynamic> body) {
       _map(map['urls'])['small'],
       _map(map['urls'])['regular'],
     ]);
+    final bookmarkData = map['bookmarkData'];
+    final bookmarkId =
+        bookmarkData is Map ? _positiveIntOrNull(bookmarkData['id']) : null;
+    final bookmarkStateKnown = map.containsKey('bookmarkData') &&
+        (bookmarkData == null || bookmarkId != null);
     if (!seenIds.add(id)) continue;
     result.add(
       PixivComicBrief(
@@ -530,6 +572,21 @@ List<PixivComicBrief> parsePixivRankingItems(Map<String, dynamic> body) {
         pageCount: _int(
           map['illust_page_count'] ?? map['pageCount'],
         ),
+        width: _positiveIntOrNull(map['width']),
+        height: _positiveIntOrNull(map['height']),
+        authorId: _idStr(map['user_id'] ?? map['userId']),
+        authorAvatar: _firstNonEmpty(<dynamic>[
+          map['profile_img'],
+          map['user_profile_img'],
+          map['profileImageUrl'],
+        ]),
+        // ranking.php normally omits bookmark capability/state. Preserve it
+        // when a future authenticated response supplies the generic fields,
+        // but keep the conservative false default for today's response.
+        isBookmarked: bookmarkId != null,
+        isBookmarkable: _bool(map['isBookmarkable'] ?? map['is_bookmarkable']),
+        bookmarkStateKnown: bookmarkStateKnown,
+        canLoadBookmarkState: !bookmarkStateKnown,
       ),
     );
   }
@@ -728,6 +785,7 @@ PixivAuthor parsePixivAuthorInfo(Map<String, dynamic> body) {
         ? _normalizePlainComment(plainComment)
         : stripPixivHtml(_str(body['commentHtml'])),
     following: _int(body['following']),
+    isFollowed: _bool(body['isFollowed']),
   );
 }
 
@@ -836,7 +894,8 @@ String describePixivJsonShape(dynamic value, {int maxKeys = 10}) {
   if (value is Map) {
     final keys = value.keys.map((key) => key.toString()).toList();
     final shown = keys.take(maxKeys).join(', ');
-    final suffix = keys.length > maxKeys ? ', …(+${keys.length - maxKeys})' : '';
+    final suffix =
+        keys.length > maxKeys ? ', …(+${keys.length - maxKeys})' : '';
     return 'Map(键: $shown$suffix)';
   }
   if (value is List) {

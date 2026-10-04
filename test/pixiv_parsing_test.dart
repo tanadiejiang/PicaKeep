@@ -228,6 +228,73 @@ void main() {
     });
   });
 
+  group('Pixiv 榜单解析', () {
+    test('下划线字段保留头像、作者、比例与页数', () {
+      final items = parsePixivRankingItems(<String, dynamic>{
+        'contents': <dynamic>[
+          <String, dynamic>{
+            'illust_id': 150377984,
+            'title': '榜单作品',
+            'url': 'https://i.pximg.net/c/480x960/img-master/a.jpg',
+            'tags': <dynamic>['标签一', '标签二'],
+            'illust_type': '0',
+            'illust_page_count': '7',
+            'user_id': 2119505,
+            'user_name': '榜单作者',
+            'profile_img': 'https://i.pximg.net/user-profile/a_50.jpg',
+            'width': '1389',
+            'height': 1736,
+          },
+        ],
+      });
+      final item = items.single;
+      expect(item.authorId, '2119505');
+      expect(item.authorAvatar, endsWith('_50.jpg'));
+      expect(item.width, 1389);
+      expect(item.height, 1736);
+      expect(item.pageCount, 7);
+      expect(item.tags, ['标签一', '标签二']);
+      expect(item.isBookmarked, isFalse,
+          reason: 'ranking.php 当前响应不带 bookmarkData');
+      expect(item.isBookmarkable, isFalse, reason: '未知收藏能力由按需读取后再确认');
+      expect(item.bookmarkStateKnown, isFalse,
+          reason: '排名响应不提供当前账号收藏态，点击时再查作品详情');
+    });
+
+    test('可选收藏字段存在时沿用通用状态映射', () {
+      final item = parsePixivRankingItems(<String, dynamic>{
+        'contents': <dynamic>[
+          <String, dynamic>{
+            'illust_id': '1',
+            'title': '已收藏',
+            'url': 'cover',
+            'user_id': '2',
+            'user_name': '作者',
+            'profile_img': 'avatar',
+            'bookmarkData': <String, dynamic>{'id': '3'},
+            'is_bookmarkable': true,
+          },
+        ],
+      }).single;
+      expect(item.isBookmarked, isTrue);
+      expect(item.isBookmarkable, isTrue);
+    });
+
+    test('异常书签对象不会冒充已收藏状态', () {
+      final item = parsePixivRankingItems(<String, dynamic>{
+        'contents': <dynamic>[
+          <String, dynamic>{
+            'illust_id': '1',
+            'bookmarkData': <String, dynamic>{'id': 'invalid'},
+          },
+        ],
+      }).single;
+      expect(item.isBookmarked, isFalse);
+      expect(item.bookmarkStateKnown, isFalse);
+      expect(item.canLoadBookmarkState, isTrue);
+    });
+  });
+
   group('Pixiv ID 提取', () {
     test('支持裸 ID / pixiv 前缀 / 作品链接 / 语言段链接', () {
       expect(extractPixivNumericId('12345678'), '12345678');
@@ -407,7 +474,8 @@ void main() {
       // 正则刻意排除花括号，避免把 api 之后**其它对象**里的 token 张冠李戴。
       // 实测首页里 token 就在 api 的第一位，所以这条限制不影响真实页面；
       // 保留这个断言是为了防止后人"顺手优化"掉这层保护。
-      const html = r'"api":{"services":{"boot":"x"},"token":"deadbeefcafe1234"}';
+      const html =
+          r'"api":{"services":{"boot":"x"},"token":"deadbeefcafe1234"}';
       expect(parsePixivCsrfTokenFromHtml(html), isNull);
     });
 

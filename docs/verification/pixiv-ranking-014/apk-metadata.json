@@ -1,0 +1,30 @@
+{
+    "completed_at":  "2026-10-04T17:09:13.3252311+08:00",
+    "command":  "flutter build apk --profile --target-platform android-arm64",
+    "mode":  "profile",
+    "target_platform":  "android-arm64",
+    "apk":  "D:\\Flutter_Projucts\\PicaComic\\PicaKeep\\build\\verification\\pixiv-ranking-014\\app-after014-profile.apk",
+    "bytes":  71912498,
+    "sha256":  "54E9B3665E960CA0311C0E69412252E37EC46D5F02CC5516FE5307BE2931F375",
+    "input_count":  780,
+    "source_inputs_unchanged":  true,
+    "changed_inputs":  [
+
+                       ],
+    "enumeration_omissions_directly_rehashed":  [
+
+                                                ],
+    "identity":  [
+                     "package: name=\u0027lingxue.picakeep\u0027 versionCode=\u00277\u0027 versionName=\u00271.9.90\u0027 platformBuildVersionName=\u002716\u0027 platformBuildVersionCode=\u002736\u0027 compileSdkVersion=\u002736\u0027 compileSdkVersionCodename=\u002716\u0027",
+                     "sdkVersion:\u002724\u0027",
+                     "targetSdkVersion:\u002736\u0027",
+                     "native-code: \u0027arm64-v8a\u0027 \u0027armeabi-v7a\u0027 \u0027x86_64\u0027"
+                 ],
+    "installed":  false,
+    "tests":  {
+                  "passed":  78,
+                  "skipped":  1,
+                  "failed":  0,
+                  "analyze":  "flutter analyze lib test: exit 0, No issues found; whole-workspace analyze reports existing tool/_tmp preview diagnostics outside this fix"
+              }
+}

@@ -224,11 +224,12 @@ class OnlineComicListItem extends StatelessWidget {
 ///
 /// 转场统一用 [AppPageRoute]（与搜索页改造前一致）：它有项目统一的滑动转场与
 /// 桌面/移动端一致的边缘返回手势；换成 `MaterialPageRoute` 会静默丢掉这两项。
-void openOnlineComic(
-    BuildContext context, ComicSource source, BaseComic comic) {
+Future<void> openOnlineComic(
+    BuildContext context, ComicSource source, BaseComic comic) async {
   final builder = source.comicPageBuilder;
   if (builder == null) return;
-  Navigator.of(context).push(AppPageRoute(builder: (_) => builder(comic)));
+  await Navigator.of(context)
+      .push<void>(AppPageRoute(builder: (_) => builder(comic)));
 }
 
 /// 关键词屏蔽匹配（探索列表展示层用）。

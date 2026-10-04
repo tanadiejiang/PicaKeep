@@ -357,6 +357,7 @@ class OnlineComicIconAction extends StatelessWidget {
           children: [
             busy
                 ? const SizedBox(
+                    key: ValueKey('online-comic-favorite-progress'),
                     width: 20,
                     height: 20,
                     child: CircularProgressIndicator(strokeWidth: 2),

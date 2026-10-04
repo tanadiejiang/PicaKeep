@@ -1,0 +1,24 @@
+{
+  "completed_at": "2026-10-04T12:20:28+08:00",
+  "command": "flutter build apk --profile",
+  "mode": "profile",
+  "apk": "D:\\Flutter_Projucts\\PicaComic\\PicaKeep\\build\\verification\\illust-tags-003\\app-after003-profile.apk",
+  "bytes": 129329379,
+  "sha256": "1EA5B66B19A10E7726BA184C7D3BCC76475D662154EF329467B472440EDFA53B",
+  "input_count": 774,
+  "source_inputs_unchanged": true,
+  "changed_inputs": [],
+  "identity": [
+    "package: name='lingxue.picakeep' versionCode='6' versionName='1.9.89' platformBuildVersionName='16' platformBuildVersionCode='36' compileSdkVersion='36' compileSdkVersionCodename='16'",
+    "sdkVersion:'24'",
+    "targetSdkVersion:'36'",
+    "native-code: 'arm64-v8a' 'armeabi-v7a' 'x86_64'"
+  ],
+  "installed": false,
+  "tests": {
+    "passed": 2374,
+    "skipped": 14,
+    "failed": 0,
+    "analyze": "No issues found"
+  }
+}

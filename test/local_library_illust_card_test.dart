@@ -20,6 +20,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'dart:typed_data';
 import 'dart:ui' show SemanticsAction, Tristate;
 import 'package:picakeep/foundation/download_model.dart';
+import 'package:picakeep/components/comic_tag_wrap.dart';
+import 'package:picakeep/foundation/comic_tile_display_config.dart';
 import 'package:picakeep/foundation/illust_card_info_config.dart';
 import 'package:picakeep/foundation/local_library.dart';
 import 'package:picakeep/foundation/local_library_illust_view.dart';
@@ -70,6 +72,7 @@ Widget _harness({
   String infoSeparator = '\n',
   TextScaler textScaler = TextScaler.noScaling,
   double columnWidth = 120,
+  WaterfallTagDisplayConfig tagConfig = WaterfallTagDisplayConfig.defaults,
 }) {
   return MaterialApp(
     home: Scaffold(
@@ -85,6 +88,7 @@ Widget _harness({
               infoSpans: infoSpans,
               infoFields: infoFields,
               infoSeparator: infoSeparator,
+              tagConfig: tagConfig,
               onTap: () {},
               onLongPress: () {},
             ),
@@ -99,6 +103,68 @@ Widget _harness({
 Image _imageIn(WidgetTester tester) => tester.widget<Image>(find.byType(Image));
 
 void main() {
+  testWidgets('本地插画不限标签自然增高，统一封面圆角为4dp', (tester) async {
+    final base = _entry(width: 600, height: 800);
+    const config = WaterfallTagDisplayConfig(showTags: true, tagRows: 0);
+    await tester.pumpWidget(
+        _harness(entry: base, infoSpans: const [], tagConfig: config));
+    final before = tester.getSize(find.byType(IllustCard));
+    final cover = tester.getSize(find.byType(AspectRatio));
+    expect(tester.widget<ClipRRect>(find.byType(ClipRRect)).borderRadius,
+        BorderRadius.circular(4));
+    final tagged = IllustLibraryEntry(
+        item: base.item,
+        aspectRatio: base.aspectRatio,
+        tags: List.generate(10, (i) => '作品标签-$i'),
+        width: base.width,
+        height: base.height);
+    await tester.pumpWidget(
+        _harness(entry: tagged, infoSpans: const [], tagConfig: config));
+    expect(tester.getSize(find.byType(IllustCard)).height,
+        greaterThan(before.height));
+    expect(tester.getSize(find.byType(AspectRatio)), cover);
+    expect(find.byType(ComicTagChip), findsNWidgets(10));
+    expect(tester.takeException(), isNull);
+  });
+  testWidgets('本地标签独立于信息模板，补齐标签不改预算，空模板仍可管理', (tester) async {
+    final base = _entry(width: 600, height: 800);
+    const config = WaterfallTagDisplayConfig(showTags: true, tagRows: 2);
+    await tester.pumpWidget(
+        _harness(entry: base, infoSpans: const [], tagConfig: config));
+    final before = tester.getSize(find.byType(IllustCard));
+    expect(find.byType(ComicTagWrap), findsOneWidget);
+    final tagged = IllustLibraryEntry(
+        item: base.item,
+        aspectRatio: base.aspectRatio,
+        tags: List.generate(80, (i) => '作品标签-$i'),
+        width: base.width,
+        height: base.height);
+    await tester.pumpWidget(
+        _harness(entry: tagged, infoSpans: const [], tagConfig: config));
+    expect(tester.getSize(find.byType(IllustCard)), before);
+    expect(find.byType(ComicTagChip), findsNWidgets(2));
+    var detail = 0, longPress = 0, read = 0;
+    await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+            body: Align(
+      alignment: Alignment.topLeft,
+      child: SizedBox(
+          width: 120,
+          child: IllustCard(
+            entry: tagged,
+            imageProvider: null,
+            infoSpans: const [],
+            tagConfig: config,
+            onTap: () => read++,
+            onInfoTap: () => detail++,
+            onLongPress: () => longPress++,
+          )),
+    ))));
+    await tester.tap(find.byType(ComicTagChip).first);
+    await tester.longPress(find.byType(ComicTagChip).first);
+    expect([read, detail, longPress], [0, 1, 1]);
+    expect(tester.takeException(), isNull);
+  });
   group('异步信息补齐的布局预留', () {
     testWidgets('未知页数变为 p2 不推动卡片下方，占位不渲染或朗读', (tester) async {
       final semantics = tester.ensureSemantics();
@@ -194,7 +260,8 @@ void main() {
       expect(find.byType(Text), findsNothing);
       await tester.pumpWidget(_harness(
           entry: entry.withResolvedInfo(pageCount: 1), infoFields: fields));
-      expect(tester.getSize(find.byType(IllustCard)).height, lessThan(before.height));
+      expect(tester.getSize(find.byType(IllustCard)).height,
+          lessThan(before.height));
       expect(find.byType(Text), findsNothing);
       await tester.pumpWidget(_harness(
           entry: entry.withResolvedInfo(pageCount: 2), infoFields: fields));

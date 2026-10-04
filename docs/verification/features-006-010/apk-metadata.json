@@ -1,0 +1,28 @@
+{
+  "completed_at": "2026-10-04T15:32:33.1534498+08:00",
+  "command": "flutter build apk --profile --target-platform android-arm64",
+  "mode": "profile",
+  "target_platform": "android-arm64",
+  "apk": "D:\\Flutter_Projucts\\PicaComic\\PicaKeep\\build\\verification\\features-006-010\\app-after006-010-profile.apk",
+  "bytes": 72207410,
+  "sha256": "06FC197EE9EBBB83BBEC7F5ACADF419096FF9D934BD70D4D7B3E7DD240DFE962",
+  "input_count": 780,
+  "source_inputs_unchanged": true,
+  "changed_inputs": [],
+  "enumeration_omissions_directly_rehashed": [],
+  "identity": [
+    "package: name='lingxue.picakeep' versionCode='6' versionName='1.9.89' platformBuildVersionName='16' platformBuildVersionCode='36' compileSdkVersion='36' compileSdkVersionCodename='16'",
+    "sdkVersion:'24'",
+    "targetSdkVersion:'36'",
+    "native-code: 'arm64-v8a' 'armeabi-v7a' 'x86_64'"
+  ],
+  "installed": false,
+  "tests": {
+    "passed": 2501,
+    "skipped": 14,
+    "failed": 0,
+    "post_lint_regressions_passed": 87,
+    "analyze": "flutter analyze --no-fatal-infos: exit 0, 0 errors, 0 warnings, 6 infos in existing tool/_tmp preview scripts; application and changed tests clean"
+  },
+  "libapp_sha256": "575799DC72CC854D22CBAAA2756E6AC402C94F6AD3AC4554472B1B685285EC18"
+}

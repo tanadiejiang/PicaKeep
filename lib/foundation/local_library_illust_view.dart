@@ -124,6 +124,22 @@ String normalizeIllustViewSwitcherPosition(String? value) {
 bool illustViewSwitcherAlignsLeft(String? value) =>
     normalizeIllustViewSwitcherPosition(value) == illustViewSwitcherLeft;
 
+/// `settings[]` 下标：插画搜索关键词是否同时匹配作品标签（19 号）。
+///
+/// 默认 `'0'`（关）—— 保持 56 号引入搜索面板时的匹配范围不变
+/// （只匹配标题与作者）；用户显式打开后才把 [IllustLibraryEntry.tags]
+/// 并入关键词匹配。
+///
+/// ⚠️ 索引**只能追加**，在已有下标之前插入会让后面所有下标漂移。
+const int illustSearchMatchTagsSettingIndex = 163;
+
+/// 归一化：只认 `'1'`，其余（含未设置、脏值）一律回落到 `'0'`（关）。
+String normalizeIllustSearchMatchTags(String? value) =>
+    value == '1' ? '1' : '0';
+
+/// 读取开关：只有 `'1'` 为真。
+bool illustSearchMatchesTags(String? value) => value == '1';
+
 /// 是否显示视图切换悬浮按钮。
 ///
 /// 抽成纯函数是为了能被直接测试：这条判据同时承担两个易错的约束 ——
@@ -508,6 +524,31 @@ List<IllustLibraryEntry> filterIllustEntriesByTags(
     }
     return true;
   }).toList(growable: false);
+}
+
+/// 关键词是否命中一条插画条目（19 号）。
+///
+/// 语义（刻意与 [filterIllustEntriesByTags] 分开，别"统一"它们）：
+/// - 恒匹配**标题**（`item.name`）与**作者**（`item.subTitle`），大小写不敏感；
+/// - [matchTags] 为真时，[IllustLibraryEntry.tags] 里任一标签**包含**关键词也算
+///   命中（子串匹配，与标题/作者口径一致）；
+/// - 关键词为空视为"未筛选"，恒为 `true`；
+/// - 标签维度是**子串搜索**，而 [filterIllustEntriesByTags] 是**精确相等筛选**：
+///   前者回答"用户找什么"，后者回答"用户勾了哪些标签"，两者不冲突也不等价。
+bool illustEntryMatchesKeyword(
+  IllustLibraryEntry entry,
+  String keyword, {
+  bool matchTags = false,
+}) {
+  final needle = keyword.trim().toLowerCase();
+  if (needle.isEmpty) return true;
+  if (entry.item.name.toLowerCase().contains(needle)) return true;
+  if (entry.item.subTitle.toLowerCase().contains(needle)) return true;
+  if (!matchTags) return false;
+  for (final tag in entry.tags) {
+    if (tag.toLowerCase().contains(needle)) return true;
+  }
+  return false;
 }
 
 int? _positiveInt(Object? raw) {

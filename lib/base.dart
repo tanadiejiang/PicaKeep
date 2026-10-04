@@ -198,6 +198,7 @@ class Appdata {
     '1', //160 readerHighQualityIllust 插画/图集阅读高清模式：1=原图（**默认开**）；0=降采样。与 159 分开是用户要求两类内容各自控制，默认值方向也相反
     'ask', //161 pixivTransferPolicy
     'ask', //162 pixivFolderDeletePolicy
+    '0', //163 illustSearchMatchTags 插画搜索关键词是否同时匹配作品标签：0=只匹配标题/作者（默认，与 56 号搜索面板行为一致）；1=标题/作者/标签任一命中。见 foundation/local_library_illust_view.dart
   ];
 
   List<String> implicitData = [
@@ -360,6 +361,9 @@ class Appdata {
             settings[readerHighQualityIllustSettingIndex]);
     settings[pixivTransferPolicyIndex] = normalizePixivTransferPolicy(settings[pixivTransferPolicyIndex]);
     settings[pixivFolderDeletePolicyIndex] = normalizePixivFolderDeletePolicy(settings[pixivFolderDeletePolicyIndex]);
+    // 插画搜索是否同时匹配标签（settings[163]，19 号）：只认 '1'，其余回落 '0'。
+    settings[illustSearchMatchTagsSettingIndex] =
+        normalizeIllustSearchMatchTags(settings[illustSearchMatchTagsSettingIndex]);
     setManagedDataSourceMode(settings[managedDataSourceModeSettingIndex]);
     _syncArchiveRuntimeSettings();
     var settingsChanged = hadMissingSettings;
@@ -566,6 +570,9 @@ class Appdata {
               settings[readerHighQualityIllustSettingIndex]);
       settings[pixivTransferPolicyIndex] = normalizePixivTransferPolicy(settings[pixivTransferPolicyIndex]);
       settings[pixivFolderDeletePolicyIndex] = normalizePixivFolderDeletePolicy(settings[pixivFolderDeletePolicyIndex]);
+      // 与 readSettings 同一行：导入路径也必须归一化（漏一处就会出现"导入后不生效"）。
+      settings[illustSearchMatchTagsSettingIndex] =
+          normalizeIllustSearchMatchTags(settings[illustSearchMatchTagsSettingIndex]);
       setManagedDataSourceMode(settings[managedDataSourceModeSettingIndex]);
       settings[22] = downloadPath;
       settings[13] = authRequired;

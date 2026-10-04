@@ -304,6 +304,55 @@ void main() {
     });
   });
 
+  for (final view in IllustLibraryView.values) {
+    testWidgets('${view.name} search rebuilds page only for text edits',
+        (tester) async {
+      appdata.settings[illustLibraryViewSettingIndex] = view.name;
+      await pushPage(tester, albumOnly: true, title: '图集');
+      await tester.tap(find.byTooltip('搜索'));
+      await settleDisk(tester);
+      final field = tester.widget<TextField>(find.byType(TextField));
+      final controller = field.controller!;
+      final previous = debugOnRebuildDirtyWidget;
+      var pageBuilds = 0;
+      debugOnRebuildDirtyWidget = (element, builtOnce) {
+        previous?.call(element, builtOnce);
+        if (element.widget is LocalLibraryPage) pageBuilds++;
+      };
+      addTearDown(() => debugOnRebuildDirtyWidget = previous);
+
+      controller.text = 'needle';
+      await tester.pump();
+      expect(pageBuilds, greaterThan(0),
+          reason:
+              'actual keyword edits must still update filtering immediately');
+      await settleDisk(tester);
+      pageBuilds = 0;
+
+      controller.selection = const TextSelection.collapsed(offset: 2);
+      await tester.pump();
+      controller.value = controller.value
+          .copyWith(composing: const TextRange(start: 0, end: 3));
+      await tester.pump();
+      expect(pageBuilds, 0,
+          reason: 'cursor and IME range changes do not change the filter');
+
+      controller.text = 'needle ';
+      await tester.pump();
+      expect(pageBuilds, greaterThan(0),
+          reason: 'preserve exact text edits, including whitespace');
+      pageBuilds = 0;
+      controller.clear();
+      await tester.pump();
+      expect(pageBuilds, greaterThan(0),
+          reason: 'clearing must refresh the page immediately');
+      expect(controller.text, isEmpty);
+      expect(tester.takeException(), isNull);
+      debugOnRebuildDirtyWidget = previous;
+      await tester.pumpWidget(const SizedBox.shrink());
+    });
+  }
+
   group('工具栏宽度：只能容下 4 个 action（窄屏不被挤爆）', () {
     Future<void> setWidth(WidgetTester tester, double width) async {
       tester.view.physicalSize = Size(width, 800);

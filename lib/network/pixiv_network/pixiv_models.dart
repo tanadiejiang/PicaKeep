@@ -40,6 +40,12 @@ class PixivComicBrief extends BaseComic {
     required this.pageCount,
     this.width,
     this.height,
+    this.authorId = '',
+    this.authorAvatar = '',
+    this.isBookmarked = false,
+    this.isBookmarkable = false,
+    this.bookmarkStateKnown = true,
+    this.canLoadBookmarkState = false,
   });
 
   @override
@@ -75,6 +81,46 @@ class PixivComicBrief extends BaseComic {
   final int? width;
   final int? height;
 
+  /// 列表响应自带的作者UID与50px头像，不额外逐项查询详情。
+  final String authorId;
+  final String authorAvatar;
+
+  /// 当前请求账号的书签状态。
+  final bool isBookmarked;
+  final bool isBookmarkable;
+
+  /// 是否已经从当前账号的响应中确认过 [isBookmarked]。
+  ///
+  /// 推荐/搜索响应带 `bookmarkData` 时为 true。排行榜接口不带收藏态，
+  /// 但可以在用户点击收藏时按需读取作品详情补齐，避免进入榜单就逐项请求。
+  final bool bookmarkStateKnown;
+
+  /// 榜单条目允许点按时查询详情，确认能力后再执行收藏操作。
+  final bool canLoadBookmarkState;
+
+  PixivComicBrief copyWith({
+    bool? isBookmarked,
+    bool? isBookmarkable,
+    bool? bookmarkStateKnown,
+  }) =>
+      PixivComicBrief(
+        id: id,
+        title: title,
+        cover: cover,
+        author: author,
+        tags: tags,
+        illustType: illustType,
+        pageCount: pageCount,
+        width: width,
+        height: height,
+        authorId: authorId,
+        authorAvatar: authorAvatar,
+        isBookmarked: isBookmarked ?? this.isBookmarked,
+        isBookmarkable: isBookmarkable ?? this.isBookmarkable,
+        bookmarkStateKnown: bookmarkStateKnown ?? this.bookmarkStateKnown,
+        canLoadBookmarkState: canLoadBookmarkState,
+      );
+
   @override
   String get subTitle => author;
 
@@ -83,9 +129,20 @@ class PixivComicBrief extends BaseComic {
   String get description => '';
 }
 
+/// 点按榜单心形时读取的当前账号书签状态与添加能力。
+class PixivBookmarkState {
+  const PixivBookmarkState({
+    required this.isBookmarked,
+    required this.isBookmarkable,
+  });
+
+  final bool isBookmarked;
+  final bool isBookmarkable;
+}
+
 /// Pixiv 作者（用户）资料（`/ajax/user/{uid}?full=1` 的 `body`）。
 ///
-/// 只保留作者页真正要展示的字段：展示名、头像、简介、关注数。
+/// 保留作者页展示字段，以及当前登录用户对作者的关注状态。
 /// 不可变：所有字段 `final`，构造为 `const`（理由同本文件头部注释：
 /// 本文件必须能在纯 `dart test` 下被解析层 import）。
 class PixivAuthor {
@@ -95,6 +152,7 @@ class PixivAuthor {
     required this.avatar,
     required this.comment,
     required this.following,
+    this.isFollowed = false,
   });
 
   /// 作者 uid（`userId`）。
@@ -112,6 +170,18 @@ class PixivAuthor {
 
   /// 关注数（`following`）；字段缺失时为 0（不显示该行）。
   final int following;
+
+  /// 当前请求账号是否关注该作者（`isFollowed`），游客为 false。
+  final bool isFollowed;
+
+  PixivAuthor copyWith({bool? isFollowed}) => PixivAuthor(
+        id: id,
+        name: name,
+        avatar: avatar,
+        comment: comment,
+        following: following,
+        isFollowed: isFollowed ?? this.isFollowed,
+      );
 }
 
 /// Pixiv 作品详情（`/ajax/illust/{id}` 的 `body` 对象）。
@@ -138,6 +208,8 @@ class PixivComicInfo {
     required this.createDate,
     required this.uploadDate,
     required this.userId,
+    this.isBookmarked = false,
+    this.bookmarkId,
   });
 
   /// 作品 id（`illustId`，兼容 `id`）。
@@ -189,8 +261,14 @@ class PixivComicInfo {
   /// 上传时间（`uploadDate`，同上，保持原样字符串不做时区转换）。
   final String uploadDate;
 
-  /// 当前请求用户 id（Pixiv 详情响应里的 `userId`，登录态下为账号 uid）。
+  /// 作品作者 uid（详情响应 `userId`）；不是当前登录账号 uid。
   final String userId;
+
+  /// 当前请求账号是否已收藏该作品（详情 `bookmarkData`）。
+  final bool isBookmarked;
+
+  /// 当前账号的书签 ID（`bookmarkData.id`），与作品 ID 不同。
+  final String? bookmarkId;
 }
 
 /// Pixiv 单页图片的多档 URL（`/ajax/illust/{id}/pages` 的数组元素）。

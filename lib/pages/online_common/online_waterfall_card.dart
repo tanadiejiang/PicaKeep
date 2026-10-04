@@ -7,24 +7,27 @@
 /// （封面走网络、没有本地路径、没有可配置字段）。硬套会为了一个"看起来一样"
 /// 而把本地侧的模型渗进在线链路。
 ///
-/// 所以这里只**复用视觉常量**（[illustCardGap] / [illustCardImageRadius]）与
+/// 所以这里只**复用视觉常量**（[illustCardGap]）与
 /// 页数文案函数（`illustCardInfoPageText`），排版数值与插画卡片保持一致 ——
 /// 用户看到的是同一个设计语言，而不是两套"长得像"的东西。
 library;
 
 import 'package:flutter/material.dart';
+import 'package:picakeep/components/comic_tag_wrap.dart';
+import 'package:picakeep/foundation/comic_tile_display_config.dart';
 
 import 'package:picakeep/foundation/illust_card_info_config.dart'
     show illustCardInfoPageText;
 import 'package:picakeep/foundation/local_library_illust_view.dart'
     show illustAspectRatioForSize;
 import 'package:picakeep/pages/local_library_illust_card.dart'
-    show illustCardGap, illustCardImageRadius;
+    show illustCardGap;
 
 import 'online_comic_list_item.dart' show onlineCoverProvider;
 
 /// 解码宽度的冗余系数（与 `IllustCard` 同口径）。
 const double _decodeQualityScale = 1.35;
+const double onlineWaterfallImageRadius = 8;
 
 /// 在线作品的瀑布流卡片：**近无边框大图 + 底部标题/作者/页数**。
 ///
@@ -43,6 +46,16 @@ class OnlineWaterfallCard extends StatelessWidget {
     this.pageCount = 0,
     this.width,
     this.height,
+    this.tags = const <String>[],
+    this.tagConfig = WaterfallTagDisplayConfig.defaults,
+    this.authorAvatarUrl = '',
+    this.showAuthorAvatar = false,
+    this.onAuthorTap,
+    this.isFavorited = false,
+    this.favoriteStateKnown = true,
+    this.onToggleFavorite,
+    this.favoriteBusy = false,
+    this.favoriteStyle = WaterfallFavoriteStyle.defaults,
   });
 
   final String title;
@@ -66,6 +79,16 @@ class OnlineWaterfallCard extends StatelessWidget {
   /// 原图宽高；用于算真实比例（缺失时按 3:4 占位）。
   final int? width;
   final int? height;
+  final List<String> tags;
+  final WaterfallTagDisplayConfig tagConfig;
+  final String authorAvatarUrl;
+  final bool showAuthorAvatar;
+  final VoidCallback? onAuthorTap;
+  final bool isFavorited;
+  final bool favoriteStateKnown;
+  final VoidCallback? onToggleFavorite;
+  final bool favoriteBusy;
+  final WaterfallFavoriteStyle favoriteStyle;
 
   /// 格子比例（恒为正有限数）。
   double get aspectRatio => illustAspectRatioForSize(width, height);
@@ -84,10 +107,21 @@ class OnlineWaterfallCard extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: <Widget>[
             ClipRRect(
-              borderRadius: BorderRadius.circular(illustCardImageRadius),
+              borderRadius: BorderRadius.circular(onlineWaterfallImageRadius),
               child: AspectRatio(
                 aspectRatio: aspectRatio,
-                child: _buildImage(context),
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    _buildImage(context),
+                    if (onToggleFavorite != null)
+                      Positioned(
+                        right: 0,
+                        bottom: 0,
+                        child: _favoriteButton(context),
+                      ),
+                  ],
+                ),
               ),
             ),
             const SizedBox(height: 4),
@@ -109,7 +143,9 @@ class OnlineWaterfallCard extends StatelessWidget {
                     ),
                   // 作者与页数合并成一行（用 `_` 连接，与下载产物名的记号一致）：
                   // 在线列表的宽度只有半屏，两行文字会把卡片撑得比图还高。
-                  if (author.trim().isNotEmpty || pagesText.isNotEmpty)
+                  if (showAuthorAvatar)
+                    _authorRow(context, pagesText)
+                  else if (author.trim().isNotEmpty || pagesText.isNotEmpty)
                     Text(
                       <String>[
                         if (author.trim().isNotEmpty) author.trim(),
@@ -122,11 +158,143 @@ class OnlineWaterfallCard extends StatelessWidget {
                         height: 1.2,
                       ),
                     ),
+                  if (tagConfig.showTags)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 2),
+                      child: ComicTagWrap(
+                        tags: tags
+                            .map((tag) => tag.trim())
+                            .where((tag) => tag.isNotEmpty)
+                            .toSet()
+                            .toList(),
+                        maxRows: tagConfig.maxTagRows,
+                        reserveRows: tagConfig.maxTagRows != null,
+                      ),
+                    ),
                 ],
               ),
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _favoriteButton(BuildContext context) => Semantics(
+        key: const ValueKey('waterfall-favorite'),
+        button: true,
+        enabled: !favoriteBusy,
+        toggled: favoriteStateKnown ? isFavorited : null,
+        label: favoriteBusy
+            ? favoriteStateKnown
+                ? '正在更新收藏'
+                : '正在读取收藏状态'
+            : !favoriteStateKnown
+                ? '切换平台收藏'
+                : isFavorited
+                    ? '取消平台收藏'
+                    : '加入平台收藏',
+        onTap: favoriteBusy ? null : onToggleFavorite,
+        child: ExcludeSemantics(
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            // Busy still consumes the tap so it cannot open the detail page.
+            onTap: favoriteBusy ? () {} : onToggleFavorite,
+            child: SizedBox(
+              width: 48,
+              height: 48,
+              child: favoriteBusy
+                  ? Icon(
+                      Icons.hourglass_top,
+                      key: const ValueKey('waterfall-favorite-progress'),
+                      size: 22,
+                      color: Theme.of(context).colorScheme.primary,
+                    )
+                  : Icon(
+                      isFavorited ? Icons.favorite : Icons.favorite_border,
+                      size: 22,
+                      color: isFavorited
+                          ? favoriteStyle.favoriteColor(context)
+                          : favoriteStyle.inactiveColor,
+                    ),
+            ),
+          ),
+        ),
+      );
+
+  Widget _authorRow(BuildContext context, String pagesText) {
+    final name = author.trim().isEmpty ? '未知作者' : author.trim();
+    final row = Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2),
+      child: Row(
+        children: [
+          ExcludeSemantics(child: _avatar(context, name)),
+          const SizedBox(width: 4),
+          Expanded(
+            child: Text(
+              name,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    height: 1.2,
+                  ),
+            ),
+          ),
+          if (pagesText.isNotEmpty)
+            Padding(
+              padding: const EdgeInsetsDirectional.only(start: 4),
+              child: Text(pagesText,
+                  style: Theme.of(context).textTheme.labelSmall),
+            ),
+        ],
+      ),
+    );
+    if (onAuthorTap == null) return row;
+    return Semantics(
+      key: const ValueKey('waterfall-author'),
+      label: '查看作者 $name',
+      button: true,
+      onTap: onAuthorTap,
+      child: ExcludeSemantics(
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: onAuthorTap,
+          child: row,
+        ),
+      ),
+    );
+  }
+
+  Widget _avatar(BuildContext context, String name) {
+    final fallback = ColoredBox(
+      color: Theme.of(context).colorScheme.secondaryContainer,
+      child: Center(
+        child: Text(name.characters.first,
+            style: Theme.of(context).textTheme.labelSmall),
+      ),
+    );
+    final url = authorAvatarUrl.trim();
+    final decodeSize =
+        (20 * MediaQuery.devicePixelRatioOf(context)).round().clamp(20, 60);
+    return SizedBox(
+      key: const ValueKey('waterfall-avatar'),
+      width: 20,
+      height: 20,
+      child: ClipOval(
+        child: url.isEmpty
+            ? fallback
+            : Image(
+                image: ResizeImage.resizeIfNeeded(
+                  decodeSize,
+                  decodeSize,
+                  onlineCoverProvider(url: url, headers: imageHeaders),
+                ),
+                fit: BoxFit.cover,
+                frameBuilder: (context, child, frame, synchronous) =>
+                    frame != null || synchronous ? child : fallback,
+                errorBuilder: (context, error, stackTrace) => fallback,
+              ),
       ),
     );
   }

@@ -29,6 +29,8 @@ library;
 
 import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter/material.dart';
+import 'package:picakeep/components/comic_tag_wrap.dart';
+import 'package:picakeep/foundation/comic_tile_display_config.dart';
 
 import 'package:picakeep/foundation/illust_card_info_config.dart';
 import 'package:picakeep/foundation/local_library_illust_view.dart';
@@ -42,7 +44,7 @@ import 'package:picakeep/foundation/local_library_illust_view.dart';
 const double illustCardGap = 3;
 
 /// 图片圆角。
-const double illustCardImageRadius = 8;
+const double illustCardImageRadius = 4;
 
 /// 解码宽度的冗余系数。
 ///
@@ -69,6 +71,7 @@ class IllustCard extends StatelessWidget {
     this.selected = false,
     this.selecting = false,
     this.onCoverError,
+    this.tagConfig = WaterfallTagDisplayConfig.defaults,
   });
 
   final IllustLibraryEntry entry;
@@ -107,6 +110,7 @@ class IllustCard extends StatelessWidget {
   final bool selected;
   final bool selecting;
   final VoidCallback? onCoverError;
+  final WaterfallTagDisplayConfig tagConfig;
 
   /// 本控件实际会渲染的信息片段（显式传入，或走默认配置）。
   List<IllustCardInfoSpan> get _effectiveInfoSpans =>
@@ -169,16 +173,37 @@ class IllustCard extends StatelessWidget {
             fields: infoFields,
             separator: infoSeparator,
             spans: spans,
+            forceVisible: tagConfig.showTags,
             builder: (layoutSpans) => Padding(
               padding: const EdgeInsets.only(top: 4),
               child: _tappable(
                 onTap: onInfoTap ?? onTap,
                 label:
-                    '详情与管理：${spans.map((s) => s.text).join()}${locationLabel == null ? "" : "，$locationLabel"}',
+                    '详情与管理：${spans.map((s) => s.text).join()}${locationLabel == null ? "" : "，$locationLabel"}${tagConfig.showTags && entry.tags.isNotEmpty ? "，标签：${entry.tags.join('，')}" : ""}',
                 child: Padding(
                   // 上边距取 1 而不是 2：信息块整体要"轻"，把纵向空间让给图片。
                   padding: const EdgeInsets.symmetric(horizontal: 2),
-                  child: _buildInfoText(theme, spans, layoutSpans),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      if (spans.isNotEmpty || layoutSpans != null)
+                        _buildInfoText(theme, spans, layoutSpans),
+                      if (tagConfig.showTags)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 2),
+                          child: ComicTagWrap(
+                            tags: entry.tags
+                                .map((tag) => tag.trim())
+                                .where((tag) => tag.isNotEmpty)
+                                .toSet()
+                                .toList(),
+                            maxRows: tagConfig.maxTagRows,
+                            reserveRows: tagConfig.maxTagRows != null,
+                          ),
+                        ),
+                    ],
+                  ),
                 ),
               ),
             ),
@@ -391,6 +416,7 @@ class _IllustInfoLayout extends StatefulWidget {
     required this.separator,
     required this.spans,
     required this.builder,
+    this.forceVisible = false,
   });
 
   final IllustLibraryEntry entry;
@@ -398,6 +424,7 @@ class _IllustInfoLayout extends StatefulWidget {
   final String separator;
   final List<IllustCardInfoSpan> spans;
   final Widget Function(List<IllustCardInfoSpan>? layoutSpans) builder;
+  final bool forceVisible;
 
   @override
   State<_IllustInfoLayout> createState() => _IllustInfoLayoutState();
@@ -437,7 +464,9 @@ class _IllustInfoLayoutState extends State<_IllustInfoLayout> {
             fields: widget.fields!,
             separator: widget.separator,
             reservedFields: _reservedFields);
-    if (widget.spans.isEmpty && (layoutSpans?.isEmpty ?? true)) {
+    if (!widget.forceVisible &&
+        widget.spans.isEmpty &&
+        (layoutSpans?.isEmpty ?? true)) {
       return const SizedBox.shrink();
     }
     return widget.builder(layoutSpans);

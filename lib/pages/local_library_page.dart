@@ -18,6 +18,7 @@ import 'package:picakeep/components/library_view_selector.dart';
 import 'package:picakeep/components/scrollable.dart';
 import 'package:picakeep/foundation/app.dart';
 import 'package:picakeep/foundation/app_runtime_mode.dart';
+import 'package:picakeep/foundation/comic_tile_display_config.dart';
 import 'package:picakeep/foundation/archive/archive_password_store.dart';
 import 'package:picakeep/foundation/download_model.dart';
 import 'package:picakeep/foundation/download_snapshot_reader.dart';
@@ -50,6 +51,12 @@ import 'illust_folder_selector.dart';
 import 'package:picakeep/foundation/illust_folder_preferences.dart';
 import 'package:picakeep/foundation/illust_page_count_cache.dart';
 import 'illust_scroll_anchor.dart';
+
+/// 工具栏标题（标题文本 ↔ 搜索框）与搜索图标两态切换时长（19 号）。
+///
+/// 与搜索面板的 `illustSearchPanelAnimationDuration`（220ms）分开取值：
+/// 标题切换是"整块内容替换"，比高度过渡稍快一点更利落。
+const Duration illustSearchTitleAnimationDuration = Duration(milliseconds: 200);
 
 String _formatLocalLibrarySize(double sizeMb) {
   if (sizeMb >= 1024) {
@@ -713,6 +720,7 @@ class _LocalLibraryPageState extends State<LocalLibraryPage>
   final _manager = LocalLibraryManager();
   final _remoteDataSource = const RemoteLibraryDataSource();
   final _searchController = TextEditingController();
+  String _lastSearchText = '';
   final Set<String> _selectedItemIds = <String>{};
   bool _loading = true;
   bool _searchMode = false;
@@ -1004,10 +1012,16 @@ class _LocalLibraryPageState extends State<LocalLibraryPage>
       );
 
   /// 插画视图下、按已选标签筛过的条目。
+  ///
+  /// 关键词的匹配范围由 `settings[163]` 决定（19 号）：默认只匹配标题与作者，
+  /// 打开后连标签一起匹配。**匹配范围必须并进缓存键** —— 否则"关键词为空、
+  /// 只切开关"这一脚会命中旧缓存，界面毫无反应（表现为"功能没生效"）。
   List<IllustLibraryEntry> get _filteredIllustEntries {
     final keyword = _searchController.text.trim().toLowerCase();
+    final matchTags = illustSearchMatchesTags(
+        appdata.settings[illustSearchMatchTagsSettingIndex]);
     final filterKey =
-        '$keyword|$_pixivFolderFilter|${(_selectedIllustTags.toList()..sort()).join("|")}';
+        '$keyword|$_pixivFolderFilter|${(_selectedIllustTags.toList()..sort()).join("|")}|${matchTags ? 1 : 0}';
     if (_filteredIllustCache != null && _filteredIllustCacheKey == filterKey) {
       return _filteredIllustCache!;
     }
@@ -1021,9 +1035,7 @@ class _LocalLibraryPageState extends State<LocalLibraryPage>
             (selectedFolder == null ||
                 p.equals(
                     p.dirname(e.item.fileSystemPath!), selectedFolder.path)) &&
-            (keyword.isEmpty ||
-                e.item.name.toLowerCase().contains(keyword) ||
-                e.item.subTitle.toLowerCase().contains(keyword)))
+            illustEntryMatchesKeyword(e, keyword, matchTags: matchTags))
         .toList();
   }
 
@@ -1325,6 +1337,22 @@ class _LocalLibraryPageState extends State<LocalLibraryPage>
     });
   }
 
+  /// 搜索是否同时匹配标签（`settings[163]`，19 号）。
+  ///
+  /// 面板内开关、设置页「插画列表」、页内「资源库显示设置」三处共用这一条
+  /// 写入路径：先就地改值 + 清过滤缓存（立刻生效），再落盘 + 发显示设置通知。
+  /// 通知会回到本页 `_handleDisplaySettingsChanged`（:1385-1396），那里会再
+  /// setState 并清一次缓存 —— 两处都清是刻意的：它同时让设置页那边的开关值
+  /// 在下次进入时读到新值。
+  Future<void> _setIllustSearchMatchTags(bool value) async {
+    setState(() {
+      appdata.settings[illustSearchMatchTagsSettingIndex] = value ? '1' : '0';
+      _filteredIllustCache = null;
+    });
+    await appdata.updateSettings();
+    App.notifyDisplaySettingsChanged();
+  }
+
   Widget _buildIllustSearch() => IllustSearchPanel(
         expanded: _searchMode,
         controller: _searchController,
@@ -1334,6 +1362,10 @@ class _LocalLibraryPageState extends State<LocalLibraryPage>
         onToggleTag: _toggleIllustTag,
         onClear: _clearIllustSearch,
         onExpand: () => setState(() => _searchMode = true),
+        onCollapse: () => setState(() => _searchMode = false),
+        matchTags: illustSearchMatchesTags(
+            appdata.settings[illustSearchMatchTagsSettingIndex]),
+        onMatchTagsChanged: _setIllustSearchMatchTags,
       );
 
   @override
@@ -1355,11 +1387,8 @@ class _LocalLibraryPageState extends State<LocalLibraryPage>
     // 而这三个值都只在 `build` 里读。不监听的话症状是
     // "在设置里改了、返回后没反应"，用户会以为改坏了。
     App.displaySettingsVersion.addListener(_handleDisplaySettingsChanged);
-    _searchController.addListener(() {
-      if (mounted) {
-        setState(() {});
-      }
-    });
+    _lastSearchText = _searchController.text;
+    _searchController.addListener(_handleSearchTextChanged);
     _load();
   }
 
@@ -1379,6 +1408,19 @@ class _LocalLibraryPageState extends State<LocalLibraryPage>
     WidgetsBinding.instance.removeObserver(this);
     _searchController.dispose();
     super.dispose();
+  }
+
+  void _handleSearchTextChanged() {
+    final text = _searchController.text;
+    if (text == _lastSearchText) {
+      return;
+    }
+    // Selection/composing updates are handled by TextField itself and do not
+    // change the library filter. Actual text edits still filter immediately.
+    _lastSearchText = text;
+    if (mounted) {
+      setState(() {});
+    }
   }
 
   /// 显示类设置变了 → 只重建，**不重扫本地库**（那会白扫几百个目录）。
@@ -1880,6 +1922,22 @@ class _LocalLibraryPageState extends State<LocalLibraryPage>
                           }
                         },
                       ),
+                      // 搜索关键词是否同时匹配作品标签（`settings[163]`，19 号）。
+                      // 这里与设置页「插画列表」区写的是同一个索引，不需要额外
+                      // 同步代码 —— 项目既有约定是"页面内一处 + 设置页一处"
+                      // （上面那条「视图切换按钮位置」就是同一个模式）。
+                      if (_isIllustView)
+                        SwitchListTile(
+                          value: illustSearchMatchesTags(appdata
+                              .settings[illustSearchMatchTagsSettingIndex]),
+                          title: Text('搜索同时匹配标签'.tl),
+                          subtitle: Text('关键词除标题、作者外，也匹配作品标签'.tl),
+                          secondary: const Icon(Icons.sell_outlined),
+                          onChanged: (value) async {
+                            await _setIllustSearchMatchTags(value);
+                            setDialogState(() {});
+                          },
+                        ),
                     ],
                   ),
                 ),
@@ -2394,45 +2452,82 @@ class _LocalLibraryPageState extends State<LocalLibraryPage>
         operationRunning: false,
       );
 
+  /// 工具栏标题。
+  ///
+  /// 图集侧的搜索入口就是**标题本身**（19 号补了过渡）：点搜索时标题文本与
+  /// 搜索框之间交叉淡化，工具栏图标同步 search ↔ close 切换。
   Widget _buildTitle() {
-    if (_searchMode && !_selecting && !_isIllustView) {
-      return TextField(
-        controller: _searchController,
-        autofocus: true,
-        decoration: InputDecoration(
-          border: InputBorder.none,
-          hintText: '搜索'.tl,
-        ),
-      );
-    }
     if (_selecting) {
       return Text('已选择 @num 个项目'.tlParams({'num': _selectedCount.toString()}));
     }
-    // 标题的三条来源与**优先级**（33 号明确写出，避免以后再加分支时各猜一套）：
-    //
-    // 1. **视图**（最高）：本页确实能切「图集 / 插画」时，标题跟着视图走 ——
-    //    用户原话「顶部的画集标题应该随着按钮的切换而切换」。文案直接取
-    //    [illustViewLabel]，与悬浮按钮上的标识**同一个函数**，不会出现
-    //    "按钮写着插画、标题写着图集"。
-    //
-    //    ⚠️ 这条**必须高于 `widget.title`**，否则本需求在主入口上根本不生效：
-    //    从「我」页进图集页时传的就是 `title: '图集'`
-    //    （`me_page.dart:454-457`），若 `widget.title` 优先，切到插画后标题仍是
-    //    「图集」—— 那正是 33 号真机截图里的症状。
-    //    计划文里"建议 widget.title > 视图"的写法在这一点上与主需求冲突，故取
-    //    "视图 > widget.title"；实际可见结果反而更稳：图集侧渲染出来仍是「图集」
-    //    （与该页传进来的 `widget.title` 逐字相同），只有切到插画才变。
-    //
-    // 2. **显式 `widget.title`**：子页面（本地根 / 远程根，标题是那个根的名字）
-    //    与任何调用方指定的标题。这些页 `_isIllustSwitchableRoot` 为假，所以上面
-    //    那条不会截走它们 —— 既有行为**一点没改**。
-    //
-    // 3. **`albumOnly`**（最低，既有分支）：`widget.title` 没给时，
-    //    `图集` / `资源库`。行为与改动前逐字一致。
+    final searching = _searchMode && !_isIllustView;
+    final Widget child = searching
+        ? TextField(
+            key: const ValueKey('local-library-title-search'),
+            controller: _searchController,
+            autofocus: true,
+            decoration: InputDecoration(
+              border: InputBorder.none,
+              hintText: '搜索'.tl,
+            ),
+          )
+        : KeyedSubtree(
+            key: ValueKey('local-library-title-$_titleText'),
+            child: Text(_titleText),
+          );
+    final reduceMotion = MediaQuery.disableAnimationsOf(context);
+    return AnimatedSwitcher(
+      duration:
+          reduceMotion ? Duration.zero : illustSearchTitleAnimationDuration,
+      switchInCurve: Curves.easeOutCubic,
+      switchOutCurve: Curves.easeInCubic,
+      // 自定义 layoutBuilder 的**首要目的是 alignment**：默认实现是
+      // `Stack(alignment: Alignment.center)`，会让标题在过渡期间跑到中间，
+      // 而这一页的标题一直是左对齐（`components/appbar.dart` 里 title 被
+      // `Expanded + DefaultTextStyle` 包住）。
+      // `fit: StackFit.passthrough` 是顺带的保险：已核对过默认的 loose 约束下
+      // TextField 也不会塌陷（InputDecorator 按 `constraints.maxWidth` 定宽，
+      // 而 `loosen()` 只放宽 min，Stack 自身仍是紧宽）。
+      layoutBuilder: (currentChild, previousChildren) => Stack(
+        alignment: Alignment.centerLeft,
+        fit: StackFit.passthrough,
+        children: <Widget>[
+          ...previousChildren,
+          if (currentChild != null) currentChild,
+        ],
+      ),
+      child: child,
+    );
+  }
+
+  /// 标题文本。
+  ///
+  /// 标题的三条来源与**优先级**（33 号明确写出，避免以后再加分支时各猜一套）：
+  ///
+  /// 1. **视图**（最高）：本页确实能切「图集 / 插画」时，标题跟着视图走 ——
+  ///    用户原话「顶部的画集标题应该随着按钮的切换而切换」。文案直接取
+  ///    [illustViewLabel]，与悬浮按钮上的标识**同一个函数**，不会出现
+  ///    "按钮写着插画、标题写着图集"。
+  ///
+  ///    ⚠️ 这条**必须高于 `widget.title`**，否则本需求在主入口上根本不生效：
+  ///    从「我」页进图集页时传的就是 `title: '图集'`
+  ///    （`me_page.dart:454-457`），若 `widget.title` 优先，切到插画后标题仍是
+  ///    「图集」—— 那正是 33 号真机截图里的症状。
+  ///    计划文里"建议 widget.title > 视图"的写法在这一点上与主需求冲突，故取
+  ///    "视图 > widget.title"；实际可见结果反而更稳：图集侧渲染出来仍是「图集」
+  ///    （与该页传进来的 `widget.title` 逐字相同），只有切到插画才变。
+  ///
+  /// 2. **显式 `widget.title`**：子页面（本地根 / 远程根，标题是那个根的名字）
+  ///    与任何调用方指定的标题。这些页 `_isIllustSwitchableRoot` 为假，所以上面
+  ///    那条不会截走它们 —— 既有行为**一点没改**。
+  ///
+  /// 3. **`albumOnly`**（最低，既有分支）：`widget.title` 没给时，
+  ///    `图集` / `资源库`。行为与改动前逐字一致。
+  String get _titleText {
     if (_isIllustSwitchableRoot) {
-      return Text(illustViewLabel(_illustView));
+      return illustViewLabel(_illustView);
     }
-    return Text((widget.title ?? (_isAlbumOnly ? '图集' : '资源库')).tl);
+    return (widget.title ?? (_isAlbumOnly ? '图集' : '资源库')).tl;
   }
 
   /// 设置面板里的**档位区**（36 号）。
@@ -2879,6 +2974,7 @@ class _LocalLibraryPageState extends State<LocalLibraryPage>
       infoSpans: _illustInfo[entry.id]!.spans,
       infoFields: _illustCardInfoSpec.fields,
       infoSeparator: _illustCardInfoSpec.separator,
+      tagConfig: readComicTileDisplaySettings().localIllustTags,
       selecting: _selecting,
       selected: _isItemSelected(item),
       // 36 号：图片与信息**分区响应** —— 看图的人想马上翻，管理的人才会点文字。
@@ -3069,8 +3165,19 @@ class _LocalLibraryPageState extends State<LocalLibraryPage>
                               onPressed: _showSortDialog,
                             ),
                             IconButton(
-                              icon: Icon(
-                                  _searchMode ? Icons.close : Icons.search),
+                              // 图标随两态切换（19 号）：24×24 固定尺寸，
+                              // 既不动工具栏宽度，也不增加 action 数量
+                              // （33/36 号铁律 + view_scope 测试守卫）。
+                              icon: AnimatedSwitcher(
+                                duration:
+                                    MediaQuery.disableAnimationsOf(context)
+                                        ? Duration.zero
+                                        : illustSearchTitleAnimationDuration,
+                                child: Icon(
+                                  _searchMode ? Icons.close : Icons.search,
+                                  key: ValueKey(_searchMode),
+                                ),
+                              ),
                               tooltip: _searchMode ? '收起搜索'.tl : '搜索'.tl,
                               onPressed: () {
                                 setState(() {

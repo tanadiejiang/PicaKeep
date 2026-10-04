@@ -70,6 +70,7 @@ part 'reading_settings.dart';
 part 'local_favorite_settings.dart';
 part 'download_settings.dart';
 part 'illust_card_info_settings.dart';
+part 'waterfall_tag_settings.dart';
 part 'network_settings.dart';
 part 'ai_settings_page.dart';
 

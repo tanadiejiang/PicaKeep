@@ -31,6 +31,8 @@ import 'package:flutter_staggered_grid_view/flutter_staggered_grid_view.dart';
 
 import 'package:picakeep/base.dart';
 import 'package:picakeep/comic_source/comic_source.dart';
+import 'package:picakeep/foundation/app.dart';
+import 'package:picakeep/foundation/comic_tile_display_config.dart';
 import 'package:picakeep/foundation/local_library_illust_view.dart'
     show illustWaterfallColumnsSettingIndex, normalizeIllustWaterfallColumns;
 import 'package:picakeep/network/base_comic.dart';
@@ -38,9 +40,12 @@ import 'package:picakeep/network/res.dart';
 import 'package:picakeep/network/pixiv_network/pixiv_network.dart';
 import 'package:picakeep/network/pixiv_network/pixiv_parsing.dart'
     show pixivProportionalThumbUrl;
+import 'package:picakeep/pages/accounts/account_page_route.dart';
 import 'package:picakeep/pages/online_common/online_comic_list_item.dart'
     show onlineCoverProvider, openOnlineComic;
 import 'package:picakeep/pages/online_common/online_waterfall_card.dart';
+import 'package:picakeep/pages/settings/settings_page.dart'
+    show showWaterfallTagSettings;
 
 /// Pixiv 图片（头像/封面）必须带的防盗链头。
 ///
@@ -55,7 +60,14 @@ const Map<String, String> pixivImageHeaders = <String, String>{
 /// Pixiv 作者页。入参 [uid] 是纯数字的作者 uid（由 ID 直跳区清洗后传来）。
 class PixivAuthorPageV2 extends StatefulWidget {
   const PixivAuthorPageV2(this.uid,
-      {super.key, this.loadAuthor, this.loadWorks});
+      {super.key,
+      this.loadAuthor,
+      this.loadWorks,
+      this.setFollow,
+      this.isLoggedIn,
+      this.currentUserId,
+      this.manageAccounts,
+      this.openTagSettings});
 
   /// 作者 uid（Pixiv 的 `userId`）。
   final String uid;
@@ -64,6 +76,13 @@ class PixivAuthorPageV2 extends StatefulWidget {
   final Future<Res<PixivAuthor>> Function(String uid)? loadAuthor;
   final Future<Res<List<PixivComicBrief>>> Function(String uid, int page)?
       loadWorks;
+
+  final Future<Res<bool>> Function(String uid, {required bool isFollowing})?
+      setFollow;
+  final bool Function()? isLoggedIn;
+  final String Function()? currentUserId;
+  final Future<void> Function(BuildContext context)? manageAccounts;
+  final Future<void> Function(BuildContext context)? openTagSettings;
 
   @override
   State<PixivAuthorPageV2> createState() => _PixivAuthorPageV2State();
@@ -75,6 +94,9 @@ class _PixivAuthorPageV2State extends State<PixivAuthorPageV2> {
   int _generation = 0;
   int _authorRequest = 0;
   bool _commentExpanded = false;
+  bool _followLoading = false;
+  bool _accountsOpening = false;
+  bool _followTarget = false;
 
   // ── 作者资料区（第 1 步，独立成败）──
   PixivAuthor? _author;
@@ -95,6 +117,7 @@ class _PixivAuthorPageV2State extends State<PixivAuthorPageV2> {
   void initState() {
     super.initState();
     _scrollController.addListener(_onScroll);
+    App.displaySettingsVersion.addListener(_onDisplaySettingsChanged);
     _loadAuthor();
     _loadNextPage();
   }
@@ -102,9 +125,14 @@ class _PixivAuthorPageV2State extends State<PixivAuthorPageV2> {
   @override
   void dispose() {
     _generation++;
+    App.displaySettingsVersion.removeListener(_onDisplaySettingsChanged);
     _scrollController.removeListener(_onScroll);
     _scrollController.dispose();
     super.dispose();
+  }
+
+  void _onDisplaySettingsChanged() {
+    if (mounted) setState(() {});
   }
 
   /// 触底前 400px 预加载下一页：与搜索页的续页手感一致（不等用户真的滑到底）。
@@ -117,7 +145,7 @@ class _PixivAuthorPageV2State extends State<PixivAuthorPageV2> {
   }
 
   Future<void> _loadAuthor() async {
-    if (!mounted) return;
+    if (!mounted || _followLoading) return;
     final generation = _generation;
     final request = ++_authorRequest;
     setState(() {
@@ -186,7 +214,7 @@ class _PixivAuthorPageV2State extends State<PixivAuthorPageV2> {
   }
 
   Future<void> _refresh() async {
-    if (!mounted) return;
+    if (!mounted || _followLoading || _accountsOpening) return;
     setState(() {
       _generation++;
       _worksLoading = false;
@@ -204,11 +232,97 @@ class _PixivAuthorPageV2State extends State<PixivAuthorPageV2> {
     if (oldWidget.uid != widget.uid) {
       _author = null;
       _commentExpanded = false;
+      _followLoading = false;
+      _accountsOpening = false;
       _refresh();
     }
   }
 
   ComicSource? get _source => ComicSource.find('pixiv');
+
+  bool get _isLoggedIn =>
+      widget.isLoggedIn?.call() ?? (_source?.isLoggedIn ?? false);
+
+  String get _currentUserId => (widget.currentUserId?.call() ??
+          _source?.data['userId']?.toString() ??
+          '')
+      .trim();
+
+  bool get _isSelf => _isLoggedIn && _currentUserId == widget.uid;
+
+  Future<void> _openAccounts() async {
+    final generation = _generation;
+    final uid = widget.uid;
+    setState(() => _accountsOpening = true);
+    try {
+      await (widget.manageAccounts?.call(context) ?? showAccountsPage(context));
+    } catch (_) {
+      if (mounted && generation == _generation && uid == widget.uid) {
+        _showMessage('暂时无法打开账号管理，请重试');
+      }
+    }
+    if (!mounted || generation != _generation || uid != widget.uid) return;
+    setState(() => _accountsOpening = false);
+    // A changed account needs fresh server state. Opening login never submits
+    // the original follow action automatically.
+    await _loadAuthor();
+  }
+
+  Future<void> _toggleFollow() async {
+    final author = _author;
+    if (author == null ||
+        _authorLoading ||
+        _followLoading ||
+        _accountsOpening) {
+      return;
+    }
+    if (!_isLoggedIn) {
+      await _openAccounts();
+      return;
+    }
+    if (_isSelf) return;
+    final generation = _generation;
+    final uid = widget.uid;
+    final accountUid = _currentUserId;
+    final target = !author.isFollowed;
+    setState(() {
+      _followLoading = true;
+      _followTarget = target;
+      // A profile request started before the write must not restore old state.
+      _authorRequest++;
+    });
+    Res<bool> res;
+    try {
+      res = await (widget.setFollow?.call(uid, isFollowing: target) ??
+          _network.setFollow(uid, isFollowing: target));
+    } catch (_) {
+      res = const Res.error('暂时无法连接 Pixiv，请检查网络后重试');
+    }
+    if (!mounted || generation != _generation || uid != widget.uid) return;
+    setState(() => _followLoading = false);
+    if (!_isLoggedIn || accountUid != _currentUserId) {
+      await _loadAuthor();
+      return;
+    }
+    if (res.error) {
+      _showMessage('操作失败：${res.errorMessageWithoutNull}');
+      return;
+    }
+    setState(() => _author = author.copyWith(isFollowed: res.data));
+    _showMessage(res.data ? '已关注' : '已取消关注');
+  }
+
+  void _showMessage(String message) {
+    ScaffoldMessenger.of(context)
+      ..clearSnackBars()
+      ..showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  Future<void> _openTagSettings() async {
+    await (widget.openTagSettings?.call(context) ??
+        showWaterfallTagSettings(context));
+    if (mounted) setState(() {});
+  }
 
   /// 瀑布流列数：与图集页「插画」视图**共用同一个设置**（`settings[156]`）。
   ///
@@ -227,8 +341,13 @@ class _PixivAuthorPageV2State extends State<PixivAuthorPageV2> {
         ),
         actions: [
           IconButton(
+            tooltip: '瀑布流标签设置',
+            onPressed: _openTagSettings,
+            icon: const Icon(Icons.label_outline),
+          ),
+          IconButton(
             tooltip: '刷新作者页',
-            onPressed: _refresh,
+            onPressed: _followLoading || _accountsOpening ? null : _refresh,
             icon: const Icon(Icons.refresh),
           ),
         ],
@@ -291,6 +410,8 @@ class _PixivAuthorPageV2State extends State<PixivAuthorPageV2> {
       pageCount: brief?.pageCount ?? 0,
       width: brief?.width,
       height: brief?.height,
+      tags: comic.tags,
+      tagConfig: readComicTileDisplaySettings().pixivAuthorTags,
     );
   }
 
@@ -327,6 +448,13 @@ class _PixivAuthorPageV2State extends State<PixivAuthorPageV2> {
                     Expanded(child: _buildAuthorTexts(context)),
                   ],
                 ),
+                if (author != null) ...[
+                  const SizedBox(height: 12),
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: _buildFollowButton(),
+                  ),
+                ],
                 if (comment.isNotEmpty) ...[
                   const SizedBox(height: 16),
                   Text(
@@ -415,6 +543,35 @@ class _PixivAuthorPageV2State extends State<PixivAuthorPageV2> {
           const SizedBox(height: 4),
         ],
       ),
+    );
+  }
+
+  Widget _buildFollowButton() {
+    final loggedIn = _isLoggedIn;
+    final busy = _followLoading || _accountsOpening;
+    final followed = _author!.isFollowed;
+    final label = _accountsOpening
+        ? '正在打开账号管理…'
+        : _followLoading
+            ? (_followTarget ? '正在关注…' : '正在取消关注…')
+            : _isSelf
+                ? '这是你自己'
+                : !loggedIn
+                    ? '登录后关注'
+                    : followed
+                        ? '已关注'
+                        : '关注';
+    return FilledButton.tonalIcon(
+      key: const ValueKey('pixiv-author-follow'),
+      onPressed: busy || _authorLoading || _isSelf ? null : _toggleFollow,
+      icon: busy
+          ? const SizedBox.square(
+              dimension: 16,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            )
+          : Icon(
+              followed ? Icons.person_remove_outlined : Icons.person_add_alt),
+      label: Text(label),
     );
   }
 

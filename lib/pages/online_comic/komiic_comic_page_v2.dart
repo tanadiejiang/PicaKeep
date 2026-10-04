@@ -14,6 +14,7 @@ import 'package:picakeep/pages/online_comic/base_online_comic_page.dart';
 import 'package:picakeep/pages/online_comic/local_favorite_actions.dart';
 import 'package:picakeep/pages/online_comic/online_comic_page_components.dart';
 import 'package:picakeep/pages/online_comic/platform_favorite_panel.dart';
+import 'chapter_download_selection.dart';
 import 'package:picakeep/pages/online_search/online_search_result_page.dart';
 import 'package:picakeep/pages/reader/comic_reading_page.dart';
 
@@ -249,7 +250,22 @@ class KomiicComicPageV2 extends BaseOnlineComicPage<KomiicComicInfo> {
       );
       return;
     }
-    final res = await OnlineDownloadManager.instance.enqueueKomiic(data);
+    if (supportsChapterDownloads(data)) {
+      final added = await showOnlineChapterDownloadSelection(context,
+          title: data.title,
+          chapterNames: extractEpisodes(data)!,
+          sourceKey: sourceKey,
+          candidateIds: downloadCandidateIds(data)!,
+          onSubmit: (indexes) => OnlineDownloadManager.instance
+              .enqueueKomiic(data, chapterIndexes: indexes));
+      if (added && context.mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text('已加入下载队列')));
+      }
+      return;
+    }
+    final res = await OnlineDownloadManager.instance
+        .enqueueKomiic(data, chapterIndexes: [0]);
     if (!context.mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
@@ -258,6 +274,10 @@ class KomiicComicPageV2 extends BaseOnlineComicPage<KomiicComicInfo> {
       ),
     );
   }
+
+  @override
+  bool supportsChapterDownloads(KomiicComicInfo data) =>
+      data.chapters.length > 1;
 
   // ── 已下载检测（与下载队列 taskId / 本地库 ID 一致）─────────────────────
 

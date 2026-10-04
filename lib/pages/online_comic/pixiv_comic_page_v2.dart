@@ -7,10 +7,12 @@ import 'package:picakeep/comic_source/comic_source.dart';
 import 'package:picakeep/foundation/app_page_route.dart';
 import 'package:picakeep/foundation/history.dart';
 import 'package:picakeep/foundation/log.dart';
+import 'package:picakeep/foundation/state_controller.dart';
 import 'package:picakeep/network/pixiv_network/pixiv_network.dart';
 import 'package:picakeep/network/res.dart';
 import 'package:picakeep/pages/online_comic/base_online_comic_page.dart';
 import 'package:picakeep/pages/online_comic/online_comic_page_components.dart';
+import 'package:picakeep/pages/online_comic/online_comic_page_logic.dart';
 import 'package:picakeep/pages/online_comic/pixiv_author_link.dart';
 import 'package:picakeep/pages/online_search/online_search_result_page.dart';
 import 'package:picakeep/pages/reader/comic_reading_page.dart';
@@ -209,41 +211,123 @@ class PixivComicPageV2 extends BaseOnlineComicPage<PixivComicInfo> {
   /// 显式表达目标态；这里以 [currentFavorite]（而非 data 的静态快照）为基准，
   /// 保证连点两次后图标与实际平台状态一致。
   ///
-  /// 当前网络层**没有**"查询单本是否已收藏"的接口（书签列表接口要分页遍历，
-  /// 代价过高），因此 [loadFavoriteState] 只能保守返回 false；进入页面时图标
-  /// 可能显示为未收藏，但点击后即按真实结果刷新。
+  /// 忙锁挂在本页状态实例上，点击与长按取消共用，重建 widget 不会解锁。
+  static final _bookmarkBusy = Expando<bool>('Pixiv bookmark action');
+
+  OnlineComicPageLogic<PixivComicInfo>? get _favoriteLogic =>
+      StateController.findOrNull<OnlineComicPageLogic<PixivComicInfo>>(
+          tag: tag);
+
+  bool _hasCurrentData(
+    OnlineComicPageLogic<PixivComicInfo> logic,
+    PixivComicInfo data,
+  ) =>
+      identical(_favoriteLogic, logic) && identical(logic.data, data);
+
+  Future<R> _withBookmarkLock<R>(
+    R busyResult,
+    Future<R> Function(OnlineComicPageLogic<PixivComicInfo>) action,
+  ) async {
+    final logic = _favoriteLogic;
+    if (logic == null || _bookmarkBusy[logic] == true) return busyResult;
+    _bookmarkBusy[logic] = true;
+    logic.setFavoriteBusy(true);
+    try {
+      return await action(logic);
+    } finally {
+      _bookmarkBusy[logic] = false;
+      logic.setFavoriteBusy(false);
+    }
+  }
+
+  /// 测试可覆盖这一请求边界，状态流程仍执行本页真实实现。
+  @protected
+  Future<Res<bool>> writeBookmark(String id, {required bool isAdding}) =>
+      PixivNetwork().setBookmark(id, isAdding: isAdding);
+
+  void _showBookmarkMessage(BuildContext context, String message) {
+    ScaffoldMessenger.of(context)
+      ..clearSnackBars()
+      ..showSnackBar(SnackBar(content: Text(message)));
+  }
+
   @override
   Future<void> onFavorite(BuildContext context, PixivComicInfo data) async {
-    final wasFavorite = currentFavorite;
-    final target = !wasFavorite;
-    final res = await PixivNetwork().setBookmark(data.id, isAdding: target);
-    if (!context.mounted) return;
-    if (res.error) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('操作失败：${res.errorMessageWithoutNull}')),
-      );
-      return;
-    }
-    refreshFavorite(target);
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(target ? '已收藏' : '已取消收藏')),
-    );
+    await _withBookmarkLock(false, (logic) async {
+      final target = !logic.favorite;
+      final res = await writeBookmark(data.id, isAdding: target);
+      if (!context.mounted || !_hasCurrentData(logic, data)) return false;
+      if (res.error) {
+        _showBookmarkMessage(context, '操作失败：${res.errorMessageWithoutNull}');
+        return false;
+      }
+      logic.setFavorite(target);
+      _showBookmarkMessage(context, target ? '已收藏' : '已取消收藏');
+      return true;
+    });
   }
 
   /// 取消网络收藏（基类长按「收藏」按钮走这里）。
   ///
-  /// 返回 `true` 表示平台侧已确定无收藏：Pixiv 的书签删除接口不回传可复读的
-  /// 状态，而 [loadFavoriteState] 本来就查不到，回 true 才能让图标可靠置灰。
+  /// 返回 `true` 表示平台侧已确定无收藏；失败保留确认前状态。
   @override
-  Future<bool?> performCancelPlatformFavorite(PixivComicInfo data) async {
-    final res = await PixivNetwork().setBookmark(data.id, isAdding: false);
-    return res.success;
+  Future<bool?> performCancelPlatformFavorite(PixivComicInfo data) =>
+      _withBookmarkLock(false, (logic) async {
+        final res = await writeBookmark(data.id, isAdding: false);
+        return _hasCurrentData(logic, data) && res.success;
+      });
+
+  @override
+  void Function(BuildContext, PixivComicInfo, bool)?
+      get onCancelPlatformFavorite => _confirmAndCancelBookmark;
+
+  Future<void> _confirmAndCancelBookmark(
+    BuildContext context,
+    PixivComicInfo data,
+    bool wasFavorite,
+  ) async {
+    await _withBookmarkLock(false, (logic) async {
+      if (!logic.favorite) {
+        _showBookmarkMessage(context, '当前未收藏，无需取消');
+        return false;
+      }
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('取消网络收藏'),
+          content: const Text('确定取消这本作品的 Pixiv 收藏吗？'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(dialogContext, true),
+              child: const Text('确定'),
+            ),
+          ],
+        ),
+      );
+      if (confirmed != true ||
+          !context.mounted ||
+          !_hasCurrentData(logic, data)) {
+        return false;
+      }
+      final res = await writeBookmark(data.id, isAdding: false);
+      if (!context.mounted || !_hasCurrentData(logic, data)) return false;
+      if (res.success) logic.setFavorite(false);
+      _showBookmarkMessage(
+        context,
+        res.success ? '已取消网络收藏' : '取消网络收藏失败：${res.errorMessageWithoutNull}',
+      );
+      return res.success;
+    });
   }
 
-  /// Pixiv 没有"查询单本收藏态"的轻量接口（见 [onFavorite] 注释）。
-  // TODO(pixiv): 若后续补上 `getBookmarkState` 一类的查询接口，这里改为真实查询。
+  /// 详情响应自带当前账号的收藏状态，无需额外查询书签列表。
   @override
-  Future<bool> loadFavoriteState(PixivComicInfo data) async => false;
+  Future<bool> loadFavoriteState(PixivComicInfo data) async =>
+      data.isBookmarked;
 
   // ── 点赞 / 评论：不实现，按钮自动隐藏 ───────────────────────────────────
 

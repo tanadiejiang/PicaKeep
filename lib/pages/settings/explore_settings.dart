@@ -79,9 +79,23 @@ Widget buildExploreSettings(double width, BuildContext context) {
       // 不通知就会出现"选了靠左、返回后还在右边"。
       onChanged: (_) => App.notifyDisplaySettingsChanged(),
     ),
+    // 搜索关键词是否同时匹配作品标签（`settings[163]`，19 号）。
+    // 默认关：保持 56 号搜索面板"只按标题/作者搜"的结果不变。
+    SwitchSetting(
+      title: "搜索同时匹配标签".tl,
+      settingsIndex: illustSearchMatchTagsSettingIndex,
+      onChanged: (_) => App.notifyDisplaySettingsChanged(),
+    ),
     // 卡片底部显示哪些信息（`settings[158]`）。交互形态与「下载目录名模板」
     // 一致（勾选 + 拖拽排序 + 预览），用户明确要求"和下载命名一样可以自由选择"。
     const _IllustCardInfoTile(),
+    ListTile(
+      leading: const Icon(Icons.sell_outlined),
+      title: Text('瀑布流卡片标签'.tl),
+      subtitle: Text('推荐页、本地插画与作者作品的标签，以及平台收藏图标'.tl),
+      trailing: const Icon(Icons.chevron_right),
+      onTap: () => showWaterfallTagSettings(context),
+    ),
     SettingsTitle('在线浏览'.tl),
     SelectSetting(
       title: "浏览时远程图片并发".tl,

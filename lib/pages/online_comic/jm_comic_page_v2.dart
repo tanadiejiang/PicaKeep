@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:picakeep/foundation/local_favorites.dart';
 import 'local_favorite_actions.dart';
 import 'platform_favorite_panel.dart';
+import 'chapter_download_selection.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:picakeep/comic_source/comic_source.dart';
 import 'package:picakeep/foundation/app_page_route.dart';
@@ -140,7 +141,22 @@ class JmComicPageV2 extends BaseOnlineComicPage<JmComicInfo> {
 
   @override
   Future<void> onDownload(BuildContext context, JmComicInfo data) async {
-    final res = await OnlineDownloadManager.instance.enqueueJm(data);
+    if (supportsChapterDownloads(data)) {
+      final added = await showOnlineChapterDownloadSelection(context,
+          title: data.title,
+          chapterNames: extractEpisodes(data)!,
+          sourceKey: sourceKey,
+          candidateIds: ['jm${data.id}'],
+          onSubmit: (indexes) => OnlineDownloadManager.instance
+              .enqueueJm(data, chapterIndexes: indexes));
+      if (added && context.mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text('已加入下载队列')));
+      }
+      return;
+    }
+    final res = await OnlineDownloadManager.instance
+        .enqueueJm(data, chapterIndexes: [0]);
     if (!context.mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
@@ -148,6 +164,9 @@ class JmComicPageV2 extends BaseOnlineComicPage<JmComicInfo> {
       ),
     );
   }
+
+  @override
+  bool supportsChapterDownloads(JmComicInfo data) => data.series.length > 1;
 
   @override
   Future<bool?> performCancelPlatformFavorite(JmComicInfo data) async {
@@ -160,8 +179,12 @@ class JmComicPageV2 extends BaseOnlineComicPage<JmComicInfo> {
   @override
   Future<void> onFavorite(BuildContext context, JmComicInfo data) async {
     final localItem = FavoriteItem(
-      target: data.id, name: data.title, coverPath: data.coverUrl,
-      author: data.author, type: FavoriteType.jm, tags: data.tags,
+      target: data.id,
+      name: data.title,
+      coverPath: data.coverUrl,
+      author: data.author,
+      type: FavoriteType.jm,
+      tags: data.tags,
     );
     final wasFavorite = currentFavorite;
 
@@ -206,8 +229,7 @@ class JmComicPageV2 extends BaseOnlineComicPage<JmComicInfo> {
           final moveRes =
               await JmNetwork().moveFavoriteToFolder(data.id, folderId);
           if (moveRes.error) {
-            return const PlatformFavoriteSubmitResult.failed(
-                '收藏成功，但移入所选收藏夹失败');
+            return const PlatformFavoriteSubmitResult.failed('收藏成功，但移入所选收藏夹失败');
           }
         }
         return const PlatformFavoriteSubmitResult.ok();

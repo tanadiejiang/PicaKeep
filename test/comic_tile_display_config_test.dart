@@ -47,6 +47,7 @@ void main() {
   });
 
   setUp(() {
+    SharedPreferences.setMockInitialValues({});
     // 配置读取是纯函数式（按 settings 索引 150 的原始字符串），不依赖数据库。
     appdata.settings[settingIndex] = '{}';
   });
@@ -58,6 +59,105 @@ void main() {
   void setRaw(String raw) {
     appdata.settings[settingIndex] = raw;
   }
+
+  group('瀑布流标签配置与旧卡片隔离', () {
+    test('旧配置默认关闭，坏值回退，行数只认整数 1/2/3/不限', () {
+      expect(readComicTileDisplaySettings().localIllustTags,
+          WaterfallTagDisplayConfig.defaults);
+      for (final value in [
+        null,
+        '坏值',
+        {'tagRows': -1},
+        {'tagRows': 2.0},
+        {'tagRows': 4, 'showTags': 'true'}
+      ]) {
+        expect(WaterfallTagDisplayConfig.fromJson(value),
+            WaterfallTagDisplayConfig.defaults);
+      }
+      setRaw(jsonEncode({
+        'local': {'showTags': false},
+        'waterfall': {
+          'local': {'showTags': true, 'tagRows': 1},
+          'pixivAuthor': {'showTags': false, 'tagRows': 3},
+          'recommend': {'showTags': false, 'tagRows': 0},
+          'favoriteStyle': {'color': 'theme', 'opacity': 60},
+        }
+      }));
+      final parsed = readComicTileDisplaySettings();
+      expect(parsed.local.showTags, isFalse);
+      expect(parsed.localIllustTags.showTags, isTrue);
+      expect(parsed.localIllustTags.tagRows, 1);
+      expect(parsed.pixivAuthorTags.tagRows, 3);
+      expect(parsed.recommendTags.maxTagRows, isNull);
+      expect(parsed.recommendTags.showTags, isFalse);
+      expect(parsed.favoriteStyle,
+          const WaterfallFavoriteStyle(color: 'theme', opacity: 60));
+      expect(ComicTileDisplaySettings.fromJson(parsed.toJson()), parsed);
+      for (final changed in [
+        parsed.withIdColor('blue'),
+        parsed.withLocal(ComicTileDisplayConfig.defaults),
+        parsed.withOnline(ComicTileDisplayConfig.defaults),
+        parsed.withSearch('pixiv', ComicTileDisplayConfig.defaults)
+      ]) {
+        expect(changed.localIllustTags, parsed.localIllustTags);
+        expect(changed.pixivAuthorTags, parsed.pixivAuthorTags);
+        expect(changed.recommendTags, parsed.recommendTags);
+        expect(changed.favoriteStyle, parsed.favoriteStyle);
+      }
+    });
+
+    test('瀑布流保存读取最新根，旧卡片编辑器不覆盖新瀑布流', () async {
+      final oldEditor = readComicTileDisplaySettings();
+      await writeComicTileDisplayConfig(
+          scope: 'search', sourceKey: 'pixiv', tagRows: 3);
+      await saveWaterfallTagDisplaySettings(
+        local: const WaterfallTagDisplayConfig(showTags: true, tagRows: 1),
+        pixivAuthor:
+            const WaterfallTagDisplayConfig(showTags: true, tagRows: 3),
+        recommend: const WaterfallTagDisplayConfig(showTags: true, tagRows: 0),
+        favoriteStyle:
+            const WaterfallFavoriteStyle(color: 'theme', opacity: 50),
+      );
+      expect(readSearchComicTileDisplayConfig('pixiv').tagRows, 3);
+      await saveComicTileDisplaySettings(oldEditor.withIdColor('blue'));
+      expect(readComicTileDisplaySettings().idColor, 'blue');
+      expect(readComicTileDisplaySettings().localIllustTags.tagRows, 1);
+      expect(readComicTileDisplaySettings().pixivAuthorTags.showTags, isTrue);
+      expect(readComicTileDisplaySettings().recommendTags.maxTagRows, isNull);
+      expect(
+          readComicTileDisplaySettings().favoriteStyle.normalizedOpacity, 50);
+      // A caller from the older two-scope editor preserves newer nodes.
+      await saveWaterfallTagDisplaySettings(
+        local: WaterfallTagDisplayConfig.defaults,
+        pixivAuthor: WaterfallTagDisplayConfig.defaults,
+      );
+      expect(readComicTileDisplaySettings().recommendTags.maxTagRows, isNull);
+      expect(readComicTileDisplaySettings().favoriteStyle.normalizedColor,
+          'theme');
+    });
+
+    test('推荐默认开两行，旧本地/作者默认关闭，图标非法样式安全回退', () {
+      final defaults = readComicTileDisplaySettings();
+      expect(defaults.localIllustTags.showTags, isFalse);
+      expect(defaults.pixivAuthorTags.showTags, isFalse);
+      expect(
+          defaults.recommendTags, WaterfallTagDisplayConfig.recommendDefaults);
+      for (final rows in WaterfallTagDisplayConfig.rowOptions) {
+        expect(WaterfallTagDisplayConfig.fromJson({'tagRows': rows}).toJson(),
+            {'showTags': false, 'tagRows': rows});
+      }
+      final damaged = ComicTileDisplaySettings.fromJson({
+        'waterfall': {
+          'recommend': {'tagRows': '0', 'showTags': null},
+          'favoriteStyle': {'color': 'red', 'opacity': 65},
+        },
+      });
+      expect(
+          damaged.recommendTags, WaterfallTagDisplayConfig.recommendDefaults);
+      expect(damaged.favoriteStyle, WaterfallFavoriteStyle.defaults);
+      expect(ComicTileDisplaySettings.fromJson(damaged.toJson()), damaged);
+    });
+  });
 
   group('X03 新索引默认值', () {
     test('索引 150 存在且默认值为空对象', () {
@@ -106,16 +206,13 @@ void main() {
       expect(data.settings.length, greaterThan(settingIndex));
 
       // 补齐语义：索引 150 在旧列表里不存在，必须由默认值补齐为 '{}'。
-      expect(data.settings[settingIndex], '{}',
-          reason: '新索引必须由默认值补齐');
+      expect(data.settings[settingIndex], '{}', reason: '新索引必须由默认值补齐');
 
       // 旧列表覆盖到的最后一项（索引 148）必须是用户自己的值，不能被默认值冲掉。
-      expect(data.settings[legacyLength - 1], '1',
-          reason: '用户已有的设置项不得被默认值改写');
+      expect(data.settings[legacyLength - 1], '1', reason: '用户已有的设置项不得被默认值改写');
 
       // 旧列表之后的索引（149）保留默认值 '0'（AI 自动下载默认关闭）。
-      expect(data.settings[149], '0',
-          reason: '旧列表未覆盖的索引必须保持默认值，不得被补齐逻辑污染');
+      expect(data.settings[149], '0', reason: '旧列表未覆盖的索引必须保持默认值，不得被补齐逻辑污染');
     });
   });
 
@@ -133,10 +230,10 @@ void main() {
       expect(readSearchComicTileDisplayConfig('jm').showTags, isFalse);
       expect(readSearchComicTileDisplayConfig('jm').showId, isFalse);
 
-      expect(readLocalComicTileDisplayConfig(),
-          ComicTileDisplayConfig.defaults);
-      expect(readOnlineComicTileDisplayConfig(),
-          ComicTileDisplayConfig.defaults);
+      expect(
+          readLocalComicTileDisplayConfig(), ComicTileDisplayConfig.defaults);
+      expect(
+          readOnlineComicTileDisplayConfig(), ComicTileDisplayConfig.defaults);
       expect(readSearchComicTileDisplayConfig('ehentai'),
           ComicTileDisplayConfig.defaults);
     });
@@ -169,8 +266,8 @@ void main() {
       expect(config.showTags, isFalse, reason: '第二次写入不得把 showTags 冲回默认');
       expect(config.showId, isFalse);
       expect(config.tagRows, 2);
-      expect(readOnlineComicTileDisplayConfig(),
-          ComicTileDisplayConfig.defaults);
+      expect(
+          readOnlineComicTileDisplayConfig(), ComicTileDisplayConfig.defaults);
     });
 
     test('写入只改目标节点，不动其它页面/源的既有 JSON', () async {
@@ -264,7 +361,8 @@ void main() {
           ComicTileDisplaySettings.defaults,
           reason: 'raw=$raw 必须回退默认值',
         );
-        expect(readLocalComicTileDisplayConfig().tagRows, 2, reason: 'raw=$raw');
+        expect(readLocalComicTileDisplayConfig().tagRows, 2,
+            reason: 'raw=$raw');
       }
     });
 
@@ -275,10 +373,10 @@ void main() {
         'search': 'not-a-map',
       }));
 
-      expect(readLocalComicTileDisplayConfig(),
-          ComicTileDisplayConfig.defaults);
-      expect(readOnlineComicTileDisplayConfig(),
-          ComicTileDisplayConfig.defaults);
+      expect(
+          readLocalComicTileDisplayConfig(), ComicTileDisplayConfig.defaults);
+      expect(
+          readOnlineComicTileDisplayConfig(), ComicTileDisplayConfig.defaults);
       expect(readSearchComicTileDisplayConfig('jm'),
           ComicTileDisplayConfig.defaults);
     });
@@ -326,8 +424,8 @@ void main() {
         appdata.settings[settingIndex] = '{}';
       });
 
-      expect(readLocalComicTileDisplayConfig(),
-          ComicTileDisplayConfig.defaults);
+      expect(
+          readLocalComicTileDisplayConfig(), ComicTileDisplayConfig.defaults);
 
       await writeComicTileDisplayConfig(
         scope: comicTileDisplayLocalPageKey,
@@ -347,8 +445,8 @@ void main() {
 
       await saveComicTileDisplaySettings(readComicTileDisplaySettings());
 
-      expect(readLocalComicTileDisplayConfig(),
-          ComicTileDisplayConfig.defaults);
+      expect(
+          readLocalComicTileDisplayConfig(), ComicTileDisplayConfig.defaults);
       expect(readSearchComicTileDisplayConfig('jm').showId, isFalse);
     });
   });
@@ -400,8 +498,7 @@ void main() {
       expect(rows, 3);
     });
 
-    testWidgets('标签区高度不足时按可用高度收行，不把描述位挤出卡片',
-        (tester) async {
+    testWidgets('标签区高度不足时按可用高度收行，不把描述位挤出卡片', (tester) async {
       // 定高 164dp + 30 个标签：行数上限给到 3，但高度只够 2 行。
       final rows = await _renderedTagRows(
         tester,
@@ -415,8 +512,7 @@ void main() {
       expect(find.text('128 MB'), findsOneWidget);
     });
 
-    testWidgets('配置不限行（tagRows=0）→ 同高度下比 3 行配置显示更多标签',
-        (tester) async {
+    testWidgets('配置不限行（tagRows=0）→ 同高度下比 3 行配置显示更多标签', (tester) async {
       const unlimited = ComicTileDisplayConfig(
         tagRows: 0,
         showTags: true,
@@ -526,7 +622,8 @@ void main() {
 
     test('showId 默认开启，保持历史回退行为', () {
       expect(
-        displaySourceInfoLine(source: 'jm', comicId: '1466163', description: ''),
+        displaySourceInfoLine(
+            source: 'jm', comicId: '1466163', description: ''),
         'jm1466163',
       );
     });
@@ -542,8 +639,7 @@ void main() {
           reason: '角标过高会跟标签区抢行高');
     });
 
-    testWidgets('无限制布局分支（不限档 / 网络收藏 / 搜索页）同样是紧凑角标',
-        (tester) async {
+    testWidgets('无限制布局分支（不限档 / 网络收藏 / 搜索页）同样是紧凑角标', (tester) async {
       // 这两条分支原先各写一份角标，改小时只改了一处 —— 「不限」档的卡片
       // 就还是旧的大角标（用户实测发现）。现在共用 _ComicBadge。
       await tester.pumpWidget(_tile(tags: const ['a']));
@@ -655,8 +751,7 @@ void main() {
             darkBlack = resolveComicTileIdColor(context, 'black'),
       ));
       expect(lightBlack, Colors.black);
-      expect(darkBlack, Colors.white,
-          reason: '深色模式下纯黑会看不见，必须自动转白');
+      expect(darkBlack, Colors.white, reason: '深色模式下纯黑会看不见，必须自动转白');
     });
 
     testWidgets('颜色键 → 实际颜色（浅色主题）', (tester) async {
@@ -691,9 +786,7 @@ Widget _colorProbe({
 }) {
   return MaterialApp(
     key: ValueKey<bool>(dark),
-    theme: dark
-        ? ThemeData.dark()
-        : ThemeData(brightness: Brightness.light),
+    theme: dark ? ThemeData.dark() : ThemeData(brightness: Brightness.light),
     home: Builder(
       builder: (context) {
         onLight(context);

@@ -10,6 +10,107 @@ import 'package:picakeep/base.dart';
 /// 每个节点是 `{"tagRows":2,"showTags":true,"showId":true}`。
 const comicTileDisplayConfigSettingIndex = 150;
 
+/// 瀑布流卡片独立于收藏卡片，仍保存在同一份显示配置中。
+const waterfallTagDisplayKey = 'waterfall';
+const waterfallTagLocalKey = 'local';
+const waterfallTagPixivAuthorKey = 'pixivAuthor';
+const waterfallTagRecommendKey = 'recommend';
+const waterfallFavoriteStyleKey = 'favoriteStyle';
+
+/// 有限行数预留固定预算；0 为自然高度的不限行。旧本地/作者默认不显示。
+class WaterfallTagDisplayConfig {
+  const WaterfallTagDisplayConfig({this.showTags = false, this.tagRows = 2});
+
+  static const defaults = WaterfallTagDisplayConfig();
+  static const recommendDefaults = WaterfallTagDisplayConfig(showTags: true);
+  static const rowOptions = <int>[1, 2, 3, 0];
+  final bool showTags;
+  final int tagRows;
+
+  int get normalizedTagRows => rowOptions.contains(tagRows) ? tagRows : 2;
+  int? get maxTagRows => normalizedTagRows == 0 ? null : normalizedTagRows;
+
+  factory WaterfallTagDisplayConfig.fromJson(Object? value,
+      {WaterfallTagDisplayConfig fallback = defaults}) {
+    if (value is! Map) return fallback;
+    return WaterfallTagDisplayConfig(
+      showTags: value['showTags'] is bool
+          ? value['showTags'] as bool
+          : fallback.showTags,
+      tagRows: value['tagRows'] is int && rowOptions.contains(value['tagRows'])
+          ? value['tagRows'] as int
+          : fallback.normalizedTagRows,
+    );
+  }
+
+  WaterfallTagDisplayConfig copyWith({bool? showTags, int? tagRows}) =>
+      WaterfallTagDisplayConfig(
+        showTags: showTags ?? this.showTags,
+        tagRows: rowOptions.contains(tagRows ?? this.tagRows)
+            ? tagRows ?? this.tagRows
+            : 2,
+      );
+
+  Map<String, Object?> toJson() =>
+      {'showTags': showTags, 'tagRows': normalizedTagRows};
+
+  @override
+  bool operator ==(Object other) =>
+      other is WaterfallTagDisplayConfig &&
+      other.showTags == showTags &&
+      other.maxTagRows == maxTagRows;
+
+  @override
+  int get hashCode => Object.hash(showTags, maxTagRows);
+}
+
+/// 封面收藏按钮只改变图标颜色和透明度，不添加底板或阴影。
+class WaterfallFavoriteStyle {
+  const WaterfallFavoriteStyle({this.color = 'rose', this.opacity = 90});
+
+  static const defaults = WaterfallFavoriteStyle();
+  static const colorOptions = <String>['rose', 'theme'];
+  static const opacityOptions = <int>[100, 90, 80, 70, 60, 50];
+  final String color;
+  final int opacity;
+
+  String get normalizedColor => colorOptions.contains(color) ? color : 'rose';
+  int get normalizedOpacity => opacityOptions.contains(opacity) ? opacity : 90;
+
+  factory WaterfallFavoriteStyle.fromJson(Object? value) => value is Map
+      ? WaterfallFavoriteStyle(
+          color: value['color'] is String ? value['color'] as String : 'rose',
+          opacity: value['opacity'] is int ? value['opacity'] as int : 90,
+        )
+      : defaults;
+
+  WaterfallFavoriteStyle copyWith({String? color, int? opacity}) =>
+      WaterfallFavoriteStyle(
+        color: color ?? this.color,
+        opacity: opacity ?? this.opacity,
+      );
+
+  Color favoriteColor(BuildContext context) => (normalizedColor == 'theme'
+          ? Theme.of(context).colorScheme.primary
+          : const Color(0xFFE0245E))
+      .withValues(alpha: normalizedOpacity / 100);
+
+  Color get inactiveColor =>
+      Colors.white.withValues(alpha: normalizedOpacity / 100);
+
+  Map<String, Object?> toJson() =>
+      {'color': normalizedColor, 'opacity': normalizedOpacity};
+
+  @override
+  bool operator ==(Object other) =>
+      other is WaterfallFavoriteStyle &&
+      other.normalizedColor == normalizedColor &&
+      other.normalizedOpacity == normalizedOpacity;
+
+  @override
+  int get hashCode => Object.hash(normalizedColor, normalizedOpacity);
+}
+
 /// 来源标识号（`jm<id>` / `nhentai<id>`）那一行的颜色。
 ///
 /// 是**整体一份**、不按页面/源分开：用户改颜色的动机是"这一行我想让它显眼/低调"，
@@ -276,8 +377,8 @@ Future<void> writeComicTileDisplayConfig({
   while (settings.length <= comicTileDisplayConfigSettingIndex) {
     settings.add('');
   }
-  final root = decodeComicTileDisplayRoot(
-      settings[comicTileDisplayConfigSettingIndex]);
+  final root =
+      decodeComicTileDisplayRoot(settings[comicTileDisplayConfigSettingIndex]);
 
   final isSearch = scope == comicTileDisplaySearchPageKey;
   final normalizedSourceKey = normalizeComicTileSourceKey(sourceKey);
@@ -321,7 +422,44 @@ Future<void> saveComicTileDisplaySettings(
   while (values.length <= comicTileDisplayConfigSettingIndex) {
     values.add('');
   }
-  values[comicTileDisplayConfigSettingIndex] = jsonEncode(settings.toJson());
+  final root = settings.toJson();
+  // 普通卡片编辑器可能仍持有打开时的快照，不能覆盖另一个弹窗新写的瀑布流设置。
+  final latest =
+      decodeComicTileDisplayRoot(values[comicTileDisplayConfigSettingIndex]);
+  if (latest.containsKey(waterfallTagDisplayKey)) {
+    root[waterfallTagDisplayKey] = latest[waterfallTagDisplayKey];
+  }
+  values[comicTileDisplayConfigSettingIndex] = jsonEncode(root);
+  await appdata.updateSettings();
+}
+
+/// 保存瀑布流配置；可选的新节点未传时保留最新值，兼容原来两组的编辑器。
+Future<void> saveWaterfallTagDisplaySettings({
+  required WaterfallTagDisplayConfig local,
+  required WaterfallTagDisplayConfig pixivAuthor,
+  WaterfallTagDisplayConfig? recommend,
+  WaterfallFavoriteStyle? favoriteStyle,
+}) async {
+  final values = appdata.settings;
+  while (values.length <= comicTileDisplayConfigSettingIndex) {
+    values.add('');
+  }
+  final root =
+      decodeComicTileDisplayRoot(values[comicTileDisplayConfigSettingIndex]);
+  final existing = root[waterfallTagDisplayKey];
+  final waterfall = existing is Map
+      ? Map<String, dynamic>.from(existing)
+      : <String, dynamic>{};
+  waterfall[waterfallTagLocalKey] = local.toJson();
+  waterfall[waterfallTagPixivAuthorKey] = pixivAuthor.toJson();
+  if (recommend != null) {
+    waterfall[waterfallTagRecommendKey] = recommend.toJson();
+  }
+  if (favoriteStyle != null) {
+    waterfall[waterfallFavoriteStyleKey] = favoriteStyle.toJson();
+  }
+  root[waterfallTagDisplayKey] = waterfall;
+  values[comicTileDisplayConfigSettingIndex] = jsonEncode(root);
   await appdata.updateSettings();
 }
 
@@ -376,6 +514,10 @@ class ComicTileDisplaySettings {
     required this.local,
     required this.online,
     required this.searchBySource,
+    this.localIllustTags = WaterfallTagDisplayConfig.defaults,
+    this.pixivAuthorTags = WaterfallTagDisplayConfig.defaults,
+    this.recommendTags = WaterfallTagDisplayConfig.recommendDefaults,
+    this.favoriteStyle = WaterfallFavoriteStyle.defaults,
   });
 
   static const ComicTileDisplaySettings defaults = ComicTileDisplaySettings(
@@ -390,6 +532,10 @@ class ComicTileDisplaySettings {
   final ComicTileDisplayConfig local;
   final ComicTileDisplayConfig online;
   final Map<String, ComicTileDisplayConfig> searchBySource;
+  final WaterfallTagDisplayConfig localIllustTags;
+  final WaterfallTagDisplayConfig pixivAuthorTags;
+  final WaterfallTagDisplayConfig recommendTags;
+  final WaterfallFavoriteStyle favoriteStyle;
 
   /// 只改颜色，其余节点原样保留。
   ComicTileDisplaySettings withIdColor(String colorKey) {
@@ -398,6 +544,10 @@ class ComicTileDisplaySettings {
       local: local,
       online: online,
       searchBySource: searchBySource,
+      localIllustTags: localIllustTags,
+      pixivAuthorTags: pixivAuthorTags,
+      recommendTags: recommendTags,
+      favoriteStyle: favoriteStyle,
     );
   }
 
@@ -408,6 +558,10 @@ class ComicTileDisplaySettings {
       local: config,
       online: online,
       searchBySource: searchBySource,
+      localIllustTags: localIllustTags,
+      pixivAuthorTags: pixivAuthorTags,
+      recommendTags: recommendTags,
+      favoriteStyle: favoriteStyle,
     );
   }
 
@@ -418,6 +572,10 @@ class ComicTileDisplaySettings {
       local: local,
       online: config,
       searchBySource: searchBySource,
+      localIllustTags: localIllustTags,
+      pixivAuthorTags: pixivAuthorTags,
+      recommendTags: recommendTags,
+      favoriteStyle: favoriteStyle,
     );
   }
 
@@ -443,6 +601,10 @@ class ComicTileDisplaySettings {
         ...searchBySource,
         normalizeComicTileSourceKey(sourceKey): config,
       },
+      localIllustTags: localIllustTags,
+      pixivAuthorTags: pixivAuthorTags,
+      recommendTags: recommendTags,
+      favoriteStyle: favoriteStyle,
     );
   }
 
@@ -452,6 +614,7 @@ class ComicTileDisplaySettings {
       return defaults;
     }
     final search = <String, ComicTileDisplayConfig>{};
+    final waterfall = json[waterfallTagDisplayKey];
     final searchNode = json[comicTileDisplaySearchPageKey];
     if (searchNode is Map) {
       searchNode.forEach((key, value) {
@@ -464,11 +627,20 @@ class ComicTileDisplaySettings {
     }
     return ComicTileDisplaySettings(
       idColor: normalizeComicTileIdColor(json[comicTileDisplayIdColorKey]),
-      local: ComicTileDisplayConfig.fromJson(
-          json[comicTileDisplayLocalPageKey]),
-      online: ComicTileDisplayConfig.fromJson(
-          json[comicTileDisplayOnlinePageKey]),
+      local:
+          ComicTileDisplayConfig.fromJson(json[comicTileDisplayLocalPageKey]),
+      online:
+          ComicTileDisplayConfig.fromJson(json[comicTileDisplayOnlinePageKey]),
       searchBySource: search,
+      localIllustTags: WaterfallTagDisplayConfig.fromJson(
+          waterfall is Map ? waterfall[waterfallTagLocalKey] : null),
+      pixivAuthorTags: WaterfallTagDisplayConfig.fromJson(
+          waterfall is Map ? waterfall[waterfallTagPixivAuthorKey] : null),
+      recommendTags: WaterfallTagDisplayConfig.fromJson(
+          waterfall is Map ? waterfall[waterfallTagRecommendKey] : null,
+          fallback: WaterfallTagDisplayConfig.recommendDefaults),
+      favoriteStyle: WaterfallFavoriteStyle.fromJson(
+          waterfall is Map ? waterfall[waterfallFavoriteStyleKey] : null),
     );
   }
 
@@ -491,6 +663,12 @@ class ComicTileDisplaySettings {
           for (final entry in searchBySource.entries)
             entry.key: entry.value.toJson(),
         },
+        waterfallTagDisplayKey: <String, Object?>{
+          waterfallTagLocalKey: localIllustTags.toJson(),
+          waterfallTagPixivAuthorKey: pixivAuthorTags.toJson(),
+          waterfallTagRecommendKey: recommendTags.toJson(),
+          waterfallFavoriteStyleKey: favoriteStyle.toJson(),
+        },
       };
 
   /// 深比较（含 [idColor] 与 [searchBySource] 逐键比较）——设置页与测试都靠它判断"配置没变"。
@@ -503,6 +681,12 @@ class ComicTileDisplaySettings {
       return false;
     }
     if (other.local != local || other.online != online) {
+      return false;
+    }
+    if (other.localIllustTags != localIllustTags ||
+        other.pixivAuthorTags != pixivAuthorTags ||
+        other.recommendTags != recommendTags ||
+        other.favoriteStyle != favoriteStyle) {
       return false;
     }
     if (other.searchBySource.length != searchBySource.length) {
@@ -521,8 +705,13 @@ class ComicTileDisplaySettings {
         idColor,
         local,
         online,
+        localIllustTags,
+        pixivAuthorTags,
+        recommendTags,
+        favoriteStyle,
         Object.hashAllUnordered(
-          searchBySource.entries.map((entry) => Object.hash(entry.key, entry.value)),
+          searchBySource.entries
+              .map((entry) => Object.hash(entry.key, entry.value)),
         ),
       );
 

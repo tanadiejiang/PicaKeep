@@ -3,8 +3,13 @@ library;
 
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter_staggered_grid_view/flutter_staggered_grid_view.dart';
+import 'package:picakeep/base.dart';
 import 'package:picakeep/comic_source/comic_source.dart';
+import 'package:picakeep/foundation/app.dart';
 import 'package:picakeep/foundation/app_page_route.dart';
+import 'package:picakeep/foundation/local_library_illust_view.dart'
+    show illustWaterfallColumnsSettingIndex, normalizeIllustWaterfallColumns;
 import 'package:picakeep/foundation/explore/explore_bindings.dart';
 import 'package:picakeep/foundation/explore/explore_models.dart';
 import 'package:picakeep/foundation/explore/explore_registry.dart';
@@ -16,6 +21,7 @@ import 'package:picakeep/pages/explore/explore_keep_alive_switcher.dart';
 import 'package:picakeep/pages/explore/explore_result_page.dart';
 import 'package:picakeep/pages/explore/explore_route_scope.dart';
 import 'package:picakeep/pages/online_common/online_comic_list_item.dart';
+import 'package:picakeep/pages/online_common/online_recommendation_card.dart';
 
 enum ExploreTabKind { recommend, ranking, category }
 
@@ -591,12 +597,14 @@ class _ExploreFeed extends StatefulWidget {
 
 class _ExploreFeedState extends State<_ExploreFeed> {
   final _scroll = ScrollController();
+  final _bookmarks = RecommendationBookmarkController();
   ExploreOverview? _overview;
   // Virtualize individual comics, not entire recommendation sections. A single
   // section can contain dozens of cards whose metadata is expensive to build.
   List<({ExploreSection section, BaseComic? comic, bool header})>
       _overviewRows = [];
   ExploreListController? _controller;
+  ExploreListState? _retainedRecommendationState;
   String? _session;
   ExploreError? _error;
   bool _loading = true;
@@ -605,6 +613,11 @@ class _ExploreFeedState extends State<_ExploreFeed> {
       .providerOf(widget.descriptor.sourceKey)
       ?.contextFingerprint;
   bool _contextCheckScheduled = false;
+
+  bool get _usesPixivWaterfall =>
+      widget.descriptor.sourceKey.toLowerCase() == 'pixiv' &&
+      (widget.entry.kind == ExploreSectionKind.recommend ||
+          widget.entry.kind == ExploreSectionKind.ranking);
 
   bool get _contextMatches =>
       _fingerprint ==
@@ -628,7 +641,12 @@ class _ExploreFeedState extends State<_ExploreFeed> {
 
   void _onScroll() {
     final controller = _controller;
-    if (!widget.active || controller == null || !_scroll.hasClients) return;
+    if (_loading ||
+        !widget.active ||
+        controller == null ||
+        !_scroll.hasClients) {
+      return;
+    }
     if (!_contextMatches) {
       _contextChanged();
       return;
@@ -647,10 +665,19 @@ class _ExploreFeedState extends State<_ExploreFeed> {
   void initState() {
     super.initState();
     _scroll.addListener(_onScroll);
+    App.displaySettingsVersion.addListener(_onDisplaySettingsChanged);
     // Capture identity before the first request, rather than after its completion.
     final identity = _fingerprint;
     assert(identity != null);
     unawaited(_load());
+  }
+
+  void _onDisplaySettingsChanged() {
+    if (mounted &&
+        (_usesPixivWaterfall ||
+            widget.entry.kind == ExploreSectionKind.recommend)) {
+      setState(() {});
+    }
   }
 
   @override
@@ -673,23 +700,37 @@ class _ExploreFeedState extends State<_ExploreFeed> {
   @override
   void dispose() {
     _generation++;
+    App.displaySettingsVersion.removeListener(_onDisplaySettingsChanged);
+    _bookmarks.dispose();
     _release();
     _scroll.dispose();
     super.dispose();
   }
 
-  Future<void> _load() async {
+  Future<void> _load({bool preserveContent = false}) async {
     if (!_contextMatches) {
       _contextChanged();
       return;
     }
     final generation = ++_generation;
+    final retainContent = preserveContent &&
+        _usesPixivWaterfall &&
+        (_overview != null ||
+            (_controller?.state.items.isNotEmpty ?? false) ||
+            _retainedRecommendationState != null);
+    final retainedState = retainContent
+        ? _retainedRecommendationState ?? _controller?.state
+        : null;
+    _bookmarks.reset(preserveConfirmed: retainContent);
     _release();
     setState(() {
       _loading = true;
       _error = null;
-      _overview = null;
-      _overviewRows = [];
+      _retainedRecommendationState = retainedState;
+      if (!retainContent) {
+        _overview = null;
+        _overviewRows = [];
+      }
     });
     _session = widget.registry.createSession();
     final sourceKey = widget.descriptor.sourceKey;
@@ -705,6 +746,12 @@ class _ExploreFeedState extends State<_ExploreFeed> {
         return;
       }
       if (result.errorOrNull?.code != ExploreErrorCode.unsupported) {
+        if (retainContent && result.errorOrNull != null) {
+          setState(() => _loading = false);
+          _showRefreshError(result.errorOrNull!);
+          return;
+        }
+        _bookmarks.reset();
         setState(() {
           _overview = result.dataOrNull;
           _overviewRows = [
@@ -719,6 +766,7 @@ class _ExploreFeedState extends State<_ExploreFeed> {
             ],
           ];
           _error = result.errorOrNull;
+          _retainedRecommendationState = null;
           _loading = false;
         });
         return;
@@ -740,7 +788,41 @@ class _ExploreFeedState extends State<_ExploreFeed> {
       _contextChanged();
       return;
     }
-    setState(() => _loading = false);
+    // Restore the previously loaded range in the new session before replacing
+    // the visible grid. Old continuation handles belong to the released session.
+    final targetCount = retainedState?.items.length ?? 0;
+    while (controller.state.error == null &&
+        controller.state.moreError == null &&
+        controller.state.hasMore &&
+        controller.state.items.length < targetCount) {
+      final previousCount = controller.state.items.length;
+      await controller.loadMore();
+      if (!mounted || generation != _generation) return;
+      if (!_contextMatches) {
+        _contextChanged();
+        return;
+      }
+      if (controller.state.items.length <= previousCount) break;
+    }
+    final refreshError = controller.state.error ?? controller.state.moreError;
+    if (retainContent && refreshError != null) {
+      setState(() => _loading = false);
+      _showRefreshError(refreshError);
+      return;
+    }
+    _bookmarks.reset();
+    setState(() {
+      _overview = null;
+      _overviewRows = [];
+      _retainedRecommendationState = null;
+      _loading = false;
+    });
+  }
+
+  void _showRefreshError(ExploreError error) {
+    ScaffoldMessenger.of(context)
+      ..clearSnackBars()
+      ..showSnackBar(SnackBar(content: Text('刷新失败：${error.message}')));
   }
 
   Widget _message(Widget child) => CustomScrollView(
@@ -755,9 +837,11 @@ class _ExploreFeedState extends State<_ExploreFeed> {
       return const Center(child: CircularProgressIndicator());
     }
     final source = ComicSource.find(widget.descriptor.sourceKey);
-    final error = _error ?? _controller?.state.error;
+    final error = _retainedRecommendationState == null
+        ? _error ?? _controller?.state.error
+        : null;
     Widget body;
-    if (_loading) {
+    if (_loading && _overview == null && _retainedRecommendationState == null) {
       body = _message(const Center(child: CircularProgressIndicator()));
     } else if (error != null) {
       body = _message(exploreErrorView(error: error.message, onRetry: _load));
@@ -767,39 +851,45 @@ class _ExploreFeedState extends State<_ExploreFeed> {
       final sections = _overview!.sections;
       body = sections.isEmpty
           ? _message(const Center(child: Text('没有推荐内容')))
-          : ListView.builder(
-              controller: _scroll,
-              physics: const AlwaysScrollableScrollPhysics(),
-              padding: const EdgeInsets.only(top: 4, bottom: 12),
-              itemCount: _overviewRows.length,
-              itemBuilder: (_, i) {
-                final row = _overviewRows[i];
-                if (row.header) return _sectionHeader(row.section);
-                final comic = row.comic;
-                return Padding(
-                  padding: EdgeInsets.only(
-                      bottom: comic == null ||
-                              identical(comic, row.section.items.last)
-                          ? 8
-                          : 0),
-                  child: comic == null
-                      ? _sectionMessage(row.section)
-                      : _comic(source, comic),
-                );
-              });
+          : _usesPixivWaterfall
+              ? _recommendOverview(source, sections)
+              : ListView.builder(
+                  controller: _scroll,
+                  physics: const AlwaysScrollableScrollPhysics(),
+                  padding: const EdgeInsets.only(top: 4, bottom: 12),
+                  itemCount: _overviewRows.length,
+                  itemBuilder: (_, i) {
+                    final row = _overviewRows[i];
+                    if (row.header) return _sectionHeader(row.section);
+                    final comic = row.comic;
+                    return Padding(
+                      padding: EdgeInsets.only(
+                          bottom: comic == null ||
+                                  identical(comic, row.section.items.last)
+                              ? 8
+                              : 0),
+                      child: comic == null
+                          ? _sectionMessage(row.section)
+                          : _comic(source, comic),
+                    );
+                  });
     } else {
-      final state = _controller?.state ?? const ExploreListState();
+      final state = _retainedRecommendationState ??
+          _controller?.state ??
+          const ExploreListState();
       final items = state.items;
       body = items.isEmpty && !state.hasMore
           ? _message(const Center(child: Text('没有内容')))
-          : ListView.builder(
-              controller: _scroll,
-              physics: const AlwaysScrollableScrollPhysics(),
-              padding: const EdgeInsets.only(top: 4, bottom: 12),
-              itemCount: items.length + 1,
-              itemBuilder: (_, i) => i == items.length
-                  ? _footer(state)
-                  : _comic(source, items[i].comic));
+          : _usesPixivWaterfall
+              ? _recommendList(source, state)
+              : ListView.builder(
+                  controller: _scroll,
+                  physics: const AlwaysScrollableScrollPhysics(),
+                  padding: const EdgeInsets.only(top: 4, bottom: 12),
+                  itemCount: items.length + 1,
+                  itemBuilder: (_, i) => i == items.length
+                      ? _footer(state)
+                      : _comic(source, items[i].comic));
     }
     return Column(children: [
       if (widget.entry.kind == ExploreSectionKind.ranking &&
@@ -807,6 +897,85 @@ class _ExploreFeedState extends State<_ExploreFeed> {
         exploreHintBar(context, widget.entry.description),
       Expanded(child: RefreshIndicator(onRefresh: _load, child: body)),
     ]);
+  }
+
+  List<({BaseComic comic, String? blockedBy})> _recommendItems(
+      Iterable<BaseComic> comics) {
+    final resolver = buildExploreBlockingResolver();
+    final hide = readHideBlockedComics();
+    final result = <({BaseComic comic, String? blockedBy})>[];
+    for (final comic in comics) {
+      final blockedBy = resolver?.call(comic);
+      if (!hide || blockedBy == null) {
+        result.add((comic: comic, blockedBy: blockedBy));
+      }
+    }
+    return result;
+  }
+
+  Widget _recommendGrid(
+      ComicSource source, List<({BaseComic comic, String? blockedBy})> items) {
+    return SliverPadding(
+      padding: const EdgeInsets.symmetric(horizontal: 2),
+      sliver: SliverMasonryGrid.count(
+        crossAxisCount: normalizeIllustWaterfallColumns(
+            appdata.settings[illustWaterfallColumnsSettingIndex]),
+        childCount: items.length,
+        itemBuilder: (context, index) {
+          final item = items[index];
+          return OnlineRecommendationCard(
+            key: ValueKey((source.key, item.comic.id)),
+            source: source,
+            comic: item.comic,
+            blockedBy: item.blockedBy,
+            bookmarks: _bookmarks,
+            actionsEnabled: !_loading,
+            onAccountsChanged: () {
+              widget.onContextChanged();
+              if (_contextMatches) {
+                unawaited(_load(preserveContent: true));
+              }
+            },
+            onDataRefresh: () => _load(preserveContent: true),
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _recommendOverview(ComicSource source, List<ExploreSection> sections) {
+    return CustomScrollView(
+      key: const Key('explore-recommend-scroll'),
+      controller: _scroll,
+      physics: const AlwaysScrollableScrollPhysics(),
+      slivers: [
+        const SliverToBoxAdapter(child: SizedBox(height: 4)),
+        for (final section in sections) ...[
+          SliverToBoxAdapter(child: _sectionHeader(section)),
+          if (section.error != null || section.items.isEmpty)
+            SliverToBoxAdapter(child: _sectionMessage(section))
+          else
+            _recommendGrid(source, _recommendItems(section.items)),
+          const SliverToBoxAdapter(child: SizedBox(height: 8)),
+        ],
+        const SliverToBoxAdapter(child: SizedBox(height: 12)),
+      ],
+    );
+  }
+
+  Widget _recommendList(ComicSource source, ExploreListState state) {
+    return CustomScrollView(
+      key: const Key('explore-recommend-scroll'),
+      controller: _scroll,
+      physics: const AlwaysScrollableScrollPhysics(),
+      slivers: [
+        const SliverToBoxAdapter(child: SizedBox(height: 4)),
+        _recommendGrid(
+            source, _recommendItems(state.items.map((item) => item.comic))),
+        SliverToBoxAdapter(child: _footer(state)),
+        const SliverToBoxAdapter(child: SizedBox(height: 12)),
+      ],
+    );
   }
 
   Widget _comic(ComicSource source, BaseComic comic) {
@@ -865,16 +1034,25 @@ class _ExploreFeedState extends State<_ExploreFeed> {
           padding: EdgeInsets.all(16),
           child: Center(child: CircularProgressIndicator()));
     }
-    final error = state.moreError;
+    final error = _retainedRecommendationState == null
+        ? state.moreError
+        : _controller?.state.error ?? _controller?.state.moreError;
     if (error != null || state.hasMore) {
-      final restart =
-          error?.code == ExploreErrorCode.expiredContinuation || !state.hasMore;
+      final restart = _retainedRecommendationState != null ||
+          error?.code == ExploreErrorCode.expiredContinuation ||
+          !state.hasMore;
       return Padding(
           padding: const EdgeInsets.all(12),
           child: Column(children: [
             if (error != null) Text(error.message),
             OutlinedButton(
-                onPressed: restart ? _load : _controller!.loadMore,
+                onPressed: _loading
+                    ? null
+                    : restart
+                        ? () => _load(
+                            preserveContent:
+                                _retainedRecommendationState != null)
+                        : _controller!.loadMore,
                 child: Text(restart
                     ? '从头刷新'
                     : error != null

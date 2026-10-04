@@ -1,0 +1,3109 @@
+{
+  "created_at": "2026-10-04T13:20:18.4192186+08:00",
+  "branch": "main",
+  "base_commit": "83a47ff161758adc15b1f756b072b6beb92ca8b6",
+  "command": "flutter build apk --profile --target-platform android-arm64",
+  "input_scope": "rg --files lib assets android linux windows packages, plus pubspec.yaml/pubspec.lock; generated/ignored paths excluded",
+  "files": [
+    {
+      "path": "android/app/build.gradle.kts",
+      "sha256": "A8CDA00295180B60252F7D1224EF92531B2E113663930B1D0EEAC6522386520F"
+    },
+    {
+      "path": "android/app/src/debug/AndroidManifest.xml",
+      "sha256": "C4CC3A70FB2937A1CF357AB341A8EEE6FD2B5C1F8B7406A34995DDC86F391BB9"
+    },
+    {
+      "path": "android/app/src/main/aidl/lingxue/picakeep/shizuku/IPicaKeepShizukuFileService.aidl",
+      "sha256": "A337035CA4B3C0014B2485BE719E4F6BC72EDEDF4EE6AF42EBE531B18174E592"
+    },
+    {
+      "path": "android/app/src/main/AndroidManifest.xml",
+      "sha256": "A070B3C8CCDB97BF8087E1682245529F16D0BC1A65B4C276860B5CF4684185F6"
+    },
+    {
+      "path": "android/app/src/main/kotlin/lingxue/picakeep/MainActivity.kt",
+      "sha256": "8BDD1A4FBB54E8F3669D414C452FE7307034A67BB82050C022C2E00A6EB6EFA1"
+    },
+    {
+      "path": "android/app/src/main/kotlin/lingxue/picakeep/PicaKeepDownloadService.kt",
+      "sha256": "717C0DE7422E1A9B441D09A069CA04F7875DF2526BB813450A9D369122B6BB3A"
+    },
+    {
+      "path": "android/app/src/main/kotlin/lingxue/picakeep/PicaKeepForegroundService.kt",
+      "sha256": "D6BCDD6378D8978749D4108B68280CB389DFECEC7699A4B3021E2CBD038C9334"
+    },
+    {
+      "path": "android/app/src/main/kotlin/lingxue/picakeep/shizuku/PicaKeepShizukuFileService.kt",
+      "sha256": "B44448EE1963DFBFF2AEEA3AD3E240DADD4BC82432F1F1904F4302F1ACBA190F"
+    },
+    {
+      "path": "android/app/src/main/res/drawable-night-v21/launch_background.xml",
+      "sha256": "2301FC19302E04D958581CED9B9FC5C0FCEAED679BA05425904864EA5E00BAD7"
+    },
+    {
+      "path": "android/app/src/main/res/drawable-night/launch_background.xml",
+      "sha256": "9507D0BF7ED2D4AA3E195C3850309F0E3C92191584D0CEA31756EBB42E0333A3"
+    },
+    {
+      "path": "android/app/src/main/res/drawable-night/launch_icon_full.xml",
+      "sha256": "7726AFA2D743B1AE4B645FFDB1DF1656769F5717392CCBD89A8C37DB79740EC1"
+    },
+    {
+      "path": "android/app/src/main/res/drawable-night/launch_splash_icon.xml",
+      "sha256": "79B6EB39B4E2090D1E67DC62908ACCD071930AF6111FBA95C7EE70A016134A50"
+    },
+    {
+      "path": "android/app/src/main/res/drawable-v21/launch_background.xml",
+      "sha256": "E55E1E957DAFB5745E9CFEF9D6B03996874ABE28D32058B2A0ED9E3DCC842944"
+    },
+    {
+      "path": "android/app/src/main/res/drawable/ic_stat_download.xml",
+      "sha256": "50D90EAAA8BF5F28F7FB4ED7FD51743DA01AA4A8AECE0D81FD7B32B06308A9C8"
+    },
+    {
+      "path": "android/app/src/main/res/drawable/launch_background.xml",
+      "sha256": "D5EB7BE65653CD998B4BF211DF8443818D0B748AFAB27176BC33F3150A3F926C"
+    },
+    {
+      "path": "android/app/src/main/res/drawable/launch_icon_full.xml",
+      "sha256": "DA5E8A2D95EFAA6B1A35031F3D695E810A22498333B559B61836D23F78D7A794"
+    },
+    {
+      "path": "android/app/src/main/res/drawable/launch_splash_icon.xml",
+      "sha256": "9AB93CDD52D82BEC01ED05EE4F6A0C8F23EB496BCDB94B3090B95E3FA7D0BE31"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-anydpi-v26/ic_launcher_amber_round.xml",
+      "sha256": "EB5A00A3E83F9C17ED5BE4C2D031E16F273A419E1DA23C6A6A4A5954A0E97270"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-anydpi-v26/ic_launcher_amber.xml",
+      "sha256": "EB5A00A3E83F9C17ED5BE4C2D031E16F273A419E1DA23C6A6A4A5954A0E97270"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-anydpi-v26/ic_launcher_blue_round.xml",
+      "sha256": "581AA4394B6A3A4F87304B98926BD9A3C789933F45F5EB0E4203B1895F9AF436"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-anydpi-v26/ic_launcher_blue.xml",
+      "sha256": "581AA4394B6A3A4F87304B98926BD9A3C789933F45F5EB0E4203B1895F9AF436"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-anydpi-v26/ic_launcher_coral_round.xml",
+      "sha256": "7E1790C40740FD7B59EFFD459522E1AAD86DA076BC3C85C4297C9D046BA40D07"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-anydpi-v26/ic_launcher_coral.xml",
+      "sha256": "7E1790C40740FD7B59EFFD459522E1AAD86DA076BC3C85C4297C9D046BA40D07"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-anydpi-v26/ic_launcher_cyan_round.xml",
+      "sha256": "582F93C7BA68707AB8B5EC2A913888330428925EAA5581E2021369B47EA242AC"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-anydpi-v26/ic_launcher_cyan.xml",
+      "sha256": "582F93C7BA68707AB8B5EC2A913888330428925EAA5581E2021369B47EA242AC"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-anydpi-v26/ic_launcher_green_round.xml",
+      "sha256": "F4A7B33D53DEC1E7DD209515B2620664469C5C844D8A39B0BEE1F3123D2E9E1E"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-anydpi-v26/ic_launcher_green.xml",
+      "sha256": "F4A7B33D53DEC1E7DD209515B2620664469C5C844D8A39B0BEE1F3123D2E9E1E"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-anydpi-v26/ic_launcher_indigo_round.xml",
+      "sha256": "0A774CFF7745421CC2CEE34C9687F5434554B4DD87C654DE850B4FC85B25F4C9"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-anydpi-v26/ic_launcher_indigo.xml",
+      "sha256": "0A774CFF7745421CC2CEE34C9687F5434554B4DD87C654DE850B4FC85B25F4C9"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-anydpi-v26/ic_launcher_lime_round.xml",
+      "sha256": "A487530CFB47E8E0E7A4061FFABC8351038016B26AB5B6CC1D0D3F0F89EAB03A"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-anydpi-v26/ic_launcher_lime.xml",
+      "sha256": "A487530CFB47E8E0E7A4061FFABC8351038016B26AB5B6CC1D0D3F0F89EAB03A"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-anydpi-v26/ic_launcher_orange_round.xml",
+      "sha256": "70EA9EDD0BA16EC1D1A3A4EAB3BA3E1895189A7C6D9AB81AB63F1447B073EB08"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-anydpi-v26/ic_launcher_orange.xml",
+      "sha256": "70EA9EDD0BA16EC1D1A3A4EAB3BA3E1895189A7C6D9AB81AB63F1447B073EB08"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-anydpi-v26/ic_launcher_pink_round.xml",
+      "sha256": "B634953BFE8E4316BDC6D40041B5FF4C17B27CB08B3CE96D17B097818DF3FEF7"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-anydpi-v26/ic_launcher_pink.xml",
+      "sha256": "B634953BFE8E4316BDC6D40041B5FF4C17B27CB08B3CE96D17B097818DF3FEF7"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-anydpi-v26/ic_launcher_purple_round.xml",
+      "sha256": "D8F8AC0A43FEEE9837CEA1F0CC9AA271F6F8B786E01A88696D2E7725244E1C07"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-anydpi-v26/ic_launcher_purple.xml",
+      "sha256": "D8F8AC0A43FEEE9837CEA1F0CC9AA271F6F8B786E01A88696D2E7725244E1C07"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-anydpi-v26/ic_launcher_red_round.xml",
+      "sha256": "E63B25F4AB3EDDADDF21FB4821CDAED8EF58AEB104E3EE362343784E64676AA3"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-anydpi-v26/ic_launcher_red.xml",
+      "sha256": "E63B25F4AB3EDDADDF21FB4821CDAED8EF58AEB104E3EE362343784E64676AA3"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-anydpi-v26/ic_launcher_teal_round.xml",
+      "sha256": "52C6C7BC6CACA93731EFD85656370B2CC22128C36CDB796C132A7CFE9EC02EF0"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-anydpi-v26/ic_launcher_teal.xml",
+      "sha256": "52C6C7BC6CACA93731EFD85656370B2CC22128C36CDB796C132A7CFE9EC02EF0"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-anydpi-v26/ic_launcher_yellow_round.xml",
+      "sha256": "2CAFB70C1E5A37D7F43CFEFC569B96D3AC4FBC69E6F2F56F6561609650322C2E"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-anydpi-v26/ic_launcher_yellow.xml",
+      "sha256": "2CAFB70C1E5A37D7F43CFEFC569B96D3AC4FBC69E6F2F56F6561609650322C2E"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-hdpi/ic_launcher_amber_background.webp",
+      "sha256": "F6B2A4F06B74799BA2CFE0E59102D75A11D7D8F59CED4D19707EDABA050F9212"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-hdpi/ic_launcher_amber_foreground.webp",
+      "sha256": "1B49C968377D5EAE3514711306B9DC503C726F4A75E4D40957A49883254E8CCF"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-hdpi/ic_launcher_amber_round.webp",
+      "sha256": "081B549B18502B0F4304F1A6ED33D63565D1183B9B8FF5BCFDCD4A18C81C0A4C"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-hdpi/ic_launcher_amber.webp",
+      "sha256": "6ADB47FBFE0ACDE9E6FA7C7FFEA4CE34B38466C3E7E4BE0ECA2670C7DB1F5B60"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-hdpi/ic_launcher_blue_background.webp",
+      "sha256": "EFCF3EE693996FB680E71C6A2FC6D3D0C36894B2673A5AC19387773A35F78F27"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-hdpi/ic_launcher_blue_foreground.webp",
+      "sha256": "CD0A0EA4BE1BC2AE64D61DDAD2E940EE5D39B7CCBC7B516FBB261787CE6A76E0"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-hdpi/ic_launcher_blue_round.webp",
+      "sha256": "3504E9E81994441A6F05CAB764A525A9F9D55971D58F33C3616EE81E5FC5CBA8"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-hdpi/ic_launcher_blue.webp",
+      "sha256": "D01498AAA7425B96748A13324529496E0ED426AF2FB4551FE81A77E8CECE345D"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-hdpi/ic_launcher_coral_background.webp",
+      "sha256": "85046E8F4067EBEE3E1B5C346DC83FA2969150F59621B025EFBE62FFE4BA83FC"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-hdpi/ic_launcher_coral_foreground.webp",
+      "sha256": "1269563D45E537DC4EA4349EE642923B9185F07D0C2E6A277EDA2D7829D65A2C"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-hdpi/ic_launcher_coral_round.webp",
+      "sha256": "885308D07AFC0AB055583411837762B9B3485F89CA093525A7AD71586C99EAC4"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-hdpi/ic_launcher_coral.webp",
+      "sha256": "3D5B881C99D3A2DC859A88DCB95B1E54EBE3F29B555964F33833C82B13BC6B79"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-hdpi/ic_launcher_cyan_background.webp",
+      "sha256": "C1B3977E00E8B1A5DF52A302E4FFC5AF4D472BB8CF2329E055B18C4DE9E7DC46"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-hdpi/ic_launcher_cyan_foreground.webp",
+      "sha256": "1FA687F82D5242B811468576553A37B29D8915B30C11AA2D2CB50CAC1162E65D"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-hdpi/ic_launcher_cyan_round.webp",
+      "sha256": "198DE0473FCFC75C17F6C243844CAC9833EB15F02EC3FBCEC3BD9B4D0E9BC3CB"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-hdpi/ic_launcher_cyan.webp",
+      "sha256": "80C69C367A407EDF9D74F5EBF63893A62C04F26FAB37EDA239CC73943BE2B9B4"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-hdpi/ic_launcher_green_background.webp",
+      "sha256": "107BC32719A2E0D0C65E08D2A69D9847E26C244996F43C0D91684D2E5E5647FD"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-hdpi/ic_launcher_green_foreground.webp",
+      "sha256": "0D9EC08F695A341EA0385764BB692D8F587580380CC345B293542E4CE3AD14B0"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-hdpi/ic_launcher_green_round.webp",
+      "sha256": "3A9CB9FE75ED4EFE7E20427FB0DE5269652A616C815BF7FFA2E42B76B656514E"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-hdpi/ic_launcher_green.webp",
+      "sha256": "5D794A24B67E8AC34E2E260A216A031FEBE2927CA689747D47882584A5647651"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-hdpi/ic_launcher_indigo_background.webp",
+      "sha256": "C882F77B9CB00D2417706E6B3102D57F770F91F005F59562CCD4A15A4BC1B233"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-hdpi/ic_launcher_indigo_foreground.webp",
+      "sha256": "9BC5B02979B2358750B823763962D1E79D2CDE74780ABE11F637A06E62135B01"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-hdpi/ic_launcher_indigo_round.webp",
+      "sha256": "CD6C208DBC195EC5F2ECCC6D7CD94FA1203A9542DA58EB8AAFE5D70FAF171C42"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-hdpi/ic_launcher_indigo.webp",
+      "sha256": "9EBF2253A5444D852695B5FB657380B0F91DDC31A1F8628388AAB00852A4A3C8"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-hdpi/ic_launcher_lime_background.webp",
+      "sha256": "52C07D19203049E3E39639F846A9EEB0AC7D4EB5C880F0FAE99581353BDFEFCC"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-hdpi/ic_launcher_lime_foreground.webp",
+      "sha256": "0263C2B3BBC6158E9CF17001E1EBD14597F93A6D8EBAA770FE90227D2C9B1D9B"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-hdpi/ic_launcher_lime_round.webp",
+      "sha256": "CC30EC07AF6C086CDAF52643D9A73E0C34C6A212CF57CA5D46006623B35191A8"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-hdpi/ic_launcher_lime.webp",
+      "sha256": "C6270BC60BDD8ACD05361C586ED1266106D35D46A699A6B1803D9F5BBF0E7C7D"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-hdpi/ic_launcher_orange_background.webp",
+      "sha256": "4F28A1DC964430615884C004BEB3B217260E5ED97103F03EE97E0A9FC79EE313"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-hdpi/ic_launcher_orange_foreground.webp",
+      "sha256": "7E7BC67E63FAADB4D602AEC782676747FEB829E8F252139DF5A9E4B6F3D77430"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-hdpi/ic_launcher_orange_round.webp",
+      "sha256": "B7988F0D469B899D3605C5B63E46A71EAE95E58F24F01057B5A8610E96766F44"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-hdpi/ic_launcher_orange.webp",
+      "sha256": "3ABDF2632515CC8C05F2391378AEADD40E606FC838CA5747F0374162B9CF3918"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-hdpi/ic_launcher_pink_background.webp",
+      "sha256": "E3FB8B66470BE143E99122454CC5A52337A2C4478E6B63223C86AE2284607649"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-hdpi/ic_launcher_pink_foreground.webp",
+      "sha256": "2942AD0F76D26F7FCF53258AB52BA589D6700CB9C4A73EFA8E21B3E056134223"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-hdpi/ic_launcher_pink_round.webp",
+      "sha256": "0B162859D2F56FDCF988B803494B849A10DE9BF23018541B2B3E35D068881F4E"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-hdpi/ic_launcher_pink.webp",
+      "sha256": "114C1432A72F749BF8D59CD8F10F8F01225D710AED67D1D575518E6904AB71D7"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-hdpi/ic_launcher_purple_background.webp",
+      "sha256": "5A054C891B44B9F62A0B285A95CDD850D3527DAF63CA54235F4B94BF917D0ACE"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-hdpi/ic_launcher_purple_foreground.webp",
+      "sha256": "BD19A26842DDF966C2EFB2A23B63A9D13B8264E356AF67B9C7A307CE13D0D38D"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-hdpi/ic_launcher_purple_round.webp",
+      "sha256": "25B93E69B49D471557BCF8E4531178D21BBFA717F100DF2A068CF81E4E8645C2"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-hdpi/ic_launcher_purple.webp",
+      "sha256": "D02C945E320D47E5F5453F6B4857BB2A8B417433010AB2FABEEB096F7D66B7E8"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-hdpi/ic_launcher_red_background.webp",
+      "sha256": "EC850A91C2865D775BFA1B417D865B21158BB2A2B33D86D4F7C36247D1353FF4"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-hdpi/ic_launcher_red_foreground.webp",
+      "sha256": "99F53AB6D349179EA5C3F5BDE507E81250A982E2EEB5CD17306A90ED6DCB1BE9"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-hdpi/ic_launcher_red_round.webp",
+      "sha256": "769E50DAAB77750B22528E05D58CEAA57346F26CF6F82B12B997E688D6630B94"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-hdpi/ic_launcher_red.webp",
+      "sha256": "31440E262C81C2501FDD6195AAF9CF398806BA1F98E2F121E1904BCBAC539F10"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-hdpi/ic_launcher_round.webp",
+      "sha256": "1ED73F5341A69D3B41C7E02E126803F50CC8C3284ADF4BBB737F0C93577AEF07"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-hdpi/ic_launcher_teal_background.webp",
+      "sha256": "E1148451EC4F0BF6F2CFAE44E06ECA6B79749A41DAF5CD4312DDEF320581FED9"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-hdpi/ic_launcher_teal_foreground.webp",
+      "sha256": "BFF5B0A5A86AF952A8BE7C1E5A95236076FC48358447CB686A86F1DE1028B7FE"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-hdpi/ic_launcher_teal_round.webp",
+      "sha256": "6FFABD0A6915E3C0211587D456A305E4253364F2A3994C99D092F9697AD2DE65"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-hdpi/ic_launcher_teal.webp",
+      "sha256": "038866A8C50D48B6647FBC2CA2B9DBF54ECFE332C94913F09008768C3D3897AB"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-hdpi/ic_launcher_yellow_background.webp",
+      "sha256": "27CBAD2F52455834BE9AF7193633DDEBCDF5A0BB0F56C5630C32C7B8FE90F542"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-hdpi/ic_launcher_yellow_foreground.webp",
+      "sha256": "D5ABD0C5CD1A36014090EF3E5C92FCD9300A1D5FB394FA11E0AFBCA6A14E40B7"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-hdpi/ic_launcher_yellow_round.webp",
+      "sha256": "092EB8B69C00040F9FC7ED4BA68B57B295A4482768ABFC690C77DBA9870653EB"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-hdpi/ic_launcher_yellow.webp",
+      "sha256": "2E2782EFEA02A009B19DF2214E11457A1ED73307B8794F2AFBC50BE9861CE4B1"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-hdpi/ic_launcher.webp",
+      "sha256": "DD00996198640ED28FBC09CDCD7A3807CF8707F3EB255B659634DA3CA6A6FF01"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-mdpi/ic_launcher_amber_background.webp",
+      "sha256": "E0782AAA8B64324EEE8F40A89EE306E51F9E78A0BC6B4D82C72A7638B2F9E119"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-mdpi/ic_launcher_amber_foreground.webp",
+      "sha256": "9204017A009D515B6C45BC8BA16CAA0A064AAF8D0CC8BBBB77AD0D2EDF307CD0"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-mdpi/ic_launcher_amber_round.webp",
+      "sha256": "DEAC2FE691ECB4A07AD793580F26381F3EE004D380ABC387B655CCF5AC8183B1"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-mdpi/ic_launcher_amber.webp",
+      "sha256": "ADC52129007F43E83206E1431B195C9ADB73BCEAE16AD15AF18C7410B2F98560"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-mdpi/ic_launcher_blue_background.webp",
+      "sha256": "5EF19BE5C3FBFA40964BA91DCEE88E466674566DB7514095C114344B43A6729F"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-mdpi/ic_launcher_blue_foreground.webp",
+      "sha256": "BF8A30219D4F42927F81F6DE2070A5282D789BCFB5F3B2D5EC4862F015146CD2"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-mdpi/ic_launcher_blue_round.webp",
+      "sha256": "8E489DE7A17CC502D4030A677767EEA35C48D1DEA9E340FB3E2A0B8029BAEC48"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-mdpi/ic_launcher_blue.webp",
+      "sha256": "B29A023B2853682085094F8A6AB09E43A89B29E50A7561B18FB3880E1AAB4560"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-mdpi/ic_launcher_coral_background.webp",
+      "sha256": "10912A84F29880034EFD55119B05ED8C930C04FC09FCEF8F8ADDD0D1052830DB"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-mdpi/ic_launcher_coral_foreground.webp",
+      "sha256": "40C5CEE3EE58575E492D5B33290B41A249BC5BCD95BA3AC7B70CD7D5F052560A"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-mdpi/ic_launcher_coral_round.webp",
+      "sha256": "A1E8293014AAB9C3C305C90925279B19922347FC1FB433ABD96FF4876D4C230B"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-mdpi/ic_launcher_coral.webp",
+      "sha256": "4E6B6D71B684A0921883A8736FA87C76FBD1CA0936391D037FF3DB5F8D0C6680"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-mdpi/ic_launcher_cyan_background.webp",
+      "sha256": "DA4C28F9FC1232169D702B86C14DD08D6903D8592E8F6B5587A76C1FD9500F62"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-mdpi/ic_launcher_cyan_foreground.webp",
+      "sha256": "2DF36FA61524D5AD08A47D3C8DD53657AFA7FE1CCE75D00B61FD095A1E7173D4"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-mdpi/ic_launcher_cyan_round.webp",
+      "sha256": "60145A33649B2790B1034949D656D29515E98D353CEE724E9E4F5AA9C925EE9A"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-mdpi/ic_launcher_cyan.webp",
+      "sha256": "B9617A9A60ADA41FFDFEDA966B4124D23749F3B3C7B5F16374D7AEC089433205"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-mdpi/ic_launcher_green_background.webp",
+      "sha256": "FD9B223EFF6F677E0F221EB78C031AE2C94BCF64341C9791FAE65ED5838E6A31"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-mdpi/ic_launcher_green_foreground.webp",
+      "sha256": "EA3E98DCBA2A1EFE86CDA845979E7731615C1BB4E9BEAAA0E5EF578167F5949F"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-mdpi/ic_launcher_green_round.webp",
+      "sha256": "F1185F5A901040C17535670F59B15FD0F58EC94B2B9C506BFC8589C846824738"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-mdpi/ic_launcher_green.webp",
+      "sha256": "C187D231D7C456AEA7DC30AAC43F8E2475BC095B015CA69165CC9E68778327D7"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-mdpi/ic_launcher_indigo_background.webp",
+      "sha256": "F4E40192042FC13DF74FA62001434B3AC2C129CAF4DC05B45E125645F8625991"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-mdpi/ic_launcher_indigo_foreground.webp",
+      "sha256": "FCD6E76B05C54E18C3E04EFF92530E247548C9FB15D269640AF047DFDE557954"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-mdpi/ic_launcher_indigo_round.webp",
+      "sha256": "0F065C605AE5CC0383F4C900F007704695680B0989EC1BA2173E09256793FEA6"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-mdpi/ic_launcher_indigo.webp",
+      "sha256": "701A46A510F26C58152C2E655D8E071E2E239862F248D9A2218E69B3BE158A2C"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-mdpi/ic_launcher_lime_background.webp",
+      "sha256": "9130E2C5D19F21571C1F660710F327577827EC29C6705C8F8D02B3CDD822C780"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-mdpi/ic_launcher_lime_foreground.webp",
+      "sha256": "4AEAEA0D154CC5675FAEF536022D713AA82B93588BFC1C2DA7BA5DFC137FFD6B"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-mdpi/ic_launcher_lime_round.webp",
+      "sha256": "6F09584C8BC39A03A7CD6CBDCF5CEB526F9358E263B3AE27E9A14428FC4FAFD6"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-mdpi/ic_launcher_lime.webp",
+      "sha256": "AA63302C5298E5814A22DC9CA672C4BFAD62DBCA19733EB2A52B84FB2B07E52F"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-mdpi/ic_launcher_orange_background.webp",
+      "sha256": "4716EADF14D6C643C88A0DFB89C451FC16C026EFF7D6562AFACDB454C8547758"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-mdpi/ic_launcher_orange_foreground.webp",
+      "sha256": "64C0F6AADB5EE793AB90B287DAA119ECA7DBA3AC766D576F3BFB4693826E3E3B"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-mdpi/ic_launcher_orange_round.webp",
+      "sha256": "85CBB69BB305E791A588DA82A2A76A949B481FD6F0EE7487F0CEE8B70A2759CD"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-mdpi/ic_launcher_orange.webp",
+      "sha256": "2CA9EAFE1F5CA6BEF5CE5F1F02EDF54B61F33F010505FF40108C43870902AB5B"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-mdpi/ic_launcher_pink_background.webp",
+      "sha256": "75505829FA1DC82D77E72CA529BBE4BCF47D17D0F542CDF5708D70ACCF9288B9"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-mdpi/ic_launcher_pink_foreground.webp",
+      "sha256": "CEAE2A1DE1CEACCAB5D0679C563F961A8C55CC80EC8CE674CD27449A1F443D31"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-mdpi/ic_launcher_pink_round.webp",
+      "sha256": "BE87A71F7E33C46C22460BF47310D2146AED4F5106394E483E6A93B9B147EE29"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-mdpi/ic_launcher_pink.webp",
+      "sha256": "45686C886A40E5E75A93068961538C12C8DEA1E518FC67BCEE5708B312493F9A"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-mdpi/ic_launcher_purple_background.webp",
+      "sha256": "5F42EB2F5DED4260BA196A9C03B43973D70B7A268808FCB1C231B1E3EEF28F01"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-mdpi/ic_launcher_purple_foreground.webp",
+      "sha256": "EA661EF74BE331DA3748DF857D8D480976986A3A56BF138BBFF737C987A4AD21"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-mdpi/ic_launcher_purple_round.webp",
+      "sha256": "8045C6B9A7E7EE892B1D0C16913A07679B4DE78B5686D47A4FAF892AF31304E1"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-mdpi/ic_launcher_purple.webp",
+      "sha256": "FCE4ACFAA37767B78E06783CAEC07E090073C6AB27B115BFDFD1219C07E2F904"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-mdpi/ic_launcher_red_background.webp",
+      "sha256": "DB5D68BC5CD6F5E3BF4B0F477B3A8911285C002CD6A0EE9B8863103576473BD8"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-mdpi/ic_launcher_red_foreground.webp",
+      "sha256": "8D044DE231B270BFFC8FA12B4537B20A18AF48DF20880301C54D8A589D54B1C6"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-mdpi/ic_launcher_red_round.webp",
+      "sha256": "BF93A5A05CBF4B5AF240B07D65C56B11F846C370968ECD7AE8E6449A699B1650"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-mdpi/ic_launcher_red.webp",
+      "sha256": "FAA95BADFA68F08D2505E90E86924FBB3B439911E6AD84C0E4E1D856B885D738"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-mdpi/ic_launcher_round.webp",
+      "sha256": "4E2C58B91DE01130E6479E00CBBAAF6E77CD961DD2C8E303CF13CD077FA92632"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-mdpi/ic_launcher_teal_background.webp",
+      "sha256": "DB657D32D6592AC9BE22483D853C993B14CB3BF29AC19218750F590E0D2F00FD"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-mdpi/ic_launcher_teal_foreground.webp",
+      "sha256": "AF74713FFB30CBD91CD2C08BEC3D22FE36185E8189482BB0536D285530E3C200"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-mdpi/ic_launcher_teal_round.webp",
+      "sha256": "8C4EA8CC73D172DC6AF586940524B8B7AC37A3646997DED7D798BABAAE7A7F9A"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-mdpi/ic_launcher_teal.webp",
+      "sha256": "F611A4EF9341968F1674FB1E6A3DA7AFE45872C4076CE686BD06C5CFAEBFF8E6"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-mdpi/ic_launcher_yellow_background.webp",
+      "sha256": "2A71B6D7C64D4A5197CF2084C61F612435B8B246DE3002D016F2DEF5AD54C27F"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-mdpi/ic_launcher_yellow_foreground.webp",
+      "sha256": "8E651C578429E58C456314FB0C47A5C7B7F533AE47ACF67B056721A51F22BEE1"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-mdpi/ic_launcher_yellow_round.webp",
+      "sha256": "B106E4DB4040399E50E63A44174C37ED36B1F574D06D37BF76C173D56DC4A73A"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-mdpi/ic_launcher_yellow.webp",
+      "sha256": "EA08099289C0F7B40110FE0D896764BD8968FA0F55B5E293C4BAC2ED3CBDF8A1"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-mdpi/ic_launcher.webp",
+      "sha256": "846219E6F72FE9A6C104CA8919CBEE36A101E7D2FF8DA9DA67B689A5888F060D"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xhdpi/ic_launcher_amber_background.webp",
+      "sha256": "2CB02E96456D56E43015A2B0489C21613AAFC24C51844A35510C95EEEABB48FD"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xhdpi/ic_launcher_amber_foreground.webp",
+      "sha256": "B2D1F1EB5725C6ABF720516FBD06F2D3D29287691A3E942959B240C321364536"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xhdpi/ic_launcher_amber_round.webp",
+      "sha256": "DCC125E3DC992C48960EEBBB13A74CC6E25C193C8E5EEEDFC14AA35BF31737E1"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xhdpi/ic_launcher_amber.webp",
+      "sha256": "356DEA062B81B082046CAF69199906C2DC74909140F2AAD19AC6BA3DEA6F797D"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xhdpi/ic_launcher_blue_background.webp",
+      "sha256": "2056BB49A5B06B58F76024FC61B7B2DE0DF3B529B420A812EC6EC479AC46FAA8"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xhdpi/ic_launcher_blue_foreground.webp",
+      "sha256": "2FD15D392C10BC7EC28B5E0DA77AAFFE313D599E585C2B6159A24049C246EDEB"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xhdpi/ic_launcher_blue_round.webp",
+      "sha256": "2578A9F4E6C8728A1211BC785FC3C6CAA68318F73875B8285B428C459F3A29A7"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xhdpi/ic_launcher_blue.webp",
+      "sha256": "8BC7867F7A2A1238A63AD00202CC9FAAE499EF700EE7021C6F286C44DE328373"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xhdpi/ic_launcher_coral_background.webp",
+      "sha256": "6B763FDA39722952F4C698EE1336BD03068DD171B07B0114E3B96EE1731105C4"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xhdpi/ic_launcher_coral_foreground.webp",
+      "sha256": "0A6C2D2962F26F481D0BC72578F5AD343B37C74D5523FD1DCEE4EC2594E9E182"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xhdpi/ic_launcher_coral_round.webp",
+      "sha256": "8B45D2C205BD6BABE436ECBF49107788B34131EE5603E1556EE0A2AE01B5DA07"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xhdpi/ic_launcher_coral.webp",
+      "sha256": "27EC7DF90A041F3093C281AD4EBB8CA87E71B1AB80227A2B48073FDF6B670B4B"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xhdpi/ic_launcher_cyan_background.webp",
+      "sha256": "DE86B0C82D022D4DCC341E6A610A0D0B5463450C6D3660519DFAF73631D228DA"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xhdpi/ic_launcher_cyan_foreground.webp",
+      "sha256": "DB73BF0BDA1DB182E8FB96BBBF910D31B09E1F58C1538271EFDB985D7A24ED0E"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xhdpi/ic_launcher_cyan_round.webp",
+      "sha256": "874D730306B58E5870C027D344181316B158AE80832BA910821C427003AA0912"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xhdpi/ic_launcher_cyan.webp",
+      "sha256": "16378729E88F5FC8868FF95FE7D2D9D3E34DC6CA20F082F9BCD2E72E6BDE0DB1"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xhdpi/ic_launcher_green_background.webp",
+      "sha256": "D5F02BE7DAF97A973432035224CA1B70811B6B5F2A981AF7345908B314481607"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xhdpi/ic_launcher_green_foreground.webp",
+      "sha256": "FFEC97F55878CA1EA3AE493E7C96F3FC4887ADDA0F5ACB0CA4B3903F5C54D8DB"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xhdpi/ic_launcher_green_round.webp",
+      "sha256": "1604E9CA8E7969A617702F11C38875E3DD007A0FFA80FBF8174F3AA36C690E36"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xhdpi/ic_launcher_green.webp",
+      "sha256": "A39974F7701670D6771A8E7EE39AFA599AE8F931D1E35C8196C343A6CD05DEDA"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xhdpi/ic_launcher_indigo_background.webp",
+      "sha256": "C6482E3D599A9A5263E6B35BADB428807F8296A747ED7014B48BE87AC7AEBC9B"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xhdpi/ic_launcher_indigo_foreground.webp",
+      "sha256": "069DC285D253BB6B2A672FCCB0CE2E4FBC4BAC45FD4E68B273DCF5A6263FFCBD"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xhdpi/ic_launcher_indigo_round.webp",
+      "sha256": "26FEA15E4C7121DE68FDABDFC024E9DBF58BD4D5FD6449C490A58FF079C0D029"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xhdpi/ic_launcher_indigo.webp",
+      "sha256": "AAB1A519426C75553A7C60D26965FA2AF9D3AE678D151977BB6D4FA984E75379"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xhdpi/ic_launcher_lime_background.webp",
+      "sha256": "2FC8C5ABDEF6989AF91981F86349D18196CFD1B4DBE8EBD2402E1FC7DFC8E4CD"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xhdpi/ic_launcher_lime_foreground.webp",
+      "sha256": "8E12927AC99DC8F3957B5CB25FB957BE4B05422EC4D3B6B9C5B7C0C08C5AD0EC"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xhdpi/ic_launcher_lime_round.webp",
+      "sha256": "1E2DBA01F9800DB0A9AF97DE428BFFD06644A6481DC567DA6B0CDAA5D27614E0"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xhdpi/ic_launcher_lime.webp",
+      "sha256": "AB1656486BEA838D886120C44E130A4A84653B6FAB96B3B80CF6A3F285A58A88"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xhdpi/ic_launcher_orange_background.webp",
+      "sha256": "2EDB66802A071B02C0338FF20BDAEB6F351A47DAB7A3908A7D98F9B75D8BC138"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xhdpi/ic_launcher_orange_foreground.webp",
+      "sha256": "94E1CDEFB4030062C61325A5117F8B941CAEC4C0DFDB825FEBD5A0ADE021A6B4"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xhdpi/ic_launcher_orange_round.webp",
+      "sha256": "77AE6B6123C542F9FF886034F2FCB2C0FC4AEFB21289524CA0BC1B680C3D835C"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xhdpi/ic_launcher_orange.webp",
+      "sha256": "2AA26C2107A30DE3AA61BB433C7CD431A0D287C9351A48C3860C826A8B1F0A24"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xhdpi/ic_launcher_pink_background.webp",
+      "sha256": "3B6DBFC9FE6A0E1EE64235D1109E5F80D9E627F1E6043E593472CAD0ECF58E45"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xhdpi/ic_launcher_pink_foreground.webp",
+      "sha256": "94939D18BA71D4CF6C87D4106B0FEEB0AF2E43FF88C02C3148FD553C5272E7F7"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xhdpi/ic_launcher_pink_round.webp",
+      "sha256": "C8B69B973D3C4E380B6AC680A7572040876ED8666A184861A6A3B11661554FCF"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xhdpi/ic_launcher_pink.webp",
+      "sha256": "1EF750680297F0B11BE551674938BA8820AC508BF9B4325F4E779812C6333088"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xhdpi/ic_launcher_purple_background.webp",
+      "sha256": "572B04957A0A2A537B56A6BEE1CA37D0521BCF4A21CF002DDB873789C1B2A8F9"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xhdpi/ic_launcher_purple_foreground.webp",
+      "sha256": "7AECAB25793E9E8C0F877815473FDC56A652FA510B325EAF9540C94492B05D5B"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xhdpi/ic_launcher_purple_round.webp",
+      "sha256": "06A0A65421611108AA136AA785A62317FAD174D2AAE71C70F7A7EBA320D70FAF"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xhdpi/ic_launcher_purple.webp",
+      "sha256": "DEAC12C510D8D4663161D8609B03CC3A9C20714B58655AAD8B459255A21192CC"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xhdpi/ic_launcher_red_background.webp",
+      "sha256": "83CEC24C83A98FDF6F3431F174A7B85D822ABD3FCFC99BD8639514639C2A37B4"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xhdpi/ic_launcher_red_foreground.webp",
+      "sha256": "4332943A3AC970444DA5023AC39A61F4E55A598B052381AFA4F9E230BC403FDE"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xhdpi/ic_launcher_red_round.webp",
+      "sha256": "96A1581D7D8953BCA0E1A1F5EB6A89F26AA68126BB6F175BF0971F557E4492B1"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xhdpi/ic_launcher_red.webp",
+      "sha256": "50EAE5331987F5131FB56ECC018169DE06C86929C7CE5649ED7E5DD95E079468"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xhdpi/ic_launcher_round.webp",
+      "sha256": "91B490AEF86574901137F0A252272E1F1ADD99C1AD709E0696ED68929B88D261"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xhdpi/ic_launcher_teal_background.webp",
+      "sha256": "81485E83BB4B11B61B5369FB0009D751DE110707B7F2C5F5F1FAD5716ADC4126"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xhdpi/ic_launcher_teal_foreground.webp",
+      "sha256": "20619643D3881908E97C740684341C20897671F55A5E6E0DE4A24939A8ED9008"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xhdpi/ic_launcher_teal_round.webp",
+      "sha256": "F4F968CCC81782833DD7E1F1590AA6ECDBFA14FE5298E9003FBA0D39A8AAD9F8"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xhdpi/ic_launcher_teal.webp",
+      "sha256": "59C5801A12804C2BD2B99E89F69C9290DD2B9DBAC0F93EE6E3381ACA4B038C19"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xhdpi/ic_launcher_yellow_background.webp",
+      "sha256": "74E38D769ECF073C0038C3961A58A10DBE60A4CB891FD33CC3B0947783A1444F"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xhdpi/ic_launcher_yellow_foreground.webp",
+      "sha256": "624ADB857B1C2E0C245CDCE4796E6223C8F9CAA7E9464AFF51E702B08A1E05B1"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xhdpi/ic_launcher_yellow_round.webp",
+      "sha256": "BD90F454A8BD81554E4C92D5D3D344D2E9CADA3DEE9A7E344D38EE7E28028992"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xhdpi/ic_launcher_yellow.webp",
+      "sha256": "488E84FBF0FF7A31E2F7F6729F86F267352CE77EBC7C6497CF136D9B52448EE2"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xhdpi/ic_launcher.webp",
+      "sha256": "398340DAD816FC9A6338CB151A8CF1E45B926F9BFB70628B24C4BD2523CC94D4"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xxhdpi/ic_launcher_amber_background.webp",
+      "sha256": "0B14BF3894F90FC3B741ABB7E39A5B4F6DCB2C6CD874029F0698522C8D4F96B5"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xxhdpi/ic_launcher_amber_foreground.webp",
+      "sha256": "2908A33BCF09ACB7D34EC2E9214EC6F537CC372AF9D21378350B7BF6F40F4B44"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xxhdpi/ic_launcher_amber_round.webp",
+      "sha256": "1A63CCEDA657B127556A2FB56615624B1C2DBA2995318EB2F0ACA554EE9FC3C2"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xxhdpi/ic_launcher_amber.webp",
+      "sha256": "F7463444E1EEF7BE99B0C9F470D9502E9E7A213D08D75B18F9490099EB398241"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xxhdpi/ic_launcher_blue_background.webp",
+      "sha256": "3C2F66E009EDCC1DE795D3927A05EFC607DBCE91F6174916474B5E5B0F117B65"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xxhdpi/ic_launcher_blue_foreground.webp",
+      "sha256": "6FEAA47886D7232FDE05D791178BF99654B99922548711C90441558EC17D5F3F"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xxhdpi/ic_launcher_blue_round.webp",
+      "sha256": "E56EDA4D841E516AAB50E18030BA1FFDC1CF3D1DDA29BF1F4CBBFFABF9AB9FB0"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xxhdpi/ic_launcher_blue.webp",
+      "sha256": "ED1ADDAE7659F3258BC83F119332E9880C80E08CDAA3CFE1FA7A4472C4D764A5"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xxhdpi/ic_launcher_coral_background.webp",
+      "sha256": "31865AB4BC535246AA8522BF2B02B884C0554B01DB6CE974F7CCAE4E49CD5B01"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xxhdpi/ic_launcher_coral_foreground.webp",
+      "sha256": "352179DC8A4311EBA48F6EECDC7CB441099C2D7CC66164CEE623EBD96294E15A"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xxhdpi/ic_launcher_coral_round.webp",
+      "sha256": "A214DA9AFBCAF3F92183CF58AB2FC13C5DFE9E54038E52663262429D65C5A430"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xxhdpi/ic_launcher_coral.webp",
+      "sha256": "F597D7932B6B9925F11DB04F2C301D6EAED5D825FDC55030935B3096DAB6CBE3"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xxhdpi/ic_launcher_cyan_background.webp",
+      "sha256": "B2341E7BAAA3149EB83003760697A3F11E286BD9920C0F6F31F3240849150016"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xxhdpi/ic_launcher_cyan_foreground.webp",
+      "sha256": "96745BCB9F22CA46BD0FDDEE7E8938AEFA459C06458218142F3C3A1A49076FE8"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xxhdpi/ic_launcher_cyan_round.webp",
+      "sha256": "8AC22C1936751C144CD932A99CD12C68FD5A1010027BD6F8970AAD23CCFBCAF6"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xxhdpi/ic_launcher_cyan.webp",
+      "sha256": "F74649641E4CA214A5A5F842C04EA3B2A3F7C86E22C9E0132763AAA943051F9A"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xxhdpi/ic_launcher_green_background.webp",
+      "sha256": "DF16D72F968CC4ACEF6599190CAF169593E842B668D9441821B79064C5A96CE8"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xxhdpi/ic_launcher_green_foreground.webp",
+      "sha256": "6B3FA67056BEB4465C7CF22B6A9F0DAF0A280D2BA212D137CD118D3755A62061"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xxhdpi/ic_launcher_green_round.webp",
+      "sha256": "2FEC0F4C52AB1E5316536675C86E48D221831E4C4A8CB99E75172E628AB652E9"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xxhdpi/ic_launcher_green.webp",
+      "sha256": "1DFAA974DE233018F81E1BCF43D7B327B12ED9E608A7839AE58043A9C0196458"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xxhdpi/ic_launcher_indigo_background.webp",
+      "sha256": "83F15F0DE8BAFBF75854B0804B610B054D4444F5EEA6FE735D2CCC08E69D6BCA"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xxhdpi/ic_launcher_indigo_foreground.webp",
+      "sha256": "1B51EF355224FFA6F451EB27FCF73C41F98EE1D6FF783778DB45F229A0F53F17"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xxhdpi/ic_launcher_indigo_round.webp",
+      "sha256": "C9732599D65C903D34D02EED9D2C93AC5DD01015B5E50BB2554C866292AC5A89"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xxhdpi/ic_launcher_indigo.webp",
+      "sha256": "3ECA1F6C491926C4EEE68B84F306648D4E6BDFEDBE8780425BEFF092A4EDD2B2"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xxhdpi/ic_launcher_lime_background.webp",
+      "sha256": "31D1C4E477F28078D3D244145A341C02AEAD6DAE22E1112BD6DD7508305EA82F"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xxhdpi/ic_launcher_lime_foreground.webp",
+      "sha256": "5E5B4FDE0CCF1F06818C3C550678FF6E1109E31C125462F741CB3151342A7D1B"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xxhdpi/ic_launcher_lime_round.webp",
+      "sha256": "52C859B5DDC28589CE1137B648239011A08E2AB66E05E39FDA7140274A6875B0"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xxhdpi/ic_launcher_lime.webp",
+      "sha256": "7AE3943512682BE95DB28FE5511FAF6D01962EFD46ABB0C83E5AFAF9AE2E6F96"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xxhdpi/ic_launcher_orange_background.webp",
+      "sha256": "4EABA7CBA57ACF8FED05A9A088B1EED8FE85EB60F88F1DD8064C99A83CBAA1F4"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xxhdpi/ic_launcher_orange_foreground.webp",
+      "sha256": "3D503C5133F153CD7885D1A00FDD36073D5BA0772F6C9020C9ECB21A1AFC6B3B"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xxhdpi/ic_launcher_orange_round.webp",
+      "sha256": "323613009ED2C87196A4A0C761D303CDB0E45D5FF056AFB0EC306327BA1BEB01"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xxhdpi/ic_launcher_orange.webp",
+      "sha256": "AF00FE39A4E8BE5C61F1BC0DFE235D77126EB2B98947EDA80F9AB74A27FD9DCB"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xxhdpi/ic_launcher_pink_background.webp",
+      "sha256": "FBC0EF9E8133E07735AB2563B148C4BA32ABDF20702881A59A69384D6FE1BA95"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xxhdpi/ic_launcher_pink_foreground.webp",
+      "sha256": "EA69F8D3C763EE8D37D9C82E2545F38E6D7CF6404365D7ADA31742F94CB43EBE"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xxhdpi/ic_launcher_pink_round.webp",
+      "sha256": "7DE8993344A3A96CE89041C632DB896DCC97207E7E21A6C515C021A9C3F4E69B"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xxhdpi/ic_launcher_pink.webp",
+      "sha256": "6B81406D01284BFBC6BB4B238F9C2A861B03BCB1083C1431EE15FBFBC602F100"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xxhdpi/ic_launcher_purple_background.webp",
+      "sha256": "CB6C6D151E8D7EDD72C023E931AC13AFF87977BFBD7B5490C83644C611632AD5"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xxhdpi/ic_launcher_purple_foreground.webp",
+      "sha256": "CFBBD8402C4E7C0CB769B23BCF24D7147D17AEEB0035964D29DFF7553F51EE62"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xxhdpi/ic_launcher_purple_round.webp",
+      "sha256": "65A8A37CCBD64EC4054E87A3BCF6E9347D1420E034F1A002012A23A42BE60B91"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xxhdpi/ic_launcher_purple.webp",
+      "sha256": "196DDC69902A0445889FDDCF3E04BA44C1FBB67BC062314FB909DDBE7676F5DA"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xxhdpi/ic_launcher_red_background.webp",
+      "sha256": "86C1FA15936CF732EF18B11279CE85ABC16A00812AF85FC52A11463B66924BF7"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xxhdpi/ic_launcher_red_foreground.webp",
+      "sha256": "1178C8CCC9A7C7D5378F3E58137394384C0656F125895444FBD3CFD95BADD36A"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xxhdpi/ic_launcher_red_round.webp",
+      "sha256": "D59B664867EA72ED12486353B1D5AA8A5133C9454D9436014B5BF4B169F55B97"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xxhdpi/ic_launcher_red.webp",
+      "sha256": "1EFA35EBEBE9CDD522DB345F5EB649352CC8810B88F3CA9CC187C023F660FF30"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xxhdpi/ic_launcher_round.webp",
+      "sha256": "3009FAD079F5772F30ECD767F98924367FBE0F81C30048D672D4FDA2D5CA7D12"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xxhdpi/ic_launcher_teal_background.webp",
+      "sha256": "ECED56895B8ED6C5D84FB48D630AD2C219293992CCF117E53897912C92CBA363"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xxhdpi/ic_launcher_teal_foreground.webp",
+      "sha256": "277D08FD19F97ADBFDBF2F73C18E3095C0C8C04AA5B8E180C0C0ABCCEEF1C5A2"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xxhdpi/ic_launcher_teal_round.webp",
+      "sha256": "EEC1CFA294A7B1B34E95E49730372F9DF959ECAD157BB045209055A1F5652A5F"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xxhdpi/ic_launcher_teal.webp",
+      "sha256": "9FC0D98FE03046BAD02819285D209A441E3746DDE625DEA85C56B225ECA469D5"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xxhdpi/ic_launcher_yellow_background.webp",
+      "sha256": "D4AAD062B4EE0F8A225FC1B7CF7A932A0DC68AA1D52BAAF5144345EFC479FD81"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xxhdpi/ic_launcher_yellow_foreground.webp",
+      "sha256": "6CC569FF80A36498B2B5FD9771895CAB656D14BC55553DDBB080A488EE8134CB"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xxhdpi/ic_launcher_yellow_round.webp",
+      "sha256": "8CD63308B4E57D2B2D787A74AE164238D96239D91DBB60309A6790915C28053D"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xxhdpi/ic_launcher_yellow.webp",
+      "sha256": "7B87191071ECA29410324923A7227DAF561287EA30C7BDCA6AE000CB4CB7C19C"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xxhdpi/ic_launcher.webp",
+      "sha256": "58AE87FA0C5B5D1562D27FD648D2C061553FE20E3ED570BDE588162D01EA7A27"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_amber_background.webp",
+      "sha256": "E2F67215931705E3FF12718EF486315DDF72AFA7285C7C67AFBF9C8ED48E2C9A"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_amber_foreground.webp",
+      "sha256": "9AA4EEA6CAAFB872A0105898DD0FF4D8618FB450A79716308AD32BB2FD08E428"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_amber_round.webp",
+      "sha256": "AAD66545381C7BBB7F0FD87CC0DDD7ACDF484FB7DF451CFE6F2031F8DB8C6443"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_amber.webp",
+      "sha256": "F8A24E9BB68B21E8C171BF7C154CAE57EC734B6A4601A1FDB92FF8F00F860377"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_blue_background.webp",
+      "sha256": "8CE0658BD98661257D0E10724CC624D8E2B8EF33FE4AB0E49A063FE99628425B"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_blue_foreground.webp",
+      "sha256": "71E26370D063AA43C07EC709CE485675D9876C88B48F3DB25C0EBE49B0B9A1AF"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_blue_round.webp",
+      "sha256": "4CF9869E6051661A7B176E503A5DD76AADC10982FAA937995BC01635B80639B8"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_blue.webp",
+      "sha256": "3978264A983020D77BD7F7962EEA9438063F9E51CFBAE82621EAC574DC72BBD5"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_coral_background.webp",
+      "sha256": "E4BA9508A637DB2A498D8FC3C926059D4444EC413BA64AB2D21ECA8DA2252395"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_coral_foreground.webp",
+      "sha256": "4626F395EED53CCF3CE910C9AE55D878DC1215DAD8ACC79EE8AAD440B3361BB2"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_coral_round.webp",
+      "sha256": "4E17205E513278621C4148B511BF9BEB60C99018B62DE98A69DFB3E0A1A35B3E"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_coral.webp",
+      "sha256": "34A93137415CC19DD683038CB08FB3820F7B99BB0BA11C6D9C294E1A49D12481"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_cyan_background.webp",
+      "sha256": "A74F13B729799FA4FD591D211DB921BD2DD0B7D5BBED8C4E947CCBFEF05BBB52"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_cyan_foreground.webp",
+      "sha256": "8C5693BFA785F8031EA4B877F0863C2CC528D1BF3BDD44F49A3B0DC22733CAC0"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_cyan_round.webp",
+      "sha256": "1A04179BB18EBD44BB3C6155632358BD57D3D37C313FD2A13BC1117506E81C50"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_cyan.webp",
+      "sha256": "C7FF9751E7095012A465E255A45FE626A0735ABFB5E01F06C1BEAFE8591D0921"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_green_background.webp",
+      "sha256": "2623778D3432DB160F5BC37DA6135153FC31C00AAFEA46EB433FBD91A8928BDE"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_green_foreground.webp",
+      "sha256": "9294F107443C46B5711B2369F979E58C033AA72162AEC703260F821D0F3EE8F1"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_green_round.webp",
+      "sha256": "574A944C43CC4A24270DB1648630A21BD622DCB6C8CE507C57F5E9FB3A0A33BC"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_green.webp",
+      "sha256": "C1FA8817F78578AA915BF5E2F08BB39C9A9EF60DD2424416491FF3DD97C5CEE9"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_indigo_background.webp",
+      "sha256": "BEDC40CE47F5DEB64BC2B49657CA8CD578BECFB570353FCC1014B0B676DA2027"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_indigo_foreground.webp",
+      "sha256": "7E9794DC7991C362333E4F444A68FA1DA27CC88DDCE832D2773427E21FF00156"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_indigo_round.webp",
+      "sha256": "2DDA2169579FF0077A08923AFFAFA7903A7A029DC47FA5381D9F32BB049FF260"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_indigo.webp",
+      "sha256": "F166EA8E24FB9DA85472106E1D8FC0F48B4FD152F3819F8C260511C95D25F375"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_lime_background.webp",
+      "sha256": "6BA520D08E08BE5DCCA907100D8CBB6538B0F6E997E6354A753104998CDEF7EF"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_lime_foreground.webp",
+      "sha256": "C5DCD1DAC965284FD3FE664B02ED1D03AB697A54159C3758DD52C81CAA7C4A67"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_lime_round.webp",
+      "sha256": "C8288888FF0C3AE8E0FECA384F5A0551FD8C7018478C6C3CB9BAC3A9EA92F70D"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_lime.webp",
+      "sha256": "5DA0C1D9AA10DFB93D7F336CAF9B573AEB5142F7EA86B6627037685700BAF986"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_orange_background.webp",
+      "sha256": "AC9188FB708E9A1410B9B20CAA047639458B5E83D61C2ED10D903AE91F5FE273"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_orange_foreground.webp",
+      "sha256": "A1B5369619A61E8AFB670218DFE9E0684452D1A00250B444C1E25C338C031D65"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_orange_round.webp",
+      "sha256": "0CFAF44FCEB31A43B1D68E4C2CBB0F1DD4416BF33467280A25E750BAC83E8757"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_orange.webp",
+      "sha256": "42FABCA604E46D827E302F0BB93020C373015C0646F7F0569ED8C3D42219BD83"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_pink_background.webp",
+      "sha256": "B4D45CAB912B953373C65DD1CFBED94C9750587AD225B4E9FE145751A3A372A2"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_pink_foreground.webp",
+      "sha256": "CDABF1DE95E1BC7BA536F2EBAEE509084CEACE931B76CEF007D1B1933AC1BE7E"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_pink_round.webp",
+      "sha256": "340FAED035F864A174DAA5490825D91BCCBABE5075AF390D0245328FE22803B3"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_pink.webp",
+      "sha256": "88C8203F55C7D293DE23004E85DF4C3E7B9B36DE57351A2BFA9AC977E8933C61"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_purple_background.webp",
+      "sha256": "E42283942C0D98DDE794AEDFD68311CCF544352FB17CFC1F3290AFA571470C14"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_purple_foreground.webp",
+      "sha256": "C28CFC8B4F65D087EED10656AC0200BF09E13470BE1A9DC4A7086C2CD30F42C9"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_purple_round.webp",
+      "sha256": "D4A667A3A27BD6DC3D1FA8E2BFDED059B42B76847F545F35C02CB5C2614B3167"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_purple.webp",
+      "sha256": "44C93DB41DD154134794EA4F63C3202FA04F16E289DC1973BF82DE922AD815F0"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_red_background.webp",
+      "sha256": "41311B793489C9CAB3407DE19C9424D351003EDA8824C6FAF00847B06773E401"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_red_foreground.webp",
+      "sha256": "382191890A7F9FBCC180D099DE36549F64519B97BA25FEDC14CC95448721135E"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_red_round.webp",
+      "sha256": "B349210F09EBF1680E9D39E23F09AD544715528BFE1D4BD326A9140CE03719A5"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_red.webp",
+      "sha256": "D70691F93F3B98A731D5C1282D30AC034FF254C36CDF472CFDC0867A85E97F3F"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_round.webp",
+      "sha256": "5FAF033745C8C882C43BB1B372D4E4A5890CAEC63D9892A2E756C954108B85DC"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_teal_background.webp",
+      "sha256": "7DD3CB74B23E4586504C5E9DE53CF89577DB4627A3561924DE47E6E4FBDC4044"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_teal_foreground.webp",
+      "sha256": "29C129884E25215D2F8485FD54B6B061FE6C018C9992F18F6326D527DE4BE224"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_teal_round.webp",
+      "sha256": "9833AC465B69EB38FC73E0FE85C81780CE4F56CFEB8F2788151090C0352E8BBD"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_teal.webp",
+      "sha256": "C090B576747CF321CE1620E178DF2C0BE4ADDA9844FC6DD120E51140F0483E30"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_yellow_background.webp",
+      "sha256": "E84625CB29CB3BE223185D50ABFF4D0105AA154B74A465A89B846517C8E7A377"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_yellow_foreground.webp",
+      "sha256": "5CBE9CA87BA7EC6B1F13A82F57E63E8443B5C38D42BF2D146E59826E283F3C7B"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_yellow_round.webp",
+      "sha256": "53DD19CC353B04B2237F2FDD446F7A78C8689DF7DA2E55E079C093285751AA5A"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_yellow.webp",
+      "sha256": "7F0FF200EC9DC4C787E84B395CFA26FB0A96845DB0ADA0FEC59D9F69D93C7C23"
+    },
+    {
+      "path": "android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.webp",
+      "sha256": "F98FEF5BC3BFE5B65692C40AD1CBAE2BEC4FAF9F1B249C397626740DB71B62D8"
+    },
+    {
+      "path": "android/app/src/main/res/values-night/styles.xml",
+      "sha256": "65BBCEB89B334AD4474176E84020A4DA9CC4CE3BEF14E920B20AC36730299200"
+    },
+    {
+      "path": "android/app/src/main/res/values/styles.xml",
+      "sha256": "A450692AC9D4A18E491EA5D0D0CF419380D9364BEC5F0457EB80AD3CDE513125"
+    },
+    {
+      "path": "android/app/src/profile/AndroidManifest.xml",
+      "sha256": "C4CC3A70FB2937A1CF357AB341A8EEE6FD2B5C1F8B7406A34995DDC86F391BB9"
+    },
+    {
+      "path": "android/app/src/release/AndroidManifest.xml",
+      "sha256": "119A9F938B2B339F7BFFA5E6C57C1C2F7BEE495FD409050BEC20652680DF3FE0"
+    },
+    {
+      "path": "android/build.gradle.kts",
+      "sha256": "E5E085E0CF8F59B596F53534832B202BDED3CD28DD2E1CC91BD854EDE40EF356"
+    },
+    {
+      "path": "android/build/reports/problems/problems-report.html",
+      "sha256": "FA7E422CDE3B1C6168A1B4D3D0F922BB21503B8ED85D38248B1E10191BF97D58"
+    },
+    {
+      "path": "android/gradle.properties",
+      "sha256": "6BDB07C2774E00B3DC96FD1B553EFDB83EFD7BD3C91F16C26875A73BD0091530"
+    },
+    {
+      "path": "android/gradle/wrapper/gradle-wrapper.properties",
+      "sha256": "BFFA11EEB566F3E738623F033796CE23E1692D979F1DB41F0F1C5F3DA9CF622D"
+    },
+    {
+      "path": "android/settings.gradle.kts",
+      "sha256": "360FBF53DEF80555036DAC816C06037FE083E24586A66516E14A82747347EC74"
+    },
+    {
+      "path": "assets/app_icon.png",
+      "sha256": "19FA9120189D2FBA6E108C1500AA16D9EEB1D5B3D539C6439FB7918D461A0154"
+    },
+    {
+      "path": "assets/init.js",
+      "sha256": "48E95D7F7F5C60D184D74917EB2FF46F3C318144C18190733D66A1067143C581"
+    },
+    {
+      "path": "assets/tags_tw.json",
+      "sha256": "186767CB4D02372BEF30866F1AD2D0BBC45A92B0E0552699534534036023B4F7"
+    },
+    {
+      "path": "assets/tags.json",
+      "sha256": "566B6E1E359A47BCD0C75100BAAE35C7E59D639C5A908074E44FCED66FCFD4E1"
+    },
+    {
+      "path": "assets/translation.json",
+      "sha256": "EFF3B61DE5021B17132824256B7B61E5EBACCA437C3CDC4250CF04D4931DA1A0"
+    },
+    {
+      "path": "assets/tray_icon.ico",
+      "sha256": "FE1A4FC38E24AFF9F0EA9555820154E2915D921A81598A8E4D58A322578093CA"
+    },
+    {
+      "path": "assets/web_console/css/admin.css",
+      "sha256": "C760B77DC8E8DCC3C221C87D631A7EFDBCB2A3DB069C2B2B7E83F7DE53FD789D"
+    },
+    {
+      "path": "assets/web_console/css/app.css",
+      "sha256": "458D57BC8DF39138C7F6DB1BA09EAE20463AE97A2DB982969D3922037EA06E10"
+    },
+    {
+      "path": "assets/web_console/css/common.css",
+      "sha256": "CD7CC25E3B9BA8538A8D2086F0325DD8659C3CC28871B27A40CB847A7946D8F9"
+    },
+    {
+      "path": "assets/web_console/index.html",
+      "sha256": "7B85FD82E854488A9F093FC443806FDF222726625A08AA5D39E93C54F29A0726"
+    },
+    {
+      "path": "assets/web_console/js/admin.js",
+      "sha256": "6FE7CFBB3769E40CC93FC142C6793419AECA30B7556A6E417F2D56F1F738678C"
+    },
+    {
+      "path": "assets/web_console/js/app.js",
+      "sha256": "72BD7FF5854DEEF78CB463BBE864B88C0C212A1DC31DDEBD206CE92F521F6B62"
+    },
+    {
+      "path": "assets/web_console/js/auth.js",
+      "sha256": "8F6A78D4EAEAAD26ED5E7772B33C3535FB4F3A0D9BBF132AC49F441FD3A69FC9"
+    },
+    {
+      "path": "assets/web_console/js/common.js",
+      "sha256": "4C6ABD05E5570A070270107FB3AFD6B7FF40960AD75BCDC4A06148AC73526131"
+    },
+    {
+      "path": "assets/web_console/js/shell.js",
+      "sha256": "75971103A6EFE5ADDA05784C4FC5953D5DD1840E26D98882EE21A84B8FA6D558"
+    },
+    {
+      "path": "assets/web_console/manifest.webmanifest",
+      "sha256": "D31B2292214E0CAD2385CAB98723854B44D774FD14E9C6B6A43DAA666F6A2A84"
+    },
+    {
+      "path": "assets/web_console/pica-icon.svg",
+      "sha256": "BDC68629D00703F643D77336B8C13B1FD06E51CB47635D31BF025FDA5EFFE002"
+    },
+    {
+      "path": "lib/base.dart",
+      "sha256": "939F8FD5D81FEB21D80D2A6C06933BC07245048F9C11180A34B54D2F5FF61F91"
+    },
+    {
+      "path": "lib/comic_source/built_in/ehentai.dart",
+      "sha256": "B75478FBFFE1D4C78AB7E2D642AF51F02D09FE9AA07389CD8D8FD872D9511955"
+    },
+    {
+      "path": "lib/comic_source/built_in/jm.dart",
+      "sha256": "C95E7F409509AC81D8C185FCB02BDC391B6AB1597FF987DB8668E50226E6F599"
+    },
+    {
+      "path": "lib/comic_source/built_in/komiic.dart",
+      "sha256": "F27C201259786CCE65245D6F4C4330786A7A810C5B91CB088179F9ED9CAA5746"
+    },
+    {
+      "path": "lib/comic_source/built_in/nhentai.dart",
+      "sha256": "9752D8338D8D22A45C5C4686E2CA9C05BFA534759A8C545A3B51762D84D9F155"
+    },
+    {
+      "path": "lib/comic_source/built_in/picacg.dart",
+      "sha256": "8FA04874E38DD1F09B5C0D13E87B482E1CA2DF65A4D8B3A88F90A834CFA0E9F6"
+    },
+    {
+      "path": "lib/comic_source/built_in/pixiv.dart",
+      "sha256": "6B6B1B9E46EEDE812BF3E20516A6DB9837832DFA1E9006135211C4140C3369F0"
+    },
+    {
+      "path": "lib/comic_source/comic_source.dart",
+      "sha256": "47CD7BFF8D197A3D61FD1D2A42496C23DC7D72A7CA61BEDC6F9FD7B64656726E"
+    },
+    {
+      "path": "lib/comic_source/favorite_data.dart",
+      "sha256": "0E9667315627A5767BC8B90832CC8B9590309380FE7FD7E65CF5B13C65AE34AD"
+    },
+    {
+      "path": "lib/components/animated_check_icon.dart",
+      "sha256": "7491471F294739BEFCC7CC84831FB1EE592D59A95B46E15129B8ED3DFF609FBD"
+    },
+    {
+      "path": "lib/components/appbar.dart",
+      "sha256": "329426BFDBB024D72D116729920D536820567192960E30AF390467D4DFB01ED9"
+    },
+    {
+      "path": "lib/components/archive_password_dialog.dart",
+      "sha256": "29E0C219BB8FE174ED185B81958CCF1D9581E34BA3D03EA8DEE0AD5561A0409F"
+    },
+    {
+      "path": "lib/components/comic_tile.dart",
+      "sha256": "E450DC0BDE99ABAFC79D3A7693F2ED94BB9B6A51CD83C1E5CD572B0666D34FB9"
+    },
+    {
+      "path": "lib/components/components.dart",
+      "sha256": "37C0A5AD4E18B16860A0A6955B5E77F30762C393AF6337CD9CECC002FFB985A7"
+    },
+    {
+      "path": "lib/components/consts.dart",
+      "sha256": "F61B5A8548A7AEABCEF43B5B5F5B8F65B3564A3FC669CD005B5B08C8AA4AEA1A"
+    },
+    {
+      "path": "lib/components/custom_slider.dart",
+      "sha256": "86502C74E2E27B750080E707DA43EC4E38017BB5DC7BCC305754B616B64F3BAB"
+    },
+    {
+      "path": "lib/components/info_value_action.dart",
+      "sha256": "315E583ADD578B3889B829AA46E0AABD92E19AD1B309B08AFE017E38E74CED27"
+    },
+    {
+      "path": "lib/components/layout.dart",
+      "sha256": "AC53D32A4394C864CD20377265F66FC20E4EA5057677EF020A00DB35B6AE391D"
+    },
+    {
+      "path": "lib/components/library_view_selector.dart",
+      "sha256": "C033DCCBB9B4E650E33AA7BB7B2835530E6530310C335ECD3588EDAA6E2AA65A"
+    },
+    {
+      "path": "lib/components/local_favorite_update_dialog.dart",
+      "sha256": "4DF4CCBAB1F50740E8AD8232F463FB18E2C42BCB9C19DC2D2EC5CBE667C489FC"
+    },
+    {
+      "path": "lib/components/message.dart",
+      "sha256": "9D1F145ADE447A0C37C47CE32BDE8E7792471E5E6150AED0A85112E5D2C8C6FE"
+    },
+    {
+      "path": "lib/components/navigation_bar.dart",
+      "sha256": "61D68A825B05852C93C720B873A92DB25743DE9095C89D54709A6931F799CCFA"
+    },
+    {
+      "path": "lib/components/scrollable_list/scrollable_positioned_list.dart",
+      "sha256": "0A4E2511EA1EBEF59FEE2A55E31E3F597CE598806FA89891091FFD1C9104CBD2"
+    },
+    {
+      "path": "lib/components/scrollable_list/src/element_registry.dart",
+      "sha256": "923A3482FFF822F76E6A4EFA2530CE244C86704A77A0B96013B5ED6C053094F5"
+    },
+    {
+      "path": "lib/components/scrollable_list/src/item_positions_listener.dart",
+      "sha256": "BD7409F898483DE1D3CBCDE312B8A4824260333DEBFF31B56216EFA3EA4139FF"
+    },
+    {
+      "path": "lib/components/scrollable_list/src/item_positions_notifier.dart",
+      "sha256": "6C0D81F9FDF545E80F96EAE0756B7709DB3DBB83DC26D70757999BE578014A5A"
+    },
+    {
+      "path": "lib/components/scrollable_list/src/positioned_list.dart",
+      "sha256": "75D280DBFD60D44BFEBA0128E72982E3FFC9F6FE2A923B50016116C91B658A8E"
+    },
+    {
+      "path": "lib/components/scrollable_list/src/post_mount_callback.dart",
+      "sha256": "8E74463C9E5E5498770116FECC3BE2FD7648BCB9AABC3CEE7FA662F685EF854C"
+    },
+    {
+      "path": "lib/components/scrollable_list/src/scroll_view.dart",
+      "sha256": "DBE40F94A92B5D416271A7D4C62474A1091F2D57F3503B4F84B39D4ED835509F"
+    },
+    {
+      "path": "lib/components/scrollable_list/src/scrollable_positioned_list.dart",
+      "sha256": "C64A70A3796E716F5F31F26660138A26E28F5C958B84ADF44B0A27D0BB796D61"
+    },
+    {
+      "path": "lib/components/scrollable_list/src/viewport.dart",
+      "sha256": "0E22323E7E2D4D710D9C867BF0FA1A073CF053C909A8A74761075ADD7011DB8B"
+    },
+    {
+      "path": "lib/components/scrollable_list/src/wrapping.dart",
+      "sha256": "000CB6F37455A45F7D8F105422ED67B005AE0E7DDC7997291B00E7D7F0845570"
+    },
+    {
+      "path": "lib/components/scrollable.dart",
+      "sha256": "E3D0DE23670DD875D8ECD134FDFF44A4DF4C1D63744B622FE77206DA0AF4977C"
+    },
+    {
+      "path": "lib/components/select.dart",
+      "sha256": "AA7493CFB57629C22573C8D202B11C5B956832819239A994FE097CB18E692DB4"
+    },
+    {
+      "path": "lib/components/side_bar.dart",
+      "sha256": "D9C10B6C42A64E012B0D371E0039939F52F6F4A8138513CABFF324BDE25BEC67"
+    },
+    {
+      "path": "lib/components/window_frame.dart",
+      "sha256": "B8FEE302675D2EAB715F1B0D3D511601770A75FCFBA9C6D4926F76D683CF66BD"
+    },
+    {
+      "path": "lib/foundation/ai/ai_attachments.dart",
+      "sha256": "C46C97D1C7DB8F2701651EA4DF19D909009AB21DBCF6C0C72E57E1F64F53B385"
+    },
+    {
+      "path": "lib/foundation/ai/ai_capabilities.dart",
+      "sha256": "279D08E2510444D5FE6D37DC321122C1DAE9A338CA2844F81439BC3B7FB30D65"
+    },
+    {
+      "path": "lib/foundation/ai/ai_conversation_store.dart",
+      "sha256": "19081AD6E904AB25CE2E031026827448AA4C39448D0877B2F6C8F2659639F3AB"
+    },
+    {
+      "path": "lib/foundation/ai/ai_conversation.dart",
+      "sha256": "ECF645B10D55A3A3C1A7F96B26DAF58302BA349845188A890B6E88FC0CDEB25C"
+    },
+    {
+      "path": "lib/foundation/ai/ai_download_queue.dart",
+      "sha256": "4CBA5E800ACF3F36C1E94EBC91ADA4BF927510D7237EDCC4CEE1BBAD175C7DA7"
+    },
+    {
+      "path": "lib/foundation/ai/ai_prompt_tags.dart",
+      "sha256": "E68A72C520A40F8855AC4CDBE239019D17A6BC926A4EB9DA34161F5D3C778281"
+    },
+    {
+      "path": "lib/foundation/ai/ai_result_item.dart",
+      "sha256": "5482E6D1DC3B2CC647ED87C690DA98642DB98C8CD719144B76ADFE38F4B72F04"
+    },
+    {
+      "path": "lib/foundation/ai/ai_settings.dart",
+      "sha256": "226DDD7C31D1807FCFB0EC1682F27BB73BCF50CD7EB34354CEE5E725E2451D0B"
+    },
+    {
+      "path": "lib/foundation/ai/ai_sources.dart",
+      "sha256": "6115519973310DF3A8D4767B7FF29E7FD0AF695E590FE930E309EA1D8162CC7A"
+    },
+    {
+      "path": "lib/foundation/ai/ai_tool_plugin_runtime.dart",
+      "sha256": "B60997C543073A2576207D588BF7D7FBB72FBFE7D566035A9AAABCDEA07FF1BA"
+    },
+    {
+      "path": "lib/foundation/ai/ai_tool_plugin_store.dart",
+      "sha256": "A541EFDD67E245247E6C66021FEC4320493F49A1102C802AF4C7CCF838CC02E2"
+    },
+    {
+      "path": "lib/foundation/ai/ai_tool_plugin.dart",
+      "sha256": "40BBEE3C1FF5424DE5A12CBA84B2148EC1D88D553052ACB0E6C7E209121EA46B"
+    },
+    {
+      "path": "lib/foundation/ai/ai_tool_registry.dart",
+      "sha256": "7050D7B27233C574F5C6F53FCA12AA51285EB09FFCE2400B5FC5581DAABB5719"
+    },
+    {
+      "path": "lib/foundation/ai/ai_tool.dart",
+      "sha256": "5762EF26B2125C7AED61CDBC4A76DDA731214102B0B4C1829367607E2DD5180A"
+    },
+    {
+      "path": "lib/foundation/ai/balance_client.dart",
+      "sha256": "22A95A6205CC35910C8FA34E0346C5B2EFC0A792378EC4F5FA3483B5C21ED552"
+    },
+    {
+      "path": "lib/foundation/ai/llm_client.dart",
+      "sha256": "4895D5FA476F09577AE574C953BE0D3EDD247E6DC27ABF0091B8285C54ACC3DD"
+    },
+    {
+      "path": "lib/foundation/ai/local_library_ai_query.dart",
+      "sha256": "A07AEA1018CDE5FF4C20CE76C8403A7818A5FF501E86E3A235264B630066141E"
+    },
+    {
+      "path": "lib/foundation/ai/model_list_client.dart",
+      "sha256": "45D6F58ED594F79902B994F857F1EF68A1FCF6B62974224DCBB1B7372A8F91C3"
+    },
+    {
+      "path": "lib/foundation/ai/ocr_client.dart",
+      "sha256": "E0A5C44321357F12F3B9F162D83FBA1ABA0A5216AB8DABEC545709D82DCA244D"
+    },
+    {
+      "path": "lib/foundation/ai/sse_chat_parser.dart",
+      "sha256": "98D624B242E1D3CDE8AC7DC166B86CBBC652E24CD6F51144E387096876DD5170"
+    },
+    {
+      "path": "lib/foundation/ai/tools/display_result_list_tool.dart",
+      "sha256": "C2AB17F103650C9C6C50DC51D672435CB81E9EC3FB96832D397266E35F014B17"
+    },
+    {
+      "path": "lib/foundation/ai/tools/download_comic_tool.dart",
+      "sha256": "8C43EF991B69ED3BBF75933ECE3DF1C06E0B28EB66E0412FF31B5A0F30C0A096"
+    },
+    {
+      "path": "lib/foundation/ai/tools/download_status_tool.dart",
+      "sha256": "05E97F3F101B95844865B0BE8CEE02D05D84A1DC4F86ECF7DAB77A266F3C472E"
+    },
+    {
+      "path": "lib/foundation/ai/tools/get_comic_detail_tool.dart",
+      "sha256": "5D4159D46EFB8C5D5C16A92C57AD1B4E489D4BE417D9655CC927BBE9AFE6F21D"
+    },
+    {
+      "path": "lib/foundation/ai/tools/manage_favorites_tool.dart",
+      "sha256": "F161F584C65A5BC5680CEFA47E5645A142A9E1127BF85ACDCDD1DC6222876F14"
+    },
+    {
+      "path": "lib/foundation/ai/tools/query_local_library_tool.dart",
+      "sha256": "9F44A66E6B12BCADAD356B03A42731492AA3BF2CA03AD548F4ED63E02BCA9331"
+    },
+    {
+      "path": "lib/foundation/ai/tools/query_remote_library_tool.dart",
+      "sha256": "5D1BAD2B85680388139D06CD49548A346FDBEB1BA50730719128FE8F14B04316"
+    },
+    {
+      "path": "lib/foundation/ai/tools/resolve_local_items_tool.dart",
+      "sha256": "CFFC7FD7AF28FCFF6C46F9888B3594EF5FA6397B4CCDE3FEDE2257E07D3FE48A"
+    },
+    {
+      "path": "lib/foundation/ai/tools/search_by_image_tool.dart",
+      "sha256": "8D0A69705620494CE1D7DBC657FACE2410FFEF87F2712DBD6E7A731654CAB663"
+    },
+    {
+      "path": "lib/foundation/ai/tools/search_local_tool.dart",
+      "sha256": "D5F3C0A8F0B3824026DEB3990277213EACDEACB1BAB1D2C71851B1C6D67894E6"
+    },
+    {
+      "path": "lib/foundation/ai/tools/search_online_tool.dart",
+      "sha256": "3932D95EF258EE287D15236DB1BB08011D392D1288F27C3BF0653B0AF6297478"
+    },
+    {
+      "path": "lib/foundation/app_page_route.dart",
+      "sha256": "BFB0D4C9B5DB84C8114807F3C24BF5D4307614571728BA3249816EF92D28E2E2"
+    },
+    {
+      "path": "lib/foundation/app_runtime_mode.dart",
+      "sha256": "79A07DC8BA9F739741EE20CBE99827AF6CBCE11412581A1B9AB320AD47D3E6C2"
+    },
+    {
+      "path": "lib/foundation/app.dart",
+      "sha256": "D643779FEC1DEF93DAF8A2F552559819A8A21D4774CFC3D27EFED4D7560FE7C8"
+    },
+    {
+      "path": "lib/foundation/appearance_settings.dart",
+      "sha256": "DF1719B163A06641E3972D88673192EE2E8FA47D3322B2C493F2BF4807127404"
+    },
+    {
+      "path": "lib/foundation/archive/archive_backend.dart",
+      "sha256": "F017953B17C282047BDCF615779A0B7B546132F36C747AE51896A086DF277B0D"
+    },
+    {
+      "path": "lib/foundation/archive/archive_episode_builder.dart",
+      "sha256": "A2F6BD4B85B67E2BCBDA93EBEDB4219119A0893F8087B5B16DA7DF1EF0BE5823"
+    },
+    {
+      "path": "lib/foundation/archive/archive_errors.dart",
+      "sha256": "1433FA2E521EBE8C712686416F1B43BA34555A8764B2F98C01D23DBA0B6D753D"
+    },
+    {
+      "path": "lib/foundation/archive/archive_image_provider.dart",
+      "sha256": "5F27F74C8E828AEB0515D360A44BA3D68AE022475CEDE82066A7A744A6A5BCEF"
+    },
+    {
+      "path": "lib/foundation/archive/archive_memory_cache.dart",
+      "sha256": "0141D3F63CA8B766449CDBE26FEF9867306051CCCA3C6FC1A9A893F452F6D35C"
+    },
+    {
+      "path": "lib/foundation/archive/archive_models.dart",
+      "sha256": "CB3220887208805B41326F99FAAEBD387A4ACC78BDA33F0E88B7A56F16C21B97"
+    },
+    {
+      "path": "lib/foundation/archive/archive_password_store.dart",
+      "sha256": "0AA538BDBA8BDADBB6D658A71250F7C670652C0BC16213DD76DCA72C5A2D2FF7"
+    },
+    {
+      "path": "lib/foundation/archive/archive_reading_service.dart",
+      "sha256": "0429C757C6668C8F5BE39FB5E788C7BA66DFBCC61834188395F8513CCD89601A"
+    },
+    {
+      "path": "lib/foundation/archive/archive_registry.dart",
+      "sha256": "D918EB1BF84550A581C017B2643033277A926FC73028D1756C10CB739EAF1EC3"
+    },
+    {
+      "path": "lib/foundation/archive/backends/dart_zip_backend.dart",
+      "sha256": "BFA312950AC5C06F2E6976E0B3A513BCE1FDFD8AA156FC6887399208C044CAD8"
+    },
+    {
+      "path": "lib/foundation/cache_file_inventory.dart",
+      "sha256": "7DF9476B3A00614B3D66C75D6981774A2811138749F077F7C37CD843C642B67F"
+    },
+    {
+      "path": "lib/foundation/comic_tile_display_config.dart",
+      "sha256": "E2BA21629AF99183764F6B01907547161E20B175DB856108287F18CE208041C4"
+    },
+    {
+      "path": "lib/foundation/cover_thumbnail_cache.dart",
+      "sha256": "3CE7A53EEF95979DCBA028347412334AE2E5CCFD5842CFBBD2BAE3932B7B48E8"
+    },
+    {
+      "path": "lib/foundation/def.dart",
+      "sha256": "B4CE659F0C1625693FF5FC9A8D2009DAF0D5CB4E2D35F400BA342162BFF04416"
+    },
+    {
+      "path": "lib/foundation/download_author_resolver.dart",
+      "sha256": "271801588997FC21D49929AE3F0D621C93E684CCAAFEFEC017528E4BA10C1CAB"
+    },
+    {
+      "path": "lib/foundation/download_directory_migration.dart",
+      "sha256": "0FA548BA2202B72108B7536B088620108E463CEEF236753F66584E41062D3661"
+    },
+    {
+      "path": "lib/foundation/download_export/download_export_core.dart",
+      "sha256": "5522E9D75963E50E7D5917A8DB90AEAD68310103C42BC3E9082BD709AFFE742B"
+    },
+    {
+      "path": "lib/foundation/download_export/download_export_delivery.dart",
+      "sha256": "4E1C285FF2960AB8F51FF5C00AD7DB28F19D47412E90F89414329525F17D7614"
+    },
+    {
+      "path": "lib/foundation/download_export/download_export_formatter.dart",
+      "sha256": "C22AF8F2008D7A909ED9C81C094A033F497313F0DB8256369DC03F270E3F3109"
+    },
+    {
+      "path": "lib/foundation/download_export/download_export_models.dart",
+      "sha256": "DA02D5852F677282EDEEE87C39A49509664E346166D3FD3053521A6C3D8EA735"
+    },
+    {
+      "path": "lib/foundation/download_export/download_export_page.dart",
+      "sha256": "237CB095565703B217C0C5B1B8D14EF34C59995696DD78625930337EB038883F"
+    },
+    {
+      "path": "lib/foundation/download_export/download_export_paths.dart",
+      "sha256": "EAA1C673733B14B87889EBCBD03FAAAA9AB8A74D4639D74B60B60EA3BDB7C4E4"
+    },
+    {
+      "path": "lib/foundation/download_export/download_export_sources.dart",
+      "sha256": "F607A87CA2F974A0076D245B8E2D4E657CC876B5B42369189496A6026F43BBB7"
+    },
+    {
+      "path": "lib/foundation/download_export/download_export.dart",
+      "sha256": "8E8BAAE4AE7C24CBE0ED9FF2E6EBCBB96780EA2051DC753EC7BFA03B252430BD"
+    },
+    {
+      "path": "lib/foundation/download_migration_controller.dart",
+      "sha256": "1D7B4C75DE4237475F0745D8CB95A390250C56BAD5C9922035C2730A2EE76A68"
+    },
+    {
+      "path": "lib/foundation/download_model.dart",
+      "sha256": "807E3B0DE83BF2E61F8ED9EDAA75142669119E133194DFED161676A2C5C212C2"
+    },
+    {
+      "path": "lib/foundation/download_snapshot_reader.dart",
+      "sha256": "24642412990B9DE09B6B65A3FDA0724476E9282F93CF1EC11CA509487E93D83F"
+    },
+    {
+      "path": "lib/foundation/download_stream_file.dart",
+      "sha256": "D7189FD67B0BD883DB7D907710F51B2F8ECC4B778958EA24B19D98000D49FB42"
+    },
+    {
+      "path": "lib/foundation/download.dart",
+      "sha256": "C80B08F97705B92C4C487E874DDFBF9D2204B80089E3019A8D977F62243D8186"
+    },
+    {
+      "path": "lib/foundation/explore/explore_bindings.dart",
+      "sha256": "149E934381A2A10A1F15F572C9F329CC5B47A88D4265D685549BE2934FF7467D"
+    },
+    {
+      "path": "lib/foundation/explore/explore_error_mapping.dart",
+      "sha256": "8A2A817B4EF91BE3A539E0D1B36D99C53F2906020836614F98F8A612AB25BDAE"
+    },
+    {
+      "path": "lib/foundation/explore/explore_models.dart",
+      "sha256": "C07FEAE74257927344EBC7DD2BB9B0F173E4EEF12FA161E2150EA260BA84FC94"
+    },
+    {
+      "path": "lib/foundation/explore/explore_provider.dart",
+      "sha256": "34500E9A3E83C6353FD4A8410C4834A80D02E172E9EA077E0E1E681E023327A7"
+    },
+    {
+      "path": "lib/foundation/explore/explore_registry.dart",
+      "sha256": "D1D83FC9BB592604376F534AEE749848494F78CB4F547726452E73F9C841DD5C"
+    },
+    {
+      "path": "lib/foundation/explore/providers/eh_explore_provider.dart",
+      "sha256": "C7C642DBB0E030346D05745F2766C8B02F0F34D155B19A6C5E72D725FB5E492B"
+    },
+    {
+      "path": "lib/foundation/explore/providers/jm_explore_provider.dart",
+      "sha256": "FC55E9BE6ABF01B4922973BEF87EAFD51309113098BE6D719797E61BD69E2623"
+    },
+    {
+      "path": "lib/foundation/explore/providers/komiic_explore_categories.dart",
+      "sha256": "A08A2147F9F5A2537D81A2D72139877EE3313F90A12D317439A3FB93BEDA3A2D"
+    },
+    {
+      "path": "lib/foundation/explore/providers/komiic_explore_provider.dart",
+      "sha256": "C3B9362891AF75DE09FDDBB600143646712E3A10450043910D3637BF2548C1B7"
+    },
+    {
+      "path": "lib/foundation/explore/providers/nhentai_explore_options.dart",
+      "sha256": "4AAEF44065466B4E0294F0C5CBF2EDD94C6561B453066C35F3E099C07C23F668"
+    },
+    {
+      "path": "lib/foundation/explore/providers/nhentai_explore_provider.dart",
+      "sha256": "DED79E165A2F240220A3AF1E3B7249AF164FECA70237DBA7E299D00AD5750B8C"
+    },
+    {
+      "path": "lib/foundation/explore/providers/picacg_explore_provider.dart",
+      "sha256": "7B709128ED1891E0B7D793D9A54305633B9038A571B9B38674C0B827DFFF9B87"
+    },
+    {
+      "path": "lib/foundation/explore/providers/pixiv_explore_provider.dart",
+      "sha256": "CD33454CB52A98F631D1D252CFEAF5DB7CABA4E94353E251268D1EAB31264269"
+    },
+    {
+      "path": "lib/foundation/favorite_source_id.dart",
+      "sha256": "073C33A92B50D74E042E84BC1AB5B510F995CA5C9D6487F474D68AD96E52264F"
+    },
+    {
+      "path": "lib/foundation/history.dart",
+      "sha256": "A1C49013CD0B3DA218D2C085F20101DED489D722A0182A5F890269A6F697E691"
+    },
+    {
+      "path": "lib/foundation/illust_card_info_config.dart",
+      "sha256": "F8B051D7D4D8842652C036F994BBEDC817EB175B2729BE1303124A206A8443F8"
+    },
+    {
+      "path": "lib/foundation/illust_cover_diagnostics.dart",
+      "sha256": "E740177332FD098EB5D9CEF55F8EE1225CA4A116FEBC00E9393D0FDE92CFC327"
+    },
+    {
+      "path": "lib/foundation/illust_cover_size.dart",
+      "sha256": "378E2DF93F838FB6DE21DDA038D97973B89DEE55DC175AB27DD552426A7FB7DC"
+    },
+    {
+      "path": "lib/foundation/illust_folder_preferences.dart",
+      "sha256": "0859252CDA85F909B3B687B80B5C136DC65A4BBD9A6E17AA2B3420FBED9FFD5D"
+    },
+    {
+      "path": "lib/foundation/illust_page_count_cache.dart",
+      "sha256": "5D8A63CC5A155DCC09D2DB1F2F23C0CBA52915A24D951936D756C121C0F180A3"
+    },
+    {
+      "path": "lib/foundation/image_favorites.dart",
+      "sha256": "FBDF654B47F4AE464B31BCF316F4EEF9E95F0B0FD2F547539A6C39E1AB40FBF7"
+    },
+    {
+      "path": "lib/foundation/image_header_size.dart",
+      "sha256": "F6C93B42D0DC4A413BB766748A06FAEBF07A8FD1BA62816012C164C7537DB0B1"
+    },
+    {
+      "path": "lib/foundation/image_loader/base_image_provider.dart",
+      "sha256": "373644597AA7C578B8468BBDC803271A0FDAE75B62483A83576DAF2F9DA6A728"
+    },
+    {
+      "path": "lib/foundation/image_loader/file_image_loader.dart",
+      "sha256": "9807BB8529190790F8011BC03B78BC20D186CB984EAAADB3683366444BA54AA5"
+    },
+    {
+      "path": "lib/foundation/image_loader/jm_image_recombine.dart",
+      "sha256": "DFA50FCF95C862031CAB8B80F557563CD7AC9A138E9101C47F540B561D0470F5"
+    },
+    {
+      "path": "lib/foundation/image_loader/stream_image_provider.dart",
+      "sha256": "CF82E121C27C75B2C5686ECB397F7B2F0F43652E522AB347059F304B4992A1CA"
+    },
+    {
+      "path": "lib/foundation/image_manager.dart",
+      "sha256": "459C8CF3B669F0F362473DDD6DAFB2F20609145C366EC9C9BF4BE64E5EDAE96F"
+    },
+    {
+      "path": "lib/foundation/local_cover_cache.dart",
+      "sha256": "2CCE0E2A9E986D283144E32BE7C4D0FDEDA1C1C4DD6B9D0F4DEDF3C31BDAB360"
+    },
+    {
+      "path": "lib/foundation/local_data_source.dart",
+      "sha256": "F71384229721DAD5BCC660069B32EC56F76D60182BB1A35A06447BCDF00822CD"
+    },
+    {
+      "path": "lib/foundation/local_favorites_comics.dart",
+      "sha256": "A1D094B472EB7F2B419831EF2400B587C284F59FB8867C91D0DAF7CAA9B07153"
+    },
+    {
+      "path": "lib/foundation/local_favorites_db.dart",
+      "sha256": "65F223F133EA56B223B4B8DDD666155C10444C43BBBD917041A1AA222D481B23"
+    },
+    {
+      "path": "lib/foundation/local_favorites_folders.dart",
+      "sha256": "DF9C1EA67315599F60A49AF3FFCDC2FE38FE90071E45CE83F2B88E694DE1EBFD"
+    },
+    {
+      "path": "lib/foundation/local_favorites_query.dart",
+      "sha256": "B959280E2A2CD02CD32481356D76B4CC4A3B9136CC85075E7694FF4CD8568194"
+    },
+    {
+      "path": "lib/foundation/local_favorites_update.dart",
+      "sha256": "EF5FA6BD6CD29A79C04DD3F5FD0147F26D4226FC13F31E747C9E3CFEA61380A6"
+    },
+    {
+      "path": "lib/foundation/local_favorites.dart",
+      "sha256": "E9F60CE6404500901CAD88FC840EB6D7B9DB0A69ED33E7EA9741E19DBF21B1C7"
+    },
+    {
+      "path": "lib/foundation/local_library_archive.dart",
+      "sha256": "9479C4C4994BB0E701B05D2093E620F6BB744121657F86C6068DBA4E20713573"
+    },
+    {
+      "path": "lib/foundation/local_library_cover.dart",
+      "sha256": "39477FBD8CEB76093CA51748F3A70DFA6FE23633073D307E27888CD5202AC3A0"
+    },
+    {
+      "path": "lib/foundation/local_library_illust_view.dart",
+      "sha256": "1B0177B1DF0C7BB25E6936BD92C13DE3D77FF80319E3C801E30FAD5E52DB98C9"
+    },
+    {
+      "path": "lib/foundation/local_library_manager_settings.dart",
+      "sha256": "79254E96A5E0DD38A0970C6AD9D237BE48ABA81D5B72A88A151E3BE70EAEF379"
+    },
+    {
+      "path": "lib/foundation/local_library_query.dart",
+      "sha256": "772F721A624A2802F2CC5C2E4E4BE5C49B56ACBDE91D70C9E3C44551B9D6CB5F"
+    },
+    {
+      "path": "lib/foundation/local_library_scan.dart",
+      "sha256": "CB6B468D07EB60459DE325C5235B5328E735377CAD8F71AF9A74416297850C3B"
+    },
+    {
+      "path": "lib/foundation/local_library_settings.dart",
+      "sha256": "267CD87DF858C2EDC2855AE7DD7ED50B3711831A3D53C752B84076370A41ECE4"
+    },
+    {
+      "path": "lib/foundation/local_library_static.dart",
+      "sha256": "7645D124D2303135B482D58C712B3D2FF6DC2FF69295ABE9D0703E763D47BFC8"
+    },
+    {
+      "path": "lib/foundation/local_library.dart",
+      "sha256": "5168E4463AF92293599AE59C7857248BF123EC91C3EE66315318574DB014DCF4"
+    },
+    {
+      "path": "lib/foundation/local_search_core.dart",
+      "sha256": "AC6899B7D8618C3D2A891E05D59D7D76BBF923C4F49CCBEB26AF62A9D6C035F7"
+    },
+    {
+      "path": "lib/foundation/local_search_data_source.dart",
+      "sha256": "2A96FD9C029035BB6DAB5720034E9A3DC49D87CF2B21E04DDB81AB316E157760"
+    },
+    {
+      "path": "lib/foundation/local_trash_store.dart",
+      "sha256": "C27F3F814E44A960FB19505B128258AF1876455D6C18C0F294A74873FEAC8DE5"
+    },
+    {
+      "path": "lib/foundation/log_file_service.dart",
+      "sha256": "50A729032CD62DB9354780E2C3F2BA2C61F4C3A4059C12128F6B5440754B1332"
+    },
+    {
+      "path": "lib/foundation/log.dart",
+      "sha256": "9FD982E3D48E1E0B95FAAB54F4635911638B0FAA630ED550FBAFD7C5DC10E600"
+    },
+    {
+      "path": "lib/foundation/main_page_hub.dart",
+      "sha256": "37A0D3360203D7A344042F247E56CEFBB6E14B59A8AA72C9482EDA5F6DEE6671"
+    },
+    {
+      "path": "lib/foundation/online_download_manager.dart",
+      "sha256": "1CEB354A53F7BCFAE8A644A5AC01F7E16B3C5DC60143BA4BD983C04947B4DF63"
+    },
+    {
+      "path": "lib/foundation/pair.dart",
+      "sha256": "9EE40A5D33D91F92830A95DB605C8CF307447357EBE8BB80FD1001AD93B1D56D"
+    },
+    {
+      "path": "lib/foundation/picakeep_mdns.dart",
+      "sha256": "145B5FE07A4DD98C206A1981DA1532260C03753FFDCF8F9ADF4596786DC0DA51"
+    },
+    {
+      "path": "lib/foundation/pixiv_artifact.dart",
+      "sha256": "B749F6EBED00A945A0AAA62B6CC3034EF3B29297CD86076B8B38059855B34D3C"
+    },
+    {
+      "path": "lib/foundation/pixiv_download_migration.dart",
+      "sha256": "644A891B02433246C206D69CF2E2EDDB5C406A1C881F8623ADC07A9E19353D60"
+    },
+    {
+      "path": "lib/foundation/pixiv_download_naming.dart",
+      "sha256": "FA9A207C14D123C8AC2BF374E9DF49BD28DFD6EA9D4B88E3EC854D1CCD48CD39"
+    },
+    {
+      "path": "lib/foundation/pixiv_download_root.dart",
+      "sha256": "38B2F0E32840EEFF299010A2D6192F65C99DB4571C8B479A972F767FC94D7B44"
+    },
+    {
+      "path": "lib/foundation/pixiv_library_locations.dart",
+      "sha256": "5B55CF282D616470C21FD89EAA1204ED2CF314A10960AF074F680AA56EB1D8C0"
+    },
+    {
+      "path": "lib/foundation/pixiv_library_maintenance.dart",
+      "sha256": "F363A85BA8918039C670BA3E5EAD150F56574DDC9F3215F3F27125964AAE1B46"
+    },
+    {
+      "path": "lib/foundation/pixiv_library.dart",
+      "sha256": "120C4589926CD0C65A5E6D12B009EC7E9878314F7295D9E1BA03620E26CB3469"
+    },
+    {
+      "path": "lib/foundation/privileged_storage_access_flutter.dart",
+      "sha256": "7B2823FBCA6E2E56CECF72AE16330405C0030BAE0AA2948D964417C981C21628"
+    },
+    {
+      "path": "lib/foundation/privileged_storage_access_io.dart",
+      "sha256": "28CE8E73A7079BEBD4072DE6546486C50708C42434343D5E4AC6288972AED706"
+    },
+    {
+      "path": "lib/foundation/privileged_storage_access.dart",
+      "sha256": "CF1B715EC926B2B0CC2BB1EF7C5F8EE19E4F0E3CF540CDA4857E33082D436EBD"
+    },
+    {
+      "path": "lib/foundation/reader_image_quality.dart",
+      "sha256": "74694FF4E88483FBCE33638C7AA8C12BDBEAFABF3BF6BA0D559AF8FE6F361451"
+    },
+    {
+      "path": "lib/foundation/remote_library_data_source.dart",
+      "sha256": "3F57C81FB5E2C006EC886DC251CB6C30B8ED070CCDB5C5F04A06105F94F1965C"
+    },
+    {
+      "path": "lib/foundation/remote_library_event_channel.dart",
+      "sha256": "446A98EDC0BE4CFAFA32E2FE290FDE83B2621503EE400CA95B34B0760DF391FD"
+    },
+    {
+      "path": "lib/foundation/service_data_source.dart",
+      "sha256": "2E816AF700CC13BE512A2D9DB617F3D75E7CAC6E05408EBC9A51962E8A3837C8"
+    },
+    {
+      "path": "lib/foundation/state_controller.dart",
+      "sha256": "2A4E32C72C36472BEBEBC60B29B7C48F4BB140680FD3C5E2DB8FDA8997CF5704"
+    },
+    {
+      "path": "lib/foundation/template_field_order.dart",
+      "sha256": "DA12FEBA46823B4B20DABD50BF67CB5C85F3D5DD48A543332CF976837D9AC2A7"
+    },
+    {
+      "path": "lib/foundation/trash_delete.dart",
+      "sha256": "3C4D31EAA43E63C492EF5386EE097AC2186D4BF2407FFA6E13714BC93AB77D1A"
+    },
+    {
+      "path": "lib/foundation/trash_io.dart",
+      "sha256": "4FDD666F18831CCDBE949337A8C0401E5C68B672A097A118F7859682D0C91DB9"
+    },
+    {
+      "path": "lib/foundation/trash_remote.dart",
+      "sha256": "6BC0A47FD3866E382AE61A096D861866E29A0CF2E6E2C0B0A900C34C585D7A03"
+    },
+    {
+      "path": "lib/foundation/trash_restore.dart",
+      "sha256": "D4DF32EB7A670B3490905CD0F84AECC09F69A8C4B7FEDC78ADC429CCB9AF9E9C"
+    },
+    {
+      "path": "lib/foundation/trash.dart",
+      "sha256": "873AD0361E29135425E0CE58863C285282F39D0E4329FDA645AEF4A7F8C89A78"
+    },
+    {
+      "path": "lib/foundation/ui_mode.dart",
+      "sha256": "CF3B7C65BF91F2149237DA7B7B647CDC934A807F8497BA99D3E46FEC9AD3544E"
+    },
+    {
+      "path": "lib/foundation/untranslated_tags/untranslated_tag_coordinator.dart",
+      "sha256": "61BDD32302D3945D31DA4E1EF3055B387F0C023FEBE032B0A8D8771B7020527B"
+    },
+    {
+      "path": "lib/foundation/untranslated_tags/untranslated_tag_store.dart",
+      "sha256": "7E91AAAAF8CB0616785064D50D71F029CB723824D9B916B4E036A053C4B85E80"
+    },
+    {
+      "path": "lib/foundation/user_data_transfer_sqlite.dart",
+      "sha256": "9CA2F9F0B148BCCF0E6178FF36AD0947BE5246E5F1E68022E458FA8E1DD4D045"
+    },
+    {
+      "path": "lib/foundation/user_data_transfer.dart",
+      "sha256": "E0BC7EB93B18C8751F3602F711257F4FE019C71BD3A1A41B985E58EE1E604A6F"
+    },
+    {
+      "path": "lib/foundation/widget_utils.dart",
+      "sha256": "77BAE2487B528111C179CC654CF55B06C441559E72B4A099F55CD892E84FC896"
+    },
+    {
+      "path": "lib/main.dart",
+      "sha256": "7D6BD21CB346B3E6B65F95DC69F3C42EFB9AB8D3556F63C627182075084365FC"
+    },
+    {
+      "path": "lib/network/app_dio.dart",
+      "sha256": "7732BAA4DCA5BEEB5863AF677B1C00A9E4A829F4137773F9B31DC67929B6BCF2"
+    },
+    {
+      "path": "lib/network/base_comic.dart",
+      "sha256": "C012F89B704C7A2579C0AA4DAEDB6A7B8CCDF17FE1B23474C79F3CFCE3491C33"
+    },
+    {
+      "path": "lib/network/cloudflare.dart",
+      "sha256": "2085917A4345AF8AE3753BE9ECD2B525D09A80C6CCE25EDE38ED8BD382BFA1A6"
+    },
+    {
+      "path": "lib/network/cookie_jar.dart",
+      "sha256": "E93029A8F1914C000DF903EF0F520D9107B6D21398D3352B7DEBD46682B941BC"
+    },
+    {
+      "path": "lib/network/eh_network/eh_brief_models.dart",
+      "sha256": "86C218A268D92007644C0BE108B15A61E29EBFC1DDCE6A627E50847A11FF9052"
+    },
+    {
+      "path": "lib/network/eh_network/eh_list_parsing.dart",
+      "sha256": "1AE87FEFB39E3AB83F2FA06B8303F70B7548BD89B76F7D24F7E49F57E4D21B18"
+    },
+    {
+      "path": "lib/network/eh_network/eh_main_network.dart",
+      "sha256": "8875747DD305A21E94646AEB597C5C873C0A4CEE85F2A575FF43AA44EB59C0C6"
+    },
+    {
+      "path": "lib/network/eh_network/eh_models.dart",
+      "sha256": "03A12676261DD34A58FC962B47DD0AD198D2072551CC4CB9C1959C3B7231C34D"
+    },
+    {
+      "path": "lib/network/eh_network/eh_site.dart",
+      "sha256": "C4CD850E78D32565B0DCE7672CCCBC978706A1F1A0FD53E34CCF983FBBDD35A4"
+    },
+    {
+      "path": "lib/network/eh_network/get_gallery_id.dart",
+      "sha256": "2CEDAA8F05568C109DF99F8C2B883B798F460918E4EBBB1DC759DD9B3B6A102F"
+    },
+    {
+      "path": "lib/network/eh_network/js.dart",
+      "sha256": "EC4CE0F2E0F44FFD174A7AE38F327DBD534023E81B874B906DF55903F1F9701A"
+    },
+    {
+      "path": "lib/network/jm_network/jm_headers.dart",
+      "sha256": "154796F7B0257270946A8D522A23BFE103428CA9995FC284EA755C58E6D57785"
+    },
+    {
+      "path": "lib/network/jm_network/jm_image.dart",
+      "sha256": "3712037204D5ED32B22795274480D14AAEF998942D1BEB8B67CD498F70847550"
+    },
+    {
+      "path": "lib/network/jm_network/jm_models.dart",
+      "sha256": "F2F71BF8D1DA515D65FAE1F907AB59ACAD8D63D644BE53B6CD7F93D13F69E196"
+    },
+    {
+      "path": "lib/network/jm_network/jm_network.dart",
+      "sha256": "CF411DD607BF13B20E85F53C87F84BF21FEA0CA2DE7263BB1D014A5703CCA71A"
+    },
+    {
+      "path": "lib/network/jm_network/jm_parsing.dart",
+      "sha256": "E00A3DAD1C462F2B553AFC856E88DC900C3E9B0A751D637700098C3286E0C0D2"
+    },
+    {
+      "path": "lib/network/komiic_network/komiic_graphql.dart",
+      "sha256": "D0AA857BF0E124132C0C9F2579136339994BF37917B47ABB0B93DB687D3ECAE3"
+    },
+    {
+      "path": "lib/network/komiic_network/komiic_models.dart",
+      "sha256": "75DAA98BCC1B35653C6B03D1AC913AC91BD304E43B38FDF6E78030F8487E2964"
+    },
+    {
+      "path": "lib/network/komiic_network/komiic_network.dart",
+      "sha256": "1A84B90C1D28C6F1F7C0172E9E7DBB6A03487255690BE976B253501925EEFADD"
+    },
+    {
+      "path": "lib/network/komiic_network/komiic_parsing.dart",
+      "sha256": "0D7FD1E6ABBE6D835F2ADEF3DC16083F505425669969258BE4CA2A4C1CFAB374"
+    },
+    {
+      "path": "lib/network/network_error_text.dart",
+      "sha256": "6885B5747ED69BDC313E034F033A68AAD14995B2C9B4D5080FC35B745E080F6B"
+    },
+    {
+      "path": "lib/network/nhentai_network/models.dart",
+      "sha256": "2C73900A876EC2F283257A30331EC5DDB84100B93E02283B281AF9BE056E2CA6"
+    },
+    {
+      "path": "lib/network/nhentai_network/nhentai_main_network.dart",
+      "sha256": "A9B91722FEC39EE09D444B3FE4ADBB085ECAB172216EC2693AC5B4129B6EB161"
+    },
+    {
+      "path": "lib/network/nhentai_network/tags.dart",
+      "sha256": "9552F6AA54C2979FDB3504DD0DE9E3CFFFE892A617AA65B798D61527CD284246"
+    },
+    {
+      "path": "lib/network/online_image/online_image_cache.dart",
+      "sha256": "A3E39A6F991432DA0219E4FCBCDE23D82110DBFDA60C9A669ABC5D3E8BBC3D85"
+    },
+    {
+      "path": "lib/network/online_image/online_image_manager.dart",
+      "sha256": "42800E4BFD1EBCA924477E0C5174B42C8EBD79943F2A3A5046E5AC3CE6D12287"
+    },
+    {
+      "path": "lib/network/picacg_network/headers.dart",
+      "sha256": "34337198155AF19B6159A0ECB7B7CA157FAFD2051A3979EF20ACB41633B351AA"
+    },
+    {
+      "path": "lib/network/picacg_network/models.dart",
+      "sha256": "D9FC49BDF6358B99B13DCA03BCCBAB49FF2934D2E39A4724E37C0DE9A767735D"
+    },
+    {
+      "path": "lib/network/picacg_network/picacg_brief_models.dart",
+      "sha256": "7ADF7709139A257B7A5403D7EE7B3A6657F5AF228D9A766AAE30C6DD073981EA"
+    },
+    {
+      "path": "lib/network/picacg_network/picacg_network.dart",
+      "sha256": "EFE0088510E35698633B2D4B62284E016538B9DA4C3DDDF952D88DC82DE0DF93"
+    },
+    {
+      "path": "lib/network/picacg_network/picacg_parsing.dart",
+      "sha256": "D279DB9BECC5B45064BF7387D26DD437310DDFE768D90613311C75B90353E338"
+    },
+    {
+      "path": "lib/network/pixiv_network/pixiv_models.dart",
+      "sha256": "7BE2C82695CDBB4DC886EE2FF667D1EBEE1C008E18A72D0375CC7BCE8DD99C4B"
+    },
+    {
+      "path": "lib/network/pixiv_network/pixiv_network.dart",
+      "sha256": "06C37FA3FB0DF5711D32044B2E6FB7506859068443EFF023F70DB737B333C793"
+    },
+    {
+      "path": "lib/network/pixiv_network/pixiv_parsing.dart",
+      "sha256": "0036D12902E1CB239032FE3F9068C8C7511788C4F17202CD352E8A913DA2349F"
+    },
+    {
+      "path": "lib/network/remote_service_network_policy.dart",
+      "sha256": "1DEE44C7F12369B67AC695A617333D60DB5EE7CCC1EE0789963D41AEB79336E1"
+    },
+    {
+      "path": "lib/network/res.dart",
+      "sha256": "F403B65D91154BE747A12C657BBC2F9D9456554C3EFFD5608BB400E54A651432"
+    },
+    {
+      "path": "lib/network/soutubot_network/soutubot_models.dart",
+      "sha256": "45EFB20E5C9BC8D42B3CA431BC15902646D76264E3A4EB8BE557C6C02D3CC9DE"
+    },
+    {
+      "path": "lib/network/soutubot_network/soutubot_network.dart",
+      "sha256": "ECA6D1BA8CCF4BEC25BA315375C026D931757612734EBC3259A1BEF14AC2E167"
+    },
+    {
+      "path": "lib/network/soutubot_network/soutubot_signature.dart",
+      "sha256": "107FEA7CE26E7B27B4C57DD03071AF012BF1670483B86589083D150B9D129472"
+    },
+    {
+      "path": "lib/pages/accounts/account_mode_controller.dart",
+      "sha256": "97153068F1228C6A8D17D684D09EF62C62533D13EC22A74552206C6416938C2B"
+    },
+    {
+      "path": "lib/pages/accounts/account_operation_scope.dart",
+      "sha256": "B3A1BBBC92A5599A71EB3503ABA73207CEFE88346417DA185EE00B72978A3783"
+    },
+    {
+      "path": "lib/pages/accounts/account_page_placeholder.dart",
+      "sha256": "A48ECEBBA8138FF00A0D64069FF5F67A8482A170F0DC90BC00654759ADD46418"
+    },
+    {
+      "path": "lib/pages/accounts/account_page_route.dart",
+      "sha256": "067558AEEE331BE41AC8EEE6D56AA0504DB1FAF84BFCE0E8F72158E5640639B3"
+    },
+    {
+      "path": "lib/pages/accounts/accounts_page.dart",
+      "sha256": "00988457FA69D02B355B5A7573F12EAD52984BCCC47AAE58F7C7ABAE133D5834"
+    },
+    {
+      "path": "lib/pages/accounts/eh_cookie_management_view.dart",
+      "sha256": "568B18DAE651630EB09D1BB5A2D8C34DCBC2ECA3B40C8E950923AB77B1A77B52"
+    },
+    {
+      "path": "lib/pages/accounts/login_page.dart",
+      "sha256": "606A8E75C083529E45106A4CB7065D6C4F6BA41713E32C2DCCAD3AB8AFF222ED"
+    },
+    {
+      "path": "lib/pages/ai/ai_chat_page.dart",
+      "sha256": "355F814EA91A51A35114B662EC4BCE8CDBD3FCFBD33E63AB1561BCFDDCD11D92"
+    },
+    {
+      "path": "lib/pages/ai/ai_download_list_page.dart",
+      "sha256": "C80537905DCD777FA4145D0224156402D65FB973643D58130308AFB147FD3EC3"
+    },
+    {
+      "path": "lib/pages/ai/ai_item_list_page.dart",
+      "sha256": "0BA4193F27885F2071A1D369BF8153913E09DE1339977258D60B84488B4930CB"
+    },
+    {
+      "path": "lib/pages/ai/ai_page.dart",
+      "sha256": "10F6428B7F585D8F2CC16DA153FC7425AC6F39B3A8270FC4B141F6BA42D0E46A"
+    },
+    {
+      "path": "lib/pages/ai/ai_tool_plugins_page.dart",
+      "sha256": "6B9F35D7E3DC9BB1BCA70AC7EBFE1498F13244305181EE7C7FA1CE82C8A46A4D"
+    },
+    {
+      "path": "lib/pages/app_capabilities_page.dart",
+      "sha256": "57FDA1A110B07ACD40B9B4C21B0036BA806F967EF5085011C7D26CD530B17459"
+    },
+    {
+      "path": "lib/pages/auth_page.dart",
+      "sha256": "F084EB746F3CCB45B905BEA8F0CA2B75EBD82C0D2D179E48D9C4F07C76141FE1"
+    },
+    {
+      "path": "lib/pages/download_page_logic_actions.dart",
+      "sha256": "B922DB8165DE4526EE451840E32984C607B0526BA680025F63DD9516B66D83EB"
+    },
+    {
+      "path": "lib/pages/download_page_logic_cover.dart",
+      "sha256": "265F28D8CF9D54E9B14798D95D1D34474F826F56D05A5A71FCC203E5AB0C7557"
+    },
+    {
+      "path": "lib/pages/download_page_logic_loading.dart",
+      "sha256": "498D129427ABBE51804A824D4C3E1EBA462DC7465D0113F2BB6EC8A2DAC315A7"
+    },
+    {
+      "path": "lib/pages/download_page_logic_view.dart",
+      "sha256": "168271D3089CF451F162AB7FE7BC6BE129E99108D29A0A0C4E370E1A78A5860B"
+    },
+    {
+      "path": "lib/pages/download_page.dart",
+      "sha256": "FF0E6CB31E5046F3CD6FD402FE45885F25C18B96C09708E9362E818AA56CFECC"
+    },
+    {
+      "path": "lib/pages/downloading/download_background_support.dart",
+      "sha256": "8B329CC4FF1BB6F41E3F4DE8A95474D511772F18D9B32C07F0F1F9A62E20A54D"
+    },
+    {
+      "path": "lib/pages/downloading/downloading_logic.dart",
+      "sha256": "5B316EB3B6BE7219C31D5AC0872D28030A00AEB390AE135D5F8F952B532ADE8C"
+    },
+    {
+      "path": "lib/pages/downloading/downloading_page.dart",
+      "sha256": "FB30DEA1B7B0CD32A9DA00BA9609A93DE1B6D0F339DE632920B9E6B0B85F9EC0"
+    },
+    {
+      "path": "lib/pages/eh_subscription_page.dart",
+      "sha256": "185F21D53CB4CCAB8E4668720887B08A08DEEEF32FB5F48C01C54BF2D398FF20"
+    },
+    {
+      "path": "lib/pages/explore/explore_category_button.dart",
+      "sha256": "2A7315300A38C80E290F3803AF8B4FFA5521744C7098A7083465BCF4E700345D"
+    },
+    {
+      "path": "lib/pages/explore/explore_category_label_metrics.dart",
+      "sha256": "384355FB075262B8335F1C9B2AA7BA7B252F571F92EE55F5A9474070E553E475"
+    },
+    {
+      "path": "lib/pages/explore/explore_category_page.dart",
+      "sha256": "1E4FFACEAF50DCD716B511F65810C91407C4E5F87912B3BED2C3A7E3166FE7FD"
+    },
+    {
+      "path": "lib/pages/explore/explore_category_panel.dart",
+      "sha256": "79D42F458B51169CCF5C17FBAA94D6412B8E197242E3B33A9C5820A54B3A58E1"
+    },
+    {
+      "path": "lib/pages/explore/explore_common.dart",
+      "sha256": "887F7F850D055B290AFA436AF3533510426460C9805437CC97778878489CEA7A"
+    },
+    {
+      "path": "lib/pages/explore/explore_keep_alive_switcher.dart",
+      "sha256": "FFFAC6A49EDDB8900A3B4CB089935CE20D08D845F6594F91D91A8EAD40D70B33"
+    },
+    {
+      "path": "lib/pages/explore/explore_list_controller.dart",
+      "sha256": "71835AC66854F9EE2E705CC2DA66690C51FF1DDE5695B1EE4A0F7E96564131E5"
+    },
+    {
+      "path": "lib/pages/explore/explore_page.dart",
+      "sha256": "B0D1B5F4F907DEBDC9663F116C9D9B9DDB8FB4E4B3CD4228BA5561B359D84943"
+    },
+    {
+      "path": "lib/pages/explore/explore_result_page.dart",
+      "sha256": "58DD686640F80DD754224A4275A6F3777BF1F0ECD737C1B590D10AFA4818BA60"
+    },
+    {
+      "path": "lib/pages/explore/explore_route_scope.dart",
+      "sha256": "10AB66DA3F25E1F3D152E3E387F0C8251A69C9EF80FE729EEF9DE3EE44576A7A"
+    },
+    {
+      "path": "lib/pages/favorites/local_favorites.dart",
+      "sha256": "6FD6A3372B238ABD3F35B4919B46AF5197FDEEB85E1DF4FAA7C44FC894A68D34"
+    },
+    {
+      "path": "lib/pages/favorites/main_favorites_page.dart",
+      "sha256": "2FF6789E03EDD4B730A6119CF6456639F3E99A2A0FBC4BA139EE13A03DDDE00A"
+    },
+    {
+      "path": "lib/pages/favorites/network_favorites_page.dart",
+      "sha256": "0F0E8B3CB32BFFDE2E1F6578680879E3FB7699DA919EE3D9DC14C49DF634CF39"
+    },
+    {
+      "path": "lib/pages/history_page.dart",
+      "sha256": "A2F12271DE873B5660ED710E82E4AEDDE896E769A87B7F5572FF63C976C13C31"
+    },
+    {
+      "path": "lib/pages/illust_folder_selector.dart",
+      "sha256": "E085B5F59EFBE2092B605C5414405FAEB800083261D0B40A96892DAB80A87888"
+    },
+    {
+      "path": "lib/pages/illust_scroll_anchor.dart",
+      "sha256": "FE1F2329D1E7174E46DCA535907BD6B1A2F3AE57931F49631E76C20ADFC6FE6E"
+    },
+    {
+      "path": "lib/pages/illust_search_panel.dart",
+      "sha256": "AC4781CBAAD46F0ECD7F24E57243623F158043C85B72111BEF31CE6AEE64DFE1"
+    },
+    {
+      "path": "lib/pages/illust_search_tag_list.dart",
+      "sha256": "39F289CD47F0A5C2E2DE1DC2ADFC684CFDE673A7C17B89C14354ED3B529221E0"
+    },
+    {
+      "path": "lib/pages/illust_work_queue.dart",
+      "sha256": "20BA4960D2806337DF571E29ABA52FE91FBF04ECBC073C19EE98A1A5B68B387F"
+    },
+    {
+      "path": "lib/pages/image_favorites.dart",
+      "sha256": "164EAD4757F1B28C0B78EF3D532977387C1E847F70318A43996363BDA89DCC7B"
+    },
+    {
+      "path": "lib/pages/local_comic_detail_page.dart",
+      "sha256": "98C92495EAB53CCEAF620AC8D5FCB7FD67A453AB62776E7B6F9FD26C068CF21E"
+    },
+    {
+      "path": "lib/pages/local_library_illust_card.dart",
+      "sha256": "7D7673F35D21EBA5FDD810F19815084A6745E5F3B8D686BBE1457D47B39F428D"
+    },
+    {
+      "path": "lib/pages/local_library_illust_switcher.dart",
+      "sha256": "1E3BD381B3A819A85640237BD5CC5EA5E35F0DB95C13EFD02859D0E18C2CB621"
+    },
+    {
+      "path": "lib/pages/local_library_illust_view.dart",
+      "sha256": "1F49F69E4B4581D4BE0B3DAC64ED2011C3D4B7F635C27DF3EF01A97F9CA8FE1D"
+    },
+    {
+      "path": "lib/pages/local_library_page.dart",
+      "sha256": "681B1DC42215C01BB9742571D0168C6DF152D45C2C3EEC25C32C01767668DBB8"
+    },
+    {
+      "path": "lib/pages/local_search_page.dart",
+      "sha256": "D76B2BF68F1DE70DA61617B09051D273304D400629C594F69BC55978C734E859"
+    },
+    {
+      "path": "lib/pages/main_page.dart",
+      "sha256": "764970323EF82AABA6875048E3A0D70058F0A704A2D4072C1FB72B322B379B25"
+    },
+    {
+      "path": "lib/pages/me_page.dart",
+      "sha256": "A3FFF13359CFEBF61249072B23185E3090A8620E063F287CF4F452FECADD8F94"
+    },
+    {
+      "path": "lib/pages/online_comic/account_webview_login.dart",
+      "sha256": "2D24AFD4C06693AE92E38F6E156006001F533ADD132DD06DF5B0A3FD25716E6F"
+    },
+    {
+      "path": "lib/pages/online_comic/base_online_comic_page.dart",
+      "sha256": "4187C01E88656257A96AF3CD98785B753329D3F4849828CF1E3FE6F69C37B35D"
+    },
+    {
+      "path": "lib/pages/online_comic/eh_comic_page_v2.dart",
+      "sha256": "D5A497F9D262DE78D9E27E6D1366D3CA847BF65FB65CD7668AEF13502D92D2E4"
+    },
+    {
+      "path": "lib/pages/online_comic/eh_comments_page.dart",
+      "sha256": "C5548B81E1A2F9A425418D4ACF768DD45D78C0DC5A539CE840D003DAF971F63C"
+    },
+    {
+      "path": "lib/pages/online_comic/eh_content_warning.dart",
+      "sha256": "E0ADE6756D312A979CF26FE596401BA8E2F56E22A29BB709671C99756BDA07D5"
+    },
+    {
+      "path": "lib/pages/online_comic/eh_login_page.dart",
+      "sha256": "395A2C4F9051F147116902E6BF1F8F4A9CDD5FB69D26B6FE8A54390B6AAA79F1"
+    },
+    {
+      "path": "lib/pages/online_comic/eh_reading_data.dart",
+      "sha256": "FF11A186568186C4C50447AD03AF0C0C82CA09EC0D08104F2CFB27BD5735E73E"
+    },
+    {
+      "path": "lib/pages/online_comic/example_source_page.dart",
+      "sha256": "0DD60A32147954682831FF18881455954735CAEE5519B3364CBBDA2AA9CA148B"
+    },
+    {
+      "path": "lib/pages/online_comic/jm_comic_detail_page.dart",
+      "sha256": "1CB2B884E0943E09FDB22D308E0DDB8E9A29D1988C70CE561F39B211B422F067"
+    },
+    {
+      "path": "lib/pages/online_comic/jm_comic_page_v2.dart",
+      "sha256": "338D9E491E826928C1F9AFD65B105378D885FDA16BD0FFB598263836E92C1F3A"
+    },
+    {
+      "path": "lib/pages/online_comic/jm_comments_page_v2.dart",
+      "sha256": "8855C4CB468BE23EA416034D4B2FCBED7E29EF6D477A9F773E0D0A7CCF62FB9B"
+    },
+    {
+      "path": "lib/pages/online_comic/jm_comments_page.dart",
+      "sha256": "B953E6C971C7199102EC144C4A1FB11CAB942E38A76CA49C7F49B06D9FE9887D"
+    },
+    {
+      "path": "lib/pages/online_comic/jm_reading_data.dart",
+      "sha256": "135E8CC3E2805E9F2B2D66E4D98063719339FB331BD5C01082E98D5C6B88DD08"
+    },
+    {
+      "path": "lib/pages/online_comic/komiic_comic_page_v2.dart",
+      "sha256": "332B5DF901989ADFC9F71752BDD98E738D3E4A811D14F404CB4ABD161CE7F2C5"
+    },
+    {
+      "path": "lib/pages/online_comic/komiic_reading_data.dart",
+      "sha256": "370BB8D895CDCD9C21C6E91F14985A64E6CC17AED0B93B0B174BD54CB4837F17"
+    },
+    {
+      "path": "lib/pages/online_comic/local_favorite_actions.dart",
+      "sha256": "3926D0CBFC4F7B7B58A011E093492FA1E80D3C02C563B63EAB6C88B2EEC11FEB"
+    },
+    {
+      "path": "lib/pages/online_comic/nhentai_comic_page_v2.dart",
+      "sha256": "585096EA9EBA477ABE1095789D2E72CD14388D86093AF7173CA1632FA849A012"
+    },
+    {
+      "path": "lib/pages/online_comic/nhentai_comments_page.dart",
+      "sha256": "EBA29BE89D5A59097D454C11B63F816031CF3AFB46A10F4FB3BD9A9905ABB6B9"
+    },
+    {
+      "path": "lib/pages/online_comic/nhentai_login_page.dart",
+      "sha256": "209872599AB876C5A7031116B5F6D64BBA64FF2884CFF1FC8C928220B8F4FECB"
+    },
+    {
+      "path": "lib/pages/online_comic/nhentai_reading_data.dart",
+      "sha256": "89258F062765AD18AD6C00393A71E7D035A0B2C50FD8ACADA2AC4B43BB29D2EB"
+    },
+    {
+      "path": "lib/pages/online_comic/online_comic_detail_logic.dart",
+      "sha256": "FE334AD499FCA7C26B904339F60AC645927CFE71AA7267DFD6EA57075E80AD56"
+    },
+    {
+      "path": "lib/pages/online_comic/online_comic_detail_page.dart",
+      "sha256": "828C503B9BA0AED2292EB811E119F4049E41071A16FBBCED18136B0D5E6F483D"
+    },
+    {
+      "path": "lib/pages/online_comic/online_comic_page_components.dart",
+      "sha256": "952C2EB618A30F7CD93A2A445E0F24A86D0F5CE052FF2ED064BE450F7E045ED6"
+    },
+    {
+      "path": "lib/pages/online_comic/online_comic_page_logic.dart",
+      "sha256": "D37723F9C25F78EDB40CBAB60ABB02067F4A486793E6BFE3F00CE4E7679DA060"
+    },
+    {
+      "path": "lib/pages/online_comic/picacg_comic_page_v2.dart",
+      "sha256": "621B554DAB3099AB078380C5AF5AF3126233CB5F60C548D4493A663A0C7AC707"
+    },
+    {
+      "path": "lib/pages/online_comic/picacg_comments_page_v2.dart",
+      "sha256": "01BA353682A9A5D1BD15703E5C1AB0A19B0EBF68DEFAA90368F9DC29ED5F1149"
+    },
+    {
+      "path": "lib/pages/online_comic/picacg_reading_data.dart",
+      "sha256": "423E5205852460737FCCF55B3A108423E335E847B7105C219AA1661A6282242B"
+    },
+    {
+      "path": "lib/pages/online_comic/picacg_reply_page.dart",
+      "sha256": "E7BE5A24564D4DF136DC548493F7A80BDCFDB047261F9DF245D08569250CD80B"
+    },
+    {
+      "path": "lib/pages/online_comic/pixiv_author_link.dart",
+      "sha256": "43817A92A9A48184E9D7C44FF93CE58D007F9A9FF2D2E000C8E46B7B79E6810C"
+    },
+    {
+      "path": "lib/pages/online_comic/pixiv_author_page_v2.dart",
+      "sha256": "1B88711CC9EA4C7A20308A98024D187E02429E2349CEEDB5CE578E2DB2CB4F85"
+    },
+    {
+      "path": "lib/pages/online_comic/pixiv_comic_page_v2.dart",
+      "sha256": "E3FA13C617F935DB70FFD8939CA279DD12F6C0710E3C5F351E6685F9AA93AB63"
+    },
+    {
+      "path": "lib/pages/online_comic/pixiv_login_page.dart",
+      "sha256": "CEAE3CBE765FE58DDE24C853416637FAEA69E23740FB7F2ABA8F3B27FDBAF9E9"
+    },
+    {
+      "path": "lib/pages/online_comic/pixiv_reading_data.dart",
+      "sha256": "A021757B32F37C74155DE9495BA6517BA25CF111A73B114239CE8EDD438F17D3"
+    },
+    {
+      "path": "lib/pages/online_comic/platform_favorite_panel.dart",
+      "sha256": "C44B9BD1AFE69E943AB46854C944A59719D27C6C3C4C6ED60F7C2898755E9767"
+    },
+    {
+      "path": "lib/pages/online_comic/webview_login_round.dart",
+      "sha256": "E44A49FAE10A8BFF0D28598C6E08C25C0773F643052DFEF9ACE204ED863A498E"
+    },
+    {
+      "path": "lib/pages/online_comic/webview.dart",
+      "sha256": "08C316EB9C5FD82444AF6196F8F7E1A9C2E4D2009DAD7878B4926B78518C8D5C"
+    },
+    {
+      "path": "lib/pages/online_common/online_comic_list_item.dart",
+      "sha256": "48F7BF9FA0346979D33D55144FCA7BB788C42B6A42A32B3FC3386CF515173F70"
+    },
+    {
+      "path": "lib/pages/online_common/online_waterfall_card.dart",
+      "sha256": "3BBD4BD8C38EA50DA1AEAFCCD056D542B477CD4938D91AB731F25973E3F0DC1E"
+    },
+    {
+      "path": "lib/pages/online_search/online_search_logic.dart",
+      "sha256": "4B93B7D167CF2B5B4FDF4B7D99A759B4666E2DD89DF7892E108F46CE91A3A034"
+    },
+    {
+      "path": "lib/pages/online_search/online_search_page_placeholder.dart",
+      "sha256": "466E808BA3157BAEF85B5C5826AB61BA6EDEDF77B554FEFBC9DF6753989E8A43"
+    },
+    {
+      "path": "lib/pages/online_search/online_search_page.dart",
+      "sha256": "B69F56B80D5EF6F57FF68308D7D08D04DE861CFAD87331CF099B7A7EA0D7F1F2"
+    },
+    {
+      "path": "lib/pages/online_search/online_search_result_page.dart",
+      "sha256": "0E667AFAF63CEBF8A503B00E1B0C08F238FC8BCC9B22C2B0AA053DCF249D7E9B"
+    },
+    {
+      "path": "lib/pages/pixiv_folders_page.dart",
+      "sha256": "96F0C4E7FEC7FE19DB7AD46960280AC1ED1515C0A4B64837382223966D2ED5C8"
+    },
+    {
+      "path": "lib/pages/reader/comic_reading_page.dart",
+      "sha256": "930050BA229881F9CBA418A5339DD3EF70E839B17CAA6EA010517835B5C1D72E"
+    },
+    {
+      "path": "lib/pages/reader/eps_view.dart",
+      "sha256": "8FC3FBD9F9E0F0DFAFF66374724F5463FC63BD27DBCA03D576FA8E9724BDFFB5"
+    },
+    {
+      "path": "lib/pages/reader/image_view.dart",
+      "sha256": "4018F88097809219A56B1BCCB6F8C0108BFEB356A3168B64B980336AC9BB9354"
+    },
+    {
+      "path": "lib/pages/reader/image.dart",
+      "sha256": "7F339946D939C44276F2BB3DDAFA50C2D01497666AA23021218C1AA59DBEF56F"
+    },
+    {
+      "path": "lib/pages/reader/reading_data.dart",
+      "sha256": "A6E158F5BF24357ADAE8E4E42DDFAEA781267631DDA103ADC09B4CC6F07AA6CC"
+    },
+    {
+      "path": "lib/pages/reader/reading_logic.dart",
+      "sha256": "24228D200BB266A959B12AEDB4218CCB30A620B307A6B90CA604A54EF0B15379"
+    },
+    {
+      "path": "lib/pages/reader/reading_settings.dart",
+      "sha256": "CC5F3F26113CC6BC85BD8CAECC48D3DD426632AD320552CF88E8BEA6CD74A2FD"
+    },
+    {
+      "path": "lib/pages/reader/reading_type.dart",
+      "sha256": "F390BB88D0F803DEEECCC03C8FD5A24E452A01BE5B924D0FB114F78D59C0289B"
+    },
+    {
+      "path": "lib/pages/reader/tool_bar.dart",
+      "sha256": "E14D1D9F1BEA56B758F52E1AA3951F1E3D3692E2784680AC2080609A1AF6C8CF"
+    },
+    {
+      "path": "lib/pages/reader/touch_control.dart",
+      "sha256": "A6D9B4A44BD6DD1A0B1E033236FBD2CEF78F50F97712C5BD1DCFDC407DC645A3"
+    },
+    {
+      "path": "lib/pages/service_info_page.dart",
+      "sha256": "526A19E3D8AED933B265EDC6972A16B32B27ED5F60C8B691F7286F110988DA36"
+    },
+    {
+      "path": "lib/pages/settings/ai_settings_page.dart",
+      "sha256": "C83810F0C17A5B84793A8EB645B68220A9046DB2C8A43DD06A84438A2D169A84"
+    },
+    {
+      "path": "lib/pages/settings/app_capabilities_settings.dart",
+      "sha256": "F839054CE7DC209C3C87B88ABB4C021BD3CFE0B418BDBB205A20F59B9F4B98D6"
+    },
+    {
+      "path": "lib/pages/settings/app_settings.dart",
+      "sha256": "31460BA56D1EF86458FF1D3AF3439107A3E99E68B4EB4D73090EB16377889421"
+    },
+    {
+      "path": "lib/pages/settings/archive_settings_page.dart",
+      "sha256": "D7710EECEC2A0B26BE74FBE34649DF24F83C244585BB5B6A1CAE6B04BB5368FF"
+    },
+    {
+      "path": "lib/pages/settings/comic_card_display_settings.dart",
+      "sha256": "481287272FD2CF5B274DE9CC53A2FF9E6BC440C73F9BB9E1B528EC22956B987E"
+    },
+    {
+      "path": "lib/pages/settings/download_settings.dart",
+      "sha256": "AEE8C4D07CE4B255630B7899EFD7B8CCF678F969F7020A4B60BAC5B78A510849"
+    },
+    {
+      "path": "lib/pages/settings/explore_settings.dart",
+      "sha256": "4113D14A15F59329824B1F312F3A634BFA67A42ED5444494E7BDE95EEA9D2231"
+    },
+    {
+      "path": "lib/pages/settings/illust_card_info_settings.dart",
+      "sha256": "1188291F67F11550FE0DD8F638B4C03902E7B7BB1F55495CA97CE9846CC5A0C5"
+    },
+    {
+      "path": "lib/pages/settings/internal_directory_browser.dart",
+      "sha256": "D9EA0A218BF41D9819A2BD9119D9E63451B9722179AE677245406C8D1891C47F"
+    },
+    {
+      "path": "lib/pages/settings/local_favorite_settings.dart",
+      "sha256": "4FEEFD90EA271A13B5EAD68D2755A93CB6B871AD0CC1B6761B2F574FD615F318"
+    },
+    {
+      "path": "lib/pages/settings/log_settings.dart",
+      "sha256": "59B71723ED1CCFF133DD8713449B44DAF7C1764511FD43DA864692DF1BB33C9F"
+    },
+    {
+      "path": "lib/pages/settings/network_settings.dart",
+      "sha256": "E359A169287A9A7A2007647009ED5D3C038C16BC6793E2E28D05B2946137F539"
+    },
+    {
+      "path": "lib/pages/settings/reading_settings.dart",
+      "sha256": "FEE4E9DDD86412BBBFA34722581112EB60A37D38207C52C9C4FB77982D900B13"
+    },
+    {
+      "path": "lib/pages/settings/runtime_service_settings.dart",
+      "sha256": "7541826244BF1AF31935B1146F7A1D16DCC64B85BF7CDACC9EF47AEEBDEB8C97"
+    },
+    {
+      "path": "lib/pages/settings/settings_common_widgets.dart",
+      "sha256": "0D134E771B6DA4AC91DD01A9973AFB6890569E0797EB796E1D7F905168EFBF9F"
+    },
+    {
+      "path": "lib/pages/settings/settings_page.dart",
+      "sha256": "063408E0D9344E6E3ECEFB14830BE309581DF2D44CA7FA1C2AC1DCF3FFFC0E4F"
+    },
+    {
+      "path": "lib/pages/settings/untranslated_tags_page.dart",
+      "sha256": "B81EC2510D65DB737BF46C0F80D06EA0BBD8FB03B400348C8FEE2C17C5456B92"
+    },
+    {
+      "path": "lib/pages/tool_display_config.dart",
+      "sha256": "5B6C421E9D8BC8E798CCA95C2B2F7A2135E2F0FA0FF3EB73C37D262C58159BD4"
+    },
+    {
+      "path": "lib/pages/tools.dart",
+      "sha256": "B943D53DC28B0519008A84F6933D75CDAB737F2C1B6B61D0B0B806728FA61240"
+    },
+    {
+      "path": "lib/pages/trash_page.dart",
+      "sha256": "395FF685DEA10406DA1F0DF15867B30B77F8A89CEA5BE45F8A67B62E33EE80F9"
+    },
+    {
+      "path": "lib/server/headless_cli_server.dart",
+      "sha256": "AFF066F9FAA9EB18C54BA242D895F067AC755E4144B923002E3F973B0B2E5E86"
+    },
+    {
+      "path": "lib/server/library_event_bus.dart",
+      "sha256": "FC9DBF3FD7DBC264EFC047755CB48766FE68F1460AB3B9F903079D372ACDBF3A"
+    },
+    {
+      "path": "lib/server/library_trash_store.dart",
+      "sha256": "B3063B07788722237A416BFEACF0CD74978DFB314BBC792C4DA3244F72F8B8B4"
+    },
+    {
+      "path": "lib/server/local_resource_scanner_cover.dart",
+      "sha256": "FDA4BCF6C0BF9ED6E7027D105C2E0D08498138FFB7916834DD04CAD76E3DABF3"
+    },
+    {
+      "path": "lib/server/local_resource_scanner_custom.dart",
+      "sha256": "4F88D83D8B188D731365CE831013F3F24369EFA8036C6EED5551DB7B01191980"
+    },
+    {
+      "path": "lib/server/local_resource_scanner_io.dart",
+      "sha256": "85956F65AED722B77BB140C190F45E7DE0DAEA0EE5820ECC6FA32661D2305DD5"
+    },
+    {
+      "path": "lib/server/local_resource_scanner_managed.dart",
+      "sha256": "4266273F453F836BA62A5FD0C63867B9F8E99706324E46D86DBFE98D7A8E6530"
+    },
+    {
+      "path": "lib/server/local_resource_scanner_metadata.dart",
+      "sha256": "02595F5A9A42F99C21D5F79FDB00DE007470C68A1190791D1F627268BB89C19F"
+    },
+    {
+      "path": "lib/server/local_resource_scanner_text.dart",
+      "sha256": "33FEF88BE77E626C0FEDDCD6C9EDD4A2DBDA824EC9B1D422B8583A2528CBA92F"
+    },
+    {
+      "path": "lib/server/local_resource_scanner.dart",
+      "sha256": "C7D103455FDD656651B20A0F143868BE866E26728EED0FD745EF8CA269ABACE5"
+    },
+    {
+      "path": "lib/server/local_server_runtime_sync.dart",
+      "sha256": "AB1B05D3864C2B5C4FE98077BFF70A8155F6135A4FA95AE0ABFA287530A30252"
+    },
+    {
+      "path": "lib/server/local_server_runtime.dart",
+      "sha256": "3C26B86614027EC86723EAC4830693D1C109F4C23FD38CB73099919D29D9A5A5"
+    },
+    {
+      "path": "lib/server/managed_data_root_resolver.dart",
+      "sha256": "B8A781042B3ED42E7F764A5E624AF77541DEACB5032BF6687A8C06234A3233DC"
+    },
+    {
+      "path": "lib/server/server_app_browse.dart",
+      "sha256": "267533E660D0232A2A03D5085774A1159284E0A36144DD904267B5735616F9F0"
+    },
+    {
+      "path": "lib/server/server_app_console.dart",
+      "sha256": "1378256CA89729974D93A2D8904DACD100318CAEC1A1522A422CDF2FE12AC2BF"
+    },
+    {
+      "path": "lib/server/server_app_favorites.dart",
+      "sha256": "0BEEE491357E557B21CFEB0FB22EC383ED32F01DBF419E0444265D48E6A3FFC8"
+    },
+    {
+      "path": "lib/server/server_app_files.dart",
+      "sha256": "FA1983E6EA72065FA6560A1AE0E03B1386E29F3503AC4ADE223080CAF1039797"
+    },
+    {
+      "path": "lib/server/server_app_library.dart",
+      "sha256": "55522591E11DE8C8B5B454E1D5372132A8FC80BB6B7AD65774C1A16C69BC5F81"
+    },
+    {
+      "path": "lib/server/server_app_routing.dart",
+      "sha256": "408D0C1147CAC4D53BE676663E8ABD8340B867B93422BB427A12B34F86051551"
+    },
+    {
+      "path": "lib/server/server_app_status.dart",
+      "sha256": "E95BA6BE2D60E6BEA0045D8757F85EA36809540C9A7604EF890BC79F6374E740"
+    },
+    {
+      "path": "lib/server/server_app_trash.dart",
+      "sha256": "5FAD4A6AC1655724D394970FAB8E44574588BC5795A5D20819BC271AE0CE8B1A"
+    },
+    {
+      "path": "lib/server/server_app_util.dart",
+      "sha256": "F387D7F878DC23D7E89ACE494188988FFE8111AAA54EE02C448628DF12637554"
+    },
+    {
+      "path": "lib/server/server_app.dart",
+      "sha256": "DB54D4373602E265B963C0FB6A2AC44DB7690F0F985AB4E29D56738C4FC0BFA2"
+    },
+    {
+      "path": "lib/server/server_config.dart",
+      "sha256": "535AC811877B3089531365BBB54F83DFB561AFB3177566618A451FA0FDC4059A"
+    },
+    {
+      "path": "lib/server/server_runtime_state.dart",
+      "sha256": "5CA5E21455DF8A76A9612E1811F9AED5CB0D6B39B59B7EF64E7F916655EB3349"
+    },
+    {
+      "path": "lib/server/web_console/remote_proxy_handler.dart",
+      "sha256": "715C9669B8426AEA7EA195FDA46063A7BC7C8444E01E5828D38158DDB52F474C"
+    },
+    {
+      "path": "lib/server/web_console/web_asset_loader.dart",
+      "sha256": "6ADDA44DEF4536A2884B5F1C8197B232A8142E24831EA3B1323EAA791EED5B3E"
+    },
+    {
+      "path": "lib/server/web_console/web_auth_handler.dart",
+      "sha256": "EFCC9C09660186D5B12A7A1BC103BDE9A4DBC7FB6D3A5EBAE23F60285912F6B9"
+    },
+    {
+      "path": "lib/server/web_console/web_console_handler.dart",
+      "sha256": "C1FB03852D60FFE30CD635377B4A31CAC01A654575C18B2445A8CFBEDA3538EF"
+    },
+    {
+      "path": "lib/server/web_console/web_user_store.dart",
+      "sha256": "AC800A60716074CC7B37A5DB63DEE48F44404D08F3B76957107B395FE19E7393"
+    },
+    {
+      "path": "lib/tools/android_foreground_service.dart",
+      "sha256": "E344257A0708718E704943DF689401194136548FE957C5418A0FCD7ABB10CCB9"
+    },
+    {
+      "path": "lib/tools/android_multicast_lock.dart",
+      "sha256": "6BF03B9BFE278C61CF14819479C85E88EDE815EC061F48B93045B72A70910EAB"
+    },
+    {
+      "path": "lib/tools/app_icon_channel.dart",
+      "sha256": "5BF2279BED745E771C698D682B6EB23A3F0B50D11368A2A78B7004B43AD2E1BF"
+    },
+    {
+      "path": "lib/tools/block_screenshot.dart",
+      "sha256": "C7FC92B97B8AF2C4F534D77EA6C2CA52D651F5F5C85F69E3DFBDFF39019FE53A"
+    },
+    {
+      "path": "lib/tools/download_notification_controller.dart",
+      "sha256": "AEE9930A65860133800C8F5D955CCB8A871240A70ABD869B66BA41D6A3E1B730"
+    },
+    {
+      "path": "lib/tools/download_notification_routes.dart",
+      "sha256": "B20630DC9653D3CE0724731F00FBC1F5CC650CC02D61CC2B92E7338443BD5626"
+    },
+    {
+      "path": "lib/tools/dynamic_theme_channel.dart",
+      "sha256": "276F641BCAD7D8D7CBD612CD5D8260853331484F0F2389FE653C6D353B80EA25"
+    },
+    {
+      "path": "lib/tools/extensions.dart",
+      "sha256": "6D1404C9366C1BBBABAD4AC1DE53A2A1B0C004634A93B09A938FC5E8A03EDD70"
+    },
+    {
+      "path": "lib/tools/history_cover.dart",
+      "sha256": "8DACDBFB96AA455C5E10468FF349E50684C17DE65811B42AF52B4FE935775456"
+    },
+    {
+      "path": "lib/tools/io_tools.dart",
+      "sha256": "730241BE6641FA9170941B5A64CBC5C7B2D4A64DE8BD6C3A2C6C7EEB3BAD894F"
+    },
+    {
+      "path": "lib/tools/keep_screen_on.dart",
+      "sha256": "F9520137CAA2BC3501DCA5AAE0950CBCE794EAA7C6C3324DDFC2868983738C93"
+    },
+    {
+      "path": "lib/tools/key_down_event.dart",
+      "sha256": "3909BE5A406670C3FE614D774DE71270BA7422B3CE18BBF739FA31AC3A080F7D"
+    },
+    {
+      "path": "lib/tools/local_app_links.dart",
+      "sha256": "33FF07B88FF572BCB5EB2A42ADAFE54BB64B6239F45BB5B97B8F37FC43B560D7"
+    },
+    {
+      "path": "lib/tools/night_mode_channel.dart",
+      "sha256": "E9C1223151B451D4CBB0137A3887799E31185421A0C85AEE4DF118861397667F"
+    },
+    {
+      "path": "lib/tools/notification.dart",
+      "sha256": "D0A360BD8F66FA7DE7C6B8BE03FA581E3872107FF143189B171F76065D90543B"
+    },
+    {
+      "path": "lib/tools/read_history_helper.dart",
+      "sha256": "52C48789AD8875AE74270E35F2676CE9CACC21A55D24986E6F4A60B41C1C04B1"
+    },
+    {
+      "path": "lib/tools/save_image.dart",
+      "sha256": "41A538F435BA489B8432EAF7AFA43B68FB0DE70ADFD7122EE825953A7625BE94"
+    },
+    {
+      "path": "lib/tools/system_proxy.dart",
+      "sha256": "3EE7FB67104581C5040D73A61845E1B396E1FA2B78DC59627071E4B0D33318A0"
+    },
+    {
+      "path": "lib/tools/tags_translation.dart",
+      "sha256": "E468D8B31726AD8E352DE4F4F53DA462889A53496423B8B537775BE1F8D6F87F"
+    },
+    {
+      "path": "lib/tools/time.dart",
+      "sha256": "BD2BC01AAD144D39CEF491BB4ACA493A93307E7D95F1185AD80FB3E4B880EC0F"
+    },
+    {
+      "path": "lib/tools/translations.dart",
+      "sha256": "E15462B7E8327395568CEFB22A71F06E0C8BB8ADC37506C8CEB5C99F6CA17EC2"
+    },
+    {
+      "path": "lib/tools/tray_controller.dart",
+      "sha256": "DC94300B4895ACC82299D381BE66EB1F123893ED8A4E26F956A0E7BCAA75259D"
+    },
+    {
+      "path": "linux/CMakeLists.txt",
+      "sha256": "23E7962E207B1B4AEE1F1B0366EA6BD4A05CA8FA83927AA2944C94363A7FADBC"
+    },
+    {
+      "path": "linux/flutter/CMakeLists.txt",
+      "sha256": "4EB17836308C1CD53F6B2BB8EDB3B7B30610BFF3B1D9DF7FECC9317F9109700C"
+    },
+    {
+      "path": "linux/flutter/generated_plugin_registrant.cc",
+      "sha256": "3D3C04B98855CD7C96B5FC66EF1A2C5517BCAC7421A7AF82FC2334852BF296E7"
+    },
+    {
+      "path": "linux/flutter/generated_plugin_registrant.h",
+      "sha256": "00F93BB5B1FAEFDEDE8F6065DF327522900FB0B8EFEE86BACF424FD947ED14BB"
+    },
+    {
+      "path": "linux/flutter/generated_plugins.cmake",
+      "sha256": "BBF67E774D62EF8E8EE3DCAE294A8E9CDB144FC4273700BBE394E6BCDBA49C85"
+    },
+    {
+      "path": "linux/runner/CMakeLists.txt",
+      "sha256": "81ECF2604C50F480C23D460B2DDF653ECD39DF29CC5B2FE4913F1A59F008A5A7"
+    },
+    {
+      "path": "linux/runner/main.cc",
+      "sha256": "905B4DFA4EAB584C1EB6244899B7D5EF56D0BCEAF3BFFB5EA335ED7E0BA3C549"
+    },
+    {
+      "path": "linux/runner/my_application.cc",
+      "sha256": "581C0CE964BE88A4B58DEFFAA656A3C75946CE541AEEC13DBE5744688A1DA435"
+    },
+    {
+      "path": "linux/runner/my_application.h",
+      "sha256": "880393CB82D7FEAAA95D9ACD6C2317749AFAE0E17EA5F5EE44B456BC081B5987"
+    },
+    {
+      "path": "linux/runner/resources/app_icon.png",
+      "sha256": "19FA9120189D2FBA6E108C1500AA16D9EEB1D5B3D539C6439FB7918D461A0154"
+    },
+    {
+      "path": "linux/runner/resources/picakeep.desktop",
+      "sha256": "B6FF61A10154A8A0E765B193733F17BF228316EC4090A1159FC39BE3432566BD"
+    },
+    {
+      "path": "linux/sqlite3/sqlite3.c",
+      "sha256": "A503ACC9FE98F628EED36EB2AA2116A26F2541270D757F9B7CDBC2F19EB72B8F"
+    },
+    {
+      "path": "linux/sqlite3/sqlite3.h",
+      "sha256": "37537D6131C1D2E507B34A6CEE5590E27CEDB7D82F543F257AFBC72C0CBBCC22"
+    },
+    {
+      "path": "packages/local_auth_windows_stub/lib/local_auth_windows.dart",
+      "sha256": "D1444E9F5C1D3319C64AC9BAA2E6DDD4DDA14C09D027D34C0C4D1515A7F4AD50"
+    },
+    {
+      "path": "packages/local_auth_windows_stub/pubspec.lock",
+      "sha256": "5FF3AB110419940CE3AC74724B8B60E0E777B04A364B85E8C3CAB358B8414C7C"
+    },
+    {
+      "path": "packages/local_auth_windows_stub/pubspec.yaml",
+      "sha256": "BD4FE97C4E7B3AE67FD9E411F4CF086CB0EBF13502272C439BF4EEC1BBD9EA80"
+    },
+    {
+      "path": "pubspec.lock",
+      "sha256": "2309C73B055B6878DE3C0CB5548CDE9778490FC10A90793CF1CC6F815D09518B"
+    },
+    {
+      "path": "pubspec.yaml",
+      "sha256": "01B8437ECC13271C2E7F892EFABDB8F6CB28ED3F48005EB641BB43DEF3FC4B9C"
+    },
+    {
+      "path": "windows/cli/picakeep.cmd",
+      "sha256": "CD48B92FE2C2635828F69081A15EEF7637C67C439860B959F7DC76C1C2939155"
+    },
+    {
+      "path": "windows/cli/picakeep.ps1",
+      "sha256": "9778DFC2358E6348CFEAEFAEE2C8A89CDBD6E54ACB36F086A60923182E629D7E"
+    },
+    {
+      "path": "windows/CMakeLists.txt",
+      "sha256": "4C2FC8071F6F602B7DFCC928203411118123CF00F8225C1A025E19FD600DEB6C"
+    },
+    {
+      "path": "windows/flutter/CMakeLists.txt",
+      "sha256": "BD05E3268B2F246BCBAFDB778165FE67A7BAFDBA04EB73599502563A67B8AE7E"
+    },
+    {
+      "path": "windows/flutter/generated_plugin_registrant.cc",
+      "sha256": "AC59C16AA9CC0F59D2ECA2821021BD9F2D3851153A0C6E7060E87D2A8ED201D9"
+    },
+    {
+      "path": "windows/flutter/generated_plugin_registrant.h",
+      "sha256": "DBC11635D7B1BA1887ADF40DF5B83D634E9C3AB0BEE34510C71528BB4D73602A"
+    },
+    {
+      "path": "windows/flutter/generated_plugins.cmake",
+      "sha256": "AB0B6569A78571EBD0494FDEB39A4921373B24655C84C610F703B1CB12B667AE"
+    },
+    {
+      "path": "windows/nuget.exe",
+      "sha256": "751EE5E79481626A428C1241DC7F94BCA2739B32588E669715BC5FB54D8FB8A2"
+    },
+    {
+      "path": "windows/runner/CMakeLists.txt",
+      "sha256": "D765FDD05F63AD099E585A2CCED0CBFF13EC3229B7DE68C8681B2107DB850089"
+    },
+    {
+      "path": "windows/runner/flutter_window.cpp",
+      "sha256": "D615EEDC06AE37321E59C2C00C7687D1887DCD97904EB7225FAFD8DCB5B83DA6"
+    },
+    {
+      "path": "windows/runner/flutter_window.h",
+      "sha256": "0252B804F5DA380C7709CBE1DAFF2B8D18DAF6C49D7E6DD43E5AF3C99C19F56C"
+    },
+    {
+      "path": "windows/runner/main.cpp",
+      "sha256": "2233DBE8C96CA5EE65342A54125F65E01B003ACD5AC0E4C58AAABFDD59ACF2D0"
+    },
+    {
+      "path": "windows/runner/resource.h",
+      "sha256": "D0E8BF7835468B4B6B1F8F0747F2E8F25C19841F2DF2AC60AAA584DDAE3AA7C6"
+    },
+    {
+      "path": "windows/runner/resources/app_icon.ico",
+      "sha256": "FE1A4FC38E24AFF9F0EA9555820154E2915D921A81598A8E4D58A322578093CA"
+    },
+    {
+      "path": "windows/runner/runner.exe.manifest",
+      "sha256": "639A56233FCD8CBCB8BBEFCD93E4680EC2664F32D9ACFB3D2EC1D8726A96E090"
+    },
+    {
+      "path": "windows/runner/Runner.rc",
+      "sha256": "815C1087295D12BD288A8D0F7184D7D257C6C31A0DC32C4ED86AC2D22EF35EC0"
+    },
+    {
+      "path": "windows/runner/utils.cpp",
+      "sha256": "FBB18524C22593D0CE7869B0733E237BE38E668FE045E3023BCF2D0B31784FA3"
+    },
+    {
+      "path": "windows/runner/utils.h",
+      "sha256": "832E246B6758253F89016FB0374B30791242E97AD950D27FC678B3D9FEACFDC4"
+    },
+    {
+      "path": "windows/runner/win32_window.cpp",
+      "sha256": "4E4F4DCF8E86EA6E097562CB3476039E693449BD8045367538AFEE579C017511"
+    },
+    {
+      "path": "windows/runner/win32_window.h",
+      "sha256": "D154CF89BA85F820631A9B5BEDACBE64FC5815E428FE6BC5DA579CE649F69841"
+    },
+    {
+      "path": "windows/sqlite3.dll",
+      "sha256": "72A2991859B5C08B046F894B05EC0923C81FE519490AF178065CE89607FA0410"
+    }
+  ]
+}

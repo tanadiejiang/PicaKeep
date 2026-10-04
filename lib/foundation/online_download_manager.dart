@@ -13,6 +13,8 @@ import 'package:sqlite3/sqlite3.dart';
 
 import 'package:picakeep/base.dart';
 import 'package:picakeep/foundation/app.dart';
+import 'package:picakeep/foundation/chapter_download_state.dart';
+import 'package:picakeep/foundation/download.dart';
 import 'package:picakeep/foundation/download_model.dart';
 import 'package:picakeep/foundation/download_stream_file.dart';
 import 'package:picakeep/foundation/download_author_resolver.dart';
@@ -42,6 +44,8 @@ import 'package:picakeep/pages/reader/comic_reading_page.dart';
 import 'package:picakeep/tools/tags_translation.dart';
 import 'package:picakeep/tools/download_notification_controller.dart';
 import 'package:uuid/uuid.dart';
+
+export 'chapter_download_state.dart';
 
 class OnlineDownloadTask {
   OnlineDownloadTask.jm({required JmComicInfo jmInfo})
@@ -106,12 +110,12 @@ class OnlineDownloadTask {
         _komiicInfo = komiicInfo,
         sourceKey = 'Komiic';
 
-  final PicacgComicItem? _comic;
-  final JmComicInfo? _jmInfo;
+  PicacgComicItem? _comic;
+  JmComicInfo? _jmInfo;
   final Gallery? _gallery;
   final NhentaiComic? _nhentaiComic;
   final PixivComicInfo? _pixivInfo;
-  final KomiicComicInfo? _komiicInfo;
+  KomiicComicInfo? _komiicInfo;
   final String sourceKey;
 
   // 向前兼容的 comic getter（仅 picacg 任务有效）
@@ -232,6 +236,32 @@ class OnlineDownloadTask {
   bool waitingForNetwork = false;
   String? error;
 
+  /// Null is the old whole-book queue format. All indexes stay zero based.
+  List<int>? chapterIndexes;
+  final Set<int> completedChapters = <int>{};
+  final Map<int, int> chapterPageCounts = <int, int>{};
+  String? chapterRoot;
+  String? chapterDirectory;
+  String? chapterRecordId;
+  int chapterCancellationGeneration = 0;
+  bool chapterRestartAfterUnwind = false;
+  // These are commit checkpoints, not deductions from the display currentEp.
+  bool _chapterResumeInitialized = false;
+  int? _chapterResumeIndex;
+  final Set<int> _chapterVerified = <int>{};
+  final Set<int> _chapterVerificationPending = <int>{};
+  final Set<int> _chapterPreserved = <int>{};
+  final Map<int, int> _chapterBytes = <int, int>{};
+  final Map<int, int> _chapterCommitRevisions = <int, int>{};
+  int _chapterRevision = 0;
+  Completer<void>? _chapterCommitDone;
+  int _chapterLegacySizeBytes = 0;
+  int _chapterCoverBytes = 0;
+  bool get isChapterTask =>
+      sourceKey == 'jm' || sourceKey == 'picacg' || sourceKey == 'Komiic';
+  List<int> get requestedChapters =>
+      chapterIndexes ?? List<int>.generate(totalEps, (index) => index);
+
   // ehentai 专用：0=逐页，1=归档Original，2=归档Resample
   int downloadType = 0;
 
@@ -283,6 +313,17 @@ class OnlineDownloadTask {
     }
     final epProgress =
         totalPages <= 0 ? 0 : currentPage / math.max(totalPages, 1);
+    if (isChapterTask && requestedChapters.isNotEmpty) {
+      final finished =
+          requestedChapters.where(completedChapters.contains).length;
+      return ((finished +
+                  (completedChapters.contains(currentEp - 1)
+                      ? 0
+                      : epProgress)) /
+              requestedChapters.length)
+          .clamp(0, 1)
+          .toDouble();
+    }
     return ((currentEp - 1).clamp(0, totalEps) + epProgress) / totalEps;
   }
 }
@@ -301,8 +342,10 @@ class OnlineDownloadManager {
     notices.onNetworkChanged = handleDownloadNetworkChanged;
     notices.onBackgroundProtectionLost = () {
       final state = WidgetsBinding.instance.lifecycleState;
-      if (state != null && state != AppLifecycleState.resumed &&
-          _tasks.values.any((t) => !t.completed && !t.cancelled && !t.paused && t.error == null)) {
+      if (state != null &&
+          state != AppLifecycleState.resumed &&
+          _tasks.values.any((t) =>
+              !t.completed && !t.cancelled && !t.paused && t.error == null)) {
         pauseAll();
       }
     };
@@ -310,6 +353,30 @@ class OnlineDownloadManager {
   }
 
   static final OnlineDownloadManager instance = OnlineDownloadManager._();
+
+  /// Offline transport injection still executes selection, files, DB and queue.
+  OnlineDownloadManager.forTesting({
+    required String downloadRoot,
+    Future<Res<List<String>>> Function(String sourceKey, String comicId,
+            int chapterIndex, String chapterId)?
+        chapterLoader,
+    Future<void> Function(String sourceKey, String url, File target,
+            Map<String, String> headers)?
+        chapterFileWriter,
+    void Function(String directory, int chapterIndex)? chapterScanObserver,
+  })  : _testDownloadRoot = downloadRoot,
+        _chapterLoader = chapterLoader,
+        _chapterFileWriter = chapterFileWriter,
+        _chapterScanObserver = chapterScanObserver;
+
+  String? _testDownloadRoot;
+  Future<Res<List<String>>> Function(String, String, int, String)?
+      _chapterLoader;
+  Future<void> Function(String, String, File, Map<String, String>)?
+      _chapterFileWriter;
+  void Function(String, int)? _chapterScanObserver;
+  Future<void> _chapterEnqueueTail = Future<void>.value();
+  Future<void>? _chapterQueueLoading;
 
   final Map<String, OnlineDownloadTask> _tasks = <String, OnlineDownloadTask>{};
   final ValueNotifier<int> version = ValueNotifier<int>(0);
@@ -326,8 +393,12 @@ class OnlineDownloadManager {
     _networkAvailable = online;
     if (!online) {
       final active = _activeTask;
-      if (active != null && !active.completed && !active.cancelled && !active.paused) {
+      if (active != null &&
+          !active.completed &&
+          !active.cancelled &&
+          !active.paused) {
         active.waitingForNetwork = true;
+        if (active.isChapterTask) active.chapterCancellationGeneration++;
         active.cancelAllTokens();
       }
     } else {
@@ -350,6 +421,11 @@ class OnlineDownloadManager {
       task.cancelToken = null;
       if (!task.completed) task.error = null;
     }
+    if (task.isChapterTask && task.chapterRestartAfterUnwind) {
+      task.chapterRestartAfterUnwind = false;
+      task.error = null;
+      task.cancelToken = null;
+    }
     if (identical(_activeTask, task)) _activeTask = null;
     _running = false;
   }
@@ -358,11 +434,11 @@ class OnlineDownloadManager {
 
   /// Flush through the same serialized queue writer used by enqueue. Lifecycle
   /// transitions and tests can await this without racing an older snapshot.
-  Future<void> persistQueue() => !_queueLoaded && _tasks.isEmpty
-      ? Future<void>.value()
-      : _saveQueue();
+  Future<void> persistQueue() =>
+      !_queueLoaded && _tasks.isEmpty ? Future<void>.value() : _saveQueue();
 
-  bool isDownloading(String id) => _tasks.values.any((t) => (t.id == id || t.taskId == id) && !t.completed && !t.cancelled);
+  bool isDownloading(String id) => _tasks.values.any(
+      (t) => (t.id == id || t.taskId == id) && !t.completed && !t.cancelled);
 
   Future<List<DownloadedItem>> loadCompletedDownloads() async {
     final roots = await _effectiveDownloadRoots();
@@ -554,6 +630,10 @@ class OnlineDownloadManager {
     final task = _tasks[id];
     if (task == null || task.completed || task.cancelled) return;
     task.cancelled = true;
+    if (task.isChapterTask) {
+      task.chapterCancellationGeneration++;
+      task.chapterRestartAfterUnwind = false;
+    }
     task.cancelAllTokens();
     unawaited(_saveQueue());
     _scheduleNext();
@@ -564,6 +644,10 @@ class OnlineDownloadManager {
     final task = _tasks[id];
     if (task == null || task.completed || task.cancelled || task.paused) return;
     task.paused = true;
+    if (task.isChapterTask) {
+      task.chapterCancellationGeneration++;
+      task.chapterRestartAfterUnwind = false;
+    }
     task.cancelAllTokens();
     task.stopSpeedTimer();
     unawaited(_saveQueue());
@@ -576,6 +660,9 @@ class OnlineDownloadManager {
       return;
     }
     task.paused = false;
+    if (task.isChapterTask && identical(_activeTask, task)) {
+      task.chapterRestartAfterUnwind = true;
+    }
     task.cancelled = false;
     task.cancelToken = null;
     unawaited(_saveQueue());
@@ -606,6 +693,10 @@ class OnlineDownloadManager {
       final task = _tasks.remove(id);
       if (task != null && !task.completed) {
         task.cancelled = true;
+        if (task.isChapterTask) {
+          task.chapterCancellationGeneration++;
+          task.chapterRestartAfterUnwind = false;
+        }
         task.cancelAllTokens();
       }
     }
@@ -618,6 +709,10 @@ class OnlineDownloadManager {
     for (final task in _tasks.values) {
       if (!task.completed && !task.cancelled && task.error == null) {
         task.paused = true;
+        if (task.isChapterTask) {
+          task.chapterCancellationGeneration++;
+          task.chapterRestartAfterUnwind = false;
+        }
         task.cancelAllTokens();
         task.stopSpeedTimer();
       }
@@ -631,6 +726,9 @@ class OnlineDownloadManager {
     for (final task in _tasks.values) {
       if (task.paused && !task.completed && !task.cancelled) {
         task.paused = false;
+        if (task.isChapterTask && identical(_activeTask, task)) {
+          task.chapterRestartAfterUnwind = true;
+        }
         task.cancelled = false;
         task.cancelToken = null;
       }
@@ -644,6 +742,10 @@ class OnlineDownloadManager {
     final task = _tasks[id];
     if (task == null || task.completed) return;
     task.error = null;
+    if (task.isChapterTask && identical(_activeTask, task)) {
+      task.chapterCancellationGeneration++;
+      task.chapterRestartAfterUnwind = true;
+    }
     task.cancelled = false;
     task.paused = false;
     task.cancelToken = null;
@@ -657,31 +759,349 @@ class OnlineDownloadManager {
     _notify();
   }
 
-  Future<Res<bool>> enqueuePicacg(PicacgComicItem comic) async {
-    if (_tasks.containsKey('picacg${comic.id}') ||
-        _tasks.containsKey(comic.id)) {
-      return const Res(true);
-    }
-    final task = OnlineDownloadTask.picacg(comic: comic)
-      ..totalEps = comic.eps.length;
-    _tasks[task.id] = task;
-    _notify();
-    unawaited(_saveQueue());
-    _scheduleNext();
-    return const Res(true);
+  bool _chapterSourceMatches(DownloadedItem item, String source) {
+    if (source == 'jm') return item.type == DownloadType.jm;
+    if (source == 'picacg') return item.type == DownloadType.picacg;
+    return item is CustomDownloadedItem &&
+        item.sourceKey.toLowerCase() == 'komiic';
   }
 
-  Future<Res<bool>> enqueueJm(JmComicInfo info) async {
-    final key = 'jm${info.id}';
-    if (_tasks.containsKey(key)) return const Res(true);
-    final task = OnlineDownloadTask.jm(jmInfo: info)
-      ..totalEps = info.series.length;
-    _tasks[task.id] = task;
-    _notify();
-    unawaited(_saveQueue());
-    _scheduleNext();
-    return const Res(true);
+  Future<List<_ChapterRecord>> _chapterRecords(
+      String source, List<String> candidateIds, int chapterCount,
+      {bool verifyFiles = true}) async {
+    final roots = <String>{
+      await _defaultOnlineDownloadRoot(),
+      if (_testDownloadRoot == null && appdata.settings[22].trim().isNotEmpty)
+        appdata.settings[22].trim(),
+      if (_testDownloadRoot == null && DownloadManager().path != null)
+        DownloadManager().path!,
+    };
+    final ids = candidateIds.where((id) => id.trim().isNotEmpty).toSet();
+    if (ids.isEmpty) throw const FormatException('缺少源站作品标识');
+    // A cached local item may point at a previously configured download root.
+    final cached = _testDownloadRoot == null
+        ? LocalLibraryManager().findCachedByCandidates(ids)
+        : null;
+    if (cached?.sourceDbPath != null) {
+      roots.add(p.dirname(cached!.sourceDbPath!));
+      if (cached.sourceDbId != null) ids.add(cached.sourceDbId!);
+    }
+    final records = <_ChapterRecord>[];
+    for (final root in roots) {
+      final dbPath = p.join(root, 'download.db');
+      if (!await File(dbPath).exists()) continue;
+      final db = sqlite3.open(dbPath);
+      try {
+        final placeholders = List.filled(ids.length, '?').join(',');
+        final rows = db.select(
+          'select id, directory, json from download where id in ($placeholders)',
+          ids.toList(),
+        );
+        for (final row in rows) {
+          final raw = jsonDecode(row['json'] as String);
+          if (raw is! Map) throw const FormatException('已下载记录格式错误');
+          final json = Map<String, dynamic>.from(raw);
+          final id = row['id'].toString();
+          final directory = row['directory']?.toString() ?? id;
+          final item =
+              parseDownloadedItemRecordData(id, json, directory: directory);
+          if (item == null) throw const FormatException('无法读取已下载章节记录');
+          if (!_chapterSourceMatches(item, source)) continue;
+          final path = p.normalize(p.join(root, directory));
+          // Records are relative to the DB root. Never follow a corrupt escape.
+          if (!p.isWithin(p.normalize(root), path)) {
+            throw const FormatException('已下载记录目录超出下载根');
+          }
+          final counts = <int, int>{};
+          final rawCounts = json['chapterPageCounts'];
+          if (rawCounts is Map) {
+            for (final entry in rawCounts.entries) {
+              final index = int.tryParse(entry.key.toString());
+              final count = int.tryParse(entry.value.toString());
+              if (index != null && count != null && count > 0) {
+                counts[index] = count;
+              }
+            }
+          }
+          final completed = <int>{};
+          final bytes = <int, int>{};
+          final rawBytes = json['chapterPageBytes'];
+          if (rawBytes is Map) {
+            for (final entry in rawBytes.entries) {
+              final index = int.tryParse(entry.key.toString());
+              final length = int.tryParse(entry.value.toString());
+              if (index != null && length != null && length >= 0) {
+                bytes[index] = length;
+              }
+            }
+          }
+          for (final index in item.downloadedEps) {
+            if (index < 0 || index >= chapterCount) continue;
+            if (!verifyFiles) {
+              completed.add(index);
+            } else {
+              final inspected =
+                  await _inspectChapterFiles(path, index, counts[index]);
+              if (inspected.complete) {
+                completed.add(index);
+                bytes[index] = inspected.bytes;
+              }
+            }
+          }
+          records.add(_ChapterRecord(root, directory, id, completed, counts,
+              bytes, ((item.comicSize ?? 0) * 1024 * 1024).round()));
+        }
+      } finally {
+        db.dispose();
+      }
+    }
+    records.sort((a, b) => b.completed.length.compareTo(a.completed.length));
+    return records;
   }
+
+  Future<bool> _chapterFilesComplete(
+          String root, int index, int? expected) async =>
+      (await _inspectChapterFiles(root, index, expected)).complete;
+
+  Future<({bool complete, int bytes})> _inspectChapterFiles(
+      String root, int index, int? expected) async {
+    final directory = Directory(p.join(root, '${index + 1}'));
+    _chapterScanObserver?.call(directory.path, index);
+    if (!await directory.exists()) return (complete: false, bytes: 0);
+    final pages = <int>{};
+    var bytes = 0;
+    await for (final entity in directory.list(followLinks: false)) {
+      if (entity is! File) continue;
+      final match = RegExp(r'^(\d+)\.(?:png|webp|jpe?g|gif|avif|bmp)$',
+              caseSensitive: false)
+          .firstMatch(p.basename(entity.path));
+      if (match != null) {
+        final length = await entity.length();
+        if (length > 0) {
+          pages.add(int.parse(match.group(1)!));
+          bytes += length;
+        }
+      }
+    }
+    if (pages.isEmpty) return (complete: false, bytes: 0);
+    // Old records have no authoritative source page count: detect visible gaps,
+    // but do not claim to prove that an unknown final page exists.
+    final count = expected ?? pages.reduce(math.max);
+    return (
+      complete:
+          count > 0 && List.generate(count, (i) => i + 1).every(pages.contains),
+      bytes: bytes,
+    );
+  }
+
+  Future<Map<int, ChapterDownloadStatus>> chapterStatuses({
+    required String sourceKey,
+    required List<String> candidateIds,
+    required int chapterCount,
+  }) async {
+    final source = sourceKey.toLowerCase();
+    if (!['jm', 'picacg', 'komiic'].contains(source)) {
+      throw const FormatException('该来源不支持选择章节');
+    }
+    if (chapterCount < 0) throw const FormatException('章节数量无效');
+    if (!_queueLoaded) {
+      final loading = _chapterQueueLoading ??= loadQueue(strict: true);
+      try {
+        await loading;
+      } finally {
+        if (identical(_chapterQueueLoading, loading)) {
+          _chapterQueueLoading = null;
+        }
+      }
+    }
+    final matchingTasks = _tasks.values
+        .where((task) =>
+            task.isChapterTask &&
+            task._chapterResumeInitialized &&
+            task.sourceKey.toLowerCase() == source &&
+            candidateIds.contains(task.taskId))
+        .toList();
+    for (final task in matchingTasks) {
+      await task._chapterCommitDone?.future;
+    }
+    final checkpointsBeforeScan = {
+      for (final task in matchingTasks)
+        task: {
+          for (final index in task._chapterVerified)
+            index: task._chapterCommitRevisions[index] ?? 0,
+        },
+    };
+    final records = await _chapterRecords(source, candidateIds, chapterCount);
+    var revoked = false;
+    // This explicit status check is the file-change detection boundary. Normal
+    // resume trusts durable checkpoints; a scan finding a missing file revokes
+    // the affected checkpoint and sends that chapter through the normal writer.
+    for (final task in matchingTasks) {
+      // A DB row read before a concurrent commit must not revoke that commit.
+      await task._chapterCommitDone?.future;
+      final matching = records.where((record) =>
+          record.root == task.chapterRoot &&
+          record.directory == task.chapterDirectory);
+      final onDisk =
+          matching.isEmpty ? const <int>{} : matching.first.completed;
+      final before = checkpointsBeforeScan[task]!;
+      final missing = before.keys
+          .where((index) =>
+              task._chapterVerified.contains(index) &&
+              (task._chapterCommitRevisions[index] ?? 0) == before[index] &&
+              !onDisk.contains(index))
+          .toSet();
+      for (final index in missing) {
+        task._chapterVerified.remove(index);
+        task._chapterPreserved.remove(index);
+        task._chapterVerificationPending.remove(index);
+        task.completedChapters.remove(index);
+        task._chapterBytes.remove(index);
+        task._chapterCommitRevisions.remove(index);
+      }
+      if (missing.isNotEmpty) {
+        task._chapterResumeIndex = missing.reduce(math.min);
+        revoked = true;
+      }
+    }
+    if (revoked) await _saveQueue(requireSuccess: true);
+    final statuses = <int, ChapterDownloadStatus>{
+      for (final record in records)
+        for (final index in record.completed)
+          index: ChapterDownloadStatus.downloaded,
+    };
+    for (final task in _tasks.values) {
+      if (task.sourceKey.toLowerCase() != source ||
+          !candidateIds.contains(task.taskId) ||
+          task.cancelled ||
+          task.completed) {
+        continue;
+      }
+      for (final index in task.requestedChapters) {
+        if (index < 0 || index >= chapterCount || statuses.containsKey(index)) {
+          continue;
+        }
+        statuses[index] = task.error != null
+            ? ChapterDownloadStatus.failed
+            : task.paused || task.waitingForNetwork || _globalPaused
+                ? ChapterDownloadStatus.paused
+                : identical(_activeTask, task) && task.currentEp - 1 == index
+                    ? ChapterDownloadStatus.downloading
+                    : ChapterDownloadStatus.queued;
+      }
+    }
+    return statuses;
+  }
+
+  Future<Res<bool>> _enqueueChapters(OnlineDownloadTask incoming,
+      List<int>? selection, List<String> candidates) {
+    final next = _chapterEnqueueTail.then((_) async {
+      try {
+        final selected = normalizeChapterIndexes(selection, incoming.totalEps);
+        final statuses = await chapterStatuses(
+            sourceKey: incoming.sourceKey,
+            candidateIds: candidates,
+            chapterCount: incoming.totalEps);
+        final added = selected
+            .where((index) =>
+                (statuses[index] ?? ChapterDownloadStatus.available) ==
+                ChapterDownloadStatus.available)
+            .toList();
+        if (added.isEmpty) {
+          return const Res<bool>.error('所选章节已下载或已在队列中',
+              errorCode: ResErrorCode.invalidArgument);
+        }
+        final existing = _tasks[incoming.id];
+        if (existing != null &&
+            identical(_activeTask, existing) &&
+            existing.cancelled) {
+          return const Res<bool>.error('任务正在结束，请稍后重试');
+        }
+        final task =
+            existing != null && !existing.cancelled && !existing.completed
+                ? existing
+                : incoming;
+        if (identical(task, existing)) {
+          final oldIds = _chapterStableIds(task);
+          final newIds = _chapterStableIds(incoming);
+          if (newIds.length < oldIds.length ||
+              List.generate(oldIds.length, (i) => i)
+                  .any((i) => oldIds[i] != newIds[i])) {
+            return const Res<bool>.error('源站章节顺序已变化，请结束旧任务后重试',
+                errorCode: ResErrorCode.invalidArgument);
+          }
+        }
+        final oldSelection = task.chapterIndexes;
+        final oldTotal = task.totalEps;
+        final oldComic = task._comic;
+        final oldJm = task._jmInfo;
+        final oldKomiic = task._komiicInfo;
+        if (identical(task, existing)) {
+          task.chapterIndexes = {...task.requestedChapters, ...added}.toList()
+            ..sort();
+          task._comic = incoming._comic;
+          task._jmInfo = incoming._jmInfo;
+          task._komiicInfo = incoming._komiicInfo;
+          task.totalEps = incoming.totalEps;
+        } else {
+          task.chapterIndexes = added;
+          task.paused = _globalPaused;
+          _tasks[task.id] = task;
+        }
+        try {
+          await _saveQueue(requireSuccess: true);
+        } catch (error) {
+          if (identical(task, existing)) {
+            task.chapterIndexes = oldSelection;
+            task.totalEps = oldTotal;
+            task._comic = oldComic;
+            task._jmInfo = oldJm;
+            task._komiicInfo = oldKomiic;
+          } else if (identical(_tasks[task.id], task)) {
+            if (existing == null) {
+              _tasks.remove(task.id);
+            } else {
+              _tasks[task.id] = existing;
+            }
+          }
+          rethrow;
+        }
+        _notify();
+        _scheduleNext();
+        return const Res<bool>(true);
+      } on FormatException catch (error) {
+        return Res<bool>.error(error.message,
+            errorCode: ResErrorCode.invalidArgument);
+      } catch (error) {
+        return Res<bool>.error('章节入队失败：$error');
+      }
+    });
+    _chapterEnqueueTail = next.then((_) {});
+    return next;
+  }
+
+  Future<Res<bool>> enqueuePicacg(PicacgComicItem comic,
+          {List<int>? chapterIndexes}) =>
+      _enqueueChapters(
+          OnlineDownloadTask.picacg(comic: comic)..totalEps = comic.eps.length,
+          chapterIndexes,
+          [comic.id, 'picacg${comic.id}']);
+
+  List<String> _chapterStableIds(OnlineDownloadTask task) =>
+      task.sourceKey == 'jm'
+          ? (task._jmInfo!.chapterIds.isEmpty
+              ? [task._jmInfo!.id]
+              : task._jmInfo!.chapterIds)
+          : task.sourceKey == 'Komiic'
+              ? task.komiicInfo.chapters.map((chapter) => chapter.id).toList()
+              : task.comic.eps;
+
+  Future<Res<bool>> enqueueJm(JmComicInfo info, {List<int>? chapterIndexes}) =>
+      _enqueueChapters(
+          OnlineDownloadTask.jm(jmInfo: info)
+            ..totalEps = math.max(1, info.series.length),
+          chapterIndexes,
+          ['jm${info.id}']);
 
   /// 入队一个 ehentai 画廊（单画廊多图、无章节）。供 06 详情页下载按钮调用。
   ///
@@ -721,46 +1141,63 @@ class OnlineDownloadManager {
   ///
   /// 去重：同 `pixiv{illustId}` 标识不重复入队。totalEps 恒为 1；
   /// totalPages 先从详情页的 `pageCount` 预估，下载时以真实 pages 数为准。
-  Future<Res<bool>> enqueuePixiv(PixivComicInfo comic, {PixivFolder? target}) async {
+  Future<Res<bool>> enqueuePixiv(PixivComicInfo comic,
+      {PixivFolder? target}) async {
     final library = PixivLibrary(target?.root ?? effectivePixivDownloadRoot());
     await library.initialize();
     target ??= library.defaultFolder;
     final task = OnlineDownloadTask.pixiv(pixivInfo: comic)
       ..pixivTarget = target.toJson()
       ..pixivBaseName = renderPixivDirectoryName(
-        template: appdata.settings[pixivDirNameTemplateSettingIndex], title: comic.title,
-        author: comic.author, id: comic.id, pages: comic.pageCount, fallback: comic.id)
+          template: appdata.settings[pixivDirNameTemplateSettingIndex],
+          title: comic.title,
+          author: comic.author,
+          id: comic.id,
+          pages: comic.pageCount,
+          fallback: comic.id)
       ..paused = _globalPaused
       ..totalEps = 1
       ..totalPages = comic.pageCount;
-    if (_tasks.values.any((t) => t.sourceKey == 'pixiv' && t.taskId == task.taskId && !t.completed && !t.cancelled && t.pixivTarget?['libraryId'] == task.pixivTarget?['libraryId'] && t.pixivTarget?['folderId'] == task.pixivTarget?['folderId'])) return const Res(true);
+    if (_tasks.values.any((t) =>
+        t.sourceKey == 'pixiv' &&
+        t.taskId == task.taskId &&
+        !t.completed &&
+        !t.cancelled &&
+        t.pixivTarget?['libraryId'] == task.pixivTarget?['libraryId'] &&
+        t.pixivTarget?['folderId'] == task.pixivTarget?['folderId'])) {
+      return const Res(true);
+    }
     _tasks[task.id] = task;
     _notify();
-    try { await _saveQueue(requireSuccess: true); }
-    catch (_) { _tasks.remove(task.id); _notify(); rethrow; }
+    try {
+      await _saveQueue(requireSuccess: true);
+    } catch (_) {
+      _tasks.remove(task.id);
+      _notify();
+      rethrow;
+    }
     _scheduleNext();
     return const Res(true);
   }
 
   bool hasPixivFolderTasks(PixivFolder folder) => tasks.any((t) =>
-      t.sourceKey == 'pixiv' && !t.completed && !t.cancelled &&
-      t.pixivTarget?['libraryId'] == folder.libraryId && t.pixivTarget?['folderId'] == folder.id);
+      t.sourceKey == 'pixiv' &&
+      !t.completed &&
+      !t.cancelled &&
+      t.pixivTarget?['libraryId'] == folder.libraryId &&
+      t.pixivTarget?['folderId'] == folder.id);
 
   /// 入队一个 Komiic 作品（**有章节**）。供详情页下载按钮调用。
   ///
   /// 去重：同 `komiic{comicId}` 标识不重复入队。totalEps = 章节数；
   /// totalPages 逐章刷新（章节页数只能逐章查）。
-  Future<Res<bool>> enqueueKomiic(KomiicComicInfo comic) async {
-    final key = 'komiic${comic.id}';
-    if (_tasks.containsKey(key)) return const Res(true);
-    final task = OnlineDownloadTask.komiic(komiicInfo: comic)
-      ..totalEps = comic.chapters.length;
-    _tasks[task.id] = task;
-    _notify();
-    unawaited(_saveQueue());
-    _scheduleNext();
-    return const Res(true);
-  }
+  Future<Res<bool>> enqueueKomiic(KomiicComicInfo comic,
+          {List<int>? chapterIndexes}) =>
+      _enqueueChapters(
+          OnlineDownloadTask.komiic(komiicInfo: comic)
+            ..totalEps = comic.chapters.length,
+          chapterIndexes,
+          ['komiic${comic.id}', 'Komiic-${comic.id}']);
 
   /// 找队列里第一个待下载的任务启动（若已有任务在跑则跳过）
   void _scheduleNext() {
@@ -798,248 +1235,396 @@ class OnlineDownloadManager {
     }
   }
 
-  Future<void> _runPicacgTask(OnlineDownloadTask task) async {
-    if (_running) return; // 已有任务在跑，跳过（_scheduleNext 会在完成后再调）
-    _running = true;
-    task.startSpeedTimer(_notify);
-    _notify();
+  Future<void> _runPicacgTask(OnlineDownloadTask task) => _runChapterTask(task);
+
+  Future<void> _runJmTask(OnlineDownloadTask task) => _runChapterTask(task);
+
+  Future<Res<List<String>>> _loadChapter(OnlineDownloadTask task, int index) {
+    final source = task.sourceKey.toLowerCase();
+    final comicId = task.sourceKey == 'jm'
+        ? task._jmInfo!.id
+        : task.sourceKey == 'Komiic'
+            ? task.komiicInfo.id
+            : task.comic.id;
+    final chapterId = task.sourceKey == 'jm'
+        ? (task._jmInfo!.chapterIds.isEmpty
+            ? task._jmInfo!.id
+            : task._jmInfo!.chapterIds[index])
+        : task.sourceKey == 'Komiic'
+            ? task.komiicInfo.chapters[index].id
+            : '${index + 1}';
+    if (_chapterLoader != null) {
+      return _chapterLoader!(source, comicId, index, chapterId);
+    }
+    return task.sourceKey == 'jm'
+        ? JmNetwork().getChapter(chapterId)
+        : task.sourceKey == 'Komiic'
+            ? KomiicNetwork().getImages(chapterId)
+            : PicacgNetwork().getComicContent(comicId, index + 1);
+  }
+
+  List<String> _chapterNames(OnlineDownloadTask task) => List.generate(
+      task.totalEps,
+      (index) => task.sourceKey == 'jm'
+          ? (index < task._jmInfo!.epNames.length
+              ? task._jmInfo!.epNames[index]
+              : '第${index + 1}章')
+          : task.sourceKey == 'Komiic'
+              ? task.komiicInfo.chapters[index].displayName
+              : task.comic.eps[index]);
+
+  Future<void> _writeChapterPage(
+      OnlineDownloadTask task, int index, String url, String basePath,
+      {bool cover = false}) async {
+    _throwIfCancelled(task);
+    final source = task.sourceKey.toLowerCase();
+    final headers = <String, String>{};
+    String chapterId = '';
+    if (source == 'jm') {
+      chapterId = cover || task._jmInfo!.chapterIds.isEmpty
+          ? task._jmInfo!.id
+          : task._jmInfo!.chapterIds[index];
+      headers.addAll(getJmImgHeaders());
+    } else if (source == 'komiic') {
+      final comic = task.komiicInfo;
+      final token = _chapterFileWriter == null ? KomiicNetwork().token : '';
+      headers.addAll({
+        'User-Agent': KomiicNetwork.komiicUA,
+        if (token.isNotEmpty) 'Authorization': 'Bearer $token',
+        'Referer': cover
+            ? 'https://komiic.com/'
+            : 'https://komiic.com/comic/${comic.id}/chapter/${comic.chapters[index].id}/images/all',
+      });
+    }
+    final file = File('$basePath${_imageExtension(url)}');
+    if (_chapterFileWriter != null) {
+      if (await file.exists() && await file.length() > 0) return;
+      await file.parent.create(recursive: true);
+      await _chapterFileWriter!(source, url, file, headers);
+    } else if (source == 'jm') {
+      final pictureName = Uri.parse(url)
+          .pathSegments
+          .last
+          .replaceFirst(RegExp(r'\.[^.]+$'), '');
+      await _downloadJmFile(task, url, basePath,
+          chapterId: chapterId,
+          pictureName: cover ? 'cover' : pictureName,
+          originalExtension: _imageExtension(url),
+          allowRecombine: !cover);
+    } else {
+      await _downloadFile(task, url, file,
+          headers: headers.isEmpty ? null : headers);
+    }
+    _throwIfCancelled(task);
+  }
+
+  DownloadedItem _chapterItem(OnlineDownloadTask task, Directory root) {
+    final completed =
+        {...task._chapterPreserved, ...task.completedChapters}.toList()..sort();
+    final names = _chapterNames(task);
+    if (task.sourceKey == 'jm') {
+      final info = task._jmInfo!;
+      return DownloadedJmComic(
+          comicId: info.id,
+          name: info.title,
+          author: info.authors.join(', '),
+          size: _chapterSizeMb(task),
+          downloadedChapters: completed,
+          epNames: names,
+          tagList: info.tags,
+          works: info.works,
+          actors: info.actors);
+    }
+    if (task.sourceKey == 'Komiic') {
+      final comic = task.komiicInfo;
+      return CustomDownloadedItem(
+          id: task.chapterRecordId ?? task.id,
+          name: comic.title,
+          subTitle: comic.authors.join(', '),
+          tags: comic.tags,
+          sourceKey: 'Komiic',
+          sourceName: 'Komiic',
+          cover: comic.coverUrl,
+          comicId: comic.id,
+          chapters: {
+            for (var i = 0; i < names.length; i++) '${i + 1}': names[i]
+          },
+          downloadedEps: completed,
+          comicSize: _chapterSizeMb(task));
+    }
+    final comic = task.comic;
+    return DownloadedComic(
+        comicId: task.chapterRecordId ?? task.id,
+        title: comic.title,
+        author: comic.author,
+        description: comic.description,
+        thumbUrl: comic.cover,
+        chapters: names,
+        downloadedChapters: completed,
+        size: _chapterSizeMb(task),
+        tagList: comic.tags,
+        sourceTime: comic.updatedAt);
+  }
+
+  double _chapterSizeMb(OnlineDownloadTask task) {
+    final known =
+        task._chapterBytes.values.fold(0, (sum, value) => sum + value);
+    // Old DB size is retained until its chapters have been migrated. New
+    // checkpoints count only the chapter just checked, never walk the book.
+    final hasUnknownSize = task._chapterPreserved
+        .any((index) => !task._chapterBytes.containsKey(index));
+    return (hasUnknownSize
+            ? math.max(
+                task._chapterLegacySizeBytes, known + task._chapterCoverBytes)
+            : known + task._chapterCoverBytes) /
+        1024 /
+        1024;
+  }
+
+  Future<void> _commitChapter(
+      OnlineDownloadTask task, Directory root, int index, int bytes) async {
+    final committed = Completer<void>();
+    task._chapterCommitDone = committed;
+    final oldCursor = task._chapterResumeIndex;
+    final oldBytes = task._chapterBytes[index];
+    final wasVerified = task._chapterVerified.contains(index);
+    final wasPreserved = task._chapterPreserved.contains(index);
+    final wasPending = task._chapterVerificationPending.contains(index);
+    final oldRevision = task._chapterCommitRevisions[index];
+    task.completedChapters.add(index);
+    task._chapterPreserved.add(index);
+    task._chapterBytes[index] = bytes;
     try {
-      final downloadRoot = await _resolveOnlineDownloadRoot();
-      final safeDirectory = _safeName(task.comic.title);
-      final root = Directory(
-        '$downloadRoot${Platform.pathSeparator}$safeDirectory',
-      );
-      await root.create(recursive: true);
-      if (task.comic.cover.isNotEmpty) {
-        await _downloadFile(
-          task,
-          task.comic.cover,
-          File('${root.path}${Platform.pathSeparator}cover.jpg'),
-        );
-      }
-      final downloadedEps = <int>[];
-      for (var epIndex = 0; epIndex < task.comic.eps.length; epIndex++) {
-        task.currentEp = epIndex + 1;
-        task.currentEpName = epIndex < task.comic.eps.length
-            ? task.comic.eps[epIndex]
-            : '第 ${epIndex + 1} 章';
-        task.currentPage = 0;
-        task.totalPages = 0;
-        _notify();
-        final content = await PicacgNetwork().getComicContent(
-          task.comic.id,
-          epIndex + 1,
-        );
-        if (content.error) {
-          throw Exception(content.errorMessageWithoutNull);
-        }
-        final epDir = Directory(
-          '${root.path}${Platform.pathSeparator}${epIndex + 1}',
-        );
-        await epDir.create(recursive: true);
-        task.totalPages = content.data.length;
-        var completedPages = 0;
-        final concurrency = int.tryParse(appdata.settings[79]) ?? 6;
-        final semaphore = _Semaphore(concurrency);
-        final errors = <String>[];
-        final futures = <Future<void>>[];
-        for (var pageIndex = 0; pageIndex < content.data.length; pageIndex++) {
-          _throwIfCancelled(task);
-          final url = content.data[pageIndex];
-          final file = File(
-            '${epDir.path}${Platform.pathSeparator}${pageIndex + 1}${_imageExtension(url)}',
-          );
-          final future = semaphore.run(() async {
-            _throwIfCancelled(task);
-            try {
-              await _downloadFile(task, url, file);
-            } catch (e) {
-              errors.add(e.toString());
-              return;
-            }
-            completedPages++;
-            task.currentPage = completedPages;
-            _notify();
-          });
-          futures.add(future);
-        }
-        await Future.wait(futures);
-        _throwIfCancelled(task);
-        if (errors.isNotEmpty && completedPages == 0) {
-          throw Exception(errors.first);
-        }
-        downloadedEps.add(epIndex);
-        unawaited(_saveQueue());
-      }
-      final item = DownloadedComic(
-        comicId: task.id,
-        title: task.comic.title,
-        author: task.comic.author,
-        description: task.comic.description,
-        thumbUrl: task.comic.cover,
-        chapters: task.comic.eps,
-        downloadedChapters: downloadedEps,
-        size: _directoryMb(root),
-        tagList: task.comic.tags,
-        sourceTime: task.comic.updatedAt,
-      )
-        ..directory = safeDirectory
-        ..time = DateTime.now();
-      await _upsertDownloadRecord(
-        rootPath: downloadRoot,
-        item: item,
-        directory: safeDirectory,
-      );
-      task.completed = true;
+      await _persistChapter(task, root);
+      // Other lifecycle saves may run while the DB write awaits. They can
+      // serialize only the old verified set until this chapter's DB succeeds.
+      task._chapterVerified.add(index);
+      task._chapterVerificationPending.remove(index);
+      task._chapterCommitRevisions[index] = ++task._chapterRevision;
+      final pending = task.requestedChapters
+          .where((chapter) => !task._chapterVerified.contains(chapter))
+          .toList();
+      task._chapterResumeIndex = pending.isEmpty ? null : pending.first;
+      await _saveQueue(requireSuccess: true);
       App.notifyLocalDataChanged();
-    } on _OnlineDownloadCancelled catch (_) {
-      if (task.paused || task.waitingForNetwork) {
-        // User pause / network loss must remain resumable.
+    } catch (_) {
+      if (!wasVerified) {
+        task._chapterVerified.remove(index);
+        task.completedChapters.remove(index);
+      }
+      if (!wasPreserved) task._chapterPreserved.remove(index);
+      if (wasPending) task._chapterVerificationPending.add(index);
+      if (oldBytes == null) {
+        task._chapterBytes.remove(index);
       } else {
-        task.cancelled = true;
+        task._chapterBytes[index] = oldBytes;
       }
-    } catch (error, stackTrace) {
-      if (!task.paused && !task.cancelled && !task.waitingForNetwork) {
-        task.error = error.toString();
+      task._chapterResumeIndex = oldCursor;
+      if (oldRevision == null) {
+        task._chapterCommitRevisions.remove(index);
+      } else {
+        task._chapterCommitRevisions[index] = oldRevision;
       }
-      LogManager.addLog(
-        LogLevel.error,
-        'OnlineDownload',
-        '$error\n$stackTrace',
-      );
+      rethrow;
     } finally {
-      _finishActiveTask(task);
-      task.stopSpeedTimer();
-      unawaited(_saveQueue());
-      _notify();
-      _scheduleNext(); // 完成/取消/出错后自动启动下一个等待任务
+      if (identical(task._chapterCommitDone, committed)) {
+        task._chapterCommitDone = null;
+      }
+      committed.complete();
     }
   }
 
-  Future<void> _runJmTask(OnlineDownloadTask task) async {
+  Future<void> _persistChapter(OnlineDownloadTask task, Directory root) async {
+    final item = _chapterItem(task, root)
+      ..directory = task.chapterDirectory
+      ..time = DateTime.now();
+    await _upsertDownloadRecord(
+        rootPath: task.chapterRoot!,
+        item: item,
+        directory: task.chapterDirectory!,
+        chapterPageCounts: task.chapterPageCounts,
+        chapterPageBytes: task._chapterBytes);
+  }
+
+  Future<void> _runChapterTask(OnlineDownloadTask task) async {
     if (_running) return;
     _running = true;
     task.startSpeedTimer(_notify);
     _notify();
-    final info = task._jmInfo!;
-    try {
-      final downloadRoot = await _resolveOnlineDownloadRoot();
-      final safeDirectory = _safeName(info.title);
-      final root =
-          Directory('$downloadRoot${Platform.pathSeparator}$safeDirectory');
-      await root.create(recursive: true);
-      // 封面（不重组，直接存原始字节）
-      if (info.coverUrl.isNotEmpty) {
-        await _downloadJmFile(
-            task, info.coverUrl, '${root.path}${Platform.pathSeparator}cover',
-            chapterId: info.id,
-            pictureName: 'cover',
-            originalExtension: _imageExtension(info.coverUrl),
-            allowRecombine: false);
+    final runGeneration = task.chapterCancellationGeneration;
+    void checkRun() {
+      _throwIfCancelled(task);
+      if (runGeneration != task.chapterCancellationGeneration) {
+        throw const _OnlineDownloadCancelled();
       }
-      final downloadedEps = <int>[];
-      final sortedSeries = info.series.entries.toList()
-        ..sort((a, b) => a.key.compareTo(b.key));
-      for (var i = 0; i < sortedSeries.length; i++) {
-        final epKey = i + 1;
-        final chapterId = sortedSeries[i].value;
-        task.currentEp = epKey;
-        task.currentEpName =
-            i < info.epNames.length ? info.epNames[i] : '第$epKey章';
+    }
+
+    try {
+      final source = task.sourceKey.toLowerCase();
+      final candidates = [
+        task.taskId,
+        if (source == 'picacg') 'picacg${task.comic.id}',
+        if (source == 'komiic') 'Komiic-${task.komiicInfo.id}'
+      ];
+      if (!task._chapterResumeInitialized) {
+        final isLegacyResume = task.currentEp > 0;
+        final records = await _chapterRecords(source, candidates, task.totalEps,
+            verifyFiles: !isLegacyResume);
+        _ChapterRecord? record;
+        for (final candidate in records) {
+          if (candidate.root == task.chapterRoot &&
+              candidate.directory == task.chapterDirectory) {
+            record = candidate;
+            break;
+          }
+        }
+        record ??= records.isEmpty ? null : records.first;
+        // Only merge completion from this exact path, not another download root.
+        task._chapterPreserved.addAll(record?.completed ?? const <int>{});
+        task.chapterPageCounts.addAll(record?.pageCounts ?? const <int, int>{});
+        task._chapterBytes.addAll(record?.pageBytes ?? const <int, int>{});
+        task._chapterLegacySizeBytes = record?.sizeBytes ?? 0;
+        task.chapterRoot = record?.root ??
+            task.chapterRoot ??
+            await _resolveOnlineDownloadRoot();
+        task.chapterDirectory = record?.directory ??
+            task.chapterDirectory ??
+            _safeName(task.taskTitle);
+        task.chapterRecordId =
+            record?.id ?? task.chapterRecordId ?? task.taskId;
+        task.completedChapters.clear();
+        if (!isLegacyResume) {
+          task._chapterVerified.addAll(task._chapterPreserved
+              .where((index) => task.chapterPageCounts.containsKey(index)));
+        }
+        final requested = task.requestedChapters.toSet();
+        task._chapterVerificationPending.addAll(task._chapterPreserved.where(
+            (index) =>
+                requested.contains(index) &&
+                !task._chapterVerified.contains(index)));
+        task.completedChapters.addAll(task._chapterVerified);
+        // currentEp changes priority only; it is never completion evidence.
+        if (isLegacyResume && requested.contains(task.currentEp - 1)) {
+          task._chapterResumeIndex = task.currentEp - 1;
+        }
+        task._chapterResumeInitialized = true;
+      }
+      final root = Directory(p.join(task.chapterRoot!, task.chapterDirectory!));
+      if (!p.isWithin(p.normalize(task.chapterRoot!), p.normalize(root.path))) {
+        throw const FormatException('章节下载目录超出下载根');
+      }
+      await root.create(recursive: true);
+      checkRun();
+      // Persist initialization/legacy migration state before any new work.
+      await _saveQueue(requireSuccess: true);
+      if (task.taskCover.isNotEmpty) {
+        try {
+          await _writeChapterPage(
+              task, 0, task.taskCover, p.join(root.path, 'cover'),
+              cover: true);
+          final cover = File(
+              p.join(root.path, 'cover${_imageExtension(task.taskCover)}'));
+          if (await cover.exists()) {
+            task._chapterCoverBytes = await cover.length();
+          }
+        } catch (error) {
+          checkRun();
+          // Missing covers do not discard successfully downloaded chapters.
+          LogManager.addLog(LogLevel.warning, 'OnlineDownload',
+              'Chapter cover failed: $error');
+        }
+      }
+      while (true) {
+        // Added indexes are only runnable after their durable enqueue succeeds.
+        // Enqueue itself never waits for the runner, so this does not deadlock.
+        await _chapterEnqueueTail;
+        checkRun();
+        final pending = task.requestedChapters
+            .where((index) => !task.completedChapters.contains(index))
+            .toList();
+        if (pending.isEmpty) break;
+        final cursor = task._chapterResumeIndex;
+        final index =
+            cursor != null && pending.contains(cursor) ? cursor : pending.first;
+        task._chapterResumeIndex = index;
+        task.currentEp = index + 1;
+        task.currentEpName = _chapterNames(task)[index];
         task.currentPage = 0;
         task.totalPages = 0;
         _notify();
-        final content = await JmNetwork().getChapter(chapterId);
-        if (content.error) throw Exception(content.errorMessageWithoutNull);
-        final epDir = Directory('${root.path}${Platform.pathSeparator}$epKey');
-        await epDir.create(recursive: true);
-        task.totalPages = content.data.length;
-        var completedPages = 0;
-        final concurrency = int.tryParse(appdata.settings[79]) ?? 6;
-        final semaphore = _Semaphore(concurrency);
-        final errors = <String>[];
-        final futures = <Future<void>>[];
-        for (var pi = 0; pi < content.data.length; pi++) {
-          _throwIfCancelled(task);
-          final url = content.data[pi];
-          final fileName = Uri.parse(url).pathSegments.last;
-          final pictureName = fileName.replaceFirst(RegExp(r'\.[^.]+$'), '');
-          // 基础路径（不含扩展名）；最终扩展名由重组结果决定（重组→.png，不重组→原始）
-          final basePath = '${epDir.path}${Platform.pathSeparator}${pi + 1}';
-          futures.add(semaphore.run(() async {
-            _throwIfCancelled(task);
-            try {
-              await _downloadJmFile(task, url, basePath,
-                  chapterId: chapterId,
-                  pictureName: pictureName,
-                  originalExtension: _imageExtension(url));
-            } catch (e) {
-              errors.add(e.toString());
-              return;
-            }
-            completedPages++;
-            task.currentPage = completedPages;
+        // Persist the precise next/problem chapter before requesting its pages.
+        await _saveQueue(requireSuccess: true);
+        checkRun();
+        if (task._chapterVerificationPending.contains(index) &&
+            task.chapterPageCounts[index] != null) {
+          final inspected = await _inspectChapterFiles(
+              root.path, index, task.chapterPageCounts[index]);
+          checkRun();
+          if (inspected.complete) {
+            await _commitChapter(task, root, index, inspected.bytes);
             _notify();
-          }));
-        }
-        await Future.wait(futures);
-        _throwIfCancelled(task);
-        if (errors.isNotEmpty && completedPages == 0) {
-          throw Exception(errors.first);
-        }
-
-        // 验证：扫描缺失页，顺序重试（应对并发批次中的偶发失败）
-        for (var pi = 0; pi < content.data.length; pi++) {
-          final basePath = '${epDir.path}${Platform.pathSeparator}${pi + 1}';
-          bool exists = false;
-          for (final ext in const ['.png', '.webp', '.jpg', '.jpeg']) {
-            if (File('$basePath$ext').existsSync()) {
-              exists = true;
-              break;
-            }
+            continue;
           }
-          if (!exists) {
-            _throwIfCancelled(task);
-            final url = content.data[pi];
-            final fileName = Uri.parse(url).pathSegments.last;
-            final pictureName = fileName.replaceFirst(RegExp(r'\.[^.]+$'), '');
-            try {
-              await _downloadJmFile(task, url, basePath,
-                  chapterId: chapterId,
-                  pictureName: pictureName,
-                  originalExtension: _imageExtension(url));
-              completedPages++;
-              task.currentPage = completedPages;
-              _notify();
-            } catch (e) {
-              LogManager.addLog(LogLevel.warning, 'OnlineDownload',
-                  'Page ${pi + 1} retry failed: $e');
-            }
+          task._chapterPreserved.remove(index);
+        }
+        final content = await _loadChapter(task, index);
+        checkRun();
+        if (content.error) throw Exception(content.errorMessageWithoutNull);
+        final urls = content.data;
+        if (urls.isEmpty) throw Exception('第${index + 1}章没有图片');
+        task.totalPages = urls.length;
+        task.chapterPageCounts[index] = urls.length;
+        final epDir = Directory(p.join(root.path, '${index + 1}'));
+        await epDir.create(recursive: true);
+        final errors = <Object>[];
+        final semaphore =
+            _Semaphore((int.tryParse(appdata.settings[79]) ?? 6).clamp(1, 16));
+        await Future.wait(List.generate(
+            urls.length,
+            (page) => semaphore.run(() async {
+                  checkRun();
+                  try {
+                    await _writeChapterPage(task, index, urls[page],
+                        p.join(epDir.path, '${page + 1}'));
+                    task.currentPage++;
+                    _notify();
+                  } catch (error) {
+                    errors.add(error);
+                  }
+                })));
+        checkRun();
+        // JM keeps its existing sequential retry of missing recombined files.
+        if (source == 'jm' &&
+            !await _chapterFilesComplete(root.path, index, urls.length)) {
+          for (var page = 0; page < urls.length; page++) {
+            final base = p.join(epDir.path, '${page + 1}');
+            final exists = await _chapterNumberExists(epDir, page + 1);
+            if (!exists) await _writeChapterPage(task, index, urls[page], base);
           }
         }
-
-        downloadedEps.add(i);
-        unawaited(_saveQueue());
+        final inspected =
+            await _inspectChapterFiles(root.path, index, urls.length);
+        checkRun();
+        if (!inspected.complete) {
+          throw Exception(
+              errors.isNotEmpty ? errors.first : '第${index + 1}章未完整下载');
+        }
+        task.currentPage = urls.length;
+        await _commitChapter(task, root, index, inspected.bytes);
+        _notify();
       }
-      final item = DownloadedJmComic(
-        comicId: info.id,
-        name: info.title,
-        author: info.authors.join(', '),
-        size: _directoryMb(root),
-        downloadedChapters: downloadedEps,
-        epNames: info.epNames,
-        tagList: info.tags,
-      )
-        ..directory = safeDirectory
-        ..time = DateTime.now();
-      await _upsertDownloadRecord(
-          rootPath: downloadRoot, item: item, directory: safeDirectory);
       task.completed = true;
-      App.notifyLocalDataChanged();
-    } on _OnlineDownloadCancelled catch (_) {
-      if (!task.paused && !task.waitingForNetwork) task.cancelled = true;
+    } on _OnlineDownloadCancelled {
+      if (runGeneration == task.chapterCancellationGeneration &&
+          !task.paused &&
+          !task.waitingForNetwork) {
+        task.cancelled = true;
+      }
     } catch (error, stackTrace) {
-      if (!task.paused && !task.cancelled && !task.waitingForNetwork) {
+      if (runGeneration == task.chapterCancellationGeneration &&
+          !task.paused &&
+          !task.cancelled &&
+          !task.waitingForNetwork) {
         task.error = error.toString();
       }
       LogManager.addLog(
@@ -1051,6 +1636,22 @@ class OnlineDownloadManager {
       _notify();
       _scheduleNext();
     }
+  }
+
+  Future<bool> _chapterNumberExists(Directory directory, int page) async {
+    for (final ext in [
+      '.png',
+      '.webp',
+      '.jpg',
+      '.jpeg',
+      '.gif',
+      '.avif',
+      '.bmp'
+    ]) {
+      final file = File(p.join(directory.path, '$page$ext'));
+      if (await file.exists() && await file.length() > 0) return true;
+    }
+    return false;
   }
 
   /// ehentai 专用下载执行体（单画廊多图、无章节、根目录平铺）。
@@ -1477,7 +2078,8 @@ class OnlineDownloadManager {
       final saved = task.pixivTarget;
       if (saved == null) throw StateError('旧下载任务未保存目标，请重新选择下载文件夹');
       final library = PixivLibrary(resolvePixivLibraryRoot(saved['root']!));
-      final folder = library.folder(saved['folderId']!, libraryId: saved['libraryId']);
+      final folder =
+          library.folder(saved['folderId']!, libraryId: saved['libraryId']);
       final downloadRoot = folder.path;
       _openDownloadDb(downloadRoot).dispose();
       if (library.find(folder.id, task.taskId) case final existing?) {
@@ -1485,7 +2087,10 @@ class OnlineDownloadManager {
         task.completed = true;
         return;
       }
-      final reusable = library.copiesOf(task.taskId).where((r) => r.folder.id != folder.id).firstOrNull;
+      final reusable = library
+          .copiesOf(task.taskId)
+          .where((r) => r.folder.id != folder.id)
+          .firstOrNull;
       if (reusable != null) {
         await library.transfer(reusable, folder.id, move: false);
         task.completed = true;
@@ -1494,7 +2099,8 @@ class OnlineDownloadManager {
       }
       lease = library.acquireLease(folder.id);
       final safeDirectory = task.pixivBaseName!;
-      final root = Directory(p.join(downloadRoot, '.pixiv_download_${task.pixivOperationId}'));
+      final root = Directory(
+          p.join(downloadRoot, '.pixiv_download_${task.pixivOperationId}'));
       await root.create(recursive: true);
       // Pixiv 图片 CDN 有严格 Referer 防盗链，缺 Referer 会 403。
       const headers = {
@@ -1693,9 +2299,13 @@ class OnlineDownloadManager {
           final staged = File(p.join(downloadRoot, '.pixiv_pending_$fileName'));
           if (await zipFile.exists()) {
             final expected = await PixivLibrary.snapshotOf(staged.path);
-            if (!await PixivLibrary.matchesSnapshot(zipFile.path, expected)) throw StateError('目标文件已存在且内容不同');
+            if (!await PixivLibrary.matchesSnapshot(zipFile.path, expected)) {
+              throw StateError('目标文件已存在且内容不同');
+            }
             await staged.delete();
-          } else { await staged.rename(zipFile.path); }
+          } else {
+            await staged.rename(zipFile.path);
+          }
           return (
             directoryName: fileName,
             sizeMb: await _fileMb(zipFile),
@@ -1726,9 +2336,14 @@ class OnlineDownloadManager {
             throw StateError('single image artifact size mismatch');
           }
           if (await target.exists()) {
-            if (!await PixivLibrary.matchesSnapshot(target.path, await PixivLibrary.snapshotOf(page.path))) throw StateError('目标文件已存在且内容不同');
+            if (!await PixivLibrary.matchesSnapshot(
+                target.path, await PixivLibrary.snapshotOf(page.path))) {
+              throw StateError('目标文件已存在且内容不同');
+            }
             await staged.delete();
-          } else { await staged.rename(target.path); }
+          } else {
+            await staged.rename(target.path);
+          }
           return (
             directoryName: fileName,
             sizeMb: await _fileMb(target),
@@ -1810,161 +2425,7 @@ class OnlineDownloadManager {
   /// `1/`、`2/`…（与 jm 的目录约定一致，便于 `LocalReadingData` 按 ep 定位）。
   /// 完成后写 [CustomDownloadedItem]，`sourceKey` 用**大写 `'Komiic'`**
   /// 以对齐历史/收藏侧的既有约定。
-  Future<void> _runKomiicTask(OnlineDownloadTask task) async {
-    if (_running) return;
-    _running = true;
-    task.startSpeedTimer(_notify);
-    _notify();
-    final comic = task._komiicInfo!;
-    try {
-      final downloadRoot = await _resolveOnlineDownloadRoot();
-      final safeDirectory = _safeName(comic.title);
-      final root =
-          Directory('$downloadRoot${Platform.pathSeparator}$safeDirectory');
-      await root.create(recursive: true);
-
-      final token = KomiicNetwork().token;
-      final baseHeaders = <String, String>{
-        'User-Agent': KomiicNetwork.komiicUA,
-        if (token.isNotEmpty) 'Authorization': 'Bearer $token',
-      };
-
-      // 封面（失败不阻断正文；封面用站点根 Referer）。
-      if (comic.coverUrl.isNotEmpty) {
-        try {
-          await _downloadFile(
-            task,
-            comic.coverUrl,
-            File('${root.path}${Platform.pathSeparator}cover.jpg'),
-            headers: <String, String>{
-              ...baseHeaders,
-              'Referer': 'https://komiic.com/',
-            },
-          );
-        } catch (e) {
-          LogManager.addLog(
-              LogLevel.warning, 'OnlineDownload', 'komiic cover failed: $e');
-        }
-      }
-
-      final chapters = comic.chapters;
-      if (chapters.isEmpty) {
-        throw Exception('No chapter found');
-      }
-
-      final downloadedEps = <int>[];
-      final chapterNames = <String, String>{};
-      for (var i = 0; i < chapters.length; i++) {
-        final chapter = chapters[i];
-        final epKey = i + 1;
-        chapterNames['$epKey'] = chapter.displayName;
-        task.currentEp = epKey;
-        task.currentEpName = chapter.displayName;
-        task.currentPage = 0;
-        task.totalPages = 0;
-        _notify();
-
-        final imagesRes = await KomiicNetwork().getImages(chapter.id);
-        if (imagesRes.error) {
-          throw Exception(imagesRes.errorMessageWithoutNull);
-        }
-        final urls = imagesRes.data;
-        if (urls.isEmpty) {
-          LogManager.addLog(LogLevel.warning, 'OnlineDownload',
-              'komiic chapter ${chapter.id} has no image, skipped');
-          continue;
-        }
-
-        // 章节内图片的 Referer 必须带具体 comic/chapter 路径，
-        // 与 KomiicReadingData.loadImageNetwork 的口径保持一致。
-        final headers = <String, String>{
-          ...baseHeaders,
-          'Referer':
-              'https://komiic.com/comic/${comic.id}/chapter/${chapter.id}/images/all',
-        };
-
-        final epDir = Directory('${root.path}${Platform.pathSeparator}$epKey');
-        await epDir.create(recursive: true);
-        task.totalPages = urls.length;
-
-        var completedPages = 0;
-        final concurrency = int.tryParse(appdata.settings[79]) ?? 6;
-        final semaphore = _Semaphore(concurrency);
-        final errors = <String>[];
-        final futures = <Future<void>>[];
-        for (var pi = 0; pi < urls.length; pi++) {
-          _throwIfCancelled(task);
-          final url = urls[pi];
-          final file = File(
-            '${epDir.path}${Platform.pathSeparator}'
-            '${pi + 1}${_imageExtension(url)}',
-          );
-          futures.add(semaphore.run(() async {
-            _throwIfCancelled(task);
-            try {
-              await _downloadFile(task, url, file, headers: headers);
-            } catch (e) {
-              errors.add('chapter ${chapter.id} page ${pi + 1}: $e');
-              return;
-            }
-            completedPages++;
-            task.currentPage = completedPages;
-            _notify();
-          }));
-        }
-        await Future.wait(futures);
-        _throwIfCancelled(task);
-        if (completedPages == 0) {
-          throw Exception(
-              errors.isNotEmpty ? errors.first : 'No page downloaded');
-        }
-
-        downloadedEps.add(i);
-        unawaited(_saveQueue());
-      }
-
-      if (downloadedEps.isEmpty) {
-        throw Exception('No chapter downloaded');
-      }
-
-      final item = CustomDownloadedItem(
-        id: task.id,
-        name: comic.title,
-        subTitle: comic.authors.join(', '),
-        tags: comic.tags,
-        sourceKey: 'Komiic',
-        sourceName: 'Komiic',
-        cover: comic.coverUrl,
-        comicId: comic.id,
-        chapters: chapterNames,
-        downloadedEps: downloadedEps,
-        comicSize: _directoryMb(root),
-      )
-        ..directory = safeDirectory
-        ..time = DateTime.now();
-      await _upsertDownloadRecord(
-        rootPath: downloadRoot,
-        item: item,
-        directory: safeDirectory,
-      );
-      task.completed = true;
-      App.notifyLocalDataChanged();
-    } on _OnlineDownloadCancelled catch (_) {
-      if (!task.paused && !task.waitingForNetwork) task.cancelled = true;
-    } catch (error, stackTrace) {
-      if (!task.paused && !task.cancelled && !task.waitingForNetwork) {
-        task.error = error.toString();
-      }
-      LogManager.addLog(
-          LogLevel.error, 'OnlineDownload', '$error\n$stackTrace');
-    } finally {
-      _finishActiveTask(task);
-      task.stopSpeedTimer();
-      unawaited(_saveQueue());
-      _notify();
-      _scheduleNext();
-    }
-  }
+  Future<void> _runKomiicTask(OnlineDownloadTask task) => _runChapterTask(task);
 
   /// jm 专用下载：下载字节 → 图块重组 → 写盘
   /// [basePath] 不含扩展名；最终扩展名由重组结果决定（重组→.png，不重组→原始）
@@ -2276,13 +2737,13 @@ class OnlineDownloadManager {
     try {
       final rootPath = await _defaultOnlineDownloadRoot();
       await Directory(rootPath).create(recursive: true);
-      final pending = _tasks.values
-          .where((t) => !t.completed && !t.cancelled)
-          .map((t) {
+      final pending =
+          _tasks.values.where((t) => !t.completed && !t.cancelled).map((t) {
         if (t.sourceKey == 'jm') {
           return {
             'sourceKey': 'jm',
             'jmJson': _jmComicInfoToQueueJson(t._jmInfo!),
+            ..._chapterQueueFields(t),
             'currentEp': t.currentEp,
             'paused': t.paused,
           };
@@ -2317,6 +2778,7 @@ class OnlineDownloadManager {
           return {
             'sourceKey': 'Komiic',
             'komiicJson': _komiicInfoToQueueJson(t._komiicInfo!),
+            ..._chapterQueueFields(t),
             'currentEp': t.currentEp,
             'paused': t.paused,
           };
@@ -2324,6 +2786,7 @@ class OnlineDownloadManager {
           return {
             'sourceKey': 'picacg',
             'comicJson': t._comic!.toQueueJson(),
+            ..._chapterQueueFields(t),
             'currentEp': t.currentEp,
             'paused': t.paused,
           };
@@ -2341,11 +2804,137 @@ class OnlineDownloadManager {
     }
   }
 
-  Future<void> loadQueue() async {
+  Map<String, dynamic> _chapterQueueFields(OnlineDownloadTask task) => {
+        'chapterIndexes': task.requestedChapters,
+        'completedChapters': task.completedChapters.toList()..sort(),
+        'chapterPageCounts': {
+          for (final entry in task.chapterPageCounts.entries)
+            '${entry.key}': entry.value
+        },
+        'chapterRoot': task.chapterRoot,
+        'chapterDirectory': task.chapterDirectory,
+        'chapterRecordId': task.chapterRecordId,
+        if (task._chapterResumeInitialized)
+          'chapterResume': {
+            'version': 1,
+            'root': task.chapterRoot,
+            'directory': task.chapterDirectory,
+            'recordId': task.chapterRecordId,
+            'nextIndex': task._chapterResumeIndex,
+            'verified': task._chapterVerified.toList()..sort(),
+            'verificationPending': task._chapterVerificationPending.toList()
+              ..sort(),
+            'preserved': task._chapterPreserved.toList()..sort(),
+            'pageBytes': {
+              for (final entry in task._chapterBytes.entries)
+                '${entry.key}': entry.value,
+            },
+            'legacySizeBytes': task._chapterLegacySizeBytes,
+            'coverBytes': task._chapterCoverBytes,
+          },
+        'error': task.error,
+      };
+
+  void _restoreChapterQueueFields(OnlineDownloadTask task, Map item) {
+    final selection = item['chapterIndexes'];
+    task.chapterIndexes = normalizeChapterIndexes(
+        selection == null ? null : List<int>.from(selection as List),
+        task.totalEps);
+    final completed = item['completedChapters'];
+    if (completed is List) {
+      task.completedChapters.addAll(List<int>.from(completed)
+          .where((index) => index >= 0 && index < task.totalEps));
+    }
+    final counts = item['chapterPageCounts'];
+    if (counts is Map) {
+      for (final entry in counts.entries) {
+        final index = int.tryParse(entry.key.toString());
+        final count = int.tryParse(entry.value.toString());
+        if (index != null && count != null && count > 0) {
+          task.chapterPageCounts[index] = count;
+        }
+      }
+    }
+    task.chapterRoot = item['chapterRoot'] as String?;
+    task.chapterDirectory = item['chapterDirectory'] as String?;
+    task.chapterRecordId = item['chapterRecordId'] as String?;
+    task.error = item['error'] as String?;
+    final resume = item['chapterResume'];
+    if (resume is! Map || resume['version'] != 1) return;
+    if (task.chapterRoot == null ||
+        !p.isAbsolute(task.chapterRoot!) ||
+        task.chapterDirectory == null ||
+        task.chapterRecordId == null ||
+        resume['root'] != task.chapterRoot ||
+        resume['directory'] != task.chapterDirectory ||
+        resume['recordId'] != task.chapterRecordId ||
+        !p.isWithin(p.normalize(task.chapterRoot!),
+            p.normalize(p.join(task.chapterRoot!, task.chapterDirectory!)))) {
+      throw const FormatException('章节续传检查点目录无效');
+    }
+    Set<int> indexes(String key) {
+      final raw = resume[key];
+      if (raw is! List ||
+          raw.any((index) =>
+              index is! int || index < 0 || index >= task.totalEps)) {
+        throw const FormatException('章节续传检查点序号无效');
+      }
+      return Set<int>.from(raw);
+    }
+
+    final verified = indexes('verified');
+    final pending = indexes('verificationPending');
+    final preserved = indexes('preserved');
+    if (verified.any((index) => task.chapterPageCounts[index] == null) ||
+        verified.intersection(pending).isNotEmpty) {
+      throw const FormatException('章节续传检查点缺少完整页数');
+    }
+    final cursor = resume['nextIndex'];
+    if (cursor != null &&
+        (cursor is! int ||
+            cursor < 0 ||
+            cursor >= task.totalEps ||
+            !task.requestedChapters.contains(cursor))) {
+      throw const FormatException('章节续传检查点游标无效');
+    }
+    final bytes = resume['pageBytes'];
+    if (bytes is! Map) throw const FormatException('章节续传大小记录无效');
+    for (final entry in bytes.entries) {
+      final index = int.tryParse(entry.key.toString());
+      if (index == null ||
+          index < 0 ||
+          index >= task.totalEps ||
+          entry.value is! int ||
+          (entry.value as int) < 0) {
+        throw const FormatException('章节续传大小记录无效');
+      }
+      task._chapterBytes[index] = entry.value as int;
+    }
+    if (verified.any((index) => !task._chapterBytes.containsKey(index))) {
+      throw const FormatException('章节续传检查点缺少已确认文件大小');
+    }
+    task._chapterVerified.addAll(verified);
+    task._chapterVerificationPending.addAll(pending);
+    task._chapterPreserved.addAll(preserved);
+    task.completedChapters
+      ..clear()
+      ..addAll(verified);
+    task._chapterResumeIndex = cursor as int?;
+    task._chapterLegacySizeBytes = (resume['legacySizeBytes'] as int?) ?? 0;
+    task._chapterCoverBytes = (resume['coverBytes'] as int?) ?? 0;
+    task._chapterResumeInitialized = true;
+  }
+
+  Future<void> loadQueue({bool strict = false}) async {
+    var succeeded = false;
+    var invalidItem = false;
     try {
       final rootPath = await _defaultOnlineDownloadRoot();
       final file = File(_queueFilePath(rootPath));
-      if (!await file.exists()) return;
+      if (!await file.exists()) {
+        succeeded = true;
+        return;
+      }
       final content = await file.readAsString();
       final list = jsonDecode(content) as List;
       for (final item in list) {
@@ -2357,9 +2946,10 @@ class OnlineDownloadManager {
             final key = 'jm${info.id}';
             if (_tasks.containsKey(key)) continue;
             final task = OnlineDownloadTask.jm(jmInfo: info)
-              ..totalEps = info.series.length
+              ..totalEps = math.max(1, info.series.length)
               ..currentEp = (item['currentEp'] as int?) ?? 0
               ..paused = true;
+            _restoreChapterQueueFields(task, item as Map);
             _tasks[task.id] = task;
           } else if (sourceKey == 'ehentai') {
             final galleryJson = (item['galleryJson'] as Map)
@@ -2391,9 +2981,12 @@ class OnlineDownloadManager {
                 .map((k, v) => MapEntry(k.toString(), v));
             final info = _pixivInfoFromQueueJson(pixivJson);
             final task = OnlineDownloadTask.pixiv(pixivInfo: info)
-              ..pixivTarget = item['target'] is Map ? Map<String,String>.from(item['target'] as Map) : null
+              ..pixivTarget = item['target'] is Map
+                  ? Map<String, String>.from(item['target'] as Map)
+                  : null
               ..pixivBaseName = item['baseName'] as String?
-              ..pixivOperationId = item['operationId'] as String? ?? const Uuid().v4()
+              ..pixivOperationId =
+                  item['operationId'] as String? ?? const Uuid().v4()
               ..totalEps = 1
               ..totalPages = info.pageCount
               ..currentPage = (item['currentPage'] as int?) ?? 0
@@ -2409,6 +3002,7 @@ class OnlineDownloadManager {
               ..totalEps = info.chapters.length
               ..currentEp = (item['currentEp'] as int?) ?? 0
               ..paused = true;
+            _restoreChapterQueueFields(task, item as Map);
             _tasks[task.id] = task;
           } else {
             final comicJson = item['comicJson'] as Map;
@@ -2418,37 +3012,43 @@ class OnlineDownloadManager {
               ..totalEps = comic.eps.length
               ..currentEp = (item['currentEp'] as int?) ?? 0
               ..paused = true;
+            _restoreChapterQueueFields(task, item as Map);
             _tasks[task.id] = task;
           }
         } catch (e) {
+          invalidItem = true;
+          if (strict) rethrow;
           LogManager.addLog(
               LogLevel.warning, 'OnlineDownload', 'loadQueue item error: $e');
         }
       }
+      succeeded = !invalidItem;
       _scheduleNext();
       _notify();
     } catch (e, s) {
       LogManager.addLog(
           LogLevel.warning, 'OnlineDownload', 'loadQueue error: $e\n$s');
+      if (strict) rethrow;
     } finally {
-      _queueLoaded = true;
+      _queueLoaded = succeeded;
     }
   }
 
   void _notify() {
     version.value++;
+    if (_testDownloadRoot != null) return;
     DownloadNotificationController.instance.update(
       DownloadNoticeSnapshot.fromTasks(
         _tasks.values.map((task) => DownloadNoticeTask(
-          id: task.id,
-          title: task.taskTitle,
-          progress: task.progress,
-          bytesPerSecond: task.currentSpeed,
-          completed: task.completed,
-          cancelled: task.cancelled,
-          paused: task.paused,
-          error: task.error,
-        )),
+              id: task.id,
+              title: task.taskTitle,
+              progress: task.progress,
+              bytesPerSecond: task.currentSpeed,
+              completed: task.completed,
+              cancelled: task.cancelled,
+              paused: task.paused,
+              error: task.error,
+            )),
         activeId: _running ? _activeTask?.id : null,
         networkAvailable: _networkAvailable,
       ),
@@ -2461,6 +3061,11 @@ class OnlineDownloadManager {
   /// `settings[152]`（专属下载目录）。选择"回退"而不是"直接抛错"，是为了让
   /// "用户填了一个当前不可写的路径"不至于把下载整个卡死：会落到主根并在日志留痕。
   Future<String> _resolveOnlineDownloadRoot({String? overrideRoot}) async {
+    if (_testDownloadRoot != null) {
+      await Directory(_testDownloadRoot!).create(recursive: true);
+      _openDownloadDb(_testDownloadRoot!).dispose();
+      return _testDownloadRoot!;
+    }
     final configured = appdata.settings[22].trim();
     final fallbackRoot = await _defaultOnlineDownloadRoot();
     final candidates = <String>[
@@ -2493,6 +3098,7 @@ class OnlineDownloadManager {
   }
 
   Future<String> _defaultOnlineDownloadRoot() async {
+    if (_testDownloadRoot != null) return _testDownloadRoot!;
     return '${(await getApplicationSupportDirectory()).path}'
         '${Platform.pathSeparator}download';
   }
@@ -2506,10 +3112,14 @@ class OnlineDownloadManager {
   /// `settings[152]` 为空时**不再**让 Pixiv 跟随默认根：36 号起它有自己的默认位置
   /// （`<数据目录>/download_pixiv`），见 `effectivePixivDownloadRoot()`。
   Future<Set<String>> _effectiveDownloadRoots() async {
-    return {...effectiveDownloadRootsFrom(
-      defaultRoot: await _defaultOnlineDownloadRoot(),
-      configuredRoot: appdata.settings[22], pixivRoot: effectivePixivDownloadRoot()),
-      for(final root in pixivLibraryRoots(effectivePixivDownloadRoot())) ...PixivLibrary(root).folders().map((f) => f.path)};
+    return {
+      ...effectiveDownloadRootsFrom(
+          defaultRoot: await _defaultOnlineDownloadRoot(),
+          configuredRoot: appdata.settings[22],
+          pixivRoot: effectivePixivDownloadRoot()),
+      for (final root in pixivLibraryRoots(effectivePixivDownloadRoot()))
+        ...PixivLibrary(root).folders().map((f) => f.path)
+    };
   }
 
   /// [_effectiveDownloadRoots] 的**纯函数内核**：把"读设置"与"算集合"分开，
@@ -2538,6 +3148,8 @@ class OnlineDownloadManager {
     required String rootPath,
     required DownloadedItem item,
     required String directory,
+    Map<int, int>? chapterPageCounts,
+    Map<int, int>? chapterPageBytes,
   }) async {
     final db = _openDownloadDb(rootPath);
     try {
@@ -2551,7 +3163,19 @@ class OnlineDownloadManager {
         (item.time ?? DateTime.now()).millisecondsSinceEpoch,
         directory,
         item.comicSize,
-        jsonEncode(item.toJson()),
+        jsonEncode({
+          ...item.toJson(),
+          if (chapterPageCounts != null)
+            'chapterPageCounts': {
+              for (final entry in chapterPageCounts.entries)
+                '${entry.key}': entry.value,
+            },
+          if (chapterPageBytes != null)
+            'chapterPageBytes': {
+              for (final entry in chapterPageBytes.entries)
+                '${entry.key}': entry.value,
+            },
+        }),
       ]);
 
       // 验证记录确实写入（防止只读 db 静默失败）
@@ -2571,7 +3195,8 @@ class OnlineDownloadManager {
     }
   }
 
-  Database _openDownloadDb(String rootPath) => PixivLibrary.openDownloads(rootPath);
+  Database _openDownloadDb(String rootPath) =>
+      PixivLibrary.openDownloads(rootPath);
 
   static Map<String, dynamic> _jmComicInfoToQueueJson(JmComicInfo info) => {
         'id': info.id,
@@ -2713,7 +3338,8 @@ class OnlineDownloadManager {
 
   /// 将旧式（纯ID）文件夹名修正为新式（标题），同步更新 DB 的 directory 字段。
   /// 返回 (fixed, failed, skipped) 三元组。
-  Future<({int fixed, int failed, int skipped})> fixDirectoryNames() async {    int fixed = 0, failed = 0, skipped = 0;
+  Future<({int fixed, int failed, int skipped})> fixDirectoryNames() async {
+    int fixed = 0, failed = 0, skipped = 0;
     final roots = await _effectiveDownloadRoots();
 
     for (final root in roots) {
@@ -2842,6 +3468,18 @@ class OnlineDownloadManager {
     }
     return '';
   }
+}
+
+class _ChapterRecord {
+  _ChapterRecord(this.root, this.directory, this.id, this.completed,
+      this.pageCounts, this.pageBytes, this.sizeBytes);
+  final String root;
+  final String directory;
+  final String id;
+  final Set<int> completed;
+  final Map<int, int> pageCounts;
+  final Map<int, int> pageBytes;
+  final int sizeBytes;
 }
 
 class _Semaphore {

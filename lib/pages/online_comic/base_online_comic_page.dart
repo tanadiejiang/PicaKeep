@@ -73,6 +73,9 @@ abstract class BaseOnlineComicPage<T> extends StatelessWidget {
   /// 下载。
   void onDownload(BuildContext context, T data);
   bool get supportsDownloadFolders => false;
+
+  /// 部分章节已下载也应进入补章选择，不走整本删除重下。
+  bool supportsChapterDownloads(T data) => false;
   void onDownloadLongPress(BuildContext context, T data) {}
 
   /// 收藏（点击收藏按钮）。完成后可通过 [refreshFavorite] 同步图标。
@@ -608,9 +611,17 @@ abstract class BaseOnlineComicPage<T> extends StatelessWidget {
           onTap: () => onShare!(context, data),
         ),
       OnlineComicIconAction(
+        key: const ValueKey('online-comic-favorite-action'),
         icon: logic.favorite ? Icons.bookmark : Icons.bookmark_border,
-        label: '收藏',
+        label: logic.favoriteBusy
+            ? logic.favorite
+                ? '正在取消'
+                : '正在收藏'
+            : logic.favorite
+                ? '取消收藏'
+                : '收藏',
         active: logic.favorite,
+        busy: logic.favoriteBusy,
         onTap: () => onFavorite(context, data),
         onLongPress: onCancelPlatformFavorite == null
             ? null
@@ -659,8 +670,12 @@ abstract class BaseOnlineComicPage<T> extends StatelessWidget {
                   Expanded(
                     child: OnlineComicPillButton(
                       label: '下载',
-                      onLongPress: supportsDownloadFolders ? () => onDownloadLongPress(context, data) : null,
-                      onTap: supportsDownloadFolders || !logic.downloaded
+                      onLongPress: supportsDownloadFolders
+                          ? () => onDownloadLongPress(context, data)
+                          : null,
+                      onTap: supportsDownloadFolders ||
+                              supportsChapterDownloads(data) ||
+                              !logic.downloaded
                           ? () => onDownload(context, data)
                           : () async {
                               final confirm = await showDialog<bool>(
@@ -694,7 +709,8 @@ abstract class BaseOnlineComicPage<T> extends StatelessWidget {
                             },
                     ),
                   ),
-                  if (logic.downloaded && !supportsDownloadFolders &&
+                  if (logic.downloaded &&
+                      !supportsDownloadFolders &&
                       downloadCandidateIds(data) != null) ...[
                     const SizedBox(width: 4),
                     _DeleteDownloadAction(

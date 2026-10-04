@@ -15,6 +15,7 @@ import 'dart:convert';
 import 'dart:io' show Cookie, Platform;
 
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:picakeep/comic_source/comic_source.dart';
 import 'package:picakeep/foundation/app.dart';
 import 'package:picakeep/foundation/log.dart';
@@ -29,9 +30,25 @@ export 'pixiv_models.dart';
 class PixivNetwork {
   factory PixivNetwork() => _cache ?? (_cache = PixivNetwork._create());
 
-  PixivNetwork._create() {
+  PixivNetwork._create()
+      : cookieJar = CookieJarSql(
+          '${App.dataPath}${Platform.pathSeparator}comic_source'
+          '${Platform.pathSeparator}pixiv_cookies.db',
+        ),
+        _dioFactory = logDio {
     _loadSessionFromJar();
   }
+
+  /// 使用独立 CookieJar 与离线 adapter 验证真实请求路径，不替换生产单例。
+  @visibleForTesting
+  PixivNetwork.forTesting({
+    required this.cookieJar,
+    required Dio Function() dioFactory,
+  }) : _dioFactory = dioFactory {
+    _loadSessionFromJar();
+  }
+
+  final Dio Function() _dioFactory;
 
   static PixivNetwork? _cache;
 
@@ -53,10 +70,7 @@ class PixivNetwork {
   ///
   /// 与 eh/jm 同构（各自一个 db 文件），**不能用** [SingleInstanceCookieJar]：
   /// 那个是 nhentai/cloudflare 共用实例，写入 Pixiv 的 PHPSESSID 会污染其它源。
-  final CookieJarSql cookieJar = CookieJarSql(
-    '${App.dataPath}${Platform.pathSeparator}comic_source'
-    '${Platform.pathSeparator}pixiv_cookies.db',
-  );
+  final CookieJarSql cookieJar;
 
   /// 内存中的会话快照（避免每请求都查 sqlite）。
   String? _phpSessId;
@@ -185,6 +199,7 @@ class PixivNetwork {
   /// 用不带 `/` 的 Uri 删不到，会留下"退出后仍带旧 session"的脏状态。
   Future<void> logout() async {
     _phpSessId = null;
+    _csrfToken = null;
     cookieJar.deleteUri(Uri.parse(pixivWebBase));
   }
 
@@ -348,8 +363,8 @@ class PixivNetwork {
 
   Future<String?> _fetchCsrfTokenFromPage() async {
     if (_session == null) return null;
+    final dio = _dioFactory();
     try {
-      final dio = logDio();
       final response = await dio.get<String>(
         '$pixivWebBase/',
         options: Options(
@@ -369,6 +384,8 @@ class PixivNetwork {
       return parsePixivCsrfTokenFromHtml(response.data);
     } catch (_) {
       return null;
+    } finally {
+      dio.close(force: true);
     }
   }
 
@@ -433,7 +450,7 @@ class PixivNetwork {
       );
     }
 
-    final dio = logDio();
+    final dio = _dioFactory();
     try {
       final response = await dio.get<String>(
         url,
@@ -535,7 +552,8 @@ class PixivNetwork {
       final hasError = errorFlag != null && errorFlag != false;
       if (hasError) {
         // 字符串形态没有 `message` 键，错误原因就在 `error` 本身。
-        final rawMessage = json['message'] ?? (errorFlag is String ? errorFlag : null);
+        final rawMessage =
+            json['message'] ?? (errorFlag is String ? errorFlag : null);
         final message = rawMessage?.toString();
         return Res.error(
           '${(message == null || message.isEmpty) ? 'Pixiv 接口返回错误' : message}'
@@ -599,11 +617,16 @@ class PixivNetwork {
       );
     }
 
+    final sessionAtStart = _session;
     // 写操作先确保 CSRF token 可用（读操作不需要，见 [_csrfHeader]）。
     // 取不到也照常发（不阻塞主流程），下面的失败分支会刷新后重试一次。
     await ensureCsrfToken();
+    if (requireAuth && _session != sessionAtStart) {
+      return const Res.error('登录状态已变化，请重试',
+          errorCode: ResErrorCode.loginRequired);
+    }
 
-    final dio = logDio();
+    final dio = _dioFactory();
     try {
       final response = await dio.post<String>(
         url,
@@ -615,6 +638,7 @@ class PixivNetwork {
           validateStatus: (status) =>
               status != null &&
               (status == 200 || (status >= 400 && status < 500)),
+          extra: const <String, dynamic>{'noRetry': true},
           headers: _baseHeaders(
             contentType: 'application/json',
             withCsrf: true,
@@ -641,6 +665,10 @@ class PixivNetwork {
         if (!_looksLikeAuthFailure(message)) return null;
         final refreshed = await ensureCsrfToken(forceRefresh: true);
         if (refreshed == null) return null;
+        if (requireAuth && _session != sessionAtStart) {
+          return const Res.error('登录状态已变化，请重试',
+              errorCode: ResErrorCode.loginRequired);
+        }
         LogManager.addLog(
           LogLevel.warning,
           'PixivNetwork',
@@ -715,6 +743,15 @@ class PixivNetwork {
         );
       }
 
+      if (statusCode != 200 || json['error'] != false) {
+        return Res.error(
+          'Pixiv 写操作未返回明确成功响应',
+          errorCode: statusCode == 200
+              ? ResErrorCode.parse
+              : _errorCodeForStatus(statusCode),
+          statusCode: statusCode,
+        );
+      }
       return Res<Map<String, dynamic>>(json);
     } on DioException catch (e) {
       return Res.error(
@@ -727,6 +764,109 @@ class PixivNetwork {
         e.toString(),
         errorCode: ResErrorCode.network,
       );
+    } finally {
+      dio.close(force: true);
+    }
+  }
+
+  /// 旧式 PHP 写端点使用表单，成功体可能是数组或端点专属对象。
+  /// 只有调用方声明的成功形状才确认写入；传输失败不自动重复提交。
+  Future<Res<bool>> _postForm(
+    String url,
+    Map<String, String> data, {
+    required String referer,
+    required bool Function(dynamic) isSuccess,
+    bool retriedWithCsrf = false,
+  }) async {
+    if (!isLoggedIn) {
+      return const Res.error('需要登录', errorCode: ResErrorCode.loginRequired);
+    }
+    final sessionAtStart = _session;
+    await ensureCsrfToken();
+    if (_session != sessionAtStart) {
+      return const Res.error('登录状态已变化，请重试',
+          errorCode: ResErrorCode.loginRequired);
+    }
+    final dio = _dioFactory();
+    try {
+      final response = await dio.post<String>(
+        url,
+        data: Uri(queryParameters: data).query,
+        options: Options(
+          responseType: ResponseType.plain,
+          extra: const <String, dynamic>{'noRetry': true},
+          validateStatus: (status) =>
+              status != null &&
+              (status == 200 || (status >= 400 && status < 500)),
+          headers: _baseHeaders(
+            contentType: 'application/x-www-form-urlencoded; charset=utf-8',
+            withCsrf: true,
+            withOrigin: true,
+            referer: referer,
+          ),
+        ),
+      );
+      final status = response.statusCode;
+      final raw = response.data ?? '';
+      dynamic decoded;
+      try {
+        decoded = jsonDecode(raw);
+      } catch (_) {
+        // 401/403 仍优先报告认证问题，HTML/空正文不会被当成成功。
+      }
+      final flag = decoded is Map ? decoded['error'] : null;
+      final hasError = flag != null && flag != false;
+      final rawMessage = decoded is Map
+          ? decoded['message'] ?? (flag is String ? flag : null)
+          : null;
+      final message = rawMessage?.toString();
+      final authRejected = status == 401 ||
+          status == 403 ||
+          (hasError && _looksLikeAuthFailure(message ?? ''));
+      if (authRejected && !retriedWithCsrf) {
+        final token = await ensureCsrfToken(forceRefresh: true);
+        if (token != null) {
+          if (_session != sessionAtStart) {
+            return const Res.error('登录状态已变化，请重试',
+                errorCode: ResErrorCode.loginRequired);
+          }
+          return _postForm(
+            url,
+            data,
+            referer: referer,
+            isSuccess: isSuccess,
+            retriedWithCsrf: true,
+          );
+        }
+      }
+      if (status == 401 || status == 403) {
+        return Res.error('需要登录',
+            errorCode: ResErrorCode.loginRequired, statusCode: status);
+      }
+      if (hasError) {
+        return Res.error(
+          message?.isNotEmpty == true ? message! : 'Pixiv 接口返回错误',
+          errorCode: _errorCodeForStatus(status),
+          statusCode: status,
+        );
+      }
+      if (status != 200) {
+        return Res.error('Pixiv 写操作失败（HTTP $status）',
+            errorCode: _errorCodeForStatus(status), statusCode: status);
+      }
+      if (decoded == null || !isSuccess(decoded)) {
+        return Res.error(
+          'Pixiv 写操作未返回明确成功响应，请刷新状态后重试',
+          errorCode: ResErrorCode.parse,
+          statusCode: status,
+        );
+      }
+      return const Res<bool>(true);
+    } on DioException catch (e) {
+      return Res.error(e.message ?? '网络请求失败',
+          errorCode: ResErrorCode.network, statusCode: e.response?.statusCode);
+    } catch (e) {
+      return Res.error(e.toString(), errorCode: ResErrorCode.network);
     } finally {
       dio.close(force: true);
     }
@@ -778,6 +918,34 @@ class PixivNetwork {
       );
     } catch (e) {
       return Res.error('详情解析失败：$e', errorCode: ResErrorCode.parse);
+    }
+  }
+
+  /// 点按榜单收藏入口时确认当前账号的状态。只读，不预取整个榜单。
+  Future<Res<PixivBookmarkState>> getBookmarkState(String illustId) async {
+    final id = _positiveId(illustId);
+    if (id == null) {
+      return const Res.error('作品 id 无效',
+          errorCode: ResErrorCode.invalidArgument);
+    }
+    final requestSession = _session;
+    final res = await _getJson('$pixivWebBase/ajax/illust/$id?lang=zh',
+        requireAuth: true);
+    if (_session != requestSession) {
+      return const Res.error('账号已变化，请重新操作',
+          errorCode: ResErrorCode.loginRequired);
+    }
+    if (res.error) return Res.fromErrorRes(res);
+    final body = res.data['body'];
+    if (body is! Map) {
+      return const Res.error('Pixiv 详情响应缺少 body',
+          errorCode: ResErrorCode.parse);
+    }
+    try {
+      return Res(parsePixivBookmarkState(
+          body.map((key, value) => MapEntry(key.toString(), value))));
+    } catch (e) {
+      return Res.error('收藏状态解析失败：$e', errorCode: ResErrorCode.parse);
     }
   }
 
@@ -1033,7 +1201,7 @@ class PixivNetwork {
     if (_session == null) {
       return const Res.error('需要登录', errorCode: ResErrorCode.loginRequired);
     }
-    final dio = logDio();
+    final dio = _dioFactory();
     try {
       final response = await dio.get<String>(
         '$pixivWebBase/',
@@ -1182,8 +1350,8 @@ class PixivNetwork {
   ///
   /// - 加书签：POST `/ajax/illusts/bookmarks/add`，body
   ///   `{"comment":"","illust_id":<int>,"restrict":0,"tags":[]}`；
-  /// - 取消书签：POST `/ajax/illusts/bookmarks/delete`，body
-  ///   `{"illust_id":<int>}`。
+  /// - 取消书签：先重读详情取得当前 `bookmarkData.id`，再 POST
+  ///   `/ajax/illusts/bookmarks/delete` 表单 `bookmark_id=…`。
   ///
   /// `restrict: 0` 表示**公开**书签（与 Web 默认一致）；本项目不提供私密书签
   /// 开关，理由同文件头的 safe mode 决策：不给用户制造"收藏了别人看不到"的
@@ -1197,7 +1365,7 @@ class PixivNetwork {
     String illustId, {
     required bool isAdding,
   }) async {
-    final id = int.tryParse(illustId.trim());
+    final id = _positiveId(illustId);
     if (id == null) {
       return const Res.error('作品 id 无效',
           errorCode: ResErrorCode.invalidArgument);
@@ -1206,21 +1374,53 @@ class PixivNetwork {
       return const Res.error('需要登录', errorCode: ResErrorCode.loginRequired);
     }
 
-    final path = isAdding ? 'add' : 'delete';
-    final payload = isAdding
-        ? <String, dynamic>{
-            'comment': '',
-            'illust_id': id,
-            'restrict': 0,
-            'tags': <String>[],
-          }
-        : <String, dynamic>{
-            'illust_id': id,
-          };
+    final actionSession = _session;
+    if (!isAdding) {
+      // 不使用页面加载时的旧 ID：取消后再添加会产生另一条书签。
+      final latest = await _getJson(
+        '$pixivWebBase/ajax/illust/$id?lang=zh',
+        requireAuth: true,
+      );
+      // The bookmark ID belongs to the account that started this read. The
+      // form writer also checks token refresh, but must not capture a newly
+      // switched account after this earlier await.
+      if (_session != actionSession) {
+        return const Res.error('账号已变化，请重新操作',
+            errorCode: ResErrorCode.loginRequired);
+      }
+      if (latest.error) return Res.fromErrorRes(latest);
+      final body = latest.data['body'];
+      if (body is! Map || !body.containsKey('bookmarkData')) {
+        return const Res.error('Pixiv 详情响应缺少收藏状态',
+            errorCode: ResErrorCode.parse);
+      }
+      final bookmarkData = body['bookmarkData'];
+      if (bookmarkData == null) return const Res<bool>(true);
+      final bookmarkId = bookmarkData is Map
+          ? _positiveId(bookmarkData['id']?.toString() ?? '')
+          : null;
+      if (bookmarkId == null) {
+        return const Res.error('Pixiv 收藏响应缺少有效书签 ID',
+            errorCode: ResErrorCode.parse);
+      }
+      return _postForm(
+        '$pixivWebBase/ajax/illusts/bookmarks/delete',
+        <String, String>{
+          'bookmark_id': bookmarkId.toString(),
+        },
+        referer: '$pixivWebBase/artworks/$id',
+        isSuccess: (body) => body is Map && body['error'] == false,
+      );
+    }
 
     final res = await _postJson(
-      '$pixivWebBase/ajax/illusts/bookmarks/$path',
-      payload,
+      '$pixivWebBase/ajax/illusts/bookmarks/add',
+      <String, dynamic>{
+        'comment': '',
+        'illust_id': id,
+        'restrict': 0,
+        'tags': <String>[],
+      },
       requireAuth: true,
       // **Referer 精确到作品页，而不是站点根。**
       //
@@ -1243,6 +1443,57 @@ class PixivNetwork {
       return Res.fromErrorRes(res);
     }
     return const Res<bool>(true);
+  }
+
+  int? _positiveId(String value) {
+    final normalized = value.trim();
+    if (!RegExp(r'^\d+$').hasMatch(normalized)) return null;
+    final id = int.tryParse(normalized);
+    return id != null && id > 0 ? id : null;
+  }
+
+  /// 设置当前账号对作者的公开关注状态；成功返回确认的目标态。
+  Future<Res<bool>> setFollow(String uid, {required bool isFollowing}) async {
+    final id = _positiveId(uid);
+    if (id == null) {
+      return const Res.error('作者 uid 无效',
+          errorCode: ResErrorCode.invalidArgument);
+    }
+    if (!isLoggedIn) {
+      return const Res.error('需要登录', errorCode: ResErrorCode.loginRequired);
+    }
+    String? currentUid;
+    try {
+      currentUid = ComicSource.require('pixiv').data['userId']?.toString();
+    } catch (_) {
+      // 缺少账号展示快照时，不从会话内容猜 UID。
+    }
+    if (currentUid != null && _positiveId(currentUid) == id) {
+      return const Res.error('不能关注自己', errorCode: ResErrorCode.invalidArgument);
+    }
+    final res = await _postForm(
+      '$pixivWebBase/${isFollowing ? 'bookmark_add.php' : 'rpc_group_setting.php'}',
+      isFollowing
+          ? <String, String>{
+              'mode': 'add',
+              'type': 'user',
+              'user_id': id.toString(),
+              'tag': '',
+              'restrict': '0',
+              'format': 'json',
+            }
+          : <String, String>{
+              'mode': 'del',
+              'type': 'bookuser',
+              'id': id.toString(),
+            },
+      referer: '$pixivWebBase/users/$id',
+      isSuccess: (body) => isFollowing
+          ? body is List && body.isEmpty
+          : body is Map && body['type'] == 'bookuser',
+    );
+    if (res.error) return Res.fromErrorRes(res);
+    return Res<bool>(isFollowing);
   }
 
   // ═════════════════════════════════════════════════════════════════════════
@@ -1427,9 +1678,8 @@ class PixivNetwork {
     }
 
     final start = (safePage - 1) * safePageSize;
-    final end = start + safePageSize > ids.length
-        ? ids.length
-        : start + safePageSize;
+    final end =
+        start + safePageSize > ids.length ? ids.length : start + safePageSize;
     final slice = ids.sublist(start, end);
 
     const stepLabel = '作者作品详情';

@@ -1,0 +1,140 @@
+{
+  "kind": "004-after-performance-recheck",
+  "date_sgt": "2026-10-04",
+  "application_changed": false,
+  "sources": [
+    {
+      "role": "cpu-profile",
+      "path": "C:\\Users\\tanad\\Downloads\\标签滚动dart_devtools_2026-10-04_13_36_46.723.json",
+      "bytes": 16901246,
+      "sha256": "AAC665B8E69ABDEEE3E905A30E6A130BC4CDA9DD6BEDF88C85ABEC2414ECA53E"
+    },
+    {
+      "role": "performance",
+      "path": "C:\\Users\\tanad\\Downloads\\标签滚动dart_devtools_2026-10-04_13_36_36.008.json",
+      "bytes": 37279629,
+      "sha256": "F3226A66DCC42D8711C9D1BCFBA41DDED95FDD07321215D5E16269FD37142435"
+    }
+  ],
+  "environment": {
+    "isFlutterApp": true,
+    "isProfileBuild": true,
+    "isDartWebApp": false,
+    "isRunningOnDartVM": true,
+    "operatingSystem": "android",
+    "flutterVersion": "3.41.6"
+  },
+  "frame_count": 2713,
+  "validated_semantics": {
+    "raw_paired_count": 1092,
+    "associated_paired_count": 1092,
+    "unassociated_before_first_frame_build_start_count": 0,
+    "invalid_cross_frame_count": 2,
+    "reliable_duration": {
+      "count": 1090,
+      "sum_ms": 2908.156,
+      "mean_ms": 2.668033,
+      "p50_ms": 3.069,
+      "p90_ms": 5.28,
+      "p95_ms": 5.948,
+      "p99_ms": 7.101,
+      "min_ms": 0.017,
+      "max_ms": 12.864
+    },
+    "reliable_over_budget": {
+      "count": 7,
+      "pct": 0.6422
+    }
+  },
+  "before_semantics": {
+    "count": 306,
+    "sum_ms": 1330.893,
+    "mean_ms": 4.349324,
+    "p50_ms": 5.786,
+    "p90_ms": 6.825,
+    "p95_ms": 7.525,
+    "p99_ms": 11.191,
+    "min_ms": 0.015,
+    "max_ms": 12.967,
+    "over_budget": {
+      "count": 14,
+      "pct": 4.5752
+    }
+  },
+  "excluded_root_frame_numbers": [
+    796,
+    1829
+  ],
+  "cpu_sample_count": 14119,
+  "cpu_time_envelope_ms": 32001.287,
+  "temporal_overlap": {
+    "assumption": "Raw CPU and Performance timestamps are compared as a shared microsecond monotonic clock; file names alone do not prove capture alignment.",
+    "frame_recording_start_ts_us": 27996837210,
+    "frame_recording_end_ts_us": 28031329525,
+    "cpu_start_ts_us": 28002744928,
+    "cpu_end_ts_us": 28034746215,
+    "envelope_overlap_us": 28584597,
+    "envelope_overlap_ms": 28584.597,
+    "cpu_sample_count_in_frame_envelope": 14116,
+    "cpu_sample_pct_in_frame_envelope": 99.9788,
+    "cpu_sample_count_in_recorded_frame_elapsed_intervals": 11962,
+    "cpu_start_minus_frame_end_ms": -28584.597,
+    "timestamp_envelopes_overlap_under_shared_clock_assumption": true,
+    "interpretation": "An overlap permits limited timestamp comparisons; absent overlap, CPU hotspots cannot establish the cause of any frame in this export. Clock offsets are not inferred or corrected."
+  },
+  "planning_samples": {
+    "count": 54,
+    "by_ui_frame": {
+      "266": 1,
+      "326": 38,
+      "2243": 15
+    },
+    "first_ts": 28006910084,
+    "last_ts": 28026873293,
+    "sample_weight_ms": 17.496
+  },
+  "current_installed_dart_aot_sha256": "7052C54FDEE8E6E76774CAE792D0967D0AF523E0C5999E6142D5ED20847073DE",
+  "evidence_files": [
+    {
+      "path": "docs\\verification\\illust-tags-004-recheck\\README.md",
+      "bytes": 6378,
+      "sha256": "19FFEAA96DE7275D65385903A517A912E257BA423205E1BFAB27B0DD9CC309FF"
+    },
+    {
+      "path": "docs\\verification\\illust-tags-004-recheck\\validate_trace.py",
+      "bytes": 12826,
+      "sha256": "E7A3F4A9064B50E966062C14B7B6C79F0BF002204ED9545C6450CB383BEF30AA"
+    },
+    {
+      "path": "docs\\verification\\illust-tags-004-recheck\\analyze_cpu_focus.py",
+      "bytes": 9015,
+      "sha256": "151D9720FA63270782CFDF9F8E8ECFC03332F848F928970111685B6C2363A11D"
+    },
+    {
+      "path": "docs\\verification\\illust-tags-004-recheck\\validated_trace_summary.json",
+      "bytes": 7291622,
+      "sha256": "7EF5405E8195E85F82ADC86FA9BA6841F12AB3C5ED3D06281AF006457E08CF09"
+    },
+    {
+      "path": "docs\\verification\\illust-tags-004-recheck\\cpu_focus.json",
+      "bytes": 104128,
+      "sha256": "29E480E9AACD829EB28EAB9B68E3AEC06DD12F9D68A25D895F2AC3EA32800654"
+    },
+    {
+      "path": "docs\\verification\\illust-tags-004-recheck\\cpu_trace_match.json",
+      "bytes": 16359,
+      "sha256": "16DC38E0A3D04CD1DB8448C9D404BC8C771756C93250677055168B77D0B079AC"
+    },
+    {
+      "path": "docs\\verification\\illust-tags-004-recheck\\device_identity.json",
+      "bytes": 4353,
+      "sha256": "A4AF870AFB955C157AE1C302DBD9681F65F486375F72195CD32116165EAA9DA1"
+    }
+  ],
+  "limits": [
+    "Different operations and trace coverage prevent strict A/B improvement or FPS claims.",
+    "Two cross-gap roots are invalid and excluded, not clipped.",
+    "Current installed identity is not a strict proof of the state at capture time.",
+    "CPU stack and time association identifies contribution, not exact exclusive wall duration."
+  ]
+}

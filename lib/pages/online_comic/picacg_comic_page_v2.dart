@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:picakeep/foundation/local_favorites.dart';
 import 'local_favorite_actions.dart';
 import 'platform_favorite_panel.dart';
+import 'chapter_download_selection.dart';
 import 'package:picakeep/comic_source/comic_source.dart';
 import 'package:picakeep/foundation/app_page_route.dart';
 import 'package:picakeep/foundation/history.dart';
@@ -186,7 +187,27 @@ class PicacgComicPageV2 extends BaseOnlineComicPage<PicacgComicItem> {
 
   @override
   Future<void> onDownload(BuildContext context, PicacgComicItem data) async {
-    final res = await OnlineDownloadManager.instance.enqueuePicacg(data);
+    if (data.eps.isEmpty) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('该作品没有可下载的章节')));
+      return;
+    }
+    if (supportsChapterDownloads(data)) {
+      final added = await showOnlineChapterDownloadSelection(context,
+          title: data.title,
+          chapterNames: data.eps,
+          sourceKey: sourceKey,
+          candidateIds: downloadCandidateIds(data)!,
+          onSubmit: (indexes) => OnlineDownloadManager.instance
+              .enqueuePicacg(data, chapterIndexes: indexes));
+      if (added && context.mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text('已加入下载队列')));
+      }
+      return;
+    }
+    final res = await OnlineDownloadManager.instance
+        .enqueuePicacg(data, chapterIndexes: [0]);
     if (!context.mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
@@ -194,6 +215,13 @@ class PicacgComicPageV2 extends BaseOnlineComicPage<PicacgComicItem> {
       ),
     );
   }
+
+  @override
+  bool supportsChapterDownloads(PicacgComicItem data) => data.eps.length > 1;
+
+  @override
+  List<String>? downloadCandidateIds(PicacgComicItem data) =>
+      [data.id, 'picacg${data.id}'];
 
   @override
   Future<bool?> performCancelPlatformFavorite(PicacgComicItem data) async {
@@ -205,8 +233,12 @@ class PicacgComicPageV2 extends BaseOnlineComicPage<PicacgComicItem> {
   @override
   Future<void> onFavorite(BuildContext context, PicacgComicItem data) async {
     final localItem = FavoriteItem(
-      target: data.id, name: data.title, coverPath: data.cover,
-      author: data.author, type: FavoriteType.picacg, tags: data.tags,
+      target: data.id,
+      name: data.title,
+      coverPath: data.cover,
+      author: data.author,
+      type: FavoriteType.picacg,
+      tags: data.tags,
     );
     final wasFavorite = currentFavorite;
 

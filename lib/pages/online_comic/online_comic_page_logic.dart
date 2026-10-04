@@ -49,6 +49,9 @@ class OnlineComicPageLogic<T> extends StateController {
   /// 本地/平台收藏态。子类可在 `onFavorite` 完成后通过 [setFavorite] 同步。
   bool favorite = false;
 
+  /// 收藏请求进行中，用于锁住操作并提供即时反馈。
+  bool favoriteBusy = false;
+
   /// 点赞态。子类可在 `onLike` 完成后通过 [setLiked] 同步。
   bool liked = false;
 
@@ -133,6 +136,12 @@ class OnlineComicPageLogic<T> extends StateController {
   void setFavorite(bool value) {
     if (favorite == value) return;
     favorite = value;
+    update();
+  }
+
+  void setFavoriteBusy(bool value) {
+    if (favoriteBusy == value) return;
+    favoriteBusy = value;
     update();
   }
 
