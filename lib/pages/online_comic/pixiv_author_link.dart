@@ -81,6 +81,7 @@ class PixivAuthorLink extends StatefulWidget {
     required this.destination,
     this.authorName = '',
     this.compact = false,
+    this.label,
     this.loadDetail,
     this.pageBuilder,
   });
@@ -88,6 +89,7 @@ class PixivAuthorLink extends StatefulWidget {
   final PixivAuthorDestination destination;
   final String authorName;
   final bool compact;
+  final String? label;
   final PixivAuthorDetailLoader? loadDetail;
   final Widget Function(String uid)? pageBuilder;
 
@@ -144,7 +146,7 @@ class _PixivAuthorLinkState extends State<PixivAuthorLink> {
                 children: [
                   icon,
                   const SizedBox(height: 8),
-                  Text(_opening ? '正在打开' : '作者页',
+                  Text(_opening ? '正在打开' : (widget.label ?? '作者页'),
                       textAlign: TextAlign.center,
                       style: Theme.of(context).textTheme.labelMedium),
                 ],
@@ -163,7 +165,8 @@ class _PixivAuthorLinkState extends State<PixivAuthorLink> {
         leading: icon,
         title: Text(
             widget.authorName.trim().isEmpty ? 'Pixiv 作者' : widget.authorName),
-        subtitle: Text(_opening ? '正在获取作者信息…' : '打开作者页 · 浏览全部作品'),
+        subtitle:
+            Text(_opening ? '正在获取作者信息…' : (widget.label ?? '打开作者页 · 浏览全部作品')),
         trailing: const Icon(Icons.chevron_right),
       ),
     );

@@ -36,6 +36,20 @@ bool _bool(dynamic value, [bool fallback = false]) {
   return fallback;
 }
 
+bool? _nullableBool(dynamic value) {
+  if (value is bool) return value;
+  if (value == 0 || value == '0' || value == 'false') return false;
+  if (value == 1 || value == '1' || value == 'true') return true;
+  return null;
+}
+
+String? _positiveIdString(dynamic value) {
+  final id = _idStr(value);
+  return RegExp(r'^[0-9]+$').hasMatch(id) && (int.tryParse(id) ?? 0) > 0
+      ? id
+      : null;
+}
+
 /// 把任意值读成** id 字符串**（兼容 JSON 数字与字符串两种形态）。
 ///
 /// 必须区别于 [_str]：Pixiv 各接口对 id 的类型并不统一——搜索结果里是字符串
@@ -180,7 +194,7 @@ String _pickUrl(dynamic urls, List<String> keys) {
 /// **唯一抛 [FormatException] 的情况**：id 与标题同时缺失——此时这条响应不可能是
 /// 有效作品，静默返回空对象只会把坏数据带到上层。其余字段一律兜底为默认值。
 PixivComicInfo parsePixivComicInfo(Map<String, dynamic> body) {
-  final id = _firstNonEmpty(<dynamic>[body['illustId'], body['id']]);
+  final id = _idStr(body['illustId'] ?? body['id']);
   final title = _firstNonEmpty(<dynamic>[body['illustTitle'], body['title']]);
   if (id.isEmpty && title.isEmpty) {
     throw const FormatException('Pixiv illust 响应缺少 id 与 title');
@@ -197,7 +211,7 @@ PixivComicInfo parsePixivComicInfo(Map<String, dynamic> body) {
     id: id,
     title: title,
     author: _firstNonEmpty(<dynamic>[body['userName'], body['userAccount']]),
-    authorId: _str(body['userId']),
+    authorId: _idStr(body['userId']),
     coverUrl: _pickUrl(
       body['urls'],
       const <String>['original', 'regular', 'small', 'thumb', 'mini'],
@@ -213,9 +227,109 @@ PixivComicInfo parsePixivComicInfo(Map<String, dynamic> body) {
     isOriginal: _bool(body['isOriginal']),
     createDate: _str(body['createDate']),
     uploadDate: _str(body['uploadDate']),
-    userId: _str(body['userId']),
+    userId: _idStr(body['userId']),
     isBookmarked: bookmarkData is Map,
     bookmarkId: bookmarkId.isEmpty ? null : bookmarkId,
+    bookmarkPrivate:
+        bookmarkData is Map ? _nullableBool(bookmarkData['private']) : null,
+    isBookmarkable: _detailBookmarkCapability(body, id),
+    regularUrl: _pickUrl(
+      body['urls'],
+      const <String>['regular', 'small', 'original', 'thumb', 'mini'],
+    ),
+    authorAvatar: _firstNonEmpty(<dynamic>[
+      body['profileImageUrl'],
+      body['userImage'],
+    ]),
+    commentCount: _int(body['commentCount']),
+    relatedWorks: parsePixivRelatedWorks(body, currentId: id),
+  );
+}
+
+bool _isAvailableEmbeddedWork(Map<String, dynamic> item) {
+  if (item.containsKey('isMasked') &&
+      _nullableBool(item['isMasked']) != false) {
+    return false;
+  }
+  return !item.containsKey('xRestrict') ||
+      item['xRestrict'] == 0 ||
+      item['xRestrict'] == '0';
+}
+
+bool? _detailBookmarkCapability(Map<String, dynamic> body, String id) {
+  if (body.containsKey('isBookmarkable')) {
+    return _nullableBool(body['isBookmarkable']);
+  }
+  final raw = _map(body['userIllusts'])[id];
+  if (raw is! Map) return null;
+  final current = _map(raw);
+  if (_positiveIdString(current['id'] ?? current['illustId']) != id ||
+      !_isAvailableEmbeddedWork(current)) {
+    return null;
+  }
+  return _nullableBool(current['isBookmarkable']);
+}
+
+/// userIllusts contains null ID slots as well as full objects. Do not hydrate
+/// those slots or substitute author-page sorting for the embedded order.
+List<PixivComicBrief> parsePixivRelatedWorks(
+  Map<String, dynamic> body, {
+  required String currentId,
+}) {
+  final works = body['userIllusts'];
+  if (works is! Map) return const <PixivComicBrief>[];
+  final result = <PixivComicBrief>[];
+  final seen = <String>{currentId};
+  for (final raw in works.values) {
+    if (raw is! Map) continue;
+    final item = _map(raw);
+    // Match the source's safe search policy before handing data to card code.
+    if (!_isAvailableEmbeddedWork(item)) continue;
+    final id = _positiveIdString(item['id'] ?? item['illustId']);
+    if (id == null || !seen.add(id)) continue;
+    final brief = _parseBriefItem(item);
+    if (brief != null) result.add(brief);
+  }
+  return List<PixivComicBrief>.unmodifiable(result);
+}
+
+PixivCommentPage parsePixivComments(dynamic body) {
+  if (body is! Map || body['comments'] is! List) {
+    throw const FormatException('Pixiv comments 响应缺少评论数组');
+  }
+  final hasNext = _nullableBool(body['hasNext']);
+  if (hasNext == null) {
+    throw const FormatException('Pixiv comments 响应缺少有效 hasNext');
+  }
+  final rows = body['comments'] as List;
+  final comments = <PixivComment>[];
+  final seen = <String>{};
+  for (final raw in rows) {
+    if (raw is! Map) continue;
+    final id = _positiveIdString(raw['id']);
+    if (id == null || !seen.add(id)) continue;
+    final stampId = _positiveIdString(raw['stampId']);
+    final replyName = _str(raw['replyToUserName']);
+    comments.add(PixivComment(
+      id: id,
+      userId: _idStr(raw['userId'] ?? raw['commentUserId']),
+      userName: _str(raw['userName']),
+      avatarUrl: _str(raw['img']),
+      comment: _str(raw['comment']),
+      commentDate: _str(raw['commentDate']),
+      stampId: stampId == null ? null : int.tryParse(stampId),
+      hasReplies: _nullableBool(raw['hasReplies']),
+      isDeletedUser: _nullableBool(raw['isDeletedUser']),
+      rootId: _positiveIdString(raw['commentRootId']),
+      parentId: _positiveIdString(raw['commentParentId']),
+      replyToUserId: _positiveIdString(raw['replyToUserId']),
+      replyToUserName: replyName.isEmpty ? null : replyName,
+    ));
+  }
+  return PixivCommentPage(
+    comments: List<PixivComment>.unmodifiable(comments),
+    hasNext: hasNext,
+    originalCount: rows.length,
   );
 }
 
@@ -238,6 +352,7 @@ PixivBookmarkState parsePixivBookmarkState(Map<String, dynamic> body) {
   return PixivBookmarkState(
     isBookmarked: data is Map,
     isBookmarkable: capability == true || capability == 1 || capability == '1',
+    bookmarkPrivate: data is Map ? _nullableBool(data['private']) : null,
   );
 }
 

@@ -3,11 +3,16 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:picakeep/components/comic_tile.dart';
 import 'package:picakeep/components/layout.dart';
-import 'package:picakeep/foundation/app.dart';
 import 'package:picakeep/foundation/download.dart';
 import 'package:picakeep/foundation/download_model.dart';
 import 'package:picakeep/foundation/local_library.dart';
 import 'package:picakeep/foundation/local_search_data_source.dart';
+import 'package:picakeep/foundation/pixiv_detail_session.dart';
+import 'package:picakeep/foundation/pixiv_local_detail.dart';
+import 'package:picakeep/foundation/local_favorites.dart';
+import 'package:picakeep/pages/online_comic/pixiv_comic_page_v2.dart';
+import 'package:picakeep/pages/online_comic/pixiv_detail_pager.dart';
+import 'package:picakeep/foundation/app.dart';
 
 import 'package:picakeep/tools/tags_translation.dart';
 import 'package:picakeep/tools/translations.dart';
@@ -204,7 +209,7 @@ class _LocalSearchPageState extends State<LocalSearchPage> {
           type: result.sourceLabel,
           tag: item.tags,
           onTap: () {
-            App.pushInner(() => LocalComicDetailPage(comic: item));
+            _openResult(result);
           },
           size: _formatSize(item.comicSize),
           onLongTap: () {},
@@ -237,7 +242,11 @@ class _LocalSearchPageState extends State<LocalSearchPage> {
           tag: comic.tags,
           onTap: () {
             if (localItem != null) {
-              App.pushInner(() => LocalComicDetailPage(comic: localItem));
+              _openResult(result);
+              return;
+            }
+            if (comic.type == FavoriteType.pixiv) {
+              _openResult(result);
               return;
             }
             App.pushInner(
@@ -251,6 +260,65 @@ class _LocalSearchPageState extends State<LocalSearchPage> {
     }
 
     return const SizedBox.shrink();
+  }
+
+  Future<void> _openResult(LocalSearchResult result) async {
+    final item = result.downloadItem ?? result.localItem;
+    final target = result.favoriteItem?.comic;
+    if (item != null && PixivLocalIdentity.fromItem(item) == null) {
+      App.pushInner(() => LocalComicDetailPage(comic: item));
+      return;
+    }
+    String keyFor(LocalSearchResult value) {
+      final local = value.downloadItem ?? value.localItem;
+      return local != null
+          ? pixivLocalDetailKey(local)
+          : 'favorite:${value.favoriteItem!.folder}:${value.favoriteItem!.comic.target}';
+    }
+
+    if (item == null &&
+        (target == null ||
+            target.type != FavoriteType.pixiv ||
+            resolveOnlineTargetSpec(target.target, target.type) == null)) {
+      return;
+    }
+    PixivDetailEntry? entryFor(LocalSearchResult value) {
+      final local = value.downloadItem ?? value.localItem;
+      if (local != null) {
+        final identity = PixivLocalIdentity.fromItem(local);
+        if (identity == null) return null;
+        return PixivDetailEntry(
+          key: keyFor(value),
+          comicId: identity.workId ?? local.id,
+          localFavoriteFolder: value.favoriteItem?.folder,
+          builder: (_) => LocalComicDetailPage(comic: local),
+        );
+      }
+      final favorite = value.favoriteItem;
+      if (favorite == null || favorite.comic.type != FavoriteType.pixiv) {
+        return null;
+      }
+      final spec =
+          resolveOnlineTargetSpec(favorite.comic.target, FavoriteType.pixiv);
+      if (spec == null) return null;
+      return PixivDetailEntry(
+        key: keyFor(value),
+        comicId: spec.id,
+        localFavoriteFolder: favorite.folder,
+        builder: (_) => PixivComicPageV2(spec.id),
+      );
+    }
+
+    final session = PixivDetailSession(
+      scope: PixivDetailScope.localSearch,
+      entries: _results.map(entryFor).whereType<PixivDetailEntry>(),
+    );
+    try {
+      await App.pushInner(() => PixivDetailPager(
+            session: session, initialKey: keyFor(result)));
+    } finally {
+      session.dispose();
+    }
   }
 
   /// 根据输入框内容从已收集的 chips（本地标签 + 作者）中过滤出匹配的建议。

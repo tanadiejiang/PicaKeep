@@ -16,6 +16,7 @@ import 'package:picakeep/pages/online_comic/online_comic_page_logic.dart';
 import 'package:picakeep/pages/online_comic/pixiv_author_link.dart';
 import 'package:picakeep/pages/online_search/online_search_result_page.dart';
 import 'package:picakeep/pages/reader/comic_reading_page.dart';
+import 'pixiv_online_detail_view.dart';
 
 /// Pixiv 作品详情页 V2。
 ///
@@ -33,6 +34,34 @@ class PixivComicPageV2 extends BaseOnlineComicPage<PixivComicInfo> {
   const PixivComicPageV2(this.comicId, {super.key});
 
   final String comicId;
+
+  @override
+  Widget build(BuildContext context) {
+    // Keep the base-page contract for test/support subclasses that override the
+    // legacy section hooks. Production routes instantiate this exact class and
+    // use the new Pixiv drawer shell below.
+    if (runtimeType != PixivComicPageV2) return super.build(context);
+    return PixivOnlineDetailView(
+      comicId: comicId,
+      loadDetail: loadData,
+      loadPages: loadImagePages,
+      writeBookmark: (id, {required isAdding, required isPrivate}) => isPrivate
+          ? writePrivateBookmark(id, isAdding: isAdding)
+          : writeBookmark(id, isAdding: isAdding),
+      onRead: (context, data, page) => onRead(context, data, initialPage: page),
+      onDownload: onDownload,
+      onDownloadLongPress: onDownloadLongPress,
+      onTagTap: onTagTap,
+    );
+  }
+
+  Future<Res<List<PixivPage>>> loadImagePages(String id) =>
+      PixivNetwork().getComicPages(id);
+
+  @protected
+  Future<Res<bool>> writePrivateBookmark(String id, {required bool isAdding}) =>
+      PixivNetwork().setBookmark(id,
+          isAdding: isAdding, visibility: PixivBookmarkVisibility.private);
 
   // ── 标识字段 ────────────────────────────────────────────────────────────
 
@@ -168,7 +197,7 @@ class PixivComicPageV2 extends BaseOnlineComicPage<PixivComicInfo> {
   /// 单本无章节：`ep` 由基类传 1，[PixivReadingData] 内部忽略它并一次拉全部页。
   @override
   Future<void> onRead(BuildContext context, PixivComicInfo data,
-      {int ep = 1}) async {
+      {int ep = 1, int initialPage = 1}) async {
     await History.ensureForLocalRead(
       target: data.id,
       type: HistoryType.pixiv,
@@ -182,7 +211,7 @@ class PixivComicPageV2 extends BaseOnlineComicPage<PixivComicInfo> {
       AppPageRoute(
         builder: (_) => ComicReadingPage(
           PixivReadingData(comic: data),
-          1,
+          initialPage,
           ep,
         ),
       ),

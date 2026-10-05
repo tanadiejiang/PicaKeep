@@ -34,6 +34,31 @@ Res<List<BaseComic>> _toBaseRes(Res<List<PixivComicBrief>> res) {
   );
 }
 
+class PixivBookmarkSourceResult extends Res<List<BaseComic>> {
+  const PixivBookmarkSourceResult(super.data,
+      {required this.totalCount, super.subData});
+
+  final int? totalCount;
+}
+
+/// Only the favorite adapter converts total records to the framework's pages.
+/// Keeping totalCount separate prevents it being used as an image/works index.
+Res<List<BaseComic>> pixivBookmarkResultForSource(
+    Res<List<PixivComicBrief>> res) {
+  if (res.error) return Res.fromErrorRes(res);
+  final rawTotal = res.subData;
+  final total = rawTotal is int && rawTotal >= 0 ? rawTotal : null;
+  final lastPage = total == null
+      ? null
+      : (total + PixivNetwork.bookmarkPageSize - 1) ~/
+          PixivNetwork.bookmarkPageSize;
+  return PixivBookmarkSourceResult(
+    List<BaseComic>.from(res.data),
+    totalCount: total,
+    subData: lastPage,
+  );
+}
+
 final ComicSource pixiv = ComicSource.named(
   key: 'pixiv',
   name: 'Pixiv',
@@ -102,7 +127,7 @@ final ComicSource pixiv = ComicSource.named(
     multiFolder: false,
     loadComic: (page, [folder]) async {
       final res = await PixivNetwork().getBookmarks(page);
-      return _toBaseRes(res);
+      return pixivBookmarkResultForSource(res);
     },
     addOrDelFavorite: (comic, isAdding) {
       final numericId = source_id_rules.extractPixivNumericId(comic.id);

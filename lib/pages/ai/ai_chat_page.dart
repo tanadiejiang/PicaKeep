@@ -23,6 +23,8 @@ import 'package:picakeep/foundation/ai/ai_result_item.dart';
 import 'package:picakeep/foundation/ai/ai_settings.dart';
 import 'package:picakeep/foundation/ai/ai_sources.dart';
 import 'package:picakeep/foundation/app_page_route.dart';
+import 'package:picakeep/foundation/pixiv_detail_session.dart';
+import 'package:picakeep/pages/online_comic/pixiv_detail_pager.dart';
 import 'package:picakeep/pages/ai/ai_download_list_page.dart';
 import 'package:picakeep/pages/ai/ai_item_list_page.dart';
 import 'package:picakeep/pages/online_comic/eh_comic_page_v2.dart';
@@ -3615,7 +3617,26 @@ class _CompactResultCardRow extends StatelessWidget {
       // 第十八轮新增源：不补这两支会走 default，点击会**静默跳回列表页**
       // 而不是详情页（无报错），表现为"点了详情却没进去"。
       case aiSourcePixiv:
-        page = PixivComicPageV2(item.id);
+        final session = PixivDetailSession(
+          scope: PixivDetailScope.aiResults,
+          entries: [
+            for (final value in items)
+              if (value.source == aiSourcePixiv &&
+                  RegExp(r'^\d+$').hasMatch(value.id))
+                PixivDetailEntry(
+                  key: 'online:${value.id}',
+                  comicId: value.id,
+                  builder: (_) => PixivComicPageV2(value.id),
+                ),
+          ],
+        );
+        if (session.indexOf('online:${item.id}') < 0) {
+          session.dispose();
+          _openList(context);
+          return;
+        }
+        openPixivDetailSession(context, session, 'online:${item.id}');
+        return;
       case aiSourceKomiic:
         page = KomiicComicPageV2(item.id);
       default:

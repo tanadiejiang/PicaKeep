@@ -964,6 +964,62 @@ class PixivNetwork {
     }
   }
 
+  Future<Res<PixivCommentPage>> getComments(
+    String illustId, {
+    int offset = 0,
+    int limit = 20,
+  }) async {
+    final id = _positiveId(illustId);
+    if (id == null || offset < 0 || limit < 1 || limit > 20) {
+      return const Res.error('评论查询参数无效',
+          errorCode: ResErrorCode.invalidArgument);
+    }
+    final url = Uri.parse('$pixivWebBase/ajax/illusts/comments/roots').replace(
+      queryParameters: {
+        'illust_id': id.toString(),
+        'offset': offset.toString(),
+        'limit': limit.toString(),
+        'lang': 'zh',
+      },
+    );
+    return _getCommentPage(url);
+  }
+
+  Future<Res<PixivCommentPage>> getCommentReplies(
+    String commentId, {
+    int page = 1,
+  }) async {
+    final id = _positiveId(commentId);
+    if (id == null || page < 1) {
+      return const Res.error('回复查询参数无效',
+          errorCode: ResErrorCode.invalidArgument);
+    }
+    final url =
+        Uri.parse('$pixivWebBase/ajax/illusts/comments/replies').replace(
+      queryParameters: {
+        'comment_id': id.toString(),
+        'page': page.toString(),
+        'lang': 'zh',
+      },
+    );
+    return _getCommentPage(url);
+  }
+
+  Future<Res<PixivCommentPage>> _getCommentPage(Uri url) async {
+    final requestSession = _session;
+    final res = await _getJson(url.toString());
+    if (_session != requestSession) {
+      return const Res.error('账号已变化，请重新加载评论',
+          errorCode: ResErrorCode.loginRequired);
+    }
+    if (res.error) return Res.fromErrorRes(res);
+    try {
+      return Res(parsePixivComments(res.data['body']));
+    } catch (e) {
+      return Res.error('评论解析失败：$e', errorCode: ResErrorCode.parse);
+    }
+  }
+
   /// 取动图元数据（`/ajax/illust/{id}/ugoira_meta`），仅在 `illustType == 2` 时有意义。
   Future<Res<PixivUgoiraMeta>> getUgoiraMeta(String id) async {
     if (id.trim().isEmpty) {
@@ -1283,9 +1339,8 @@ class PixivNetwork {
   ///   只有明确报错才不会让上层把空 URL 请求当成"没有收藏"。
   /// - `offset` 用 `(page - 1) * 48` 折算：该接口是偏移量分页而非页码分页，
   ///   语义与其它源的 `page` 不同，这里在网络层内部收敛，对外仍是页码。
-  /// - 请求**允许未登录发出**（此处不传 requireAuth）：Pixiv 的公开书签无需
-  ///   登录即可读取，只是拿到的是公开部分；有 PHPSESSID 时会一并带上，
-  ///   服务端据此返回含私密书签的完整列表。
+  /// - 请求**允许未登录发出**（此处不传 requireAuth）：rest=show 读取公开
+  ///   收藏；登录 Cookie 不会把这个查询自动变成私密列表。
   /// - `body.total` 是**书签总数**（不是页数），原样放进 [Res.subData]；
   ///   字段缺失时不传，由调用方退回保守判停。
   ///
@@ -1320,7 +1375,7 @@ class PixivNetwork {
         'tag': '',
         'offset': offset.toString(),
         'limit': bookmarkPageSize.toString(),
-        // rest=show 才会返回完整作品条目（hide 只给 id）。
+        // show is the public visibility scope; hide is the private scope.
         'rest': 'show',
         'lang': 'zh',
       },
@@ -1353,9 +1408,9 @@ class PixivNetwork {
   /// - 取消书签：先重读详情取得当前 `bookmarkData.id`，再 POST
   ///   `/ajax/illusts/bookmarks/delete` 表单 `bookmark_id=…`。
   ///
-  /// `restrict: 0` 表示**公开**书签（与 Web 默认一致）；本项目不提供私密书签
-  /// 开关，理由同文件头的 safe mode 决策：不给用户制造"收藏了别人看不到"的
-  /// 意外。`comment` / `tags` 留空，本源的收藏是纯收藏夹语义（见 pixiv.dart 的
+  /// visibility defaults to public (restrict=0); detail long-press can add a
+  /// private bookmark (restrict=1). Deleting always uses the current bookmark.
+  /// `comment` / `tags` 留空，本源的收藏是纯收藏夹语义（见 pixiv.dart 的
   /// `multiFolder: false`），不回写备注与标签，避免覆盖用户在 Web 端写的内容。
   ///
   /// 两个接口都需要登录态：`requireAuth: true` 会在本地就拦下未登录调用，
@@ -1364,6 +1419,7 @@ class PixivNetwork {
   Future<Res<bool>> setBookmark(
     String illustId, {
     required bool isAdding,
+    PixivBookmarkVisibility visibility = PixivBookmarkVisibility.public,
   }) async {
     final id = _positiveId(illustId);
     if (id == null) {
@@ -1418,7 +1474,7 @@ class PixivNetwork {
       <String, dynamic>{
         'comment': '',
         'illust_id': id,
-        'restrict': 0,
+        'restrict': visibility.restrict,
         'tags': <String>[],
       },
       requireAuth: true,

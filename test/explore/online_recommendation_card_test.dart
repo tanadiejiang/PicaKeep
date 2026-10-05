@@ -6,6 +6,7 @@ import 'package:picakeep/comic_source/comic_source.dart';
 import 'package:picakeep/network/jm_network/jm_models.dart';
 import 'package:picakeep/network/pixiv_network/pixiv_parsing.dart';
 import 'package:picakeep/network/res.dart';
+import 'package:picakeep/pages/online_comic/pixiv_author_page_v2.dart';
 import 'package:picakeep/pages/online_common/online_recommendation_card.dart';
 import 'package:picakeep/pages/online_common/online_waterfall_card.dart';
 
@@ -63,6 +64,7 @@ void main() {
     ValueChanged<String>? author,
     Future<void> Function()? refresh,
     bool actionsEnabled = true,
+    bool isAuthorPage = false,
   }) =>
       tester.pumpWidget(MaterialApp(
           home: Scaffold(
@@ -82,6 +84,7 @@ void main() {
           onOpenAuthor: author,
           onDataRefresh: refresh,
           actionsEnabled: actionsEnabled,
+          isAuthorPage: isAuthorPage,
         ),
       ))));
 
@@ -98,7 +101,9 @@ void main() {
           width: 180,
           child: OnlineRecommendationCard(
             source: source,
-            comic: _comic(),
+            comic: i == 0
+                ? _comic()
+                : _comic(bookmarkable: false, stateKnown: false),
             bookmarks: bookmarks,
             onAccountsChanged: () {},
             onOpenDetail: () => detailCalls++,
@@ -127,6 +132,225 @@ void main() {
       expect((element.widget as OnlineWaterfallCard).favoriteBusy, isFalse);
     }
     expect(detailCalls, 0);
+  });
+
+  test('a new known brief invalidates an older unknown-state read', () async {
+    final pendingRead = Completer<Res<PixivBookmarkState>>();
+    var writes = 0;
+    final pending = bookmarks.toggle(
+      account: 'account-99',
+      comic: _comic(bookmarkable: false, stateKnown: false),
+      readState: (_) => pendingRead.future,
+      write: (_, {required isAdding}) async {
+        writes++;
+        return Res(isAdding);
+      },
+      isCurrentAccount: () => true,
+    );
+    await Future<void>.delayed(Duration.zero);
+    expect(bookmarks.isBusy('account-99', _comic(stateKnown: false)), isTrue);
+
+    final refreshed = _comic(marked: true, stateKnown: true);
+    expect(bookmarks.isBusy('account-99', refreshed), isTrue);
+    pendingRead.complete(Res(_info(marked: false)));
+    await pending;
+
+    expect(writes, 0);
+    expect(bookmarks.isBookmarked('account-99', refreshed), isTrue);
+    expect(bookmarks.isBusy('account-99', refreshed), isFalse);
+  });
+
+  test('equivalent known updates and unknown briefs retain in-flight writes',
+      () async {
+    final pendingWrite = Completer<Res<bool>>();
+    final comic = _comic(marked: false, stateKnown: true);
+    final pending = bookmarks.toggle(
+      account: 'account-99',
+      comic: comic,
+      write: (_, {required isAdding}) {
+        expect(isAdding, isTrue);
+        return pendingWrite.future;
+      },
+      isCurrentAccount: () => true,
+    );
+    await Future<void>.delayed(Duration.zero);
+    expect(bookmarks.isBusy('account-99', comic), isTrue);
+    expect(
+        bookmarks.isBookmarked(
+            'account-99', _comic(marked: false, stateKnown: true)),
+        isFalse);
+    expect(
+        bookmarks.isBookmarked('account-99',
+            _comic(marked: true, bookmarkable: false, stateKnown: false)),
+        isFalse);
+
+    pendingWrite.complete(const Res(true));
+    expect((await pending)?.data, isTrue);
+    expect(bookmarks.isBookmarked('account-99', comic), isTrue);
+  });
+
+  test('an unknown brief cannot downgrade a confirmed bookmark state', () {
+    const account = 'account-99';
+    final known = _comic(marked: true, stateKnown: true);
+    bookmarks.synchronizeConfirmedState(
+      account: account,
+      comic: known,
+      state: _info(marked: true),
+    );
+
+    final unknown =
+        _comic(marked: false, bookmarkable: false, stateKnown: false);
+    expect(bookmarks.isBookmarked(account, unknown), isTrue);
+    expect(bookmarks.isStateKnown(account, unknown), isTrue);
+    expect(bookmarks.canToggle(account, unknown), isTrue);
+  });
+
+  test('conflicting known update rejects a late write result', () async {
+    final pendingWrite = Completer<Res<bool>>();
+    final initial = _comic(marked: false, stateKnown: true);
+    final pending = bookmarks.toggle(
+      account: 'account-99',
+      comic: initial,
+      write: (_, {required isAdding}) => pendingWrite.future,
+      isCurrentAccount: () => true,
+    );
+    await Future<void>.delayed(Duration.zero);
+    final authoritative = _comic(marked: true, stateKnown: true);
+    expect(bookmarks.isBookmarked('account-99', authoritative), isFalse);
+    pendingWrite.complete(const Res(true));
+
+    expect(await pending, isNull);
+    expect(bookmarks.isBookmarked('account-99', authoritative), isTrue);
+    expect(bookmarks.isBusy('account-99', authoritative), isFalse);
+  });
+
+  testWidgets('two mounted cards can add then remove through one controller',
+      (tester) async {
+    final recommendation = _comic(marked: false, stateKnown: true);
+    final author =
+        _comic(marked: false, bookmarkable: false, stateKnown: false);
+    final add = Completer<Res<bool>>();
+    final remove = Completer<Res<bool>>();
+    final writes = <bool>[];
+    Future<Res<bool>> write(String _, {required bool isAdding}) {
+      writes.add(isAdding);
+      return isAdding ? add.future : remove.future;
+    }
+
+    Future<void> mount() => tester.pumpWidget(MaterialApp(
+          home: Scaffold(
+            body: Row(children: [
+              for (var index = 0; index < 2; index++)
+                SizedBox(
+                  width: 180,
+                  child: OnlineRecommendationCard(
+                    source: source,
+                    // The recommendation card keeps an old known false brief;
+                    // the author adapter supplies an unknown brief for the
+                    // same ID while both remain mounted.
+                    comic: index == 0 ? recommendation : author,
+                    bookmarks: bookmarks,
+                    onAccountsChanged: () {},
+                    writeBookmark: write,
+                  ),
+                ),
+            ]),
+          ),
+        ));
+
+    await mount();
+    await tester.pumpAndSettle();
+    var cards = find.byType(OnlineWaterfallCard);
+    tester.widget<OnlineWaterfallCard>(cards.first).onToggleFavorite!();
+    await tester.pump();
+    expect(writes, [true]);
+    add.complete(const Res(true));
+    await tester.pumpAndSettle();
+    expect(tester.widget<OnlineWaterfallCard>(cards.first).isFavorited, isTrue);
+
+    // Rebuild both source cards before the second request completes. The
+    // stale known=false recommendation brief must not cancel the remove.
+    await mount();
+    await tester.pump();
+    cards = find.byType(OnlineWaterfallCard);
+    tester.widget<OnlineWaterfallCard>(cards.last).onToggleFavorite!();
+    await tester.pump();
+    expect(writes, [true, false]);
+    remove.complete(const Res(false));
+    await tester.pumpAndSettle();
+    expect(writes, [true, false]);
+    expect(
+        tester.widget<OnlineWaterfallCard>(cards.first).isFavorited, isFalse);
+    expect(tester.takeException(), isNull);
+  });
+
+  test('a fresh known snapshot invalidates a write after prior confirmation',
+      () async {
+    const account = 'account-99';
+    final old = _comic(marked: false, stateKnown: true);
+    bookmarks.synchronizeConfirmedState(
+      account: account,
+      comic: old,
+      state: _info(marked: true),
+    );
+    final pendingWrite = Completer<Res<bool>>();
+    final pending = bookmarks.toggle(
+      account: account,
+      comic: old,
+      write: (_, {required isAdding}) => pendingWrite.future,
+      isCurrentAccount: () => true,
+    );
+    await Future<void>.delayed(Duration.zero);
+    final fresh = _comic(marked: false, stateKnown: true);
+    expect(bookmarks.isBusy(account, fresh), isTrue);
+    pendingWrite.complete(const Res(false));
+
+    expect(await pending, isNull);
+    expect(bookmarks.isBookmarked(account, fresh), isFalse);
+    expect(bookmarks.isBusy(account, fresh), isFalse);
+  });
+
+  testWidgets('author mode hides repeated identity while preserving metadata',
+      (tester) async {
+    var details = 0, writes = 0;
+    await pump(tester,
+        isAuthorPage: true,
+        detail: () => details++,
+        write: (_, {required isAdding}) async {
+          writes++;
+          return Res(isAdding);
+        });
+    await tester.pumpAndSettle();
+    final card =
+        tester.widget<OnlineWaterfallCard>(find.byType(OnlineWaterfallCard));
+    expect(card.author, isEmpty);
+    expect(card.showAuthorAvatar, isFalse);
+    expect(card.onAuthorTap, isNull);
+    expect(card.pageCount, 3);
+    expect(card.tags, ['猫']);
+    expect(find.byKey(const Key('waterfall-avatar')), findsNothing);
+    expect(find.text('画师'), findsNothing);
+    await tester.tap(find.byKey(const Key('waterfall-favorite')));
+    await tester.pumpAndSettle();
+    expect(writes, 1);
+    expect(details, 0);
+    await tester.tap(find.text('作品1'));
+    expect(details, 1);
+  });
+
+  testWidgets('default author route passes the external bookmark controller',
+      (tester) async {
+    await pump(tester);
+    await tester.pumpAndSettle();
+    tester
+        .widget<OnlineWaterfallCard>(find.byType(OnlineWaterfallCard))
+        .onAuthorTap!();
+    await tester.pumpAndSettle();
+    final authorPage =
+        tester.widget<PixivAuthorPageV2>(find.byType(PixivAuthorPageV2));
+    expect(authorPage.bookmarks, same(bookmarks));
+    expect(authorPage.uid, '42');
+    await tester.pumpWidget(const SizedBox());
   });
 
   testWidgets('heart and author tap never trigger the detail route',

@@ -5,6 +5,7 @@ import 'package:picakeep/comic_source/comic_source.dart';
 import 'package:picakeep/foundation/untranslated_tags/untranslated_tag_coordinator.dart';
 import 'package:picakeep/network/base_comic.dart';
 import 'package:picakeep/network/res.dart';
+import 'package:picakeep/foundation/pixiv_detail_session.dart';
 import 'package:uuid/uuid.dart';
 import 'package:picakeep/network/eh_network/eh_models.dart';
 import 'package:picakeep/network/nhentai_network/models.dart';
@@ -219,6 +220,7 @@ class _OnlineSearchResultPageState extends State<OnlineSearchResultPage> {
       final sub = res.subData;
       _maxPage = sub is int ? sub : int.tryParse('$sub');
       _items.addAll(items);
+      if (items.isEmpty) _maxPage = _page;
     });
     unawaited(
       _observeSearchResults(
@@ -227,6 +229,38 @@ class _OnlineSearchResultPageState extends State<OnlineSearchResultPage> {
         operationId: operationId,
       ),
     );
+  }
+
+  Future<void> _openComic(BaseComic comic) async {
+    if (_source.key != 'pixiv') {
+      await openOnlineComic(context, _source, comic);
+      return;
+    }
+    final source = _source;
+    final generation = _searchGeneration;
+    final account = pixivDetailAccountIdentity(source);
+    bool isCurrent() =>
+        mounted &&
+        generation == _searchGeneration &&
+        source == _source &&
+        account == pixivDetailAccountIdentity(source);
+    final session = PixivDetailSession(
+      scope: PixivDetailScope.search,
+      entries: _items.map((item) => onlinePixivDetailEntry(source, item)),
+      hasMore: _maxPage == null || _page < _maxPage!,
+      ownerIsCurrent: isCurrent,
+      loadMore: () async {
+        if (_loading) throw StateError('入口正在加载');
+        await _search(loadMore: true);
+        if (_error != null) throw StateError(_error!);
+        return PixivDetailBatch(
+          _items.map((item) => onlinePixivDetailEntry(source, item)),
+          hasMore: _maxPage == null || _page < _maxPage!,
+        );
+      },
+    );
+    await openOnlineComic(context, source, comic, detailSession: session);
+    if (isCurrent()) setState(() {});
   }
 
   void _submitSearch(String keyword) {
@@ -482,6 +516,7 @@ class _OnlineSearchResultPageState extends State<OnlineSearchResultPage> {
                           return OnlineComicListItem(
                             source: _source,
                             comic: comic,
+                            onTap: () => _openComic(comic),
                           );
                         },
                       ),

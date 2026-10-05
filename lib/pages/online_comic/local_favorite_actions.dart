@@ -36,11 +36,13 @@ bool isLocalFavoriteTarget(String target, FavoriteType type) {
 
 /// 单本收藏对话框。返回 null 表示用户取消（未提交任何改动）。
 Future<LocalFavoriteBatchResult?> showLocalFavoriteFolders(
-        BuildContext context, FavoriteItem item) =>
+        BuildContext context, FavoriteItem item,
+        {List<FavoriteItem> identityAliases = const []}) =>
     showDialog<LocalFavoriteBatchResult>(
       context: context,
       barrierDismissible: false,
-      builder: (_) => _LocalFavoriteFolders(items: [item], batch: false),
+      builder: (_) => _LocalFavoriteFolders(
+          items: [item], batch: false, identityAliases: identityAliases),
     );
 
 /// 单本入口：显示对话框并在提交后给出提示；用户取消时不提示。
@@ -49,19 +51,19 @@ Future<LocalFavoriteBatchResult?> showLocalFavoriteFolders(
 /// 直接关闭对话框视为放弃。因此提示只能由调用方在拿到结果后显示
 /// （对话框自身的 SnackBar 会随其销毁而消失）。
 Future<void> showLocalFavoriteFoldersWithFeedback(
-    BuildContext context, FavoriteItem item) async {
-  final result = await showLocalFavoriteFolders(context, item);
+    BuildContext context, FavoriteItem item,
+    {List<FavoriteItem> identityAliases = const []}) async {
+  final result = await showLocalFavoriteFolders(context, item,
+      identityAliases: identityAliases);
   if (result == null || !context.mounted) return;
-  ScaffoldMessenger.of(context)
-      .showSnackBar(SnackBar(content: Text(localFavoriteSingleMessage(result))));
+  ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(localFavoriteSingleMessage(result))));
 }
 
 /// 单本收藏提交后的提示文案。
 String localFavoriteSingleMessage(LocalFavoriteBatchResult result) {
   if (result.failedRelations > 0) {
-    final base = result.addedRelations == 0
-        ? '收藏操作失败，请重试'
-        : '已添加到本地收藏，部分收藏夹失败';
+    final base = result.addedRelations == 0 ? '收藏操作失败，请重试' : '已添加到本地收藏，部分收藏夹失败';
     // 新建的收藏夹即使收藏失败也已落库，必须让用户知道，
     // 否则收藏夹列表里会"凭空"多出一个空夹而没有任何解释。
     if (result.createdFolders.isNotEmpty) {
@@ -110,9 +112,13 @@ String localFavoriteBatchMessage(LocalFavoriteBatchResult result) {
 }
 
 class _LocalFavoriteFolders extends StatefulWidget {
-  const _LocalFavoriteFolders({required this.items, required this.batch});
+  const _LocalFavoriteFolders(
+      {required this.items,
+      required this.batch,
+      this.identityAliases = const []});
   final List<FavoriteItem> items;
   final bool batch;
+  final List<FavoriteItem> identityAliases;
   @override
   State<_LocalFavoriteFolders> createState() => _LocalFavoriteFoldersState();
 }
@@ -144,8 +150,8 @@ class _LocalFavoriteFoldersState extends State<_LocalFavoriteFolders> {
     if (widget.batch) return const <String>{};
     final item = widget.items.single;
     return _manager.folderNames
-        .where((folder) =>
-            _manager.comicExists(folder, item.target, item.type.key))
+        .where((folder) => [item, ...widget.identityAliases].any((identity) =>
+            _manager.comicExists(folder, identity.target, identity.type.key)))
         .toSet();
   }
 
@@ -212,8 +218,15 @@ class _LocalFavoriteFoldersState extends State<_LocalFavoriteFolders> {
       for (final item in items) {
         try {
           _manager.deleteComicWithTarget(folder, item.target, item.type);
+          if (!widget.batch) {
+            for (final alias in widget.identityAliases) {
+              _manager.deleteComicWithTarget(folder, alias.target, alias.type);
+            }
+          }
           // 校验是否真的移除成功：多库合并场景下部分库可能拒绝删除。
-          if (_manager.comicExists(folder, item.target, item.type.key)) {
+          if ([item, if (!widget.batch) ...widget.identityAliases].any(
+              (identity) => _manager.comicExists(
+                  folder, identity.target, identity.type.key))) {
             removalFailures.add(folder);
           }
         } catch (_) {
@@ -289,11 +302,10 @@ class _LocalFavoriteFoldersState extends State<_LocalFavoriteFolders> {
               content: SizedBox(
                 width: math.min(400, media.size.width - 80),
                 child: ConstrainedBox(
-                  constraints:
-                      BoxConstraints(maxHeight: math.max(60, availableHeight * .48)),
+                  constraints: BoxConstraints(
+                      maxHeight: math.max(60, availableHeight * .48)),
                   child: SingleChildScrollView(
-                      child:
-                          Column(mainAxisSize: MainAxisSize.min, children: [
+                      child: Column(mainAxisSize: MainAxisSize.min, children: [
                     Text(widget.batch
                         ? '已选择 ${widget.items.length} 本漫画，可添加到多个收藏夹'
                         : '勾选收藏夹后点「完成」生效'),
@@ -313,8 +325,7 @@ class _LocalFavoriteFoldersState extends State<_LocalFavoriteFolders> {
                     TextField(
                         controller: _name,
                         enabled: !_busy,
-                        decoration:
-                            const InputDecoration(labelText: '新收藏夹名称')),
+                        decoration: const InputDecoration(labelText: '新收藏夹名称')),
                     TextButton.icon(
                         icon: const Icon(Icons.create_new_folder_outlined),
                         label: const Text('新建并选中'),

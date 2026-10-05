@@ -398,6 +398,8 @@ void main() {
 
   testWidgets('author card tags update immediately without profile reload',
       (tester) async {
+    appdata.settings[comicTileDisplayConfigSettingIndex] =
+        '{"waterfall":{"pixivAuthor":{"showTags":false,"tagRows":2}}}';
     var reads = 0;
     var works = 0;
     await tester.pumpWidget(_page(
@@ -478,7 +480,7 @@ void main() {
     App.notifyDisplaySettingsChanged();
     await tester.pumpAndSettle();
     card = tester.widget<OnlineWaterfallCard>(find.byType(OnlineWaterfallCard));
-    expect(card.tagConfig.showTags, isFalse);
+    expect(card.tagConfig.showTags, isTrue);
     expect(reads, 1);
     expect(works, 1);
   });

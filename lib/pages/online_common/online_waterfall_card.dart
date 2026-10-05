@@ -203,20 +203,27 @@ class OnlineWaterfallCard extends StatelessWidget {
             child: SizedBox(
               width: 48,
               height: 48,
-              child: favoriteBusy
-                  ? Icon(
-                      Icons.hourglass_top,
-                      key: const ValueKey('waterfall-favorite-progress'),
-                      size: 22,
-                      color: Theme.of(context).colorScheme.primary,
-                    )
-                  : Icon(
-                      isFavorited ? Icons.favorite : Icons.favorite_border,
-                      size: 22,
-                      color: isFavorited
-                          ? favoriteStyle.favoriteColor(context)
-                          : favoriteStyle.inactiveColor,
-                    ),
+              child: Icon(
+                favoriteBusy || isFavorited
+                    ? Icons.favorite
+                    : Icons.favorite_border,
+                key: favoriteBusy
+                    ? const ValueKey('waterfall-favorite-progress')
+                    : null,
+                size: 22,
+                color: favoriteBusy
+                    ? favoriteStyle.favoriteColor(context).withValues(alpha: .5)
+                    : isFavorited
+                        ? favoriteStyle.favoriteColor(context)
+                        : favoriteStyle.inactiveColor,
+                shadows: [
+                  Shadow(
+                    color:
+                        Colors.black.withValues(alpha: favoriteBusy ? .3 : .6),
+                    blurRadius: 2,
+                  ),
+                ],
+              ),
             ),
           ),
         ),

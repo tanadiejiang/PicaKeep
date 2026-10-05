@@ -4,13 +4,15 @@ import 'package:flutter/material.dart';
 
 import 'package:picakeep/comic_source/comic_source.dart';
 import 'package:picakeep/comic_source/favorite_data.dart';
+import 'package:picakeep/comic_source/built_in/pixiv.dart';
 import 'package:picakeep/components/comic_tile.dart';
 import 'package:picakeep/components/layout.dart';
-import 'package:picakeep/foundation/app_page_route.dart';
 import 'package:picakeep/foundation/comic_tile_display_config.dart';
 import 'package:picakeep/foundation/download_author_resolver.dart';
 import 'package:picakeep/foundation/local_favorites.dart';
+import 'package:picakeep/foundation/pixiv_detail_session.dart';
 import 'package:picakeep/network/base_comic.dart';
+import 'package:picakeep/pages/online_common/online_comic_list_item.dart';
 import 'package:picakeep/tools/translations.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -39,6 +41,8 @@ class _NetworkFavoriteWidgetState extends State<NetworkFavoriteWidget> {
   int? _maxPage;
   bool _loading = false;
   String? _error;
+  int _generation = 0;
+  int? _totalCount;
 
   FavoriteData get _favoriteData => widget.source.favoriteData!;
 
@@ -58,12 +62,15 @@ class _NetworkFavoriteWidgetState extends State<NetworkFavoriteWidget> {
   void didUpdateWidget(NetworkFavoriteWidget oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.source.key != widget.source.key) {
+      _generation++;
       _folders = null;
       _currentFolderId = null;
       _foldersError = null;
       _items.clear();
       _page = 0;
       _maxPage = null;
+      _loading = false;
+      _totalCount = null;
       _error = null;
       if (_multiFolder) {
         _loadFolders();
@@ -125,6 +132,8 @@ class _NetworkFavoriteWidgetState extends State<NetworkFavoriteWidget> {
       return;
     }
     final nextPage = reset ? 1 : _page + 1;
+    final generation = reset ? ++_generation : _generation;
+    final account = pixivDetailAccountIdentity(widget.source);
     if (!reset && _maxPage != null && _page >= _maxPage!) return;
     setState(() {
       _loading = true;
@@ -133,10 +142,16 @@ class _NetworkFavoriteWidgetState extends State<NetworkFavoriteWidget> {
         _items.clear();
         _page = 0;
         _maxPage = null;
+        _totalCount = null;
       }
     });
     final res = await _favoriteData.loadComic(nextPage, _currentFolderId);
-    if (!mounted) return;
+    if (!mounted ||
+        generation != _generation ||
+        (widget.source.key == 'pixiv' &&
+            account != pixivDetailAccountIdentity(widget.source))) {
+      return;
+    }
     setState(() {
       _loading = false;
       if (res.error) {
@@ -146,29 +161,38 @@ class _NetworkFavoriteWidgetState extends State<NetworkFavoriteWidget> {
       _page = nextPage;
       final sub = res.subData;
       _maxPage = sub is int ? sub : int.tryParse('$sub');
-      _items.addAll(res.data);
+      if (res is PixivBookmarkSourceResult) _totalCount = res.totalCount;
+      final existing = _items.map((item) => item.id).toSet();
+      _items.addAll(res.data.where((item) => existing.add(item.id)));
+      if (res.data.isEmpty) _maxPage = _page;
     });
   }
 
   // ── 文件夹选择 ──────────────────────────────────────────────────────────────
 
   void _selectFolder(String folderId) {
+    _generation++;
     setState(() {
       _currentFolderId = folderId;
       _items.clear();
       _page = 0;
       _maxPage = null;
+      _loading = false;
+      _totalCount = null;
       _error = null;
     });
     _load(reset: true);
   }
 
   void _backToFolders() {
+    _generation++;
     setState(() {
       _currentFolderId = null;
       _items.clear();
       _page = 0;
       _maxPage = null;
+      _loading = false;
+      _totalCount = null;
       _error = null;
     });
     // 如果文件夹列表需要刷新（如首次进入时 loader 返回错误）可在此重新调用
@@ -176,10 +200,40 @@ class _NetworkFavoriteWidgetState extends State<NetworkFavoriteWidget> {
 
   // ── 其他操作 ────────────────────────────────────────────────────────────────
 
-  void _openComic(BaseComic comic) {
-    final builder = widget.source.comicPageBuilder;
-    if (builder == null) return;
-    Navigator.of(context).push(AppPageRoute(builder: (_) => builder(comic)));
+  Future<void> _openComic(BaseComic comic) async {
+    final source = widget.source;
+    if (source.key != 'pixiv') {
+      await openOnlineComic(context, source, comic);
+      return;
+    }
+    final generation = _generation;
+    final folder = _currentFolderId;
+    final account = pixivDetailAccountIdentity(source);
+    bool isCurrent() =>
+        mounted &&
+        generation == _generation &&
+        folder == _currentFolderId &&
+        source == widget.source &&
+        account == pixivDetailAccountIdentity(source);
+    final session = PixivDetailSession(
+      scope: PixivDetailScope.platformFavorites,
+      entries: _items.map((item) => onlinePixivDetailEntry(source, item)),
+      hasMore: _maxPage == null || _page < _maxPage!,
+      total: _totalCount,
+      ownerIsCurrent: isCurrent,
+      loadMore: () async {
+        if (_loading) throw StateError('入口正在加载');
+        await _load();
+        if (_error != null) throw StateError(_error!);
+        return PixivDetailBatch(
+          _items.map((item) => onlinePixivDetailEntry(source, item)),
+          hasMore: _maxPage == null || _page < _maxPage!,
+          total: _totalCount,
+        );
+      },
+    );
+    await openOnlineComic(context, source, comic, detailSession: session);
+    if (isCurrent()) await _load(reset: true);
   }
 
   Future<void> _copyToLocal(BuildContext parentCtx, BaseComic comic) async {

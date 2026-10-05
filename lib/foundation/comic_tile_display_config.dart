@@ -17,11 +17,12 @@ const waterfallTagPixivAuthorKey = 'pixivAuthor';
 const waterfallTagRecommendKey = 'recommend';
 const waterfallFavoriteStyleKey = 'favoriteStyle';
 
-/// 有限行数预留固定预算；0 为自然高度的不限行。旧本地/作者默认不显示。
+/// 有限行数预留固定预算；0 为自然高度的不限行。本地默认不显示。
 class WaterfallTagDisplayConfig {
   const WaterfallTagDisplayConfig({this.showTags = false, this.tagRows = 2});
 
   static const defaults = WaterfallTagDisplayConfig();
+  static const pixivAuthorDefaults = WaterfallTagDisplayConfig(showTags: true);
   static const recommendDefaults = WaterfallTagDisplayConfig(showTags: true);
   static const rowOptions = <int>[1, 2, 3, 0];
   final bool showTags;
@@ -64,7 +65,7 @@ class WaterfallTagDisplayConfig {
   int get hashCode => Object.hash(showTags, maxTagRows);
 }
 
-/// 封面收藏按钮只改变图标颜色和透明度，不添加底板或阴影。
+/// 封面收藏图标的颜色和透明度；图标保留对比轮廓，不添加底板。
 class WaterfallFavoriteStyle {
   const WaterfallFavoriteStyle({this.color = 'rose', this.opacity = 90});
 
@@ -515,7 +516,7 @@ class ComicTileDisplaySettings {
     required this.online,
     required this.searchBySource,
     this.localIllustTags = WaterfallTagDisplayConfig.defaults,
-    this.pixivAuthorTags = WaterfallTagDisplayConfig.defaults,
+    this.pixivAuthorTags = WaterfallTagDisplayConfig.pixivAuthorDefaults,
     this.recommendTags = WaterfallTagDisplayConfig.recommendDefaults,
     this.favoriteStyle = WaterfallFavoriteStyle.defaults,
   });
@@ -634,8 +635,13 @@ class ComicTileDisplaySettings {
       searchBySource: search,
       localIllustTags: WaterfallTagDisplayConfig.fromJson(
           waterfall is Map ? waterfall[waterfallTagLocalKey] : null),
-      pixivAuthorTags: WaterfallTagDisplayConfig.fromJson(
-          waterfall is Map ? waterfall[waterfallTagPixivAuthorKey] : null),
+      // Existing author nodes retain the older parser defaults and saved
+      // preferences; only an absent node receives the new visible default.
+      pixivAuthorTags:
+          waterfall is Map && waterfall.containsKey(waterfallTagPixivAuthorKey)
+              ? WaterfallTagDisplayConfig.fromJson(
+                  waterfall[waterfallTagPixivAuthorKey])
+              : WaterfallTagDisplayConfig.pixivAuthorDefaults,
       recommendTags: WaterfallTagDisplayConfig.fromJson(
           waterfall is Map ? waterfall[waterfallTagRecommendKey] : null,
           fallback: WaterfallTagDisplayConfig.recommendDefaults),

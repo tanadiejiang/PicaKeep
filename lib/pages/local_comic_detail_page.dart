@@ -5,6 +5,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_staggered_grid_view/flutter_staggered_grid_view.dart';
 import 'package:photo_view/photo_view.dart';
 import 'package:picakeep/base.dart';
 import 'package:picakeep/comic_source/comic_source.dart';
@@ -17,8 +18,14 @@ import 'package:picakeep/foundation/archive/archive_password_store.dart';
 import 'package:picakeep/foundation/download.dart';
 import 'package:picakeep/foundation/download_author_resolver.dart';
 import 'package:picakeep/foundation/download_model.dart';
-import 'package:picakeep/foundation/favorite_source_id.dart'
-    as source_id_rules;
+import 'package:picakeep/foundation/download_export/download_export_page.dart';
+import 'package:picakeep/foundation/download_export/download_export_sources.dart';
+import 'package:picakeep/foundation/download_export/download_export_models.dart';
+import 'package:picakeep/foundation/comic_tile_display_config.dart';
+import 'package:picakeep/foundation/pixiv_detail_session.dart';
+import 'package:picakeep/foundation/pixiv_local_detail.dart';
+import 'package:picakeep/foundation/local_favorites.dart';
+import 'package:picakeep/foundation/favorite_source_id.dart' as source_id_rules;
 import 'package:picakeep/foundation/local_library.dart';
 import 'package:picakeep/foundation/log.dart';
 import 'package:picakeep/foundation/local_library_settings.dart';
@@ -37,6 +44,11 @@ import 'package:picakeep/pages/online_comic/jm_comic_page_v2.dart';
 import 'package:picakeep/pages/online_comic/picacg_comic_page_v2.dart';
 import 'package:picakeep/pages/online_comic/nhentai_comic_page_v2.dart';
 import 'package:picakeep/pages/online_comic/pixiv_author_link.dart';
+import 'package:picakeep/pages/online_comic/pixiv_detail_shell.dart';
+import 'package:picakeep/pages/online_comic/pixiv_detail_pager.dart';
+import 'package:picakeep/pages/online_comic/pixiv_comments_section.dart';
+import 'package:picakeep/pages/online_comic/local_favorite_actions.dart';
+import 'package:picakeep/pages/pixiv_local_detail_card.dart';
 import 'package:picakeep/tools/tags_translation.dart';
 import 'package:picakeep/tools/translations.dart';
 import 'package:uuid/uuid.dart';
@@ -196,7 +208,6 @@ bool supportsVisitOnline(DownloadedItem comic) {
   return supportsUpdateInfo(comic.type) ||
       buildLocalItemOnlineComicPage(comic) != null;
 }
-
 
 // 07号计划：信息区渲染需要 works/actors/chineseTeam/categories/categorizedTags
 // 这些具体子类字段，但 _comic 运行时大多是 LocalLibraryComicItem 包装层，其
@@ -854,6 +865,13 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
   // initState 里异步走 LocalLibraryManager().resolveCoverPathForItem（含目录扫描兜底）
   // 补上，与底栏侧栏 _resolveCoverIfNeeded 同思路。
   String? _resolvedCoverPath;
+  List<PixivLocalPage> _pixivPages = const [];
+  List<PixivDetailImage> _pixivImages = const [];
+  bool _pixivImagesLoading = false;
+  String? _pixivImageError;
+  bool _pixivFavoriteBusy = false;
+  bool _pixivExportBusy = false;
+  StreamSubscription<List<FavGroup>>? _pixivFavoriteChanges;
 
   // 推荐结果缓存：_buildRecommendations() 对全库做正则相似度+排序，开销大
   // （profile 实测单次 ~150ms）。原先放在 build() 里每次 setState 都重算，
@@ -872,6 +890,13 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
   void initState() {
     super.initState();
     _comic = widget.comic;
+    if (PixivLocalIdentity.fromItem(_comic) != null) {
+      unawaited(_loadPixivPages());
+      _pixivFavoriteChanges =
+          LocalFavoritesManager().allFoldersStream.listen((_) {
+        if (mounted) setState(() {});
+      });
+    }
     unawaited(_observeUntranslatedTags(_comic));
     _scrollController.addListener(_handleScroll);
     _loadRemoteDetailIfNeeded();
@@ -912,6 +937,366 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
     } catch (_) {
       // Tag collection must never block or break local detail loading.
     }
+  }
+
+  Future<void> _loadPixivPages() async {
+    setState(() {
+      _pixivImagesLoading = true;
+      _pixivImageError = null;
+    });
+    try {
+      final pages = await loadPixivLocalPages(_comic);
+      if (!mounted) return;
+      setState(() {
+        _pixivPages = pages;
+        _pixivImages = [
+          for (final page in pages)
+            PixivDetailImage(
+              key: page.key,
+              provider: page.provider,
+              aspectRatio: page.aspectRatio,
+              aspectRatioKnown: false,
+              onRead: () => _onRead(ep: page.ep, page: page.page),
+            )
+        ];
+        _pixivImagesLoading = false;
+        _pixivImageError = pages.isEmpty ? '未找到可读取的本地图片' : null;
+      });
+    } catch (error) {
+      if (mounted) {
+        setState(() {
+          _pixivImagesLoading = false;
+          _pixivImageError = '读取本地图片失败：$error';
+        });
+      }
+    }
+  }
+
+  Future<void> _pixivFavorite(
+      {DownloadedItem? item, bool manage = false}) async {
+    if (_pixivFavoriteBusy) return;
+    final target = item ?? _comic;
+    final identity = PixivLocalIdentity.fromItem(target);
+    final favorite =
+        identity?.favorite(target, coverPath: identity.record.cover);
+    if (identity == null || favorite == null) {
+      _showMessage('本地记录缺少有效 Pixiv 作品 ID，无法收藏');
+      return;
+    }
+    setState(() => _pixivFavoriteBusy = true);
+    try {
+      final folder = PixivDetailSessionScope.favoriteFolderOf(context);
+      final folders = pixivLocalFavoriteFolders(target);
+      if (!manage &&
+          item == null &&
+          folder != null &&
+          folders.contains(folder)) {
+        removePixivLocalFavoriteFromFolder(target, folder);
+        if (pixivLocalFavoriteFolders(target).contains(folder)) {
+          throw StateError('收藏关系未能移除');
+        }
+        _showMessage('已取消此收藏夹中的本地收藏');
+      } else {
+        final result = await showLocalFavoriteFolders(context, favorite,
+            identityAliases: identity.aliases(target));
+        if (mounted && result != null) {
+          _showMessage(localFavoriteSingleMessage(result));
+        }
+      }
+      App.notifyLocalDataChanged();
+    } catch (error) {
+      if (mounted) _showMessage('本地收藏操作失败：$error');
+    } finally {
+      if (mounted) setState(() => _pixivFavoriteBusy = false);
+    }
+  }
+
+  Future<void> _exportPixiv({bool manifestOnly = false}) async {
+    if (_pixivExportBusy) return;
+    setState(() => _pixivExportBusy = true);
+    try {
+      final request = await DownloadExportRequestFactory.fromItem(_comic,
+          fallbackPath: _comic.directory);
+      if (!mounted) return;
+      await Navigator.of(context).push<void>(MaterialPageRoute(
+          builder: (_) => manifestOnly
+              ? DownloadExportFieldConfigPage(requests: [request])
+              : DownloadExportProgressPage(
+                  requests: [request],
+                  fields: DownloadExportFieldConfiguration.compact(),
+                  includeContent: true)));
+    } catch (error) {
+      if (mounted) _showMessage('无法准备导出：$error');
+    } finally {
+      if (mounted) setState(() => _pixivExportBusy = false);
+    }
+  }
+
+  Future<void> _openPixivLocalBlock(
+          DownloadedItem item, Iterable<DownloadedItem> items) =>
+      openLocalPixivDetail(context, item,
+          items: items, scope: PixivDetailScope.related);
+
+  Widget _buildPixivLocalAuthor(PixivLocalIdentity identity) {
+    final name = _recommendationAuthor(_comic);
+    final uid = identity.record.authorId;
+    final works = uid == null || uid.isEmpty
+        ? <DownloadedItem>[]
+        : _localItems
+            .where((item) =>
+                item.id != _comic.id &&
+                PixivLocalIdentity.fromItem(item)?.record.authorId == uid)
+            .toList();
+    final destination = PixivAuthorDestination.fromDownloadedItem(_comic);
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        Row(children: [
+          CircleAvatar(
+              radius: 20,
+              child: Text(name.isEmpty ? '?' : name.characters.first)),
+          const SizedBox(width: 12),
+          Expanded(
+              child: Text(name.isEmpty ? '未知作者' : name,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.titleMedium)),
+          TextButton(
+            onPressed: works.isEmpty
+                ? () => _showMessage(
+                    uid == null || uid.isEmpty ? '本地记录缺少作者 ID' : '本地暂无该作者其它作品')
+                : () => _openPixivLocalBlock(works.first, works),
+            child: const Text('作者作品'),
+          ),
+        ]),
+        if (works.isNotEmpty) ...[
+          const SizedBox(height: 12),
+          LayoutBuilder(
+              builder: (context, constraints) => SizedBox(
+                    height: constraints.maxWidth / 3 * 1.35,
+                    child: ListView.separated(
+                      scrollDirection: Axis.horizontal,
+                      itemCount: works.length,
+                      separatorBuilder: (_, __) => const SizedBox(width: 8),
+                      itemBuilder: (context, index) => SizedBox(
+                          width: (constraints.maxWidth - 16) / 3,
+                          child: PixivLocalDetailCard(
+                              item: works[index],
+                              compact: true,
+                              onTap: () =>
+                                  _openPixivLocalBlock(works[index], works),
+                              onFavorite: () => _pixivFavorite(
+                                  item: works[index], manage: true))),
+                    ),
+                  )),
+        ],
+        if (destination != null) ...[
+          const SizedBox(height: 8),
+          Center(
+              child:
+                  PixivAuthorLink(destination: destination, authorName: name)),
+        ],
+      ]),
+    );
+  }
+
+  List<Widget> _buildPixivLocalRelated(
+      List<_LocalRecommendation> recommendations, int total) {
+    if (normalizeLocalDetailRecommendationMode(
+            appdata.settings[localDetailRecommendationSettingIndex]) ==
+        '5') {
+      return const [];
+    }
+    final config = readComicTileDisplaySettings().recommendTags;
+    final items =
+        recommendations.map((value) => value.item).toList(growable: false);
+    return [
+      SliverToBoxAdapter(
+          child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 24, 16, 12),
+              child: Row(children: [
+                const SizedBox(width: 48),
+                Expanded(
+                    child: Text('相关作品',
+                        textAlign: TextAlign.center,
+                        style: Theme.of(context).textTheme.titleLarge)),
+                IconButton(
+                    tooltip: '推荐设置',
+                    onPressed: _showRecommendationSettings,
+                    icon: const Icon(Icons.tune)),
+              ]))),
+      if (items.isEmpty)
+        const SliverToBoxAdapter(
+            child: Padding(
+                padding: EdgeInsets.all(16), child: Text('暂无可推荐的本地作品'))),
+      SliverPadding(
+          padding: const EdgeInsets.symmetric(horizontal: 12),
+          sliver: SliverMasonryGrid.count(
+              crossAxisCount: 2,
+              mainAxisSpacing: 12,
+              crossAxisSpacing: 8,
+              childCount: items.length,
+              itemBuilder: (context, index) => PixivLocalDetailCard(
+                  item: items[index],
+                  tagConfig: config,
+                  onTap: () => _openPixivLocalBlock(items[index], items),
+                  onFavorite:
+                      PixivLocalIdentity.fromItem(items[index])?.workId != null
+                          ? () =>
+                              _pixivFavorite(item: items[index], manage: true)
+                          : null))),
+      if (total > _recommendationPageSize)
+        SliverToBoxAdapter(
+            child: Center(
+                child: TextButton.icon(
+                    onPressed: () => _showNextRecommendationPage(total),
+                    icon: const Icon(Icons.keyboard_double_arrow_up),
+                    label: const Text('下一组推荐')))),
+    ];
+  }
+
+  Widget _buildPixivLocalDetail(PixivLocalIdentity identity) {
+    final recommendations = _buildRecommendations();
+    final start = (_recommendationPage * _recommendationPageSize)
+        .clamp(0, recommendations.length);
+    final page =
+        recommendations.skip(start).take(_recommendationPageSize).toList();
+    final history = _historyFor(_comic);
+    final info = _buildInfoGroups();
+    final folder = PixivDetailSessionScope.favoriteFolderOf(context);
+    final folders = pixivLocalFavoriteFolders(_comic);
+    final isFavorite =
+        folder == null ? folders.isNotEmpty : folders.contains(folder);
+    Widget result = PixivDetailShell(
+      title: _comic.name,
+      author: _recommendationAuthor(_comic),
+      images: _pixivImages,
+      imagesLoading: _pixivImagesLoading,
+      imageError: _pixivImageError,
+      onRetryImages: _loadPixivPages,
+      actionLabel: '导出',
+      actionIcon: Icons.ios_share_outlined,
+      actionBusy: _pixivExportBusy,
+      onAction: _exportPixiv,
+      onActionLongPress: () => _exportPixiv(manifestOnly: true),
+      isFavorited: isFavorite,
+      favoriteBusy: _pixivFavoriteBusy,
+      favoriteLabel: identity.workId == null
+          ? '缺少作品 ID，无法本地收藏'
+          : isFavorite
+              ? '取消本地收藏'
+              : '加入本地收藏',
+      onFavorite: () => _pixivFavorite(),
+      onFavoriteLongPress: () => _pixivFavorite(manage: true),
+      onShare: () => _copyText(_comic.name),
+      menuItems: [
+        const PopupMenuItem(value: 'copy_title', child: Text('复制标题')),
+        const PopupMenuItem(value: 'copy_id', child: Text('复制 ID')),
+        if (history != null)
+          const PopupMenuItem(value: 'continue', child: Text('继续阅读')),
+        const PopupMenuItem(value: 'read', child: Text('从头开始')),
+        const PopupMenuItem(value: 'pages', child: Text('全部图片')),
+        const PopupMenuItem(value: 'manifest', child: Text('导出清单')),
+        if (supportsVisitOnline(_comic))
+          const PopupMenuItem(value: 'online', child: Text('在线详情')),
+        if (_comic is LocalLibraryComicItem &&
+            (_comic as LocalLibraryComicItem).isArchiveItem &&
+            (_comic as LocalLibraryComicItem).archivePasswordMatched)
+          const PopupMenuItem(value: 'forget', child: Text('忘记压缩包密码')),
+        if (_canDeleteComic)
+          const PopupMenuItem(value: 'delete', child: Text('删除下载')),
+      ],
+      onMenu: (action) {
+        switch (action) {
+          case 'copy_title':
+            _copyText(_comic.name);
+          case 'copy_id':
+            _copyText(identity.workId ?? resolveOnlineRawId(_comic));
+          case 'continue':
+            if (history != null) {
+              _onRead(ep: history.ep, page: history.page);
+            }
+          case 'read':
+            if (_pixivPages.isNotEmpty) {
+              _onRead(ep: _pixivPages.first.ep, page: 1);
+            }
+          case 'pages':
+            _showPixivPageList();
+          case 'manifest':
+            _exportPixiv(manifestOnly: true);
+          case 'online':
+            _onVisitOnline();
+          case 'delete':
+            _onDelete();
+          case 'forget':
+            _onForgetArchivePassword(_comic as LocalLibraryComicItem);
+        }
+      },
+      sliversBuilder: (context) => [
+        SliverToBoxAdapter(
+            child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+                child: Wrap(spacing: 12, runSpacing: 8, children: [
+                  Text('${_pixivPages.isEmpty ? '未知' : _pixivPages.length} 张图'),
+                  Text(_formatSize(_comic.comicSize)),
+                  if (_comic.time != null) Text(_formatTime(_comic.time)),
+                ]))),
+        SliverToBoxAdapter(
+            child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: Wrap(children: [
+                  for (final group in info) ...[
+                    _infoCard(group.name, title: true),
+                    for (final value in group.values)
+                      _infoCard(value.displayText,
+                          rawSearchValue:
+                              group.isTagGroup ? value.effectiveRawValue : null,
+                          rawNamespace:
+                              group.isTagGroup ? value.rawNamespace : ''),
+                  ]
+                ]))),
+        ..._buildIntroduction(_getDescription()),
+        const PixivDetailFavoriteBoundary(),
+        SliverToBoxAdapter(child: _buildPixivLocalAuthor(identity)),
+        if (identity.workId != null)
+          PixivCommentsSection(
+              key: ValueKey('local-comment-${_comic.id}'),
+              illustId: identity.workId!,
+              autoLoad: false),
+        ..._buildPixivLocalRelated(page, recommendations.length),
+      ],
+    );
+    result = NotificationListener<OverscrollNotification>(
+        onNotification: (notification) => _handleRecommendationOverscroll(
+            notification, recommendations.length),
+        child: result);
+    if (_isDeleteOperationRunning) {
+      result = Stack(fit: StackFit.expand, children: [
+        result,
+        Positioned.fill(child: _buildDeleteProgressOverlay()),
+      ]);
+    }
+    return PopScope(canPop: !_isDeleteOperationRunning, child: result);
+  }
+
+  void _showPixivPageList() {
+    showModalBottomSheet<void>(
+        context: context,
+        isScrollControlled: true,
+        builder: (sheetContext) => SafeArea(
+                child: SizedBox(
+              height: MediaQuery.sizeOf(context).height * .7,
+              child: ListView.builder(
+                  itemCount: _pixivPages.length,
+                  itemBuilder: (_, index) => ListTile(
+                      title: Text('第 ${index + 1} 张'),
+                      leading: const Icon(Icons.image_outlined),
+                      onTap: () {
+                        final page = _pixivPages[index];
+                        Navigator.pop(sheetContext);
+                        _onRead(ep: page.ep, page: page.page);
+                      })),
+            )));
   }
 
   /// 启动阶段的标签表是异步预热的。详情页可能先于它完成构建，因此在完成后
@@ -958,6 +1343,7 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
 
   @override
   void dispose() {
+    _pixivFavoriteChanges?.cancel();
     _scrollController.removeListener(_handleScroll);
     _scrollController.dispose();
     super.dispose();
@@ -1905,7 +2291,8 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
 
   bool _handleRecommendationOverscroll(
       OverscrollNotification notification, int total) {
-    if (notification.dragDetails == null ||
+    if (notification.metrics.axis != Axis.vertical ||
+        notification.dragDetails == null ||
         notification.overscroll <= 0 ||
         total <= _recommendationPageSize) {
       return false;
@@ -2242,7 +2629,7 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
           LogLevel.warning,
           'LocalComicDetailPage',
           '_onVisitOnline: no online page for type=${comic.type} '
-          'id="${comic.id}" rawId="$rawId"',
+              'id="${comic.id}" rawId="$rawId"',
         );
         _showMessage('该本地记录缺少有效的在线ID，无法查看在线详情'.tl);
         return;
@@ -2629,6 +3016,8 @@ class _LocalComicDetailPageState extends State<LocalComicDetailPage> {
 
   @override
   Widget build(BuildContext context) {
+    final pixivIdentity = PixivLocalIdentity.fromItem(_comic);
+    if (pixivIdentity != null) return _buildPixivLocalDetail(pixivIdentity);
     final comic = _comic;
     final description = _getDescription();
     final history = _historyFor(comic);

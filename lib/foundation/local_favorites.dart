@@ -68,6 +68,13 @@ int? _legacyBuiltInFavoriteTypeForSourceKey(String sourceKey) {
 
 Set<int> _equivalentFavoriteTypeKeys(int type) {
   final keys = <int>{type};
+  // Pixiv was previously persisted through CustomDownloadedItem's generic
+  // sourceKey hash. New rows use the stable built-in key 9; only this
+  // source-specific alias is accepted for compatibility.
+  if (type == FavoriteType.pixiv.key || type == 'pixiv'.hashCode) {
+    keys.add(FavoriteType.pixiv.key);
+    keys.add('pixiv'.hashCode);
+  }
   final sourceKey = _preferredCustomFavoriteSourceKey(type);
   if (sourceKey != null) {
     keys.add(sourceKey.hashCode);
@@ -80,6 +87,9 @@ Set<int> _equivalentFavoriteTypeKeys(int type) {
 }
 
 String _canonicalFavoriteTypeIdentity(int type) {
+  if (type == FavoriteType.pixiv.key || type == 'pixiv'.hashCode) {
+    return 'type:${FavoriteType.pixiv.key}';
+  }
   final sourceKey = _preferredCustomFavoriteSourceKey(type);
   if (sourceKey != null) {
     return 'custom:$sourceKey';

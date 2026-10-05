@@ -70,6 +70,8 @@ void main() {
   });
 
   testWidgets('确定分别保存两组并通知，保留编辑过程中更新的普通卡片配置', (tester) async {
+    appdata.settings[comicTileDisplayConfigSettingIndex] =
+        '{"waterfall":{"pixivAuthor":{"showTags":false,"tagRows":2}}}';
     final version = App.displaySettingsVersion.value;
     await open(tester);
     await tester.tap(find.byKey(const ValueKey('waterfall-local-switch')));
@@ -153,7 +155,8 @@ void main() {
     expect(saved.favoriteStyle,
         const WaterfallFavoriteStyle(color: 'theme', opacity: 60));
     expect(saved.localIllustTags, WaterfallTagDisplayConfig.defaults);
-    expect(saved.pixivAuthorTags, WaterfallTagDisplayConfig.defaults);
+    expect(
+        saved.pixivAuthorTags, WaterfallTagDisplayConfig.pixivAuthorDefaults);
     expect(App.displaySettingsVersion.value, version + 1);
   });
 

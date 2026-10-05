@@ -8,11 +8,13 @@ import 'package:picakeep/base.dart';
 import 'package:picakeep/comic_source/comic_source.dart';
 import 'package:picakeep/foundation/app.dart';
 import 'package:picakeep/foundation/app_page_route.dart';
+import 'package:picakeep/foundation/pixiv_detail_session.dart';
 import 'package:picakeep/foundation/local_library_illust_view.dart'
     show illustWaterfallColumnsSettingIndex, normalizeIllustWaterfallColumns;
 import 'package:picakeep/foundation/explore/explore_bindings.dart';
 import 'package:picakeep/foundation/explore/explore_models.dart';
 import 'package:picakeep/foundation/explore/explore_registry.dart';
+import 'package:picakeep/foundation/explore/explore_selection_state.dart';
 import 'package:picakeep/network/base_comic.dart';
 import 'package:picakeep/pages/explore/explore_category_panel.dart';
 import 'package:picakeep/pages/explore/explore_common.dart';
@@ -78,14 +80,29 @@ class _ExplorePageState extends State<ExplorePage>
     setState(() {
       _kind = kind;
       _sessionKind = kind;
+      if (_sourceKey != null) _sourceKinds[_sourceKey!] = kind;
     });
+  }
+
+  ExploreTabKind _storedKind(ExploreSourceDescriptor descriptor) {
+    if (descriptor.sourceKey != 'pixiv') return _kind;
+    final stored = selectionForDescriptor(
+      sourceKey: descriptor.sourceKey,
+      descriptor: descriptor,
+      raw: appdata.settings.length > exploreSelectionSettingIndex
+          ? appdata.settings[exploreSelectionSettingIndex]
+          : null,
+    );
+    return stored.kind == exploreSelectionKindRanking
+        ? ExploreTabKind.ranking
+        : ExploreTabKind.recommend;
   }
 
   Widget _paneFor(ExploreRegistry registry, ExploreSourceState source) {
     final key = source.descriptor.sourceKey;
     if (!_visited.contains(key)) return const SizedBox.shrink();
     final active = key == _sourceKey;
-    final kind = _sourceKinds[key] ?? _kind;
+    final kind = _sourceKinds[key] ?? _storedKind(source.descriptor);
     final cached = _sourcePanes[key];
     if (cached != null &&
         identical(cached.registry, registry) &&
@@ -141,7 +158,12 @@ class _ExplorePageState extends State<ExplorePage>
           .sourceKey;
     }
     _visited.add(_sourceKey!);
-    _sourceKinds[_sourceKey!] = _kind;
+    final activeSource = sources
+        .where((source) => source.descriptor.sourceKey == _sourceKey)
+        .first;
+    _sourceKinds.putIfAbsent(
+        _sourceKey!, () => _storedKind(activeSource.descriptor));
+    _kind = _sourceKinds[_sourceKey!]!;
     final index =
         sources.indexWhere((s) => s.descriptor.sourceKey == _sourceKey);
     return DefaultTabController(
@@ -156,6 +178,9 @@ class _ExplorePageState extends State<ExplorePage>
             setState(() {
               _sourceKey = sources[i].descriptor.sourceKey;
               _sessionSourceKey = _sourceKey;
+              final source = sources[i];
+              _sourceKinds[_sourceKey!] ??= _storedKind(source.descriptor);
+              _kind = _sourceKinds[_sourceKey!]!;
             });
           },
           tabs: [
@@ -208,12 +233,58 @@ class _SourceExplorePaneState extends State<_SourceExplorePane> {
   final _visitedEntries = <String>{};
   final _entryWidgets = <String, Widget>{};
 
+  bool get _isPixiv => widget.descriptor.sourceKey == 'pixiv';
+
+  @override
+  void initState() {
+    super.initState();
+    _restorePixivSelection();
+  }
+
+  void _restorePixivSelection() {
+    if (!_isPixiv) return;
+    final state = selectionForDescriptor(
+      sourceKey: widget.descriptor.sourceKey,
+      descriptor: widget.descriptor,
+      raw: appdata.settings.length > exploreSelectionSettingIndex
+          ? appdata.settings[exploreSelectionSettingIndex]
+          : null,
+    );
+    _recommendId = state.entryId;
+    _rankOption = state.rankingOption;
+  }
+
+  void _persistPixivSelection({ExploreTabKind? kind}) {
+    if (!_isPixiv || appdata.settings.length <= exploreSelectionSettingIndex) {
+      return;
+    }
+    final selectedKind = kind ?? widget.kind;
+    final state = ExploreSelectionState(
+      kind: selectedKind == ExploreTabKind.ranking
+          ? exploreSelectionKindRanking
+          : exploreSelectionKindRecommend,
+      entryId: _recommendId ?? '',
+      rankingOption: _rankOption ?? '',
+    );
+    appdata.settings[exploreSelectionSettingIndex] = updateExploreSelectionJson(
+      raw: appdata.settings[exploreSelectionSettingIndex],
+      sourceKey: widget.descriptor.sourceKey,
+      state: state,
+    );
+    unawaited(appdata.updateSettings());
+  }
+
   @override
   void didUpdateWidget(covariant _SourceExplorePane oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.descriptor != widget.descriptor ||
         oldWidget.displayRevision != widget.displayRevision) {
       _entryWidgets.clear();
+      if (oldWidget.descriptor != widget.descriptor) {
+        _recommendId = null;
+        _rankOption = null;
+        _restorePixivSelection();
+      }
     }
   }
 
@@ -253,9 +324,30 @@ class _SourceExplorePaneState extends State<_SourceExplorePane> {
     setState(() {
       if (entry.kind == ExploreSectionKind.recommend) _recommendId = entry.id;
     });
+    _persistPixivSelection(
+      kind: entry.kind == ExploreSectionKind.ranking
+          ? ExploreTabKind.ranking
+          : ExploreTabKind.recommend,
+    );
     widget.onKindChanged(entry.kind == ExploreSectionKind.ranking
         ? ExploreTabKind.ranking
         : ExploreTabKind.recommend);
+  }
+
+  void _selectKind(ExploreTabKind kind) {
+    _persistPixivSelection(kind: kind);
+    widget.onKindChanged(kind);
+  }
+
+  void _selectChoice(ExploreTabKind kind, String id) {
+    setState(() {
+      if (kind == ExploreTabKind.recommend) {
+        _recommendId = id;
+      } else {
+        _rankOption = id;
+      }
+    });
+    _persistPixivSelection(kind: kind);
   }
 
   Widget _categories() {
@@ -310,73 +402,166 @@ class _SourceExplorePaneState extends State<_SourceExplorePane> {
             : <ExploreOption>[];
     final choiceId =
         kind == ExploreTabKind.recommend ? selected?.id : _rankOption;
-    return Column(children: [
-      LayoutBuilder(builder: (context, constraints) {
-        final largeText = MediaQuery.textScalerOf(context).scale(14) > 18;
-        final navigation = Wrap(children: [
-          for (final k in kinds)
-            Padding(
-                padding: const EdgeInsets.only(right: 4),
-                child: ChoiceChip(
-                  label: Text(k.$2),
-                  selected: kind == k.$1,
-                  showCheckmark: false,
-                  visualDensity: VisualDensity.compact,
-                  onSelected: (_) => widget.onKindChanged(k.$1),
-                ))
-        ]);
-        final selector = choices.length > 1
-            ? _EntryMenu(
-                title:
-                    '${widget.descriptor.name} · ${kind == ExploreTabKind.recommend ? '推荐入口' : '榜单范围'}',
-                options: choices,
-                selectedId: choiceId,
-                onSelected: (id) => setState(() {
-                  if (kind == ExploreTabKind.recommend) {
-                    _recommendId = id;
-                  } else {
-                    _rankOption = id;
-                  }
-                }),
-              )
-            : const SizedBox.shrink();
-        return Padding(
-          key: const ValueKey('explore-toolbar'),
-          padding: const EdgeInsets.symmetric(horizontal: 12),
-          child: largeText || constraints.maxWidth < 340
-              ? Wrap(
-                  crossAxisAlignment: WrapCrossAlignment.center,
-                  children: [navigation, selector])
-              : Row(children: [
-                  navigation,
-                  const SizedBox(width: 4),
-                  Expanded(
-                      child: Align(
-                          alignment: Alignment.centerRight, child: selector))
-                ]),
-        );
-      }),
-      Expanded(
-          child: !loggedIn
-              ? exploreLoginRequiredView(
-                  sourceName: widget.descriptor.name,
-                  onManageAccounts: () async {
-                    await showExploreAccountsPage(context);
-                    if (mounted) widget.onAccountsChanged();
-                  })
-              : activeId == null
-                  ? const Center(child: Text('没有可用的探索入口'))
-                  : ExploreKeepAliveSwitcher(
-                      index: ids.indexOf(activeId),
-                      animate: widget.active,
-                      motionKey: kind == ExploreTabKind.ranking
-                          ? _rankOption
-                          : activeId,
-                      children: [
-                          for (final entry in entries)
-                            _entryFor(entry, activeId, ranking),
-                          _categories(),
-                        ])),
+    final toolbar = LayoutBuilder(builder: (context, constraints) {
+      final largeText = MediaQuery.textScalerOf(context).scale(14) > 18;
+      final navigation = Wrap(children: [
+        for (final k in kinds)
+          Padding(
+              padding: const EdgeInsets.only(right: 4),
+              child: ChoiceChip(
+                label: Text(k.$2),
+                selected: kind == k.$1,
+                showCheckmark: false,
+                visualDensity: VisualDensity.compact,
+                backgroundColor: Colors.transparent,
+                selectedColor: Theme.of(context).colorScheme.secondaryContainer,
+                side: BorderSide.none,
+                onSelected: (_) => _selectKind(k.$1),
+              ))
+      ]);
+      final selector = choices.length > 1
+          ? _EntryMenu(
+              title:
+                  '${widget.descriptor.name} · ${kind == ExploreTabKind.recommend ? '推荐入口' : '榜单范围'}',
+              options: choices,
+              selectedId: choiceId,
+              floatingStyle: true,
+              onSelected: (id) => _selectChoice(kind!, id),
+            )
+          : const SizedBox.shrink();
+      return Padding(
+        key: const ValueKey('explore-toolbar'),
+        padding: const EdgeInsets.symmetric(horizontal: 12),
+        child: largeText || constraints.maxWidth < 340
+            ? Wrap(
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: [navigation, selector])
+            : Row(children: [
+                navigation,
+                const SizedBox(width: 4),
+                Expanded(
+                    child: Align(
+                        alignment: Alignment.centerRight, child: selector))
+              ]),
+      );
+    });
+    final content = !loggedIn
+        ? exploreLoginRequiredView(
+            sourceName: widget.descriptor.name,
+            onManageAccounts: () async {
+              await showExploreAccountsPage(context);
+              if (mounted) widget.onAccountsChanged();
+            })
+        : activeId == null
+            ? const Center(child: Text('没有可用的探索入口'))
+            : ExploreKeepAliveSwitcher(
+                index: ids.indexOf(activeId),
+                animate: widget.active,
+                motionKey:
+                    kind == ExploreTabKind.ranking ? _rankOption : activeId,
+                children: [
+                    for (final entry in entries)
+                      _entryFor(entry, activeId, ranking),
+                    _categories(),
+                  ]);
+    return _FloatingExploreLayout(toolbar: toolbar, child: content);
+  }
+}
+
+class _FloatingExploreLayout extends StatefulWidget {
+  const _FloatingExploreLayout({required this.toolbar, required this.child});
+
+  final Widget toolbar;
+  final Widget child;
+
+  @override
+  State<_FloatingExploreLayout> createState() => _FloatingExploreLayoutState();
+}
+
+class _FloatingExploreLayoutState extends State<_FloatingExploreLayout>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _settle;
+  double _progress = 0;
+  double _upDistance = 0;
+  int _direction = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _settle = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 220),
+    )..addListener(() {
+        if (mounted) setState(() => _progress = _settle.value);
+      });
+  }
+
+  @override
+  void dispose() {
+    _settle.dispose();
+    super.dispose();
+  }
+
+  void _setProgress(double value) {
+    final next = value.clamp(0.0, 1.0).toDouble();
+    if ((next - _progress).abs() < 0.001) return;
+    _settle.stop();
+    setState(() => _progress = next);
+  }
+
+  void _settleTo(double target) {
+    _settle.stop();
+    _settle.value = _progress;
+    _settle.animateTo(target, curve: Curves.easeOutCubic);
+  }
+
+  bool _onScroll(ScrollNotification notification) {
+    if (notification is ScrollUpdateNotification &&
+        notification.metrics.axis == Axis.vertical) {
+      final delta = notification.scrollDelta ?? 0;
+      if (delta.abs() < 0.5) return false;
+      if (delta > 0) {
+        _direction = 1;
+        _upDistance = 0;
+        _setProgress(_progress + delta / 96);
+      } else {
+        _direction = -1;
+        final distance = -delta;
+        _upDistance += distance;
+        final revealDistance = notification.metrics.pixels <= 0 ? 160 : 128;
+        if (notification.metrics.pixels <= 0 || _upDistance > 192) {
+          _setProgress(_progress - distance / revealDistance);
+        }
+      }
+    } else if (notification is ScrollEndNotification) {
+      if (_direction > 0 && _progress >= 0.25) {
+        _settleTo(1);
+      } else if (_direction < 0 && _progress <= 0.8) {
+        _settleTo(0);
+      }
+    }
+    return false;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final toolbar = IgnorePointer(
+      ignoring: _progress >= 0.98,
+      child: Opacity(
+        opacity: 1 - _progress,
+        child: Transform.scale(
+          alignment: Alignment.topCenter,
+          scale: 1 - 0.2 * _progress,
+          child: widget.toolbar,
+        ),
+      ),
+    );
+    return Stack(children: [
+      NotificationListener<ScrollNotification>(
+        onNotification: _onScroll,
+        child: widget.child,
+      ),
+      Positioned(left: 0, right: 0, top: 0, child: toolbar),
     ]);
   }
 }
@@ -386,10 +571,12 @@ class _EntryMenu extends StatefulWidget {
       {required this.title,
       required this.options,
       required this.selectedId,
+      this.floatingStyle = false,
       required this.onSelected});
   final String title;
   final List<ExploreOption> options;
   final String? selectedId;
+  final bool floatingStyle;
   final ValueChanged<String> onSelected;
   @override
   State<_EntryMenu> createState() => _EntryMenuState();
@@ -538,15 +725,25 @@ class _EntryMenuState extends State<_EntryMenu> {
       child: Semantics(
         expanded: _open,
         child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 4),
+          padding: EdgeInsets.symmetric(vertical: widget.floatingStyle ? 2 : 4),
           child: ConstrainedBox(
-            constraints: const BoxConstraints(minHeight: 40),
+            constraints: BoxConstraints(
+              minHeight: widget.floatingStyle ? 32 : 40,
+              maxWidth: widget.floatingStyle ? 220 : double.infinity,
+            ),
             child: Ink(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+              padding: EdgeInsets.symmetric(
+                horizontal: widget.floatingStyle ? 10 : 10,
+                vertical: widget.floatingStyle ? 6 : 8,
+              ),
               decoration: BoxDecoration(
-                color:
-                    _open ? colors.secondaryContainer : colors.surfaceContainer,
-                borderRadius: BorderRadius.circular(12),
+                color: widget.floatingStyle
+                    ? colors.secondaryContainer
+                    : (_open
+                        ? colors.secondaryContainer
+                        : colors.surfaceContainer),
+                borderRadius:
+                    BorderRadius.circular(widget.floatingStyle ? 20 : 12),
               ),
               child: Row(mainAxisSize: MainAxisSize.min, children: [
                 Flexible(
@@ -937,9 +1134,46 @@ class _ExploreFeedState extends State<_ExploreFeed> {
               }
             },
             onDataRefresh: () => _load(preserveContent: true),
+            detailSessionBuilder: () => _detailSession(
+              source,
+              items.map((item) => item.comic).toList(),
+              paginated: _overview == null,
+            ),
           );
         },
       ),
+    );
+  }
+
+  PixivDetailSession _detailSession(ComicSource source, List<BaseComic> items,
+      {required bool paginated}) {
+    final generation = _generation;
+    final controller = _controller;
+    final account = pixivDetailAccountIdentity(source);
+    return PixivDetailSession(
+      scope: PixivDetailScope.recommendation,
+      entries: items.map((item) => onlinePixivDetailEntry(source, item)),
+      hasMore: paginated && (controller?.state.hasMore ?? false),
+      ownerIsCurrent: () =>
+          mounted &&
+          generation == _generation &&
+          _contextMatches &&
+          account == pixivDetailAccountIdentity(source) &&
+          (!paginated || identical(controller, _controller)),
+      loadMore: paginated && controller != null
+          ? () async {
+              await controller.loadMore();
+              final state = controller.state;
+              if (state.moreError != null) {
+                throw StateError(state.moreError!.message);
+              }
+              return PixivDetailBatch(
+                _recommendItems(state.items.map((item) => item.comic))
+                    .map((item) => onlinePixivDetailEntry(source, item.comic)),
+                hasMore: state.hasMore,
+              );
+            }
+          : null,
     );
   }
 
@@ -988,6 +1222,29 @@ class _ExploreFeedState extends State<_ExploreFeed> {
         child: OnlineComicListItem(
             source: source,
             comic: comic,
+            onTap: source.key != 'pixiv'
+                ? null
+                : () async {
+                    final section = _overview?.sections
+                        .where((section) =>
+                            section.items.any((item) => item.id == comic.id))
+                        .firstOrNull;
+                    final comics = section?.items ??
+                        _controller?.state.items
+                            .map((item) => item.comic)
+                            .toList() ??
+                        [comic];
+                    await openOnlineComic(context, source, comic,
+                        detailSession: _detailSession(
+                            source,
+                            _recommendItems(comics)
+                                .map((item) => item.comic)
+                                .toList(),
+                            paginated: section == null));
+                    if (mounted && _contextMatches) {
+                      await _load(preserveContent: true);
+                    }
+                  },
             highlighted: blockedBy != null,
             trailing: blockedBy == null ? null : Text('已屏蔽：$blockedBy')));
   }

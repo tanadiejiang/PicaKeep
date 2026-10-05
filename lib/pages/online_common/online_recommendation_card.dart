@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:picakeep/comic_source/comic_source.dart';
 import 'package:picakeep/foundation/app_page_route.dart';
+import 'package:picakeep/foundation/pixiv_detail_session.dart';
 import 'package:picakeep/foundation/comic_tile_display_config.dart';
 import 'package:picakeep/foundation/download_author_resolver.dart';
 import 'package:picakeep/network/base_comic.dart';
@@ -16,8 +17,11 @@ import 'online_waterfall_card.dart';
 class _BookmarkState {
   _BookmarkState(this.input, this.value)
       : stateKnown = input.bookmarkStateKnown,
-        canAdd = input.isBookmarkable;
+        canAdd = input.isBookmarkable {
+    observedInputs[input] = true;
+  }
   PixivComicBrief input;
+  Expando<bool> observedInputs = Expando<bool>();
   bool value;
   bool stateKnown;
   bool canAdd;
@@ -41,14 +45,27 @@ class RecommendationBookmarkController extends ChangeNotifier {
     final value = _states.putIfAbsent(
         key, () => _BookmarkState(comic, comic.isBookmarked));
     if (!identical(value.input, comic)) {
-      if (value.input.isBookmarked != comic.isBookmarked ||
-          value.input.isBookmarkable != comic.isBookmarkable ||
-          value.input.bookmarkStateKnown != comic.bookmarkStateKnown ||
-          value.input.canLoadBookmarkState != comic.canLoadBookmarkState) {
-        value.revision++;
+      final isNewInput = value.observedInputs[comic] != true;
+      value.observedInputs[comic] = true;
+      final incomingConflicts = isNewInput &&
+          comic.bookmarkStateKnown &&
+          (!value.stateKnown ||
+              comic.isBookmarked != value.value ||
+              comic.isBookmarkable != value.canAdd);
+      // Old cards keep rendering their original briefs after a confirmed
+      // toggle. Only a newly observed known snapshot can supersede that state;
+      // weak identity tracking avoids retaining every loaded brief forever.
+      if (incomingConflicts) value.revision++;
+      if (isNewInput && (comic.bookmarkStateKnown || !value.stateKnown)) {
+        value.input = comic;
       }
-      value.input = comic;
-      if (!value.confirmed && !value.busy) {
+      // Different pages may provide an unknown brief for the same work.
+      // Rendering that brief must neither downgrade a known state nor cancel
+      // a pending request owned by another card.
+      if (isNewInput &&
+          !value.confirmed &&
+          !value.busy &&
+          (comic.bookmarkStateKnown || !value.stateKnown)) {
         value.value = comic.isBookmarked;
         value.stateKnown = comic.bookmarkStateKnown;
         value.canAdd = comic.isBookmarkable;
@@ -167,6 +184,7 @@ class RecommendationBookmarkController extends ChangeNotifier {
       _states.removeWhere((_, value) => !value.busy);
       for (final value in _states.values) {
         value.confirmed = false;
+        value.observedInputs = Expando<bool>();
       }
     }
     notifyListeners();
@@ -198,6 +216,8 @@ class OnlineRecommendationCard extends StatefulWidget {
     this.manageAccounts,
     this.onOpenDetail,
     this.onOpenAuthor,
+    this.detailSessionBuilder,
+    this.isAuthorPage = false,
   });
 
   final ComicSource source;
@@ -215,6 +235,8 @@ class OnlineRecommendationCard extends StatefulWidget {
   final Future<void> Function(BuildContext)? manageAccounts;
   final VoidCallback? onOpenDetail;
   final ValueChanged<String>? onOpenAuthor;
+  final PixivDetailSession Function()? detailSessionBuilder;
+  final bool isAuthorPage;
 
   @override
   State<OnlineRecommendationCard> createState() =>
@@ -248,9 +270,15 @@ class _OnlineRecommendationCardState extends State<OnlineRecommendationCard> {
     if (oldWidget.bookmarks != widget.bookmarks) {
       oldWidget.bookmarks.removeListener(_onBookmarkChanged);
       widget.bookmarks.addListener(_onBookmarkChanged);
+      _generation++;
+      _openingAccounts = false;
     }
     if (oldWidget.comic.id != widget.comic.id ||
         oldWidget.source != widget.source) {
+      _generation++;
+      _openingAccounts = false;
+    }
+    if (oldWidget.actionsEnabled && !widget.actionsEnabled) {
       _generation++;
       _openingAccounts = false;
     }
@@ -334,8 +362,8 @@ class _OnlineRecommendationCardState extends State<OnlineRecommendationCard> {
     if (open != null) {
       open(id);
     } else {
-      Navigator.of(context)
-          .push(AppPageRoute(builder: (_) => PixivAuthorPageV2(id)));
+      Navigator.of(context).push(AppPageRoute(
+          builder: (_) => PixivAuthorPageV2(id, bookmarks: widget.bookmarks)));
     }
   }
 
@@ -348,7 +376,8 @@ class _OnlineRecommendationCardState extends State<OnlineRecommendationCard> {
     final generation = _generation;
     final account = _account;
     final comic = _pixiv;
-    await openOnlineComic(context, widget.source, widget.comic);
+    await openOnlineComic(context, widget.source, widget.comic,
+        detailSession: widget.detailSessionBuilder?.call());
     if (!mounted || generation != _generation || _account != account) return;
     await widget.onDataRefresh?.call();
     if (!mounted ||
@@ -399,17 +428,20 @@ class _OnlineRecommendationCardState extends State<OnlineRecommendationCard> {
       fallbackCover: pixiv == null ? null : comic.cover,
       imageHeaders: headers,
       onTap: _openDetail,
-      author: author,
-      authorAvatarUrl: pixiv?.authorAvatar ?? '',
-      showAuthorAvatar: true,
-      onAuthorTap: pixiv != null && pixiv.authorId.isNotEmpty
-          ? () => _openAuthor(pixiv.authorId)
-          : null,
+      author: widget.isAuthorPage ? '' : author,
+      authorAvatarUrl: widget.isAuthorPage ? '' : pixiv?.authorAvatar ?? '',
+      showAuthorAvatar: !widget.isAuthorPage,
+      onAuthorTap:
+          !widget.isAuthorPage && pixiv != null && pixiv.authorId.isNotEmpty
+              ? () => _openAuthor(pixiv.authorId)
+              : null,
       pageCount: pixiv?.pageCount ?? 0,
       width: pixiv?.width,
       height: pixiv?.height,
       tags: comic.tags,
-      tagConfig: settings.recommendTags,
+      tagConfig: widget.isAuthorPage
+          ? settings.pixivAuthorTags
+          : settings.recommendTags,
       onToggleFavorite:
           pixiv != null && widget.bookmarks.canToggle(_account, pixiv)
               ? _toggleBookmark

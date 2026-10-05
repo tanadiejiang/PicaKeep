@@ -8,7 +8,7 @@ import 'package:picakeep/foundation/comic_tile_display_config.dart';
 void main() {
   tearDown(clearOnlineCoverProviderCache);
 
-  testWidgets('推荐头像兜底，收藏无底无阴影，独立点击且忙态不进入详情', (tester) async {
+  testWidgets('推荐头像兜底，爱心有对比轮廓，独立点击且等待态不进入详情', (tester) async {
     final semantics = tester.ensureSemantics();
     var cards = 0, authors = 0, favorites = 0;
     Future<void> show(
@@ -50,6 +50,9 @@ void main() {
     final unselected = tester.widget<Icon>(find.byIcon(Icons.favorite_border));
     expect(unselected.size, 22);
     expect(unselected.color, Colors.white.withValues(alpha: .9));
+    expect(unselected.shadows, isNotEmpty);
+    expect(
+        unselected.shadows!.single.color, Colors.black.withValues(alpha: .6));
     expect(tester.getSize(find.byKey(const ValueKey('waterfall-favorite'))),
         const Size(48, 48));
     expect(tester.widget<ClipRRect>(find.byType(ClipRRect).first).borderRadius,
@@ -64,13 +67,22 @@ void main() {
     expect(cards, 0);
     await show(favorite: true, busy: true);
     expect(tester.widget<Icon>(find.byIcon(Icons.favorite)).color,
-        const Color(0xFFE0245E).withValues(alpha: .9));
+        const Color(0xFFE0245E).withValues(alpha: .5));
+    expect(find.byIcon(Icons.hourglass_top), findsNothing);
     expect(find.bySemanticsLabel('正在更新收藏'), findsOneWidget);
     await tester.tap(find.byKey(const ValueKey('waterfall-favorite')));
     expect(favorites, 1);
     expect(cards, 0);
     await tester.tap(find.text('作品'));
     expect(cards, 1);
+    await show(favorite: false, busy: true);
+    expect(tester.widget<Icon>(find.byIcon(Icons.favorite)).color,
+        const Color(0xFFE0245E).withValues(alpha: .5));
+    await show(favorite: true);
+    expect(tester.widget<Icon>(find.byIcon(Icons.favorite)).color,
+        const Color(0xFFE0245E).withValues(alpha: .9));
+    await show();
+    expect(find.byIcon(Icons.favorite_border), findsOneWidget);
     await show(supported: false);
     expect(find.byKey(const ValueKey('waterfall-favorite')), findsNothing);
     await show(

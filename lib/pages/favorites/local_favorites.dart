@@ -17,6 +17,9 @@ import 'package:picakeep/foundation/local_data_source.dart';
 import 'package:picakeep/foundation/local_favorites.dart';
 import 'package:picakeep/foundation/local_favorites_update.dart';
 import 'package:picakeep/foundation/local_library.dart';
+import 'package:picakeep/foundation/pixiv_detail_session.dart';
+import 'package:picakeep/pages/online_comic/pixiv_detail_pager.dart';
+import 'package:picakeep/pages/online_comic/pixiv_comic_page_v2.dart';
 import 'package:picakeep/pages/download_page.dart';
 import 'package:picakeep/pages/local_comic_detail_page.dart';
 import 'package:picakeep/pages/local_search_page.dart';
@@ -86,6 +89,12 @@ OnlineTargetSpec? resolveOnlineTargetSpec(String target, FavoriteType type) {
     final numeric = extractNhentaiNumericId(raw);
     return numeric == null ? null : OnlineTargetSpec(type, numeric);
   }
+  if (type == FavoriteType.pixiv) {
+    final numeric = raw.startsWith('pixiv') ? raw.substring(5) : raw;
+    return RegExp(r'^\d+$').hasMatch(numeric)
+        ? OnlineTargetSpec(type, numeric)
+        : null;
+  }
   if (type == FavoriteType.picacg) {
     return OnlineTargetSpec(type, raw);
   }
@@ -123,6 +132,7 @@ Widget? buildOnlineComicPage(OnlineTargetSpec spec) {
   if (spec.kind == FavoriteType.nhentai) return NhentaiComicPageV2(spec.id);
   if (spec.kind == FavoriteType.picacg) return PicacgComicPageV2(spec.id);
   if (spec.kind == FavoriteType.ehentai) return EhentaiComicPageV2(spec.id);
+  if (spec.kind == FavoriteType.pixiv) return PixivComicPageV2(spec.id);
   return null;
 }
 
@@ -283,7 +293,8 @@ class OpenFavoriteComicHelper {
         comic.type == FavoriteType.jm ||
                 comic.type == FavoriteType.nhentai ||
                 comic.type == FavoriteType.picacg ||
-                comic.type == FavoriteType.ehentai
+                comic.type == FavoriteType.ehentai ||
+                comic.type == FavoriteType.pixiv
             ? '该条目没有本地下载，且在线标识不可用'
             : '该条目没有本地下载，且其来源暂不支持在线打开',
       );
@@ -310,8 +321,41 @@ class OpenFavoriteComicHelper {
   }
 
   /// 打开条目：本地优先；本地未命中则进在线详情页；都不可用才提示。
-  static Future<void> open(FavoriteItem comic) async {
+  static Future<void> open(
+    FavoriteItem comic, {
+    Iterable<FavoriteItem>? entries,
+    String? folderName,
+  }) async {
     try {
+      final context = App.globalContext;
+      if (comic.type == FavoriteType.pixiv &&
+          context != null &&
+          context.mounted &&
+          resolveOnlineTargetSpec(comic.target, comic.type) != null) {
+        final session = PixivDetailSession(
+          scope: PixivDetailScope.localFavorites,
+          localFavoriteFolder: folderName,
+          entries: [
+            for (final value in entries ?? [comic])
+              if (value.type == FavoriteType.pixiv &&
+                  resolveOnlineTargetSpec(value.target, value.type) != null)
+                PixivDetailEntry(
+                  key: 'favorite:${value.target}',
+                  comicId: value.target,
+                  builder: (_) => _FavoritePixivDetailEntry(comic: value),
+                ),
+          ],
+        );
+        try {
+          await App.pushInner(() => PixivDetailPager(
+                session: session,
+                initialKey: 'favorite:${comic.target}',
+              ));
+        } finally {
+          session.dispose();
+        }
+        return;
+      }
       final target = await resolveOpenTarget(comic);
       switch (target) {
         case FavoriteOpenLocal(:final item):
@@ -328,7 +372,11 @@ class OpenFavoriteComicHelper {
 
   /// 阅读条目：本地命中则读本地（原行为）；本地未命中时**与点击一致**地进入
   /// 在线详情页（用户可在该页阅读或下载），而不是静默失败。
-  static Future<void> read(FavoriteItem comic) async {
+  static Future<void> read(
+    FavoriteItem comic, {
+    Iterable<FavoriteItem>? entries,
+    String? folderName,
+  }) async {
     try {
       final target = await resolveOpenTarget(comic);
       switch (target) {
@@ -339,7 +387,11 @@ class OpenFavoriteComicHelper {
           );
           await item.read();
         case FavoriteOpenOnline(:final page):
-          App.pushInner(() => page);
+          if (comic.type == FavoriteType.pixiv) {
+            await open(comic, entries: entries, folderName: folderName);
+          } else {
+            App.pushInner(() => page);
+          }
         case FavoriteOpenUnavailable(:final reason):
           _notify(reason);
       }
@@ -347,6 +399,50 @@ class OpenFavoriteComicHelper {
       _notify('打开失败: $e');
     }
   }
+}
+
+class _FavoritePixivDetailEntry extends StatefulWidget {
+  const _FavoritePixivDetailEntry({required this.comic});
+  final FavoriteItem comic;
+
+  @override
+  State<_FavoritePixivDetailEntry> createState() =>
+      _FavoritePixivDetailEntryState();
+}
+
+class _FavoritePixivDetailEntryState extends State<_FavoritePixivDetailEntry> {
+  late Future<FavoriteOpenTarget> _target =
+      OpenFavoriteComicHelper.resolveOpenTarget(widget.comic);
+
+  @override
+  Widget build(BuildContext context) => FutureBuilder<FavoriteOpenTarget>(
+        future: _target,
+        builder: (context, snapshot) {
+          final target = snapshot.data;
+          if (target is FavoriteOpenLocal) {
+            return LocalComicDetailPage(comic: target.item);
+          }
+          if (target is FavoriteOpenOnline) return target.page;
+          if (target == null && !snapshot.hasError) {
+            return const Scaffold(
+                body: Center(child: CircularProgressIndicator()));
+          }
+          return Scaffold(
+            appBar: AppBar(),
+            body: Center(
+                child: TextButton.icon(
+              onPressed: () => setState(() {
+                _target =
+                    OpenFavoriteComicHelper.resolveOpenTarget(widget.comic);
+              }),
+              icon: const Icon(Icons.refresh),
+              label: Text(target is FavoriteOpenUnavailable
+                  ? target.reason
+                  : '读取失败，请重试'),
+            )),
+          );
+        },
+      );
 }
 
 // ============================================================
@@ -362,6 +458,7 @@ class LocalFavoriteTile extends StatelessWidget {
     required this.enableLongPressed,
     this.onTap,
     this.onLongPressed,
+    this.detailEntries,
   });
 
   final FavoriteItem comic;
@@ -370,6 +467,7 @@ class LocalFavoriteTile extends StatelessWidget {
   final bool enableLongPressed;
   final bool Function()? onTap;
   final VoidCallback? onLongPressed;
+  final Iterable<FavoriteItem>? detailEntries;
 
   static final Map<String, File> _coverCache = {};
 
@@ -502,9 +600,11 @@ class LocalFavoriteTile extends StatelessWidget {
   }
 
   // ---- open comic ----
-  Future<void> _openComic() => OpenFavoriteComicHelper.open(comic);
+  Future<void> _openComic() => OpenFavoriteComicHelper.open(comic,
+      entries: detailEntries, folderName: folderName);
 
-  Future<void> _read() => OpenFavoriteComicHelper.read(comic);
+  Future<void> _read() => OpenFavoriteComicHelper.read(comic,
+      entries: detailEntries, folderName: folderName);
 
   // ---- copy to folder ----
   void _copyTo() {
@@ -1106,6 +1206,7 @@ class _ComicsPageViewState extends State<ComicsPageView> {
             final comic = _comics[index];
             final selected = widget.selectedComics.contains(comic);
             final tile = LocalFavoriteTile(
+              detailEntries: _comics,
               key: ValueKey('${comic.type.key}_${comic.target}'),
               comic: comic,
               folderName: widget.folder,
@@ -1469,6 +1570,7 @@ class _LocalFavoritesFolderState extends State<LocalFavoritesFolder> {
                             borderRadius: BorderRadius.circular(12),
                           ),
                           child: LocalFavoriteTile(
+                            detailEntries: _comics,
                             comic: _comics[index],
                             folderName: widget.folderName,
                             onDelete: _onDeleteOne,

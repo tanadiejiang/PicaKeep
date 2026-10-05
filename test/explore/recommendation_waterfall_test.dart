@@ -14,6 +14,7 @@ import 'package:picakeep/foundation/explore/explore_bindings.dart';
 import 'package:picakeep/foundation/explore/explore_models.dart';
 import 'package:picakeep/foundation/explore/explore_provider.dart';
 import 'package:picakeep/foundation/explore/explore_registry.dart';
+import 'package:picakeep/foundation/explore/explore_selection_state.dart';
 import 'package:picakeep/foundation/local_library_illust_view.dart';
 import 'package:picakeep/network/base_comic.dart';
 import 'package:picakeep/network/pixiv_network/pixiv_models.dart';
@@ -210,6 +211,7 @@ void main() {
     appdata.settings[83] = '0';
     appdata.settings[illustWaterfallColumnsSettingIndex] = '2';
     appdata.settings[comicTileDisplayConfigSettingIndex] = '';
+    appdata.settings[exploreSelectionSettingIndex] = '{}';
     provider = _Provider();
     _bindProviders([provider]);
   });

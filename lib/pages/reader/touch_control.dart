@@ -59,6 +59,17 @@ class ScrollManager {
     }
   }
 
+  void tapCancel() {
+    final previousNoScroll = logic.noScroll;
+    logic.noScroll = fingers >= 2;
+    tapLocation = null;
+    moveOffset = null;
+    startTime = null;
+    logic.fABValue = 0;
+    if (previousNoScroll != logic.noScroll) logic.update();
+    logic.update(["FAB"]);
+  }
+
   /// handle pointer move event
   void addOffset(Offset value) {
     if (logic.scrollController.offset ==
@@ -99,6 +110,11 @@ class _TapDownPointer {
 }
 
 class TapController {
+  static final _activePointers = <int>{};
+  static bool _multiPointerInteraction = false;
+  static int _gestureGeneration = 0;
+  static Timer? _longPressTimer;
+
   static Offset? _tapOffset;
 
   static DateTime lastScrollTime = DateTime(2023);
@@ -113,8 +129,35 @@ class TapController {
 
   static int fingers = 0;
 
+  /// Pending tap/long-press callbacks belong to one reader session only.
+  static void reset() {
+    _gestureGeneration++;
+    _longPressTimer?.cancel();
+    _longPressTimer = null;
+    _activePointers.clear();
+    _multiPointerInteraction = false;
+    fingers = 0;
+    _tapOffset = null;
+    _tapDownPointer = null;
+    _doubleClickRecognizer = null;
+    onTapUpReplacement = null;
+    ignoreNextTap = false;
+    longTimePressScale = false;
+  }
+
   static void onTapCancel(PointerCancelEvent event) {
-    fingers--;
+    _activePointers.remove(event.pointer);
+    fingers = _activePointers.length;
+    _gestureGeneration++;
+    _longPressTimer?.cancel();
+    _longPressTimer = null;
+    _tapOffset = null;
+    _tapDownPointer = null;
+    _doubleClickRecognizer = null;
+    onTapUpReplacement = null;
+    if (_activePointers.isEmpty) _multiPointerInteraction = false;
+    final logic = StateController.findOrNull<ComicReadingPageLogic>();
+    if (appdata.settings[9] == "4") logic?.scrollManager?.tapCancel();
   }
 
   static void onTapDown(PointerDownEvent event, BuildContext context) {
@@ -122,17 +165,37 @@ class TapController {
       handleSecondaryTapUp(event, context);
       return;
     }
-    fingers++;
+    if (_activePointers.isEmpty) _multiPointerInteraction = false;
+    _activePointers.add(event.pointer);
+    fingers = _activePointers.length;
+    final isMultiPointer = fingers > 1;
+    if (isMultiPointer) {
+      // PhotoView owns pinch gestures. A remaining stationary finger must not
+      // later turn the pinch into a tap, double tap, or long-press zoom.
+      _multiPointerInteraction = true;
+      _gestureGeneration++;
+      _longPressTimer?.cancel();
+      _longPressTimer = null;
+      _tapOffset = null;
+      _tapDownPointer = null;
+      _doubleClickRecognizer = null;
+      onTapUpReplacement = null;
+    }
     if (ignoreNextTap) {
       ignoreNextTap = false;
       return;
     }
     var logic = StateController.find<ComicReadingPageLogic>();
 
-    if (appdata.settings[55] == "1") {
+    if (!isMultiPointer && appdata.settings[55] == "1") {
       _tapDownPointer = _TapDownPointer(event.pointer);
-      Future.delayed(const Duration(milliseconds: 300), () {
-        if (event.pointer == _tapDownPointer?.id) {
+      final generation = _gestureGeneration;
+      _longPressTimer?.cancel();
+      _longPressTimer = Timer(const Duration(milliseconds: 300), () {
+        if (generation == _gestureGeneration &&
+            !_multiPointerInteraction &&
+            _activePointers.length == 1 &&
+            event.pointer == _tapDownPointer?.id) {
           onTapUpReplacement = _handleLongPressEnd;
           _handleLongPressStart(event.position);
         }
@@ -142,6 +205,8 @@ class TapController {
     if (appdata.settings[9] == "4") {
       logic.scrollManager!.tapDown(event);
     }
+
+    if (_multiPointerInteraction) return;
 
     if (logic.tools &&
         (event.position.dy <
@@ -179,7 +244,7 @@ class TapController {
     }
   }
 
-  static void Function(PointerUpEvent detail)? _doubleClickRecognizer;
+  static bool Function(PointerUpEvent detail)? _doubleClickRecognizer;
 
   static void handleSecondaryTapUp(
       PointerDownEvent detail, BuildContext context) {
@@ -211,8 +276,13 @@ class TapController {
   }
 
   static void onTapUp(PointerUpEvent detail, BuildContext context) async {
-    fingers--;
-    if (onTapUpReplacement != null) {
+    if (!_activePointers.remove(detail.pointer)) return;
+    _longPressTimer?.cancel();
+    _longPressTimer = null;
+    fingers = _activePointers.length;
+    final wasMultiPointer = _multiPointerInteraction;
+    if (_activePointers.isEmpty) _multiPointerInteraction = false;
+    if (!wasMultiPointer && onTapUpReplacement != null) {
       onTapUpReplacement!(detail);
       onTapUpReplacement = null;
       return;
@@ -223,15 +293,24 @@ class TapController {
     _tapDownPointer = null;
 
     if (appdata.settings[9] == "4") {
-      logic.scrollManager!.tapUp(detail);
+      if (wasMultiPointer) {
+        logic.scrollManager!.tapCancel();
+      } else {
+        logic.scrollManager!.tapUp(detail);
+      }
+    }
+
+    if (wasMultiPointer) {
+      _tapOffset = null;
+      return;
     }
 
     if (_tapOffset != null) {
       var distance = (detail.position - _tapOffset!).distanceSquared;
+      _tapOffset = null;
       if (distance > _kMaxTapOffset || distance < -_kMaxTapOffset) {
         return;
       }
-      _tapOffset = null;
     } else {
       return;
     }
@@ -241,21 +320,33 @@ class TapController {
     if (appdata.settings[49] == "1") {
       if (_doubleClickRecognizer == null) {
         bool flag = false;
-        _doubleClickRecognizer = (another) {
-          var d = detail.delta - another.delta;
-          if (d.dx.abs() < 30 && d.dy.abs() < 30) {
+        final generation = _gestureGeneration;
+        bool recognize(PointerUpEvent another) {
+          final delta = detail.position - another.position;
+          if (delta.distanceSquared <= 30 * 30) {
             flag = true;
+            return true;
           }
-        };
+          return false;
+        }
+
+        _doubleClickRecognizer = recognize;
         await Future.delayed(const Duration(milliseconds: 200));
-        _doubleClickRecognizer = null;
+        if (identical(_doubleClickRecognizer, recognize)) {
+          _doubleClickRecognizer = null;
+        }
+        if (generation != _gestureGeneration ||
+            !context.mounted ||
+            StateController.findOrNull<ComicReadingPageLogic>() != logic) {
+          return;
+        }
         if (flag) {
           _handleDoubleClick(detail.position);
           return;
         }
       } else {
-        _doubleClickRecognizer!.call(detail);
-        return;
+        if (_doubleClickRecognizer!.call(detail)) return;
+        _doubleClickRecognizer = null;
       }
     }
 
@@ -268,9 +359,11 @@ class TapController {
       _tapDownPointer!.offset += event.delta;
       if (_tapDownPointer!.getDistance() > 1) {
         _tapDownPointer = null;
+        _longPressTimer?.cancel();
+        _longPressTimer = null;
       }
     }
-    if (appdata.settings[9] == "4" && logic.scrollManager!.fingers != 2) {
+    if (appdata.settings[9] == "4" && logic.scrollManager!.fingers < 2) {
       logic.scrollManager!.addOffset(event.delta);
     }
   }

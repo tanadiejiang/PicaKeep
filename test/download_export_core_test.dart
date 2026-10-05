@@ -133,6 +133,30 @@ void main() {
     }
   });
 
+  test('single file source exports only the selected image', () async {
+    final temp =
+        await Directory.systemTemp.createTemp('download_export_single_');
+    try {
+      final selected = File(_join(temp.path, 'page-3.jpg'));
+      await selected.writeAsBytes([3, 4, 5]);
+      await File(_join(temp.path, 'page-4.jpg')).writeAsBytes([6]);
+      final source = DownloadExportSingleFileSource(filePath: selected.path);
+      final files = await source.listFiles(DownloadExportCancellationToken());
+      expect(files, hasLength(1));
+      expect(files.single.relativePath, 'page-3.jpg');
+      final target = File(_join(temp.path, 'out.jpg'));
+      final bytes = await files.single.copyTo(
+        target,
+        DownloadExportCancellationToken(),
+        (_) {},
+      );
+      expect(bytes, 3);
+      expect(await target.readAsBytes(), [3, 4, 5]);
+    } finally {
+      await temp.delete(recursive: true);
+    }
+  });
+
   test('descriptor factory keeps source-specific author and link semantics',
       () {
     final eh = DownloadedGallery(

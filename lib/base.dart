@@ -14,6 +14,7 @@ import 'foundation/local_data_source.dart';
 import 'foundation/local_library_illust_view.dart';
 import 'foundation/local_library_settings.dart';
 import 'foundation/log.dart';
+import 'foundation/explore/explore_selection_state.dart';
 import 'foundation/pixiv_download_naming.dart';
 import 'foundation/reader_image_quality.dart';
 import 'foundation/history.dart';
@@ -199,6 +200,7 @@ class Appdata {
     'ask', //161 pixivTransferPolicy
     'ask', //162 pixivFolderDeletePolicy
     '0', //163 illustSearchMatchTags 插画搜索关键词是否同时匹配作品标签：0=只匹配标题/作者（默认，与 56 号搜索面板行为一致）；1=标题/作者/标签任一命中。见 foundation/local_library_illust_view.dart
+    '{}', //164 exploreSelectionState Pixiv 探索页分区/入口/榜单范围选择状态 JSON
   ];
 
   List<String> implicitData = [
@@ -359,11 +361,16 @@ class Appdata {
     settings[readerHighQualityIllustSettingIndex] =
         normalizeReaderHighQualityIllust(
             settings[readerHighQualityIllustSettingIndex]);
-    settings[pixivTransferPolicyIndex] = normalizePixivTransferPolicy(settings[pixivTransferPolicyIndex]);
-    settings[pixivFolderDeletePolicyIndex] = normalizePixivFolderDeletePolicy(settings[pixivFolderDeletePolicyIndex]);
+    settings[pixivTransferPolicyIndex] =
+        normalizePixivTransferPolicy(settings[pixivTransferPolicyIndex]);
+    settings[pixivFolderDeletePolicyIndex] = normalizePixivFolderDeletePolicy(
+        settings[pixivFolderDeletePolicyIndex]);
     // 插画搜索是否同时匹配标签（settings[163]，19 号）：只认 '1'，其余回落 '0'。
     settings[illustSearchMatchTagsSettingIndex] =
-        normalizeIllustSearchMatchTags(settings[illustSearchMatchTagsSettingIndex]);
+        normalizeIllustSearchMatchTags(
+            settings[illustSearchMatchTagsSettingIndex]);
+    settings[exploreSelectionSettingIndex] =
+        normalizeExploreSelectionJson(settings[exploreSelectionSettingIndex]);
     setManagedDataSourceMode(settings[managedDataSourceModeSettingIndex]);
     _syncArchiveRuntimeSettings();
     var settingsChanged = hadMissingSettings;
@@ -560,19 +567,24 @@ class Appdata {
       settings[illustViewSwitcherPositionSettingIndex] =
           normalizeIllustViewSwitcherPosition(
               settings[illustViewSwitcherPositionSettingIndex]);
-      settings[illustCardInfoSettingIndex] = normalizeIllustCardInfoTemplate(
-          settings[illustCardInfoSettingIndex]);
+      settings[illustCardInfoSettingIndex] =
+          normalizeIllustCardInfoTemplate(settings[illustCardInfoSettingIndex]);
       settings[readerHighQualityComicSettingIndex] =
           normalizeReaderHighQualityComic(
               settings[readerHighQualityComicSettingIndex]);
       settings[readerHighQualityIllustSettingIndex] =
           normalizeReaderHighQualityIllust(
               settings[readerHighQualityIllustSettingIndex]);
-      settings[pixivTransferPolicyIndex] = normalizePixivTransferPolicy(settings[pixivTransferPolicyIndex]);
-      settings[pixivFolderDeletePolicyIndex] = normalizePixivFolderDeletePolicy(settings[pixivFolderDeletePolicyIndex]);
+      settings[pixivTransferPolicyIndex] =
+          normalizePixivTransferPolicy(settings[pixivTransferPolicyIndex]);
+      settings[pixivFolderDeletePolicyIndex] = normalizePixivFolderDeletePolicy(
+          settings[pixivFolderDeletePolicyIndex]);
       // 与 readSettings 同一行：导入路径也必须归一化（漏一处就会出现"导入后不生效"）。
       settings[illustSearchMatchTagsSettingIndex] =
-          normalizeIllustSearchMatchTags(settings[illustSearchMatchTagsSettingIndex]);
+          normalizeIllustSearchMatchTags(
+              settings[illustSearchMatchTagsSettingIndex]);
+      settings[exploreSelectionSettingIndex] =
+          normalizeExploreSelectionJson(settings[exploreSelectionSettingIndex]);
       setManagedDataSourceMode(settings[managedDataSourceModeSettingIndex]);
       settings[22] = downloadPath;
       settings[13] = authRequired;

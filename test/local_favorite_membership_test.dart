@@ -68,6 +68,14 @@ void main() {
         {'jm123': true, 'absent': false});
   });
 
+  test('Pixiv uses stable type 9 and recognizes only its legacy source hash', () {
+    manager.addComic('A', _item('150378023', FavoriteType('pixiv'.hashCode)));
+    expect(manager.isComicFavorited('150378023', FavoriteType.pixiv), isTrue);
+    expect(manager.isComicFavorited('150378023', FavoriteType.jm), isFalse);
+    manager.deleteComicWithTarget('A', '150378023', FavoriteType.pixiv);
+    expect(manager.isComicFavorited('150378023', FavoriteType.pixiv), isFalse);
+  });
+
   test('mutations invalidate one shared snapshot across folders', () {
     expect(manager.isComicFavorited('123', FavoriteType.jm), isFalse);
     manager.addComic('A', _item('123'));

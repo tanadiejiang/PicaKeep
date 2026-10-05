@@ -9,6 +9,8 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:picakeep/comic_source/comic_source.dart';
+import 'package:picakeep/foundation/pixiv_detail_session.dart';
+import 'package:picakeep/network/base_comic.dart';
 import 'package:picakeep/foundation/explore/explore_bindings.dart';
 import 'package:picakeep/foundation/explore/explore_models.dart';
 import 'package:picakeep/pages/explore/explore_common.dart';
@@ -312,12 +314,47 @@ class _ExploreResultPageState extends State<ExploreResultPage>
           child: OnlineComicListItem(
             source: source,
             comic: item.comic,
+            onTap: source.key == 'pixiv'
+                ? () => _openComic(source, item.comic)
+                : null,
             highlighted: item.isBlocked,
             trailing: item.isBlocked ? Text('已屏蔽：${item.blockedBy}') : null,
           ),
         );
       },
     );
+  }
+
+  Future<void> _openComic(ComicSource source, BaseComic comic) async {
+    final controller = _controller;
+    if (controller == null) return;
+    final options = _options;
+    final account = pixivDetailAccountIdentity(source);
+    Iterable<BaseComic> visible() => controller.state.items
+        .where((item) => !(item.isBlocked && readHideBlockedComics()))
+        .map((item) => item.comic);
+    final session = PixivDetailSession(
+      scope: PixivDetailScope.recommendation,
+      entries: visible().map((item) => onlinePixivDetailEntry(source, item)),
+      hasMore: controller.state.hasMore,
+      ownerIsCurrent: () =>
+          mounted &&
+          identical(controller, _controller) &&
+          options == _options &&
+          account == pixivDetailAccountIdentity(source),
+      loadMore: () async {
+        await controller.loadMore();
+        if (controller.state.moreError != null) {
+          throw StateError(controller.state.moreError!.message);
+        }
+        return PixivDetailBatch(
+          visible().map((item) => onlinePixivDetailEntry(source, item)),
+          hasMore: controller.state.hasMore,
+        );
+      },
+    );
+    await openOnlineComic(context, source, comic, detailSession: session);
+    if (mounted) await _verifyContext();
   }
 
   /// 空、错误和加载态也提供一个占满剩余高度的可下拉滚动区域。

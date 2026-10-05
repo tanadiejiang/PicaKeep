@@ -463,6 +463,11 @@ class LocalLibraryComicItem extends DownloadedItem {
 
   @override
   Widget createReadingPage({int? ep, int? page}) {
+    final data = createLocalReadingData();
+    return ComicReadingPage(data, page ?? 1, ep ?? (data.hasEp ? 1 : 0));
+  }
+
+  LocalPathReadingData createLocalReadingData() {
     final hasEp = hasMultipleEpisodes;
     final epsMap = hasEp
         ? {
@@ -488,7 +493,7 @@ class LocalLibraryComicItem extends DownloadedItem {
       supportsImageSort: isAlbum && !isArchiveItem,
       archiveChapterRealNames: isArchiveItem ? _archiveChapterRealNames : null,
     );
-    return ComicReadingPage(data, page ?? 1, ep ?? (hasEp ? 1 : 0));
+    return data;
   }
 }
 

@@ -63,6 +63,34 @@ abstract class DownloadExportSourceFile {
   );
 }
 
+/// A scanned illustration is a file, never a request to export its siblings.
+class DownloadExportSingleFileSource extends DownloadExportContentSource {
+  const DownloadExportSingleFileSource({required this.filePath});
+
+  final String filePath;
+
+  @override
+  Future<List<DownloadExportSourceFile>> listFiles(
+    DownloadExportCancellationToken cancellation,
+  ) async {
+    cancellation.throwIfCancelled();
+    if (filePath.trim().isEmpty) {
+      throw const DownloadExportSourceException('本地图片路径为空');
+    }
+    if (!await PrivilegedStorageAccess.fileExists(filePath)) {
+      throw const DownloadExportSourceException('本地图片不存在或无法访问');
+    }
+    return [
+      _LocalDownloadExportFile(
+        sourcePath: filePath,
+        relativePath: DownloadExportPathTools.sanitizeSegment(
+          filePath.replaceAll('\\', '/').split('/').last,
+        ),
+      ),
+    ];
+  }
+}
+
 class DownloadExportDirectorySource extends DownloadExportContentSource {
   DownloadExportDirectorySource({
     required String rootPath,

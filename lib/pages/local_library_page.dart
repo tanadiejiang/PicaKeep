@@ -17,6 +17,8 @@ import 'package:picakeep/components/layout.dart';
 import 'package:picakeep/components/library_view_selector.dart';
 import 'package:picakeep/components/scrollable.dart';
 import 'package:picakeep/foundation/app.dart';
+import 'package:picakeep/foundation/pixiv_detail_session.dart';
+import 'package:picakeep/pages/online_comic/pixiv_detail_pager.dart';
 import 'package:picakeep/foundation/app_runtime_mode.dart';
 import 'package:picakeep/foundation/comic_tile_display_config.dart';
 import 'package:picakeep/foundation/archive/archive_password_store.dart';
@@ -41,7 +43,6 @@ import 'package:picakeep/tools/translations.dart';
 import 'download_page.dart' show DownloadedComicInfoView, DownloadPageLogic;
 import 'package:picakeep/components/archive_password_dialog.dart';
 import 'package:picakeep/components/side_bar.dart' show showSideBar;
-import 'local_comic_detail_page.dart';
 import 'local_library_illust_card.dart';
 import 'local_library_illust_switcher.dart';
 import 'local_library_illust_view.dart';
@@ -1968,7 +1969,8 @@ class _LocalLibraryPageState extends State<LocalLibraryPage>
       if (children.length == 1) {
         final comic = LocalLibraryManager().findCachedById(children.first.id);
         if (comic != null) {
-          App.pushInner(() => LocalComicDetailPage(comic: comic));
+          openLocalPixivDetail(context, comic,
+              items: [comic], scope: PixivDetailScope.localLibrary);
           return;
         }
       }
@@ -1981,7 +1983,11 @@ class _LocalLibraryPageState extends State<LocalLibraryPage>
       );
       return;
     }
-    App.pushInner(() => LocalComicDetailPage(comic: item));
+    openLocalPixivDetail(context, item,
+        items: _isIllustView
+            ? _filteredIllustEntries.map((entry) => entry.item)
+            : _filteredItems,
+        scope: PixivDetailScope.localLibrary);
   }
 
   void _showItemInfo(DownloadedItem item) {

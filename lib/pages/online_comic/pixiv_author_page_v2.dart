@@ -32,18 +32,19 @@ import 'package:flutter_staggered_grid_view/flutter_staggered_grid_view.dart';
 import 'package:picakeep/base.dart';
 import 'package:picakeep/comic_source/comic_source.dart';
 import 'package:picakeep/foundation/app.dart';
-import 'package:picakeep/foundation/comic_tile_display_config.dart';
+import 'package:picakeep/foundation/pixiv_detail_session.dart';
 import 'package:picakeep/foundation/local_library_illust_view.dart'
     show illustWaterfallColumnsSettingIndex, normalizeIllustWaterfallColumns;
 import 'package:picakeep/network/base_comic.dart';
 import 'package:picakeep/network/res.dart';
 import 'package:picakeep/network/pixiv_network/pixiv_network.dart';
-import 'package:picakeep/network/pixiv_network/pixiv_parsing.dart'
-    show pixivProportionalThumbUrl;
 import 'package:picakeep/pages/accounts/account_page_route.dart';
 import 'package:picakeep/pages/online_common/online_comic_list_item.dart'
-    show onlineCoverProvider, openOnlineComic;
-import 'package:picakeep/pages/online_common/online_waterfall_card.dart';
+    show
+        onlineCoverProvider,
+        onlinePixivDetailEntry,
+        pixivDetailAccountIdentity;
+import 'package:picakeep/pages/online_common/online_recommendation_card.dart';
 import 'package:picakeep/pages/settings/settings_page.dart'
     show showWaterfallTagSettings;
 
@@ -67,7 +68,11 @@ class PixivAuthorPageV2 extends StatefulWidget {
       this.isLoggedIn,
       this.currentUserId,
       this.manageAccounts,
-      this.openTagSettings});
+      this.openTagSettings,
+      this.bookmarks,
+      this.accountIdentity,
+      this.writeBookmark,
+      this.loadBookmarkState});
 
   /// 作者 uid（Pixiv 的 `userId`）。
   final String uid;
@@ -83,6 +88,11 @@ class PixivAuthorPageV2 extends StatefulWidget {
   final String Function()? currentUserId;
   final Future<void> Function(BuildContext context)? manageAccounts;
   final Future<void> Function(BuildContext context)? openTagSettings;
+  final RecommendationBookmarkController? bookmarks;
+  final String Function()? accountIdentity;
+  final Future<Res<bool>> Function(String id, {required bool isAdding})?
+      writeBookmark;
+  final Future<Res<PixivBookmarkState>> Function(String id)? loadBookmarkState;
 
   @override
   State<PixivAuthorPageV2> createState() => _PixivAuthorPageV2State();
@@ -91,6 +101,7 @@ class PixivAuthorPageV2 extends StatefulWidget {
 class _PixivAuthorPageV2State extends State<PixivAuthorPageV2> {
   late final PixivNetwork _network = PixivNetwork();
   final ScrollController _scrollController = ScrollController();
+  late RecommendationBookmarkController _bookmarks;
   int _generation = 0;
   int _authorRequest = 0;
   bool _commentExpanded = false;
@@ -116,6 +127,7 @@ class _PixivAuthorPageV2State extends State<PixivAuthorPageV2> {
   @override
   void initState() {
     super.initState();
+    _bookmarks = widget.bookmarks ?? RecommendationBookmarkController();
     _scrollController.addListener(_onScroll);
     App.displaySettingsVersion.addListener(_onDisplaySettingsChanged);
     _loadAuthor();
@@ -128,6 +140,7 @@ class _PixivAuthorPageV2State extends State<PixivAuthorPageV2> {
     App.displaySettingsVersion.removeListener(_onDisplaySettingsChanged);
     _scrollController.removeListener(_onScroll);
     _scrollController.dispose();
+    if (widget.bookmarks == null) _bookmarks.dispose();
     super.dispose();
   }
 
@@ -204,6 +217,7 @@ class _PixivAuthorPageV2State extends State<PixivAuthorPageV2> {
       _loadedPages = page;
       final existing = _items.map((item) => item.id).toSet();
       _items.addAll(res.data.where((item) => existing.add(item.id)));
+      if (res.data.isEmpty) _totalPages = _loadedPages;
     });
   }
 
@@ -215,6 +229,7 @@ class _PixivAuthorPageV2State extends State<PixivAuthorPageV2> {
 
   Future<void> _refresh() async {
     if (!mounted || _followLoading || _accountsOpening) return;
+    if (widget.bookmarks == null) _bookmarks.reset();
     setState(() {
       _generation++;
       _worksLoading = false;
@@ -229,6 +244,10 @@ class _PixivAuthorPageV2State extends State<PixivAuthorPageV2> {
   @override
   void didUpdateWidget(covariant PixivAuthorPageV2 oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (oldWidget.bookmarks != widget.bookmarks) {
+      if (oldWidget.bookmarks == null) _bookmarks.dispose();
+      _bookmarks = widget.bookmarks ?? RecommendationBookmarkController();
+    }
     if (oldWidget.uid != widget.uid) {
       _author = null;
       _commentExpanded = false;
@@ -239,6 +258,31 @@ class _PixivAuthorPageV2State extends State<PixivAuthorPageV2> {
   }
 
   ComicSource? get _source => ComicSource.find('pixiv');
+
+  PixivDetailSession _detailSession(ComicSource source) {
+    final generation = _generation;
+    final uid = widget.uid;
+    final account = pixivDetailAccountIdentity(source);
+    return PixivDetailSession(
+      scope: PixivDetailScope.author,
+      entries: _items.map((item) => onlinePixivDetailEntry(source, item)),
+      hasMore: _totalPages == null || _loadedPages < _totalPages!,
+      ownerIsCurrent: () =>
+          mounted &&
+          generation == _generation &&
+          uid == widget.uid &&
+          account == pixivDetailAccountIdentity(source),
+      loadMore: () async {
+        if (_worksLoading) throw StateError('入口正在加载');
+        await _loadNextPage();
+        if (_worksError != null) throw StateError(_worksError!);
+        return PixivDetailBatch(
+          _items.map((item) => onlinePixivDetailEntry(source, item)),
+          hasMore: _totalPages == null || _loadedPages < _totalPages!,
+        );
+      },
+    );
+  }
 
   bool get _isLoggedIn =>
       widget.isLoggedIn?.call() ?? (_source?.isLoggedIn ?? false);
@@ -265,7 +309,7 @@ class _PixivAuthorPageV2State extends State<PixivAuthorPageV2> {
     setState(() => _accountsOpening = false);
     // A changed account needs fresh server state. Opening login never submits
     // the original follow action automatically.
-    await _loadAuthor();
+    await _refresh();
   }
 
   Future<void> _toggleFollow() async {
@@ -390,28 +434,20 @@ class _PixivAuthorPageV2State extends State<PixivAuthorPageV2> {
       // 一个"源没注册"的环境问题上。
       return ListTile(title: Text(comic.title));
     }
-    // 宽高 / 页数只有 [PixivComicBrief] 有。`_items` 声明成 `BaseComic` 只是
-    // 为了装 `Res<List<BaseComic>>` 的容器，实际元素恒为 `PixivComicBrief`
-    // （作者页只从 `getAuthorWorks` 取数）；这里做一次显式收窄，
-    // 拿不到就退回 `BaseComic` 能给的字段，不硬转。
-    final brief = comic is PixivComicBrief ? comic : null;
-    return OnlineWaterfallCard(
-      title: comic.title,
-      // **必须换掉方图缩略图**：响应给的 `_square1200` 是裁切版，
-      // 直接排进瀑布流会让每一格都变成 1:1。
-      cover: pixivProportionalThumbUrl(comic.cover),
-      fallbackCover: comic.cover,
-      imageHeaders:
-          source.imageHeadersBuilder?.call(comic) ?? pixivImageHeaders,
-      onTap: () => openOnlineComic(context, source, comic),
-      // The whole wall belongs to the displayed author; do not repeat their
-      // name under every image. Page counts still use the shared card rule.
-      author: '',
-      pageCount: brief?.pageCount ?? 0,
-      width: brief?.width,
-      height: brief?.height,
-      tags: comic.tags,
-      tagConfig: readComicTileDisplaySettings().pixivAuthorTags,
+    return OnlineRecommendationCard(
+      key: ValueKey((source.key, comic.id)),
+      source: source,
+      comic: comic,
+      bookmarks: _bookmarks,
+      isAuthorPage: true,
+      actionsEnabled: !_worksLoading && !_accountsOpening,
+      isLoggedIn: widget.isLoggedIn,
+      accountIdentity: widget.accountIdentity,
+      writeBookmark: widget.writeBookmark,
+      loadBookmarkState: widget.loadBookmarkState,
+      manageAccounts: widget.manageAccounts,
+      onAccountsChanged: _refresh,
+      detailSessionBuilder: () => _detailSession(source),
     );
   }
 

@@ -274,6 +274,7 @@ class ComicReadingPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return StateBuilder<ComicReadingPageLogic>(initState: (logic) {
+      TapController.reset();
       App.setReadingActive(true);
       _syncReaderSystemUi(useDarkBackground: useDarkBackground, visible: false);
       if (appdata.settings[14] == "1") {
@@ -297,6 +298,7 @@ class ComicReadingPage extends StatelessWidget {
                 ?.setDarkTheme());
       }
     }, dispose: (logic) {
+      TapController.reset();
       logic.abortActiveImageLoads();
       //清除缓存并减小最大缓存
       logic.restoreReaderCacheLimits();

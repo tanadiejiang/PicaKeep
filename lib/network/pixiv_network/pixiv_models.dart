@@ -22,6 +22,16 @@ const pixivIllustTypeIllust = 0;
 /// 是网络层分流的唯一依据。
 const pixivIllustTypeUgoira = 2;
 
+enum PixivBookmarkVisibility {
+  public(0),
+  private(1);
+
+  const PixivBookmarkVisibility(this.restrict);
+  final int restrict;
+}
+
+const _pixivKeepValue = Object();
+
 /// Pixiv 列表项（搜索 / 排行榜 / 推荐通用）。
 ///
 /// 字段口径来自 Web Ajax 响应，与 nhentai / picacg 的 brief 保持一致的命名习惯：
@@ -134,10 +144,12 @@ class PixivBookmarkState {
   const PixivBookmarkState({
     required this.isBookmarked,
     required this.isBookmarkable,
+    this.bookmarkPrivate,
   });
 
   final bool isBookmarked;
   final bool isBookmarkable;
+  final bool? bookmarkPrivate;
 }
 
 /// Pixiv 作者（用户）资料（`/ajax/user/{uid}?full=1` 的 `body`）。
@@ -210,6 +222,12 @@ class PixivComicInfo {
     required this.userId,
     this.isBookmarked = false,
     this.bookmarkId,
+    this.bookmarkPrivate,
+    this.isBookmarkable,
+    this.regularUrl = '',
+    this.authorAvatar = '',
+    this.commentCount = 0,
+    this.relatedWorks = const <PixivComicBrief>[],
   });
 
   /// 作品 id（`illustId`，兼容 `id`）。
@@ -269,7 +287,113 @@ class PixivComicInfo {
 
   /// 当前账号的书签 ID（`bookmarkData.id`），与作品 ID 不同。
   final String? bookmarkId;
+
+  /// Null means the server did not establish visibility or adding capability.
+  final bool? bookmarkPrivate;
+  final bool? isBookmarkable;
+  final String regularUrl;
+  final String authorAvatar;
+  final int commentCount;
+
+  /// Valid, available objects already embedded in userIllusts, in server order.
+  final List<PixivComicBrief> relatedWorks;
+
+  PixivComicInfo copyWith({
+    bool? isBookmarked,
+    Object? bookmarkId = _pixivKeepValue,
+    Object? bookmarkPrivate = _pixivKeepValue,
+    Object? isBookmarkable = _pixivKeepValue,
+    List<PixivComicBrief>? relatedWorks,
+  }) =>
+      PixivComicInfo(
+        id: id,
+        title: title,
+        author: author,
+        authorId: authorId,
+        coverUrl: coverUrl,
+        tags: tags,
+        description: description,
+        pageCount: pageCount,
+        illustType: illustType,
+        likeCount: likeCount,
+        viewCount: viewCount,
+        width: width,
+        height: height,
+        isOriginal: isOriginal,
+        createDate: createDate,
+        uploadDate: uploadDate,
+        userId: userId,
+        isBookmarked: isBookmarked ?? this.isBookmarked,
+        bookmarkId: identical(bookmarkId, _pixivKeepValue)
+            ? this.bookmarkId
+            : bookmarkId as String?,
+        bookmarkPrivate: identical(bookmarkPrivate, _pixivKeepValue)
+            ? this.bookmarkPrivate
+            : bookmarkPrivate as bool?,
+        isBookmarkable: identical(isBookmarkable, _pixivKeepValue)
+            ? this.isBookmarkable
+            : isBookmarkable as bool?,
+        regularUrl: regularUrl,
+        authorAvatar: authorAvatar,
+        commentCount: commentCount,
+        relatedWorks: relatedWorks ?? this.relatedWorks,
+      );
 }
+
+/// A read-only root comment or first-level reply. Replies omit several flags.
+class PixivComment {
+  const PixivComment({
+    required this.id,
+    required this.userId,
+    required this.userName,
+    required this.avatarUrl,
+    required this.comment,
+    required this.commentDate,
+    this.stampId,
+    this.hasReplies,
+    this.isDeletedUser,
+    this.rootId,
+    this.parentId,
+    this.replyToUserId,
+    this.replyToUserName,
+  });
+
+  final String id;
+  final String userId;
+  final String userName;
+  final String avatarUrl;
+  final String comment;
+  final String commentDate;
+  final int? stampId;
+  final bool? hasReplies;
+  final bool? isDeletedUser;
+  final String? rootId;
+  final String? parentId;
+  final String? replyToUserId;
+  final String? replyToUserName;
+
+  String? get stampUrl =>
+      stampId == null ? null : pixivCommentStampUrl(stampId!);
+}
+
+/// The offset advances by originalCount, including invalid/duplicate rows.
+class PixivCommentPage {
+  const PixivCommentPage({
+    required this.comments,
+    required this.hasNext,
+    required this.originalCount,
+  });
+
+  final List<PixivComment> comments;
+  final bool hasNext;
+  final int originalCount;
+
+  bool get isEmptyPageWithMore => hasNext && originalCount == 0;
+}
+
+String? pixivCommentStampUrl(int stampId) => stampId > 0
+    ? 'https://s.pximg.net/common/images/stamp/generated-stamps/${stampId}_s.jpg'
+    : null;
 
 /// Pixiv 单页图片的多档 URL（`/ajax/illust/{id}/pages` 的数组元素）。
 ///

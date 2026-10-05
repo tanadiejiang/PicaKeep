@@ -266,10 +266,11 @@ extension ImageExt on ComicReadingPage {
 
                     logic.photoViewControllers[index] ??= PhotoViewController();
 
+                    final fit = getFit();
                     return PhotoViewGalleryPageOptions(
                       filterQuality: FilterQuality.high,
                       imageProvider: imageProvider,
-                      fit: getFit(),
+                      fit: fit,
                       controller: logic.photoViewControllers[index],
                       // 39 号：显式钉住缩放的下限与初值。
                       //
@@ -280,7 +281,11 @@ extension ImageExt on ComicReadingPage {
                       // 再缩就回弹，而不是停在比适配更小的尺寸上
                       // （用户原话：「缩小手势时不是自己归位，而是能更小（定住）」）。
                       minScale: PhotoViewComputedScale.contained,
-                      initialScale: PhotoViewComputedScale.contained,
+                      // The local PhotoView fork computes fitWidth/fitHeight
+                      // after decoding and rejects an explicit initial scale.
+                      initialScale: fit == BoxFit.contain
+                          ? PhotoViewComputedScale.contained
+                          : null,
                       // 上限**不显式设**：默认的 `covered * 2.5` 对"细长条"
                       // 这类适配后很窄的图更合适，写死 `contained * N` 反而
                       // 会让它们放不大。

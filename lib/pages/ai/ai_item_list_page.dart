@@ -5,6 +5,7 @@ import '../../foundation/ai/ai_result_item.dart';
 import '../../foundation/ai/ai_sources.dart';
 import '../../foundation/ai/ai_download_queue.dart';
 import '../../foundation/app_page_route.dart';
+import '../../foundation/pixiv_detail_session.dart';
 import '../../foundation/remote_library_data_source.dart';
 import '../../foundation/download_model.dart';
 import '../../components/comic_tile.dart';
@@ -15,6 +16,7 @@ import '../online_comic/jm_comic_page_v2.dart';
 import '../online_comic/nhentai_comic_page_v2.dart';
 import '../online_comic/eh_comic_page_v2.dart';
 import '../online_comic/pixiv_comic_page_v2.dart';
+import '../online_comic/pixiv_detail_pager.dart';
 import '../online_comic/komiic_comic_page_v2.dart';
 import 'ai_download_list_page.dart';
 
@@ -87,7 +89,26 @@ class _AiItemListPageState extends State<AiItemListPage> {
       // 第十八轮新增源：不补这两支会走 default，点击清单卡会**静默回落**到
       // 占位 sheet（无报错），表现为"点了没反应"。
       case aiSourcePixiv:
-        page = PixivComicPageV2(item.id);
+        final session = PixivDetailSession(
+          scope: PixivDetailScope.aiResults,
+          entries: [
+            for (final value in widget.items)
+              if (value.source == aiSourcePixiv &&
+                  RegExp(r'^\d+$').hasMatch(value.id))
+                PixivDetailEntry(
+                  key: 'online:${value.id}',
+                  comicId: value.id,
+                  builder: (_) => PixivComicPageV2(value.id),
+                ),
+          ],
+        );
+        if (session.indexOf('online:${item.id}') < 0) {
+          session.dispose();
+          _showFallbackSheet(item);
+          return;
+        }
+        openPixivDetailSession(context, session, 'online:${item.id}');
+        return;
       case aiSourceKomiic:
         page = KomiicComicPageV2(item.id);
       default:
@@ -303,8 +324,7 @@ class _AiItemListPageState extends State<AiItemListPage> {
     return Scaffold(
       appBar: _selecting
           ? AppBar(
-              backgroundColor:
-                  Theme.of(context).colorScheme.primaryContainer,
+              backgroundColor: Theme.of(context).colorScheme.primaryContainer,
               leading: IconButton(
                 icon: const Icon(Icons.close),
                 onPressed: _exitSelection,
@@ -326,8 +346,7 @@ class _AiItemListPageState extends State<AiItemListPage> {
                   tooltip: '下载队列',
                   onPressed: () {
                     Navigator.of(context).push(
-                      AppPageRoute(
-                          builder: (_) => const AiDownloadListPage()),
+                      AppPageRoute(builder: (_) => const AiDownloadListPage()),
                     );
                   },
                 ),
@@ -370,8 +389,7 @@ class _AiItemListPageState extends State<AiItemListPage> {
                               if (_selecting)
                                 IgnorePointer(
                                   child: AnimatedContainer(
-                                    duration:
-                                        const Duration(milliseconds: 150),
+                                    duration: const Duration(milliseconds: 150),
                                     color: _selected[index]
                                         ? Theme.of(context)
                                             .colorScheme

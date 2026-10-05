@@ -1215,6 +1215,10 @@ class CustomDownloadedItem extends DownloadedItem {
 
   @override
   Widget createReadingPage({int? ep, int? page}) {
+    return ComicReadingPage(createLocalReadingData(), page ?? 1, ep ?? 1);
+  }
+
+  LocalReadingData createLocalReadingData() {
     var epsMap = <String, String>{};
     if (chapters != null) {
       epsMap.addAll(chapters!);
@@ -1233,6 +1237,6 @@ class CustomDownloadedItem extends DownloadedItem {
       favoriteType: favType,
     );
     data.downloadedEps = downloadedEps;
-    return ComicReadingPage(data, page ?? 1, ep ?? 1);
+    return data;
   }
 }

@@ -16,8 +16,10 @@ import 'package:picakeep/foundation/comic_tile_display_config.dart';
 import 'package:picakeep/foundation/download_author_resolver.dart';
 import 'package:picakeep/foundation/image_loader/stream_image_provider.dart';
 import 'package:picakeep/foundation/local_favorites.dart';
+import 'package:picakeep/foundation/pixiv_detail_session.dart';
 import 'package:picakeep/network/base_comic.dart';
 import 'package:picakeep/network/online_image/online_image_manager.dart';
+import 'package:picakeep/pages/online_comic/pixiv_detail_pager.dart';
 
 /// 在线列表卡片的固定高度（164dp 基线，与搜索页/网络收藏页一致）。
 const double onlineComicListItemHeight = 164;
@@ -225,12 +227,27 @@ class OnlineComicListItem extends StatelessWidget {
 /// 转场统一用 [AppPageRoute]（与搜索页改造前一致）：它有项目统一的滑动转场与
 /// 桌面/移动端一致的边缘返回手势；换成 `MaterialPageRoute` 会静默丢掉这两项。
 Future<void> openOnlineComic(
-    BuildContext context, ComicSource source, BaseComic comic) async {
+    BuildContext context, ComicSource source, BaseComic comic,
+    {PixivDetailSession? detailSession}) async {
   final builder = source.comicPageBuilder;
   if (builder == null) return;
+  if (source.key == 'pixiv' && detailSession != null) {
+    await openPixivDetailSession(context, detailSession, 'online:${comic.id}');
+    return;
+  }
   await Navigator.of(context)
       .push<void>(AppPageRoute(builder: (_) => builder(comic)));
 }
+
+PixivDetailEntry onlinePixivDetailEntry(ComicSource source, BaseComic comic) =>
+    PixivDetailEntry(
+      key: 'online:${comic.id}',
+      comicId: comic.id,
+      builder: (_) => source.comicPageBuilder!(comic),
+    );
+
+String pixivDetailAccountIdentity(ComicSource source) =>
+    '${source.data['userId'] ?? ''}|${source.data['token'] ?? ''}';
 
 /// 关键词屏蔽匹配（探索列表展示层用）。
 ///

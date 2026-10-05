@@ -136,10 +136,11 @@ void main() {
           'theme');
     });
 
-    test('推荐默认开两行，旧本地/作者默认关闭，图标非法样式安全回退', () {
+    test('推荐与缺失作者节点默认开两行，本地关闭，图标坏值安全回退', () {
       final defaults = readComicTileDisplaySettings();
       expect(defaults.localIllustTags.showTags, isFalse);
-      expect(defaults.pixivAuthorTags.showTags, isFalse);
+      expect(defaults.pixivAuthorTags,
+          WaterfallTagDisplayConfig.pixivAuthorDefaults);
       expect(
           defaults.recommendTags, WaterfallTagDisplayConfig.recommendDefaults);
       for (final rows in WaterfallTagDisplayConfig.rowOptions) {
@@ -156,6 +157,34 @@ void main() {
           damaged.recommendTags, WaterfallTagDisplayConfig.recommendDefaults);
       expect(damaged.favoriteStyle, WaterfallFavoriteStyle.defaults);
       expect(ComicTileDisplaySettings.fromJson(damaged.toJson()), damaged);
+    });
+
+    test('作者节点缺失启用新默认，显式旧节点保留关闭和行数', () {
+      for (final root in [
+        <String, Object?>{},
+        {'waterfall': <String, Object?>{}},
+        {
+          'waterfall': {
+            'local': {'showTags': true, 'tagRows': 3}
+          }
+        }
+      ]) {
+        expect(ComicTileDisplaySettings.fromJson(root).pixivAuthorTags,
+            WaterfallTagDisplayConfig.pixivAuthorDefaults);
+      }
+      for (final rows in WaterfallTagDisplayConfig.rowOptions) {
+        final saved = ComicTileDisplaySettings.fromJson({
+          'waterfall': {
+            'pixivAuthor': {'showTags': false, 'tagRows': rows}
+          }
+        });
+        expect(saved.pixivAuthorTags,
+            WaterfallTagDisplayConfig(showTags: false, tagRows: rows));
+      }
+      final legacy = ComicTileDisplaySettings.fromJson({
+        'waterfall': {'pixivAuthor': <String, Object?>{}}
+      });
+      expect(legacy.pixivAuthorTags, WaterfallTagDisplayConfig.defaults);
     });
   });
 

@@ -66,6 +66,13 @@ class DownloadExportRequestFactory {
         source: DownloadExportArchiveSource(archivePath: path),
       );
     }
+    if (const {'.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.avif'}
+        .any((extension) => path.toLowerCase().endsWith(extension))) {
+      return DownloadExportRequest(
+        descriptor: descriptor,
+        source: DownloadExportSingleFileSource(filePath: path),
+      );
+    }
     return DownloadExportRequest(
       descriptor: descriptor,
       source: DownloadExportDirectorySource(
