@@ -4,7 +4,7 @@
 ///
 /// **A. 注入 fake registry**（`ExploreBindings.forTesting` + `debugSetInstance`）
 /// —— 页面级行为：四源可达（源是 `TabBar` 的页签，与「卡片信息显示」页同款）、
-/// 三页签可达（推荐/榜单/分类，仍是 `ChoiceChip`）、榜单选项条出现、
+/// 三页签可达（推荐/榜单/分类）、榜单选项条出现、
 /// 分类入口列表出现、未登录源不发**任何**请求且显示登录说明与账号管理入口、
 /// 概览分区错误隔离、切榜期换 option（请求 +1 且带新 id）、
 /// 以及满屏源页签 + 页签下窄屏大字号不溢出。四个源全部是 fake provider，
@@ -233,6 +233,14 @@ List<ExploreSection> _okSections() => const <ExploreSection>[
       ),
     ];
 
+/// 「推荐 / 榜单 / 分类」这三个内部页签的定位器。
+///
+/// 它们已从 `ChoiceChip` 换成**自绘胶囊**（与右侧入口同一套外观，背景画在
+/// 普通 `Container` 上，浮层淡出时不会留残影），所以按 `explore-tab-<文案>`
+/// 定位。**只有"怎么找控件"变了**，各用例的语义断言未动。
+Finder exploreTab(String label) =>
+    find.byKey(ValueKey('explore-tab-$label'));
+
 /// 只含 [ExplorePage] 的最小 MaterialApp；[textScale] 用于放大字号。
 Widget _exploreApp({
   double textScale = 1.0,
@@ -331,7 +339,8 @@ void main() {
     expect(find.text('重试'), findsOneWidget);
 
     // 没有 registry 就不该出现任何源切换或页签（也不许伪造四源/三页签）。
-    expect(find.byType(ChoiceChip), findsNothing);
+    expect(find.byType(TabBar), findsNothing);
+    expect(exploreTab('推荐'), findsNothing);
     expect(find.text('没有可用的探索源'), findsNothing);
 
     // 重试仍然只走降级路径：不崩、不改变结论。
@@ -340,7 +349,8 @@ void main() {
 
     expect(tester.takeException(), isNull);
     expect(find.text('探索能力尚未初始化'), findsOneWidget);
-    expect(find.byType(ChoiceChip), findsNothing);
+    expect(find.byType(TabBar), findsNothing);
+    expect(exploreTab('推荐'), findsNothing);
   });
 
   testWidgets('窄屏 360x640 + 字号 1.5 不溢出', (tester) async {
@@ -457,15 +467,18 @@ void main() {
     /// 点已选中项是 no-op（`_selectSource` / `_selectTab` 都会提前返回）。
     ///
     /// 源已从 `ChoiceChip` 改成 `TabBar` 的页签（与「卡片信息显示」页同款），
-    /// 因此**源**要用 [tapSourceTab]，而「推荐/榜单/分类」这些内部选项仍是
-    /// `ChoiceChip`，继续用 [tapChip]。
+    /// 因此**源**要用 [tapSourceTab]；而「推荐/榜单/分类」这些内部页签
+    /// 也从 `ChoiceChip` 换成了**自绘胶囊**（与右侧入口同一套外观），
+    /// 所以这里按 `explore-tab-<文案>` 定位 —— **只改"怎么定位控件"**，
+    /// 各用例的语义断言一个都没动。
     ///
     /// 点控件**自身**（而不是它的 Text）：Text 的 RenderParagraph 不在命中路径里，
     /// 点 Text 只是恰好由祖先 InkWell 收到，会带 "would not hit test" 警告。
+    Finder chipFinder(String label) =>
+        find.byKey(ValueKey('explore-tab-$label'));
+
     Future<void> tapChip(WidgetTester tester, String label) async {
-      final target = find
-          .ancestor(of: find.text(label), matching: find.byType(ChoiceChip))
-          .first;
+      final target = chipFinder(label);
       await tester.ensureVisible(target);
       await tester.tap(target);
       await tester.pumpAndSettle();
@@ -481,12 +494,15 @@ void main() {
     }
 
     bool chipSelected(WidgetTester tester, String label) {
-      final chip = tester.widget<ChoiceChip>(
+      // 选中态现在报在胶囊自己的 `Semantics.selected` 上（自绘胶囊不再有
+      // `ChoiceChip.selected` 可读）。
+      final semantics = tester.widget<Semantics>(
         find
-            .ancestor(of: find.text(label), matching: find.byType(ChoiceChip))
+            .descendant(
+                of: chipFinder(label), matching: find.byType(Semantics))
             .first,
       );
-      return chip.selected;
+      return semantics.properties.selected ?? false;
     }
 
     /// 源页签（`TabBar` 里的 `Tab`）。
@@ -548,9 +564,13 @@ void main() {
       expect(providers['picacg']!.overviewRequests, isNotEmpty,
           reason: '切到哔咔必须真的请求哔咔');
 
-      // 4 个源已从 ChoiceChip 变成 Tab，剩下的 ChoiceChip 只有"推荐/榜单/分类"。
-      expect(find.byType(ChoiceChip), findsNWidgets(3),
-          reason: '源不再是 ChoiceChip；3 个内部页签仍是');
+      // 4 个源已从 ChoiceChip 变成 Tab；「推荐/榜单/分类」也不再是 ChoiceChip，
+      // 而是与右侧入口同一套的自绘胶囊。
+      expect(find.byType(ChoiceChip), findsNothing,
+          reason: '源是 Tab；三个内部页签已改成自绘胶囊');
+      expect(chipFinder('推荐'), findsOneWidget);
+      expect(chipFinder('榜单'), findsOneWidget);
+      expect(chipFinder('分类'), findsOneWidget);
     });
 
     testWidgets('三页签可达：推荐/榜单/分类都在；榜单出榜期选项、分类出目录入口', (tester) async {
@@ -878,6 +898,173 @@ void main() {
       expect(tester.takeException(), isNull);
     });
 
+    /// 胶囊最外层的 `DecoratedBox` —— 浮层的**背景就画在它身上**
+    /// （不是 `Ink.decoration`，见 `_FloatingCapsule` 的注释）。
+    DecoratedBox capsuleBox(WidgetTester tester, Finder capsule) =>
+        tester.widget<DecoratedBox>(
+            find.descendant(of: capsule, matching: find.byType(DecoratedBox)).first);
+
+    BoxDecoration capsuleDecor(WidgetTester tester, Finder capsule) =>
+        capsuleBox(tester, capsule).decoration as BoxDecoration;
+
+    /// 停泊区高度：拿**同一个首项**在两个状态下比 —— 滚到避让归零时首项离内容
+    /// 区顶部只有一个列表自身的 `padding`，顶端时多出来的那块就是停泊区。
+    double contentTopGap(WidgetTester tester) =>
+        tester.getTopLeft(find.text('示例条目 0')).dy -
+        tester.getTopLeft(find.byKey(const ValueKey('explore-toolbar'))).dy -
+        tester.getSize(find.byKey(const ValueKey('explore-toolbar'))).height;
+
+    testWidgets('顶部停泊区避让：滚下去归零、回顶恢复', (tester) async {
+      installFakeBindings(overviewSections: [
+        ExploreSection(
+          id: 'many',
+          title: '推荐内容',
+          entryId: 'jm.home',
+          items: List.generate(20, (i) => _FakeComic('item-$i', '示例条目 $i')),
+        )
+      ]);
+      await pumpExplorePage(tester, size: const Size(430, 800));
+      await tapChip(tester, '推荐');
+
+      final controller =
+          tester.widget<ListView>(find.byType(ListView)).controller!;
+      final toolbar = find.byKey(const ValueKey('explore-toolbar'));
+      // 定位页签时可能带出一点滚动，先明确回到顶部再量停泊区。
+      controller.jumpTo(0);
+      await tester.pumpAndSettle();
+
+      // ① 顶部：首行必须在浮层**下方**开始（不能像现状那样被按钮压住）。
+      final itemTopAtTop = tester.getTopLeft(find.text('示例条目 0')).dy;
+      expect(itemTopAtTop,
+          greaterThanOrEqualTo(tester.getBottomLeft(toolbar).dy),
+          reason: '顶端内容首行必须从停泊区下方开始，不能被浮层压住');
+      final dock = contentTopGap(tester);
+      expect(dock, greaterThanOrEqualTo(28),
+          reason: '顶端要留出停泊区');
+
+      // ② 向下滚：避让同步归零（027 被推翻的是"固定占位"，这里必须收干净）。
+      controller.jumpTo(200);
+      await tester.pumpAndSettle();
+      final scrolledTop =
+          tester.getTopLeft(find.byType(OnlineComicListItem).first).dy;
+      expect(scrolledTop, lessThan(itemTopAtTop),
+          reason: '滚下去之后停泊区归零，内容整体顶上去');
+
+      // ③ 回顶：避让恢复，首行回到原位。
+      controller.jumpTo(0);
+      await tester.pumpAndSettle();
+      expect(tester.getTopLeft(find.text('示例条目 0')).dy,
+          closeTo(itemTopAtTop, 0.5),
+          reason: '回滚到顶要恢复停泊区');
+      expect(contentTopGap(tester), closeTo(dock, 0.5));
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('靠近顶部无条件显示浮层（不用真滚到顶）', (tester) async {
+      installFakeBindings(overviewSections: [
+        ExploreSection(
+          id: 'many',
+          title: '推荐内容',
+          entryId: 'jm.home',
+          items: List.generate(40, (i) => _FakeComic('item-$i', '示例条目 $i')),
+        )
+      ]);
+      await pumpExplorePage(tester, size: const Size(430, 800));
+      await tapChip(tester, '推荐');
+
+      // 先用**手势**滚下去（程序化滚动不会驱动浮层进度）。
+      await tester.drag(find.byType(ListView), const Offset(0, -400));
+      await tester.pumpAndSettle();
+      final toolbar = find.byKey(const ValueKey('explore-toolbar'));
+      expect(tester.getRect(toolbar).height, lessThan(32),
+          reason: '滚下去之后浮层应该是缩小/淡出态');
+
+      // 再往回滚到**顶附近**（不要求正好回到 0）：浮层必须已经完整露出来。
+      await tester.drag(find.byType(ListView), const Offset(0, 400));
+      await tester.pumpAndSettle();
+      final controller =
+          tester.widget<ListView>(find.byType(ListView)).controller!;
+      expect(controller.position.pixels, lessThan(32),
+          reason: '用例前提：此时确实已经回到顶部附近');
+      expect(tester.getRect(toolbar).height, closeTo(32, 0.5),
+          reason: '靠近顶部要无条件完整显示（不是"必须滚到顶"才显示）');
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('浮层背景透明：未选中页签与入口按钮都不留底色', (tester) async {
+      installFakeBindings(overviewSections: [
+        ExploreSection(
+          id: 'many',
+          title: '推荐内容',
+          entryId: 'jm.home',
+          items: List.generate(12, (i) => _FakeComic('item-$i', '示例条目 $i')),
+        )
+      ]);
+      await pumpExplorePage(tester, size: const Size(430, 800));
+      await tapSourceTab(tester, '禁漫');
+      await tapChip(tester, '榜单');
+
+      // 未选中页签：完全透明（无描边、无底色）。
+      final unselected = capsuleDecor(tester, exploreTab('推荐'));
+      expect(unselected.color, Colors.transparent);
+      expect(unselected.border, isNull);
+      expect(unselected.borderRadius, BorderRadius.circular(20));
+
+      // 选中页签：主题色底 + 圆角 20（与右侧入口同一套）。
+      final selected = capsuleDecor(tester, exploreTab('榜单'));
+      expect(
+          selected.color,
+          Theme.of(tester.element(exploreTab('榜单')))
+              .colorScheme
+              .secondaryContainer);
+      expect(selected.borderRadius, BorderRadius.circular(20));
+
+      // 右侧入口按钮：默认透明（"收起后残留浅紫块"的直接来源）。
+      // 只有榜单这类"多入口"页签才会渲染它。
+      final entry = find.byType(PopupMenuButton<String>);
+      expect(entry, findsOneWidget);
+      expect(capsuleDecor(tester, entry).color, Colors.transparent,
+          reason: '入口默认透明，只留文字 + 箭头');
+
+      final controller =
+          tester.widget<ListView>(find.byType(ListView)).controller!;
+      controller.jumpTo(200);
+      await tester.pumpAndSettle();
+      expect(capsuleDecor(tester, entry).color, Colors.transparent,
+          reason: '滚下去后入口按钮不得留下浅紫色块');
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('切源往返后入口按钮仍在且可弹出菜单（GlobalKey 不得跨源共用）', (tester) async {
+      installFakeBindings();
+      await pumpExplorePage(tester, size: const Size(430, 800));
+      final entry = find.byType(PopupMenuButton<String>);
+
+      await tapSourceTab(tester, '禁漫');
+      await tapChip(tester, '榜单');
+      expect(entry, findsOneWidget, reason: '首个源的入口按钮要在');
+
+      // 探索页 keep-alive 会同时挂着多个源的 pane：入口按钮的反查 key 一旦
+      // 跨源共用（`static const` GlobalKey），第二个源注册会失败并被整棵丢弃
+      // ⇒ 按钮直接消失。这里来回切两次把它钉住。
+      await tapSourceTab(tester, '哔咔');
+      await tapChip(tester, '榜单');
+      expect(entry, findsOneWidget, reason: '切到第二个源后入口按钮不能消失');
+      await tapSourceTab(tester, '禁漫');
+      expect(entry, findsOneWidget, reason: '切回来入口按钮也要还在');
+      expect(tester.takeException(), isNull,
+          reason: '不得出现重复 GlobalKey 之类的框架异常');
+
+      // 而且真的能用：弹出菜单并选中另一个榜期。
+      await tester.tap(entry);
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+      await tester.tap(find.widgetWithText(PopupMenuItem<String>, '月排行'));
+      await tester.pumpAndSettle();
+      expect(find.text('月排行'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
+
     testWidgets('账号指纹变化在恢复时清掉旧内容并重载当前源', (tester) async {
       final providers = installFakeBindings();
       await pumpExplorePage(tester);
@@ -1029,7 +1216,7 @@ void main() {
       await tapChip(tester, '榜单');
       final reads = comic.titleReads;
       expect(reads, greaterThan(0));
-      await tester.tap(find.byKey(const ValueKey('explore-entry-menu')));
+      await tester.tap(find.byType(PopupMenuButton<String>));
       await tester.pumpAndSettle();
       await tester.sendKeyEvent(LogicalKeyboardKey.escape);
       await tester.pumpAndSettle();
@@ -1045,7 +1232,7 @@ void main() {
       await tapSourceTab(tester, '禁漫');
       await tapChip(tester, '榜单');
 
-      final menu = find.byKey(const ValueKey('explore-entry-menu'));
+      final menu = find.byType(PopupMenuButton<String>);
       final settings = find.byTooltip('设置').first;
       final settingsRect = tester.getRect(settings);
       final pageRect = tester.getRect(find.byType(ExplorePage));
@@ -1105,7 +1292,7 @@ void main() {
         await tester.pumpAndSettle();
         await tapSourceTab(tester, '禁漫');
         await tapChip(tester, '榜单');
-        await tester.tap(find.byKey(const ValueKey('explore-entry-menu')));
+        await tester.tap(find.byType(PopupMenuButton<String>));
         await tester.pumpAndSettle();
         final option = find.widgetWithText(PopupMenuItem<String>, '月排行');
         expect(tester.getRect(option).left, greaterThanOrEqualTo(0));
@@ -1233,7 +1420,7 @@ void main() {
       }
 
       await capture('探索-首页.png');
-      await tester.tap(find.byKey(const ValueKey('explore-entry-menu')));
+      await tester.tap(find.byType(PopupMenuButton<String>));
       await tester.pumpAndSettle();
       await capture('探索-入口菜单.png');
       await tester.sendKeyEvent(LogicalKeyboardKey.escape);

@@ -260,17 +260,14 @@ void main() {
   /// 不在命中路径里，点 Text 只是恰好由祖先 InkWell 收到，会带 "would not hit test"
   /// 警告。
   ///
-  /// 源已从 `ChoiceChip` 改成 `TabBar` 的页签（与「卡片信息显示」页一致），
-  /// 所以这里按文案先找 `ChoiceChip`、找不到再找 `Tab` —— **只改"怎么定位控件"**，
-  /// 本文件各用例的语义断言一个都没动。
+  /// 源是 `TabBar` 的页签（与「卡片信息显示」页一致），内部页签（推荐/榜单/分类）
+  /// 已从 `ChoiceChip` 换成**自绘胶囊**（`explore-tab-<文案>`）—— **只改"怎么定位
+  /// 控件"**，本文件各用例的语义断言一个都没动。
   Future<void> tapChip(WidgetTester tester, String label) async {
-    final chip = find.ancestor(
-      of: find.text(label),
-      matching: find.byType(ChoiceChip),
-    );
+    final capsule = find.byKey(ValueKey('explore-tab-$label'));
     final tab = find.ancestor(of: find.text(label), matching: find.byType(Tab));
     await tester.tap(
-      chip.evaluate().isNotEmpty ? chip.first : tab.first,
+      capsule.evaluate().isNotEmpty ? capsule.first : tab.first,
     );
     await tester.pumpAndSettle();
   }

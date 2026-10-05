@@ -235,9 +235,41 @@ void main() {
 
   Future<void> selectRankingOption(
       WidgetTester tester, ExploreOption option) async {
-    await tester.tap(find.byKey(const ValueKey('explore-entry-menu')));
+    await tester.tap(find.byType(PopupMenuButton<String>));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(ValueKey('explore-entry-option-${option.id}')));
+    await tester.pumpAndSettle();
+  }
+
+  /// 「推荐 / 榜单 / 分类」已从 `ChoiceChip` 换成自绘胶囊（与右侧入口同一套），
+  /// 按 `explore-tab-<文案>` 定位 —— **只改"怎么定位控件"**，断言语义未动。
+  ///
+  /// ⚠️ 顶栏是**滚动驱动**的浮层：内容停在中间时它已经缩小淡出并忽略指针，
+  /// 所以定位它之前要先让内容回顶（真机里这一步由用户自己滚回顶部完成）；
+  /// 点完再把各列表的滚动位置**原样还原** —— 多个用例要断言"切页签后各自的
+  /// 滚动位置被保留"，那是**产品**行为，不该被测试的定位动作改掉。
+  Future<void> selectTab(WidgetTester tester, String label) async {
+    final target = find.byKey(ValueKey('explore-tab-$label'));
+    final saved = <ScrollController, double>{};
+    for (final element in find.byType(Scrollable).evaluate()) {
+      final controller = (element.widget as Scrollable).controller;
+      if (controller != null && controller.hasClients) {
+        saved[controller] = controller.offset;
+      }
+    }
+    for (final controller in saved.keys) {
+      controller.jumpTo(0);
+    }
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(target);
+    await tester.pumpAndSettle();
+    await tester.tap(target);
+    await tester.pumpAndSettle();
+    for (final entry in saved.entries) {
+      if (entry.key.hasClients && entry.key.offset != entry.value) {
+        entry.key.jumpTo(entry.value);
+      }
+    }
     await tester.pumpAndSettle();
   }
 
@@ -252,7 +284,7 @@ void main() {
             observer: observer, child: const Scaffold(body: ExplorePage()))));
     await tester.pumpAndSettle();
     if (initialSource != null) await selectSource(tester, initialSource);
-    await tester.tap(find.widgetWithText(ChoiceChip, '推荐'));
+    await selectTab(tester, '推荐');
     await tester.pumpAndSettle();
   }
 
@@ -327,13 +359,13 @@ void main() {
     expect(find.text('作品2'), findsOneWidget);
     expect(find.text('加载更多'), findsNothing);
     final reads = provider.lists;
-    await tester.tap(find.widgetWithText(ChoiceChip, '榜单'));
+    await selectTab(tester, '榜单');
     await tester.pumpAndSettle();
     expect(find.byType(SliverMasonryGrid), findsOneWidget);
     expect(find.byType(OnlineComicListItem), findsNothing);
     expect(find.byType(OnlineRecommendationCard), findsNWidgets(2));
     expect(provider.requests.last.entryId, provider.rankingId);
-    await tester.tap(find.widgetWithText(ChoiceChip, '推荐'));
+    await selectTab(tester, '推荐');
     await tester.pumpAndSettle();
     expect(provider.lists, reads + 1);
     expect(find.text('作品2'), findsOneWidget);
@@ -363,7 +395,7 @@ void main() {
     final recommendationOffset = recommendationScroll.offset;
     final recommendationRequestCount = provider.requests.length;
 
-    await tester.tap(find.widgetWithText(ChoiceChip, '榜单'));
+    await selectTab(tester, '榜单');
     await tester.pumpAndSettle();
     expect(find.byType(SliverMasonryGrid), findsOneWidget);
     expect(find.byType(OnlineComicListItem), findsNothing);
@@ -393,7 +425,7 @@ void main() {
     final rankingOffset = rankingScroll.offset;
     final readsAfterContinuation = provider.requests.length;
 
-    await tester.tap(find.widgetWithText(ChoiceChip, '推荐'));
+    await selectTab(tester, '推荐');
     await tester.pumpAndSettle();
     expect(find.byType(SliverMasonryGrid), findsOneWidget);
     expect(find.text('作品home-0'), findsOneWidget);
@@ -406,7 +438,7 @@ void main() {
     expect(recommendationScroll.offset, closeTo(recommendationOffset, .01));
     expect(provider.requests.length, readsAfterContinuation);
 
-    await tester.tap(find.widgetWithText(ChoiceChip, '榜单'));
+    await selectTab(tester, '榜单');
     await tester.pumpAndSettle();
     expect(find.text('作品day-next'), findsOneWidget);
     expect(
@@ -438,7 +470,7 @@ void main() {
         List.generate(12, (i) => provider.comic('day-$i'));
     _bindProviders([provider]);
     await pump(tester);
-    await tester.tap(find.widgetWithText(ChoiceChip, '榜单'));
+    await selectTab(tester, '榜单');
     await tester.pumpAndSettle();
 
     final scroll = tester
@@ -498,7 +530,7 @@ void main() {
         comicPageBuilder: (_) =>
             Scaffold(appBar: AppBar(), body: const Text('榜单详情')));
     await pump(tester);
-    await tester.tap(find.widgetWithText(ChoiceChip, '榜单'));
+    await selectTab(tester, '榜单');
     await tester.pumpAndSettle();
 
     final scroll = tester
@@ -775,13 +807,13 @@ void main() {
         expect(provider.overviews, overviewReads);
         expect(provider.lists, listReads);
 
-        await tester.tap(find.widgetWithText(ChoiceChip, '榜单'));
+        await selectTab(tester, '榜单');
         await tester.pumpAndSettle();
         expectListLayout(tester, sourceKey);
         expect(find.byType(OnlineComicListItem), findsNWidgets(2));
         expect(provider.requests.last.entryId, provider.rankingId);
 
-        await tester.tap(find.widgetWithText(ChoiceChip, '推荐'));
+        await selectTab(tester, '推荐');
         await tester.pumpAndSettle();
         expectListLayout(tester, sourceKey);
         expect(listScroll(tester), same(scroll));

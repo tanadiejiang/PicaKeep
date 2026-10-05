@@ -166,34 +166,46 @@ class _ExplorePageState extends State<ExplorePage>
     _kind = _sourceKinds[_sourceKey!]!;
     final index =
         sources.indexWhere((s) => s.descriptor.sourceKey == _sourceKey);
+    // 源页签要跟主导航顶栏留出一点距离：`NaviPane` 的内容区是
+    // `MediaQuery.removePadding(removeTop: …)` 之后的区域（状态栏那一段由导航壳的
+    // 顶栏负责），所以本页自己必须补这一档 —— 否则页签会直接贴顶栏下沿，
+    // 而且向下滚时内容首行会钻进顶栏底下。与本站其它页留白一致。
+    final topGap = MediaQuery.of(context).padding.top <= 0
+        ? 8.0
+        : (MediaQuery.of(context).padding.top / 3)
+            .clamp(8.0, 16.0)
+            .roundToDouble();
     return DefaultTabController(
       length: sources.length,
       initialIndex: index,
       child: Column(children: [
-        TabBar(
-          isScrollable: true,
-          tabAlignment: TabAlignment.start,
-          onTap: (i) {
-            if (_sourceKey == sources[i].descriptor.sourceKey) return;
-            setState(() {
-              _sourceKey = sources[i].descriptor.sourceKey;
-              _sessionSourceKey = _sourceKey;
-              final source = sources[i];
-              _sourceKinds[_sourceKey!] ??= _storedKind(source.descriptor);
-              _kind = _sourceKinds[_sourceKey!]!;
-            });
-          },
-          tabs: [
-            for (final source in sources)
-              Tab(
-                  height: 42,
-                  // 「（未登录）」只在**该源确实需要登录才有内容**时才加。
-                  // `requiresLogin == false` 的源（Pixiv / Komiic）游客也能浏览
-                  // 推荐与榜单，打上"未登录"会让人以为页签点进去是空的。
-                  text: (source.loggedIn || !source.descriptor.requiresLogin)
-                      ? source.descriptor.name
-                      : '${source.descriptor.name}（未登录）')
-          ],
+        Padding(
+          padding: EdgeInsets.only(top: topGap),
+          child: TabBar(
+            isScrollable: true,
+            tabAlignment: TabAlignment.start,
+            onTap: (i) {
+              if (_sourceKey == sources[i].descriptor.sourceKey) return;
+              setState(() {
+                _sourceKey = sources[i].descriptor.sourceKey;
+                _sessionSourceKey = _sourceKey;
+                final source = sources[i];
+                _sourceKinds[_sourceKey!] ??= _storedKind(source.descriptor);
+                _kind = _sourceKinds[_sourceKey!]!;
+              });
+            },
+            tabs: [
+              for (final source in sources)
+                Tab(
+                    height: 42,
+                    // 「（未登录）」只在**该源确实需要登录才有内容**时才加。
+                    // `requiresLogin == false` 的源（Pixiv / Komiic）游客也能浏览
+                    // 推荐与榜单，打上"未登录"会让人以为页签点进去是空的。
+                    text: (source.loggedIn || !source.descriptor.requiresLogin)
+                        ? source.descriptor.name
+                        : '${source.descriptor.name}（未登录）')
+            ],
+          ),
         ),
         Expanded(
             child: ExploreKeepAliveSwitcher(index: index, children: [
@@ -404,19 +416,21 @@ class _SourceExplorePaneState extends State<_SourceExplorePane> {
         kind == ExploreTabKind.recommend ? selected?.id : _rankOption;
     final toolbar = LayoutBuilder(builder: (context, constraints) {
       final largeText = MediaQuery.textScalerOf(context).scale(14) > 18;
+      // 页签与右侧入口**同一套胶囊**（同一 `_FloatingCapsule`）：圆角 20、
+      // 未选中完全透明、选中 `secondaryContainer`。**不用 `ChoiceChip`** ——
+      // 它的背景由 M3 chip 自己那层 `Material` 绘制，既带细描边、圆角与内边距
+      // 也跟入口对不齐；自绘后背景是普通 `Container`，浮层淡出时不会留残影。
+      // 多于三个 tab 时 `Wrap` 会换行（与「窄屏 + 大字号」的既有分支一致）。
       final navigation = Wrap(children: [
         for (final k in kinds)
           Padding(
-              padding: const EdgeInsets.only(right: 4),
-              child: ChoiceChip(
-                label: Text(k.$2),
+              padding: const EdgeInsets.only(right: 6),
+              child: _FloatingCapsule(
+                key: ValueKey('explore-tab-${k.$2}'),
                 selected: kind == k.$1,
-                showCheckmark: false,
-                visualDensity: VisualDensity.compact,
-                backgroundColor: Colors.transparent,
-                selectedColor: Theme.of(context).colorScheme.secondaryContainer,
-                side: BorderSide.none,
-                onSelected: (_) => _selectKind(k.$1),
+                semanticLabel: k.$2,
+                onTap: () => _selectKind(k.$1),
+                child: Text(k.$2),
               ))
       ]);
       final selector = choices.length > 1
@@ -429,8 +443,9 @@ class _SourceExplorePaneState extends State<_SourceExplorePane> {
               onSelected: (id) => _selectChoice(kind!, id),
             )
           : const SizedBox.shrink();
+      // 水平内边距留在这一层；`explore-toolbar` 这个 key 由浮层那边统一挂
+      // （见 `_FloatingExploreLayout`），避免同一把 key 出现在两处。
       return Padding(
-        key: const ValueKey('explore-toolbar'),
         padding: const EdgeInsets.symmetric(horizontal: 12),
         child: largeText || constraints.maxWidth < 340
             ? Wrap(
@@ -464,13 +479,25 @@ class _SourceExplorePaneState extends State<_SourceExplorePane> {
                       _entryFor(entry, activeId, ranking),
                     _categories(),
                   ]);
-    return _FloatingExploreLayout(toolbar: toolbar, child: content);
+    return _FloatingExploreLayout(
+      // 页签 / 榜期 / 入口变了就是"换了内容"：停泊区要按新内容重新判断。
+      motionKey: (kind, choiceId, activeId),
+      toolbar: toolbar,
+      child: content,
+    );
   }
 }
 
 class _FloatingExploreLayout extends StatefulWidget {
-  const _FloatingExploreLayout({required this.toolbar, required this.child});
+  const _FloatingExploreLayout({
+    required this.motionKey,
+    required this.toolbar,
+    required this.child,
+  });
 
+  /// 内容身份（页签 / 榜期 / 入口）。它一变，停泊区就按新内容重新从顶部算 ——
+  /// 否则会沿用上一个页签的滚动位置。
+  final Object? motionKey;
   final Widget toolbar;
   final Widget child;
 
@@ -480,10 +507,51 @@ class _FloatingExploreLayout extends StatefulWidget {
 
 class _FloatingExploreLayoutState extends State<_FloatingExploreLayout>
     with SingleTickerProviderStateMixin {
+  /// 工具栏的**实测**高度（`toolbarHeight`）。只有它是"按钮真正占的高度"，
+  /// 才能既让内容首行从浮层下方开始、又在收起时精确归零 —— 写死 56 就是 027
+  /// 被推翻的那种"固定占位"。
+  static const double _fallbackDockExtent = 36;
+
   late final AnimationController _settle;
+  final GlobalKey _dockKey = GlobalKey();
   double _progress = 0;
-  double _upDistance = 0;
   int _direction = 0;
+
+  /// 停泊区当前高度 = 工具栏实测高度。
+  double _dockExtent = _fallbackDockExtent;
+  double? _lastTextScale;
+
+  /// 内容当前的纵向滚动位置（停泊区跟着它收缩）。用 notifier 是为了让这一层
+  /// 独立重建，滚动时不必每帧重建整页。
+  final ValueNotifier<double> _pixels = ValueNotifier<double>(0);
+
+  /// 停泊区当前高度。
+  ///
+  /// 两个上限取小值，缺一不可：
+  ///
+  /// * **`_dockExtent - pixels`**（跟真实滚动位置）：滚过一个工具栏高度就归零，
+  ///   内容可以顶到浮层下方（"悬浮"就是这么来的）。**不能只跟 `_settle.value`** ——
+  ///   进度是按滚动增量**累加**的，滚半屏也只到 0.7 左右，避让会一直留着一截，
+  ///   内容顶不上去，看起来就像"工具栏又有了背景"（实测踩过）。
+  /// * **`_dockExtent * (1 - _settle.value)`**（跟浮层显隐进度）：保证"浮层已经
+  ///   整个露出来"时避让一定完整，不会出现"按钮全在、下面却只让出一点点"。
+  ///
+  /// 完全收起时两者都是 0 ⇒ 不会留下 027 那种"隐藏的固定占位"。
+  double get _dockPadding {
+    final byScroll = _dockExtent - _pixels.value;
+    final byProgress = _dockExtent * (1 - _settle.value);
+    final smallest = byScroll < byProgress ? byScroll : byProgress;
+    return smallest > 0 ? smallest : 0;
+  }
+
+  /// 浮层不透明度：`1 - _progress`。
+  ///
+  /// 停泊区不走 `_progress` 字段，而是直接跟这条动画曲线 —— 滚动手势里
+  /// `_settle.stop()` 之后 `_settle.value` 就是手输的进度（两者恒等，实测
+  /// `_settle.value == _progress`），所以合并成一个可监听源不会改变手感，
+  /// 却能让"内容 padding"这一层独立重建（`AnimatedBuilder`），
+  /// **不必每帧重建内容子树**。
+  double get _opacity => 1 - _settle.value;
 
   @override
   void initState() {
@@ -491,25 +559,69 @@ class _FloatingExploreLayoutState extends State<_FloatingExploreLayout>
     _settle = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 220),
+      value: 0,
     )..addListener(() {
         if (mounted) setState(() => _progress = _settle.value);
       });
+    // 首帧之后按实测高度校正一次（默认值只是为了让第一帧就有避让、不闪）。
+    WidgetsBinding.instance.addPostFrameCallback((_) => _measureDock());
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // 系统字号变了 → 工具栏高度变了 → 停泊区必须跟着重新量。
+    final scale = MediaQuery.textScalerOf(context);
+    if (_lastTextScale != scale.scale(14)) {
+      _lastTextScale = scale.scale(14);
+      WidgetsBinding.instance.addPostFrameCallback((_) => _measureDock());
+    }
+  }
+
+  @override
+  void didUpdateWidget(covariant _FloatingExploreLayout oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.motionKey != widget.motionKey) {
+      // 换页签 / 换榜期：上一个内容的位置不再适用，避让按新内容的顶部算。
+      _pixels.value = 0;
+    }
   }
 
   @override
   void dispose() {
     _settle.dispose();
+    _pixels.dispose();
     super.dispose();
+  }
+
+  void _measureDock() {
+    if (!mounted) return;
+    final box = _dockKey.currentContext?.findRenderObject();
+    if (box is! RenderBox || !box.hasSize) return;
+    final height = box.size.height;
+    if (height <= 0 || (height - _dockExtent).abs() < 0.5) return;
+    setState(() => _dockExtent = height);
+  }
+
+  /// 把实时滚动位置写进停泊区的判据（见 `_dockPadding`）。
+  bool _onScrollMetrics(ScrollMetricsNotification notification) {
+    final metrics = notification.metrics;
+    if (metrics.axis != Axis.vertical) return false;
+    _pixels.value = metrics.pixels;
+    return false;
   }
 
   void _setProgress(double value) {
     final next = value.clamp(0.0, 1.0).toDouble();
     if ((next - _progress).abs() < 0.001) return;
     _settle.stop();
+    _settle.value = next;
     setState(() => _progress = next);
   }
 
   void _settleTo(double target) {
+    // 已经在目标上（或正朝它动）就不要重启动画：重启会让跟手滚动一顿一顿的。
+    if ((_settle.value - target).abs() < 0.001) return;
     _settle.stop();
     _settle.value = _progress;
     _settle.animateTo(target, curve: Curves.easeOutCubic);
@@ -518,20 +630,34 @@ class _FloatingExploreLayoutState extends State<_FloatingExploreLayout>
   bool _onScroll(ScrollNotification notification) {
     if (notification is ScrollUpdateNotification &&
         notification.metrics.axis == Axis.vertical) {
+      // 停泊区跟着**实际**滚动位置收缩（程序化滚动同样计数）：顶端留出整个
+      // 工具栏高度，滚过一个工具栏高度就归零。跟"实际位置"而不是跟手势进度，
+      // 是为了让内容位移只由滚动决定 —— 否则程序化滚动后避让突然归零，内容
+      // 会凭空跳一下，出现"点不到的浮层/找不到的条目"。
+      final pixels = notification.metrics.pixels;
+      _pixels.value = pixels;
+      // 靠近顶部**无条件显示**（手感来源 `FlSQLite_Viewer` 的
+      // `_handleTableSelectorScroll`：`offset < 0` 时直接收回进度）：
+      // 只要内容回到停泊区那一带，浮层就露出来——拖到一半停住、再往上挪一点，
+      // 也能立刻看到它在回来，而不是"必须滚到顶"或"必须累够 192"。
+      // 这里用**动画**而不是直接赋值，避免"滚到一半突然整块跳出来"。
+      if (pixels < _dockExtent) {
+        _settleTo(0);
+        return false;
+      }
       final delta = notification.scrollDelta ?? 0;
       if (delta.abs() < 0.5) return false;
       if (delta > 0) {
         _direction = 1;
-        _upDistance = 0;
         _setProgress(_progress + delta / 96);
       } else {
         _direction = -1;
         final distance = -delta;
-        _upDistance += distance;
-        final revealDistance = notification.metrics.pixels <= 0 ? 160 : 128;
-        if (notification.metrics.pixels <= 0 || _upDistance > 192) {
-          _setProgress(_progress - distance / revealDistance);
-        }
+        final revealDistance = pixels <= 0 ? 160 : 128;
+        // **不再要求累计够 192**：一向上回滚，浮层就跟着手指按距离淡回来
+        // （"往上挪一点就见它回来一点"）。原来的门槛会让回滚的前 192dp
+        // 完全没反应，看起来就像"动画被打断了"。
+        _setProgress(_progress - distance / revealDistance);
       }
     } else if (notification is ScrollEndNotification) {
       if (_direction > 0 && _progress >= 0.25) {
@@ -545,21 +671,42 @@ class _FloatingExploreLayoutState extends State<_FloatingExploreLayout>
 
   @override
   Widget build(BuildContext context) {
-    final toolbar = IgnorePointer(
-      ignoring: _progress >= 0.98,
+    // 收起后 `Opacity` 已经降到 0（完全看不见），所以不再额外套 `IgnorePointer`：
+    // 那会在顶部留下一条"看不见、点不到、却仍然占着布局"的死区。
+    final toolbar = Material(
+      // `MaterialType.transparency` 只把水波纹收进这一层、并负责圆角裁切：它不画
+      // 底色，所以浮层没有"整条工具区背景"（需求 §3.4）；水波纹落在透明 Material
+      // 上，也不会再出现"文字淡出、背景残留"。
+      type: MaterialType.transparency,
       child: Opacity(
-        opacity: 1 - _progress,
+        opacity: _opacity,
         child: Transform.scale(
           alignment: Alignment.topCenter,
           scale: 1 - 0.2 * _progress,
-          child: widget.toolbar,
+          child: KeyedSubtree(
+            key: const ValueKey('explore-toolbar'),
+            // `_dockKey` 挂在工具栏最外侧（不含额外内边距）→ 量到的就是这个
+            // 工具栏真实占的高度，正是停泊区要留出的距离。
+            child: KeyedSubtree(key: _dockKey, child: widget.toolbar),
+          ),
         ),
       ),
     );
     return Stack(children: [
-      NotificationListener<ScrollNotification>(
-        onNotification: _onScroll,
-        child: widget.child,
+      NotificationListener<ScrollMetricsNotification>(
+        onNotification: _onScrollMetrics,
+        child: NotificationListener<ScrollNotification>(
+          onNotification: _onScroll,
+          child: AnimatedBuilder(
+            animation: Listenable.merge([_settle, _pixels]),
+            // 只重建这一层 Padding：内容子树是 `child` 实例，不跟着重建。
+            child: widget.child,
+            builder: (context, child) => Padding(
+              padding: EdgeInsets.only(top: _dockPadding),
+              child: child,
+            ),
+          ),
+        ),
       ),
       Positioned(left: 0, right: 0, top: 0, child: toolbar),
     ]);
@@ -583,11 +730,42 @@ class _EntryMenu extends StatefulWidget {
 }
 
 class _EntryMenuState extends State<_EntryMenu> {
+  /// 反查 state 用的 key，只弹出菜单而已。
+  ///
+  /// ⚠️ 两条约束缺一不可：
+  ///
+  /// 1. **必须是 State 的 `final` 字段**（不能写成 getter）：`GlobalKey` 一旦每次
+  ///    build 都新建，跨帧就不再是同一把，`currentState` 恒为 `null`、菜单永远弹不
+  ///    出来（实测踩过）。
+  /// 2. **每个实例各自一把**（不能 `static const` 共用）：探索页用 keep-alive
+  ///    同时挂着多个源的 pane，各源的 `_EntryMenu` 会同时存在于树上，共用一把
+  ///    `GlobalKey` 时第二个及以后的 `PopupMenuButton` 注册失败被整棵丢弃
+  ///    ⇒ **入口按钮在新切过去的源上直接消失**（实测报错：`the second time a
+  ///    key is seen, the previous … build scope unexpectedly does not contain
+  ///    that widget`）。
+  final GlobalKey<PopupMenuButtonState<String>> _buttonKey =
+      GlobalKey<PopupMenuButtonState<String>>();
   bool _open = false;
+  bool _pressed = false;
+
+  @override
+  void didUpdateWidget(covariant _EntryMenu oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // 切换入口 / 榜期后菜单内容变了，把它收起来，避免停在半开状态。
+    if (oldWidget.selectedId != widget.selectedId) _open = false;
+  }
 
   void _setOpen(bool value) {
     if (mounted && _open != value) setState(() => _open = value);
   }
+
+  void _setPressed(bool value) {
+    if (mounted && _pressed != value) setState(() => _pressed = value);
+  }
+
+  /// 胶囊自己的 `InkWell` 负责点击与水波纹，弹出菜单仍由 `PopupMenuButton`
+  /// 提供（菜单锚点、定位与 `MediaQuery` 适配都不变）。
+  void _openMenu() => _buttonKey.currentState?.showButtonMenu();
 
   IconData _optionIcon(String id) => switch (id.split('.').last) {
         'home' => Icons.auto_awesome_outlined,
@@ -619,8 +797,11 @@ class _EntryMenuState extends State<_EntryMenu> {
     final largeText = MediaQuery.textScalerOf(context).scale(14) > 18;
     final menuWidth = (largeText ? 288.0 : 240.0)
         .clamp(0.0, MediaQuery.sizeOf(context).width - 32);
+    // 这里挂的是**反查 state 用的实例级 `GlobalKey`**（见 `_buttonKey`）：
+    // 胶囊自己的 `InkWell` 负责点击，`_openMenu` 靠它拿到 state 弹菜单。
+    // 测试定位请用 `find.byType(PopupMenuButton<String>)`。
     return PopupMenuButton<String>(
-      key: const ValueKey('explore-entry-menu'),
+      key: _buttonKey,
       tooltip: '切换${selected.label}',
       position: PopupMenuPosition.under,
       offset: const Offset(0, 4),
@@ -722,49 +903,117 @@ class _EntryMenuState extends State<_EntryMenu> {
             ),
           ),
       ],
-      child: Semantics(
-        expanded: _open,
-        child: Padding(
-          padding: EdgeInsets.symmetric(vertical: widget.floatingStyle ? 2 : 4),
-          child: ConstrainedBox(
-            constraints: BoxConstraints(
-              minHeight: widget.floatingStyle ? 32 : 40,
-              maxWidth: widget.floatingStyle ? 220 : double.infinity,
-            ),
-            child: Ink(
-              padding: EdgeInsets.symmetric(
-                horizontal: widget.floatingStyle ? 10 : 10,
-                vertical: widget.floatingStyle ? 6 : 8,
+      child: _FloatingCapsule(
+        floating: widget.floatingStyle,
+        selected: widget.floatingStyle && _open,
+        // 展开期间保持轻反馈（非浮层外观下这就是原来的 `secondaryContainer`）。
+        pressed: _pressed || _open,
+        semanticLabel: selected.label,
+        onTap: _openMenu,
+        onTapState: _setPressed,
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Flexible(
+            child: Text(selected.label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: colors.primary)),
+          ),
+          const SizedBox(width: 4),
+          AnimatedRotation(
+            turns: _open ? 0.5 : 0,
+            duration: MediaQuery.disableAnimationsOf(context)
+                ? Duration.zero
+                : const Duration(milliseconds: 220),
+            child: Icon(Icons.expand_more, size: 18, color: colors.primary),
+          ),
+        ]),
+      ),
+    );
+  }
+}
+
+/// 浮层里的**胶囊**：左侧「推荐 / 榜单 / 分类」与右侧入口按钮共用一套外观。
+///
+/// **背景画在普通 `Container` 上**（不是 `Ink.decoration`）—— ink 装饰由祖先
+/// `Material` 的 ink layer 绘制，浮层淡出时容易留下"文字没了、色块还在"的残影；
+/// 普通容器处在浮层的绘制子树内，`Opacity` 一定管得住。
+/// 水波纹交给内层透明 `Material` + `InkWell`，圆角裁切与热区一并解决。
+class _FloatingCapsule extends StatelessWidget {
+  const _FloatingCapsule({
+    super.key,
+    required this.child,
+    required this.selected,
+    required this.onTap,
+    this.floating = true,
+    this.pressed = false,
+    this.semanticLabel,
+    this.onTapState,
+  });
+
+  final Widget child;
+  final bool selected;
+
+  /// 浮层外观（圆角 20 / 最小高度 32 / 未选中透明）。`false` 时回到内嵌外观
+  /// （圆角 12 / 最小高度 40 / 有底色），供页面里非浮层的入口复用。
+  final bool floating;
+  final bool pressed;
+  final String? semanticLabel;
+  final VoidCallback onTap;
+  final ValueChanged<bool>? onTapState;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    // 浮层态：未选中**完全透明**、选中 `secondaryContainer`，按下/展开时只给
+    // 一层很轻的 `primary` 叠色 —— 不再有"恒亮的浅紫块"。
+    final background = floating
+        ? (selected
+            ? colors.secondaryContainer
+            : pressed
+                ? colors.primary.withValues(alpha: 0.10)
+                : Colors.transparent)
+        : (selected || pressed ? colors.secondaryContainer : colors.surfaceContainer);
+    final foreground = floating
+        ? (selected ? colors.onSecondaryContainer : colors.onSurfaceVariant)
+        : (selected ? colors.onSecondaryContainer : colors.onSurface);
+    final radius = BorderRadius.circular(floating ? 20 : 12);
+    return Semantics(
+      selected: selected,
+      button: true,
+      label: semanticLabel,
+      child: Material(
+        // 透明 Material 只负责"接住水波纹 + 按圆角裁切"，不画任何底色。
+        type: MaterialType.transparency,
+        child: InkWell(
+          onTap: onTap,
+          onTapDown: onTapState == null ? null : (_) => onTapState!(true),
+          onTapUp: onTapState == null ? null : (_) => onTapState!(false),
+          onTapCancel: onTapState == null ? null : () => onTapState!(false),
+          borderRadius: radius,
+          child: DecoratedBox(
+            decoration: BoxDecoration(color: background, borderRadius: radius),
+            child: ConstrainedBox(
+              constraints: BoxConstraints(
+                minHeight: floating ? 32 : 40,
+                maxWidth: floating ? 220 : double.infinity,
               ),
-              decoration: BoxDecoration(
-                color: widget.floatingStyle
-                    ? colors.secondaryContainer
-                    : (_open
-                        ? colors.secondaryContainer
-                        : colors.surfaceContainer),
-                borderRadius:
-                    BorderRadius.circular(widget.floatingStyle ? 20 : 12),
+              child: Padding(
+                padding: EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: floating ? 6 : 8,
+                ),
+                child: DefaultTextStyle(
+                  style: TextStyle(
+                    fontSize: floating ? 13 : 14,
+                    fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
+                    color: foreground,
+                  ),
+                  child: Center(widthFactor: 1, heightFactor: 1, child: child),
+                ),
               ),
-              child: Row(mainAxisSize: MainAxisSize.min, children: [
-                Flexible(
-                  child: Text(selected.label,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w600,
-                          color: colors.primary)),
-                ),
-                const SizedBox(width: 4),
-                AnimatedRotation(
-                  turns: _open ? 0.5 : 0,
-                  duration: MediaQuery.disableAnimationsOf(context)
-                      ? Duration.zero
-                      : const Duration(milliseconds: 220),
-                  child:
-                      Icon(Icons.expand_more, size: 18, color: colors.primary),
-                ),
-              ]),
             ),
           ),
         ),
