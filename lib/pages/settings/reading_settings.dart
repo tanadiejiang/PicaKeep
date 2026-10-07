@@ -142,18 +142,8 @@ class ReadingSettings extends StatelessWidget {
         title: "限制图片宽度".tl,
         settingsIndex: 43,
       ),
-      // 39 号：两套清晰度开关。默认值方向**相反**（漫画关、插画/图集开），
-      // 由 `foundation/reader_image_quality.dart` 的归一化函数保证；
-      // 开关本身只是普通 SwitchSetting，用户打开后由 settings 持久化 ——
-      // 这就是用户要的"有记忆"。
-      SwitchSetting(
-        title: "漫画阅读高清模式".tl,
-        settingsIndex: readerHighQualityComicSettingIndex,
-      ),
-      SwitchSetting(
-        title: "插画 / 图集阅读高清模式".tl,
-        settingsIndex: readerHighQualityIllustSettingIndex,
-      ),
+      const _ReaderDisplayModeSetting(isComic: true),
+      const _ReaderDisplayModeSetting(isComic: false),
       SwitchSetting(
         title: "显示页面信息".tl,
         settingsIndex: 57,
@@ -167,6 +157,40 @@ class ReadingSettings extends StatelessWidget {
         settingsIndex: 70,
       ),
     ]);
+  }
+}
+
+class _ReaderDisplayModeSetting extends StatefulWidget {
+  const _ReaderDisplayModeSetting({required this.isComic});
+  final bool isComic;
+
+  @override
+  State<_ReaderDisplayModeSetting> createState() => _ReaderDisplayModeSettingState();
+}
+
+class _ReaderDisplayModeSettingState extends State<_ReaderDisplayModeSetting> {
+  @override
+  Widget build(BuildContext context) {
+    final config = ReaderImagePipelineSettings.tryParse(
+      appdata.settings[readerImagePipelineSettingIndex],
+    ) ?? const ReaderImagePipelineSettings();
+    final mode = widget.isComic ? config.comic : config.illust;
+    return ListTile(
+      title: Text((widget.isComic ? '漫画图片显示' : '插画 / 图集图片显示').tl),
+      trailing: Select(
+        initialValue: mode.name,
+        values: const ['sharpFirst', 'previewFirst'],
+        titles: ['清晰优先'.tl, '预览优先'.tl],
+        onChanged: (value) {
+          appdata.settings[readerImagePipelineSettingIndex] = config.withMode(
+            widget.isComic,
+            ReaderDisplayMode.fromValue(value),
+          ).encode();
+          appdata.updateSettings();
+          setState(() {});
+        },
+      ),
+    );
   }
 }
 

@@ -33,6 +33,8 @@ library;
 
 import 'dart:convert';
 import 'dart:io';
+import 'image_pipeline/derived_image_store.dart';
+import 'image_pipeline/image_disk_quota.dart';
 import 'dart:typed_data';
 
 import 'package:path/path.dart' as p;
@@ -111,6 +113,22 @@ class LocalCoverCache {
   static Map<String, _NegativeRecord>? _negatives;
   static String? _loadedRoot;
   static Future<void>? _loading;
+  static int _publicationGeneration = 0;
+
+  static void invalidatePendingPublications() {
+    _publicationGeneration++;
+  }
+
+  /// Only files registered as reproducible copies are deletion candidates.
+  static Future<Set<String>> registeredReproduciblePaths() async {
+    await _ensureLoaded();
+    final root = rootDirectory().path;
+    return {
+      for (final entry in (_entries ?? <String, LocalCoverCacheEntry>{}).values)
+        if (p.isWithin(root, p.join(root, entry.relativePath)))
+          p.normalize(p.absolute(p.join(root, entry.relativePath)))
+    };
+  }
 
   /// 缓存根：`<App.dataPath>/local_library_cache/covers`。
   ///
@@ -256,6 +274,9 @@ class LocalCoverCache {
 
   static Future<void> _saveNow() async {
     final file = _indexFile();
+    ImageDiskReservation? disk;
+    File? temp;
+    void Function()? releaseTemp;
     try {
       await file.parent.create(recursive: true);
       final payload = <String, Object?>{
@@ -269,18 +290,35 @@ class LocalCoverCache {
             e.key: e.value.toJson(),
         },
       };
-      final temp = File('${file.path}.part');
-      await temp.writeAsString(jsonEncode(payload), flush: true);
+      final encoded = utf8.encode(jsonEncode(payload));
+      // The index is shared state and can grow with every cover. Give it its
+      // own persistent ticket so its replacement peak is counted alongside
+      // the cover body, while keeping the index itself protected from trim.
+      disk = await ImageDiskQuota.shared
+          .admitManagedIndex(file.path, maximumBytes: encoded.length);
+      temp = File('${file.path}.part');
+      releaseTemp = DerivedImageStore.protectTemporaryPath(temp.path);
+      await temp.writeAsBytes(encoded, flush: true);
       if (await file.exists()) {
         await file.delete();
       }
       await temp.rename(file.path);
+      temp = null;
+      await disk.commit([file.path]);
     } catch (e) {
       LogManager.addLog(
         LogLevel.warning,
         'LocalCoverCache',
         '索引写入失败（不影响已生成的封面文件）：$e',
       );
+    } finally {
+      releaseTemp?.call();
+      if (temp != null) {
+        try {
+          if (await temp.exists()) await temp.delete();
+        } catch (_) {}
+      }
+      await disk?.abort();
     }
   }
 
@@ -366,15 +404,32 @@ class LocalCoverCache {
     final root = rootDirectory();
     final ext = _normalizeExtension(extension);
     final name = '${_stableHash(entryKey)}$ext';
+    final generation = _publicationGeneration;
+    ImageDiskReservation? disk;
+    File? staged;
     try {
       await root.create(recursive: true);
       final target = File(p.join(root.path, name));
       final temp = File('${target.path}.part');
+      staged = temp;
+      disk = await ImageDiskQuota.shared
+          .admitPublication(target.path, maximumBytes: bytes.length);
       await temp.writeAsBytes(bytes, flush: true);
+      if (generation != _publicationGeneration ||
+          root.path != rootDirectory().path) {
+        await temp.delete();
+        return null;
+      }
       if (await target.exists()) {
         await target.delete();
       }
+      if (generation != _publicationGeneration ||
+          root.path != rootDirectory().path) {
+        await temp.delete();
+        return null;
+      }
       await temp.rename(target.path);
+      staged = null;
       if (!await target.exists() || await target.length() == 0) {
         return null;
       }
@@ -393,6 +448,7 @@ class LocalCoverCache {
       if (previous != null && previous.relativePath != name) {
         await _deleteQuietly(p.join(root.path, previous.relativePath));
       }
+      await disk.commit([target.path]);
       return target.path;
     } catch (e) {
       LogManager.addLog(
@@ -401,6 +457,9 @@ class LocalCoverCache {
         '封面写入失败 entry=$entryKey：$e',
       );
       return null;
+    } finally {
+      if (staged != null) await _deleteQuietly(staged.path);
+      await disk?.abort();
     }
   }
 

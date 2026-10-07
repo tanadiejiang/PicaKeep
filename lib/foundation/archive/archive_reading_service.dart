@@ -2,11 +2,13 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'archive_errors.dart';
+import 'archive_backend.dart';
 import 'archive_memory_cache.dart';
 import 'archive_models.dart';
 import 'archive_password_store.dart';
 import 'archive_registry.dart';
 import 'package:picakeep/foundation/local_cover_cache.dart';
+import 'package:picakeep/foundation/image_pipeline/derived_image_store.dart';
 
 class ArchiveReadingService {
   ArchiveReadingService._();
@@ -86,11 +88,41 @@ class ArchiveReadingService {
       });
 
       if (encryptedEntries.isNotEmpty) {
-        await backend.readEntry(
-          archivePath,
-          encryptedEntries.first.path,
-          password: password,
-        );
+        if (backend is StreamingArchiveBackend) {
+          final bytes = encryptedEntries.first.size;
+          ImageTemporaryReservation? reservation;
+          Directory? directory;
+          try {
+            directory = await Directory.systemTemp
+                .createTemp('picakeep-archive-unlock-');
+            reservation = await ImageTemporaryPool.shared.reserveOnDisk(bytes,
+                purpose: 'archive-password-validation',
+                path: '${directory.path}/verify.bin');
+            await (backend as StreamingArchiveBackend).materializeEntry(
+              archivePath,
+              encryptedEntries.first.path,
+              File('${directory.path}/verify.bin'),
+              password: password,
+              maxBytes: bytes,
+            );
+          } finally {
+            try {
+              if (directory != null && await directory.exists()) {
+                await directory.delete(recursive: true);
+              }
+            } finally {
+              reservation?.release();
+            }
+          }
+        } else {
+          if (encryptedEntries.first.size > 8 * 1024 * 1024) {
+            throw const ArchiveFailure(
+                code: ArchiveErrorCode.entryTooLarge,
+                debugMessage: 'Backend lacks bounded password validation');
+          }
+          await backend.readEntry(archivePath, encryptedEntries.first.path,
+              password: password);
+        }
         _passwords.setSessionPassword(archivePath, password);
         _cache.evictIndex(archivePath);
         return true;
@@ -121,6 +153,50 @@ class ArchiveReadingService {
       );
     }
     return readEntryBytes(parsed.archivePath, parsed.entryPath);
+  }
+
+  Future<File> materializeEntry(
+    String archivePath,
+    String entryPath,
+    File destination, {
+    String? passwordArchivePath,
+    int maxBytes = 2 * 1024 * 1024 * 1024,
+    bool Function()? isCancelled,
+  }) async {
+    final backend = _registry.backendForOrThrow(archivePath);
+    if (backend is! StreamingArchiveBackend) {
+      throw ArchiveFailure(
+          code: ArchiveErrorCode.unsupportedFormat,
+          debugMessage:
+              'Backend does not support bounded extraction: ${backend.id}');
+    }
+    final candidates =
+        _passwords.passwordCandidates(passwordArchivePath ?? archivePath);
+    ArchiveFailure? lastFailure;
+    for (final password in candidates) {
+      try {
+        return await (backend as StreamingArchiveBackend).materializeEntry(
+          archivePath,
+          entryPath,
+          destination,
+          password: password,
+          maxBytes: maxBytes,
+          isCancelled: isCancelled,
+        );
+      } on ArchiveFailure catch (failure) {
+        if (failure.code == ArchiveErrorCode.wrongPassword ||
+            failure.code == ArchiveErrorCode.passwordRequired) {
+          lastFailure = failure;
+          continue;
+        }
+        rethrow;
+      }
+    }
+    throw lastFailure ??
+        const ArchiveFailure(
+          code: ArchiveErrorCode.passwordRequired,
+          debugMessage: 'No valid password for archive entry',
+        );
   }
 
   Future<Uint8List> readEntryBytes(
@@ -193,8 +269,64 @@ class ArchiveReadingService {
     String entryPath,
   ) async {
     try {
+      final archive = File(archivePath);
+      FileStat? sourceStat;
+      try {
+        final stat = await archive.stat();
+        if (stat.type == FileSystemEntityType.file && stat.size > 0) {
+          sourceStat = stat;
+        }
+      } catch (_) {
+        // Keep the backend's existing access/password fallback when direct
+        // source identity cannot be verified; never trust a 0|0 fingerprint.
+      }
+
+      bool sameSource(FileStat current) =>
+          sourceStat != null &&
+          current.type == FileSystemEntityType.file &&
+          current.size == sourceStat.size &&
+          current.modified == sourceStat.modified &&
+          current.changed == sourceStat.changed;
+
+      if (sourceStat != null) {
+        try {
+          // stat alone does not prove the source is still readable. This opens
+          // no member and allocates no whole-archive byte buffer.
+          final handle = await archive.open();
+          await handle.close();
+          final index = await getIndex(archivePath);
+          final member = entryPath.replaceAll('\\', '/');
+          final hasMember = isValidArchiveEntryPath(entryPath) &&
+              isValidArchiveEntryPath(member) &&
+              index.entries
+                  .any((entry) => !entry.isDirectory && entry.path == member);
+          // Encrypted archives still validate the current password by reading
+          // the member. A cached cover must not bypass forget/wrong-password.
+          if (!index.isEncrypted &&
+              hasMember &&
+              index.fileSize == sourceStat.size &&
+              index.mtimeMillis == sourceStat.modified.millisecondsSinceEpoch) {
+            final key = LocalCoverCache.entryKeyFor(
+              sourceId: 'archive_cover',
+              originalId: _stableHash(archivePath),
+              sourceRelative: entryPath,
+            );
+            final fingerprint = '$archivePath|${sourceStat.size}|'
+                '${sourceStat.modified.millisecondsSinceEpoch}';
+            final existing =
+                await LocalCoverCache.lookup(key, fingerprint: fingerprint);
+            if (existing != null && existing.isNotEmpty) {
+              return sameSource(await archive.stat()) ? existing : null;
+            }
+          }
+        } catch (_) {
+          // Index/access uncertainty follows the original recovery
+          // contract rather than publishing cached pixels without validation.
+        }
+      }
       final bytes = await _readEntryBytesUncached(archivePath, entryPath);
       if (bytes.isEmpty) return null;
+      if (sourceStat != null && !sameSource(await archive.stat())) return null;
       return _storeCoverBytesToUnifiedCache(
         archivePath: archivePath,
         entryPath: entryPath,
@@ -226,7 +358,8 @@ class ArchiveReadingService {
       sourceRelative: entryPath,
     );
     final fingerprint = _archiveFingerprint(archivePath);
-    final existing = await LocalCoverCache.lookup(key, fingerprint: fingerprint);
+    final existing =
+        await LocalCoverCache.lookup(key, fingerprint: fingerprint);
     if (existing != null && existing.isNotEmpty) {
       return existing;
     }

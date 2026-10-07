@@ -83,10 +83,13 @@ void main() {
       expect(data.favoriteType, FavoriteType.pixiv);
     });
 
-    test('缓存键只按 id + 页码（无章节维度）', () {
+    test('缓存键隔离页、来源档位与内容版本', () {
       final data = PixivReadingData(comic: _pixivInfo());
-      expect(data.buildImageKey(1, 0, 'u0'), '1004122380');
-      expect(data.buildImageKey(1, 1, 'u1'), '1004122381');
+      final original = data.buildImageKey(1, 0, 'original');
+      expect(original, isNot(data.buildImageKey(1, 0, 'regular')));
+      expect(original, isNot(data.buildImageKey(1, 1, 'original')));
+      expect(original, contains('pixiv'));
+      expect(original, contains('100412238'));
     });
   });
 
@@ -120,8 +123,8 @@ void main() {
       final keyEp1 = data.buildImageKey(1, 0, 'u');
       final keyEp2 = data.buildImageKey(2, 0, 'u');
       expect(keyEp1, isNot(keyEp2));
-      expect(keyEp1, contains('_1_'));
-      expect(keyEp2, contains('_2_'));
+      expect(keyEp1, contains('Komiic'));
+      expect(keyEp1, isNot(data.buildImageKey(1, 0, 'updated')));
     });
 
     test('章节越界时 loadEpNetwork 抛出明确错误而非静默返回空', () async {

@@ -1,0 +1,26 @@
+{
+  "plan": "022",
+  "startedAt": "2026-10-05T18:48:00+08:00",
+  "branch": "main",
+  "commit": "cf5223f1430ccdb812a5cb4c3fafef89887a856a",
+  "flutter": "3.41.6",
+  "dart": "3.11.4",
+  "flutterFrameworkRevision": "db50e20168db8fee486b9abf32fc912de3bc5b6a",
+  "flutterEngineRevision": "425cfb54d01a9472b3e81d9e76fd63a4a44cfbcb",
+  "photoViewRevision": "a1255d1b5945aad4b7323303ec2ecdf0c90ffc4c",
+  "androidDevice": {
+    "id": "192.168.5.4:5555",
+    "model": "22127RK46C",
+    "abi": "arm64-v8a",
+    "display": "1440x3200",
+    "density": 560,
+    "memTotalKiB": 11466296,
+    "memAvailableKiBAtStart": 3261216,
+    "installedVersionName": "1.9.91",
+    "installedVersionCode": 8
+  },
+  "windowsGpu": "NVIDIA GeForce RTX 4060 Laptop GPU",
+  "windowsPhysicalMemoryBytes": 25434820608,
+  "baselineAnalysis": "dart analyze lib test: No issues found",
+  "scope": "P0 input snapshot; no quality or performance claim yet"
+}

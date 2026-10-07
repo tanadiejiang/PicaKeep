@@ -40,6 +40,7 @@ extension ServerAppStatus on PicaKeepAdminServer {
     final deviceName = _deviceName();
     return {
       'serviceName': 'PicaKeepServer',
+      'imageCapabilities': _imageCapabilities.toJson(),
       'deviceSystem': deviceSystem,
       'deviceName': deviceName,
       'deviceSummary': _deviceSummary(deviceSystem, deviceName),

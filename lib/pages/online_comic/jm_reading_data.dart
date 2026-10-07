@@ -57,10 +57,14 @@ class JmReadingData extends ReadingData {
     // 1. 下载原始字节
     final result = await OnlineImageManager.instance.getImage(
       url,
+      cacheIdentity: originalNetworkCacheIdentity(ep, page, url),
       headers: getJmImgHeaders(),
     );
     final bytes = <int>[];
     await for (final chunk in result.stream) {
+      if (bytes.length + chunk.length > 64 * 1024 * 1024) {
+        throw StateError('JM recombination input exceeds the bounded decode budget');
+      }
       bytes.addAll(chunk);
     }
     final raw = Uint8List.fromList(bytes);

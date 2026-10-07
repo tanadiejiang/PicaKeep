@@ -1,0 +1,31 @@
+{
+  "copiedUtc": "2026-10-06T09:09:47.0001071Z",
+  "source": "D:\\Flutter_Projucts\\PicaComic\\PicaKeep\\build\\windows\\x64\\runner\\Profile",
+  "destination": "D:\\picakeep-image-pipeline-022-work\\windows-surface-fix1006-runner",
+  "ordinaryFileCount": 46,
+  "copiedBytes": 41429057,
+  "reparsePoints": 0,
+  "surfaceSourceSha256": "36dbda0a601f73ecd7684fc5aa74716d16ef15c63009945a7f97d058b269a9d4",
+  "profileSourceSha256": "81387ebe6c25cc5e1b19de7341ebe7fde43a08d2038fc97d76926cd2a6216f59",
+  "nativeSourceSha256": "9110413eeae496707cdf3239c4f4371bbe060c42430976ee3e79613824834087",
+  "components": [
+    {
+      "path": "picakeep.exe",
+      "sha256": "ae63c0957915b093f0d11d42d83fbef3e755342cab10133af9b0cbf3ebdea644",
+      "bytes": 77824
+    },
+    {
+      "path": "data/app.so",
+      "sha256": "25250a28b6cf254dc6df6669fe53d36e4a98e44ad184d4ff10c0d690a20e1e41",
+      "bytes": 7078832
+    },
+    {
+      "path": "picakeep_image_engine.dll",
+      "sha256": "df6b205a5ff71bb6256c887c83c876cd3433ce27393e02c07f02fe6af56d08f5",
+      "bytes": 1562624
+    }
+  ],
+  "fixtureSha256": "af84cbdfa6c67ff61cfbc8747bb0b5f33bbed0a267f1e7a8777d1c00f99fec0d",
+  "fixtureBytes": 1209123,
+  "fixtureModifiedUtc": "2026-10-05T11:23:19.0959455Z"
+}

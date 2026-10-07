@@ -63,6 +63,7 @@ extension LocalLibraryQuery on LocalLibraryManager {
     task = _loadManagedDownloadsInternal().then((items) {
       if (generation == _managedDownloadsGeneration) {
         _managedDownloadsSnapshot = List.of(items);
+        _queueChangedCovers(items);
       }
       return items;
     }).whenComplete(() {

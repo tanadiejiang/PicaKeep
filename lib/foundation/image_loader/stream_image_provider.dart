@@ -8,10 +8,14 @@ class StreamImageLoadResult {
   const StreamImageLoadResult({
     required this.stream,
     this.expectedTotalBytes,
+    this.cancel,
   });
 
   final Stream<List<int>> stream;
   final int? expectedTotalBytes;
+
+  /// Discard a response whose headers arrived before a consumer was admitted.
+  final Future<void> Function()? cancel;
 }
 
 class StreamImageAbortSignal {

@@ -19,6 +19,10 @@ extension PageControllerExtension on PageController {
   }
 }
 
+class ReaderViewportChanges extends ChangeNotifier {
+  void changed() => notifyListeners();
+}
+
 class ComicReadingPageLogic extends StateController {
   ///控制页面, 用于非从上至下(连续)阅读方式
   late PageController pageController;
@@ -33,10 +37,52 @@ class ComicReadingPageLogic extends StateController {
   var scrollController = ScrollController(keepScrollOffset: true);
 
   ///用于从上至下(连续)阅读方式, 获取放缩大小
+  int get activePhotoControllerIndex {
+    if (readingMethod == ReadingMethod.topToBottomContinuously) return 0;
+    if (readingMethod.isTwoPage) {
+      return pageController.hasClients
+          ? pageController.page!.round()
+          : (singlePageForFirstScreen ? index ~/ 2 + 1 : (index + 1) ~/ 2);
+    }
+    return index;
+  }
+
   PhotoViewController get photoViewController =>
-      photoViewControllers[index] ?? photoViewControllers[0]!;
+      ensurePhotoViewController(activePhotoControllerIndex);
 
   var photoViewControllers = <int, PhotoViewController>{};
+  final readerViewportKey = GlobalKey();
+  final sessionRasterCache = ReaderSessionRasterCache();
+  @override
+  void dispose() {
+    sessionRasterCache.dispose();
+    super.dispose();
+  }
+
+  final viewportChanges = ReaderViewportChanges();
+  final nativePixelScales = <int, double>{};
+  final _transformSubscriptions =
+      <StreamSubscription<PhotoViewControllerValue>>[];
+
+  void notifyViewportChanged() => viewportChanges.changed();
+
+  PhotoViewController ensurePhotoViewController(int index) {
+    return photoViewControllers.putIfAbsent(index, () {
+      final controller = PhotoViewController();
+      _transformSubscriptions.add(
+          controller.outputStateStream.listen((_) => notifyViewportChanged()));
+      return controller;
+    });
+  }
+
+  void showNativePixels() {
+    final controller = photoViewController;
+    final scaleKey = readingMethod == ReadingMethod.topToBottomContinuously
+        ? -index
+        : activePhotoControllerIndex;
+    final scale = nativePixelScales[scaleKey];
+    if (scale != null) controller.scale = scale;
+  }
 
   ListenVolumeController? listenVolume;
 
@@ -65,14 +111,10 @@ class ComicReadingPageLogic extends StateController {
     final imageCache = PaintingBinding.instance.imageCache;
     previousImageCacheMaximumSizeBytes ??= imageCache.maximumSizeBytes;
     previousImageCacheMaximumSize ??= imageCache.maximumSize;
-    if (imageCache.maximumSizeBytes < 320 * 1024 * 1024) {
-      imageCache.maximumSizeBytes = 320 * 1024 * 1024;
-    }
-    if (imageCache.maximumSize < 240) {
-      imageCache.maximumSize = 240;
-    }
+    imageCache.maximumSizeBytes = 96 * 1024 * 1024;
+    imageCache.maximumSize = 80;
     BaseImageProvider.clearCache();
-    BaseImageProvider.setCacheSizeLimit(160 * 1024 * 1024);
+    BaseImageProvider.setCacheSizeLimit(16 * 1024 * 1024);
   }
 
   void restoreReaderCacheLimits() {
@@ -87,10 +129,17 @@ class ComicReadingPageLogic extends StateController {
       imageCache.maximumSize = previousImageCacheMaximumSize!;
       previousImageCacheMaximumSize = null;
     }
-    imageCache.clear();
+    // Surfaces and the reader session dispose their owned pixels separately.
+    // Restoring the global limits already trims excess entries; keep decoded
+    // list covers so returning from a reader can paint them without reloading.
   }
 
   void clearPhotoViewControllers() {
+    for (final subscription in _transformSubscriptions) {
+      unawaited(subscription.cancel());
+    }
+    _transformSubscriptions.clear();
+    nativePixelScales.clear();
     photoViewControllers.forEach((key, value) => value.dispose());
     photoViewControllers.clear();
   }
@@ -119,6 +168,9 @@ class ComicReadingPageLogic extends StateController {
 
   static int _getIndex(int initPage) {
     if (appdata.settings[9] == "5" || appdata.settings[9] == "6") {
+      if (appdata.implicitData[1] == '1') {
+        return initPage <= 1 ? 1 : (initPage.isEven ? initPage : initPage - 1);
+      }
       return initPage % 2 == 1 ? initPage : initPage - 1;
     } else {
       return initPage;
@@ -127,7 +179,9 @@ class ComicReadingPageLogic extends StateController {
 
   static int _getPage(int initPage) {
     if (appdata.settings[9] == "5" || appdata.settings[9] == "6") {
-      return (initPage + 2) ~/ 2;
+      return appdata.implicitData[1] == '1'
+          ? (initPage + 2) ~/ 2
+          : (initPage + 1) ~/ 2;
     } else {
       return initPage;
     }
@@ -142,7 +196,13 @@ class ComicReadingPageLogic extends StateController {
     _index = _getIndex(initialPage);
     if (order <= 0) order = 1;
     itemScrollListener.itemPositions.addListener(() {
-      var newIndex = itemScrollListener.itemPositions.value.first.index + 1;
+      final visible = itemScrollListener.itemPositions.value
+          .where((p) => p.itemLeadingEdge < 1 && p.itemTrailingEdge > 0)
+          .toList()
+        ..sort((a, b) => a.index.compareTo(b.index));
+      if (visible.isEmpty) return;
+      notifyViewportChanged();
+      var newIndex = visible.first.index + 1;
       if (newIndex != index) {
         index = newIndex;
         update(["ToolBar"]);

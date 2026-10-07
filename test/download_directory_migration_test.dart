@@ -162,8 +162,7 @@ void main() {
         greaterThanOrEqualTo(2),
         reason: '两次备份都要留住 —— 备份的唯一价值就是"还能找回来"',
       );
-      final contents =
-          backups.map((file) => file.readAsStringSync()).toSet();
+      final contents = backups.map((file) => file.readAsStringSync()).toSet();
       expect(contents, containsAll(<String>['T1', 'T2']));
     });
   });
@@ -178,7 +177,7 @@ void main() {
         to: targetPath,
       );
 
-      expect(result.movedEntries, 2);
+      expect(result.movedEntries, 2, reason: result.failures.join('\n'));
       expect(result.skippedEntries, 0);
       expect(result.failures, isEmpty);
       expect(result.stopped, isFalse);
@@ -511,8 +510,7 @@ void main() {
   });
 
   group('拒绝危险目标', () {
-    test('目标位于源目录内部 → **允许**，且不会把目标自己搬进去（真机配置）',
-        () async {
+    test('目标位于源目录内部 → **允许**，且不会把目标自己搬进去（真机配置）', () async {
       // 真机实证的配置（用户实际踩到的）：
       //   源   `/storage/emulated/0/1/pica`
       //   目标 `/storage/emulated/0/1/pica/picakeep/download`
@@ -721,8 +719,7 @@ void main() {
       expect(await hasPendingDownloadEntries(sourcePath), isFalse);
     });
 
-    test('目标在源目录内部：「只剩通往目标的路径」也算搬完（真机实证）',
-        () async {
+    test('目标在源目录内部：「只剩通往目标的路径」也算搬完（真机实证）', () async {
       // 真机现场：旧目录 `/storage/emulated/0/1/pica` 里只剩
       // `download.db` 与 `picakeep/`（= 目标的父目录链），
       // 3.7 G 内容其实**已经全部搬进**新目录 —— 完成判定却永远为真，

@@ -1,10 +1,13 @@
 library pica_reader;
 
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
+import 'dart:ui' as ui;
 
 import 'package:flutter/gestures.dart';
+import 'package:crypto/crypto.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/scheduler.dart';
@@ -20,6 +23,11 @@ import 'package:picakeep/foundation/image_loader/base_image_provider.dart';
 import 'package:picakeep/foundation/image_loader/file_image_loader.dart';
 import 'package:picakeep/foundation/image_loader/stream_image_provider.dart';
 import 'package:picakeep/foundation/archive/archive_reading_service.dart';
+import 'package:picakeep/foundation/archive/archive_models.dart';
+import 'package:picakeep/foundation/archive/archive_errors.dart';
+import 'package:picakeep/foundation/privileged_storage_access.dart';
+import 'package:picakeep/comic_source/comic_source.dart';
+import 'package:picakeep/network/online_image/online_image_cache.dart';
 import 'package:picakeep/foundation/image_favorites.dart';
 import 'package:picakeep/foundation/local_favorites.dart';
 import 'package:picakeep/base.dart';
@@ -28,6 +36,11 @@ import 'package:picakeep/foundation/image_manager.dart';
 import 'package:picakeep/foundation/history.dart';
 import 'package:picakeep/foundation/local_library_settings.dart';
 import 'package:picakeep/foundation/reader_image_quality.dart';
+import 'package:picakeep/foundation/image_pipeline/reader_page_source.dart';
+import 'package:picakeep/foundation/image_pipeline/reader_session_raster_cache.dart';
+import 'package:picakeep/foundation/image_pipeline/derived_image_store.dart';
+import 'package:picakeep/pages/reader/reader_page_image.dart';
+import 'package:picakeep/pages/reader/reader_image_surface.dart';
 import 'package:picakeep/foundation/download_model.dart';
 import 'package:picakeep/foundation/untranslated_tags/untranslated_tag_coordinator.dart';
 import 'package:picakeep/network/online_image/online_image_manager.dart';
@@ -117,6 +130,26 @@ void _syncReaderSystemUi({
 }
 
 ///阅读器
+class _SelectedOriginalPage {
+  const _SelectedOriginalPage(
+      {required this.source,
+      required this.workId,
+      required this.title,
+      required this.url,
+      required this.eps});
+  final ReaderPageSource source;
+  final String workId;
+  final String title;
+  final String url;
+  final List<String> eps;
+}
+
+class _PersistentSelectedImage {
+  const _PersistentSelectedImage({required this.path, required this.selected});
+  final String path;
+  final _SelectedOriginalPage selected;
+}
+
 class ComicReadingPage extends StatelessWidget {
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
 
@@ -300,7 +333,8 @@ class ComicReadingPage extends StatelessWidget {
     }, dispose: (logic) {
       TapController.reset();
       logic.abortActiveImageLoads();
-      //清除缓存并减小最大缓存
+      logic.sessionRasterCache.dispose();
+      // 恢复共享缓存限额，阅读会话资源已独立释放，保留列表封面。
       logic.restoreReaderCacheLimits();
       logic.clearPhotoViewControllers();
       _showReaderSystemUi(useDarkBackground: useDarkBackground);
@@ -681,89 +715,127 @@ class ComicReadingPage extends StatelessWidget {
     return logic.urls[index];
   }
 
-  Future<File> _getFileFromStream(Stream<List<int>> stream) async {
-    var bytes = <int>[];
-    await for (var event in stream) {
-      bytes.addAll(event);
+  Future<_SelectedOriginalPage?> _selectCurrentOriginal() async {
+    final logic = StateController.find<ComicReadingPageLogic>();
+    // Freeze the data object, URL sequence, episode and metadata before any
+    // async resolution or selection UI. No code below reads a new logic index.
+    final data = readingData;
+    final order = logic.order;
+    final urls = List<String>.unmodifiable(logic.urls);
+    final title = data.title;
+    final workId = '${data.sourceKey}-${data.id}';
+    final eps = List<String>.unmodifiable(data.eps?.keys ?? const <String>[]);
+    final method = logic.readingMethod;
+    var indexes = <int>[logic.index - 1];
+    if (method == ReadingMethod.topToBottomContinuously) {
+      indexes = logic.itemScrollListener.itemPositions.value
+          .where(
+              (item) => item.itemLeadingEdge < 1 && item.itemTrailingEdge > 0)
+          .map((item) => item.index)
+          .toSet()
+          .toList()
+        ..sort();
+    } else if (method.isTwoPage) {
+      // Freeze the actual gallery spread, including the initial screen before
+      // onPageChanged synchronises the logical original-page index.
+      final spread = logic.pageController.hasClients
+          ? logic.pageController.page?.round()
+          : null;
+      final first = spread == null
+          ? logic.index - 1
+          : spread * 2 - 2 - (logic.singlePageForFirstScreen ? 1 : 0);
+      indexes = [first, first + 1];
+      if (method == ReadingMethod.twoPageReversed) {
+        indexes = indexes.reversed.toList();
+      }
     }
-    var dir = Directory.systemTemp;
-    var file =
-        File("${dir.path}/share_${DateTime.now().millisecondsSinceEpoch}.jpg");
-    return file.writeAsBytes(bytes);
+    indexes =
+        indexes.where((index) => index >= 0 && index < urls.length).toList();
+    if (indexes.isEmpty) {
+      return null;
+    }
+    final candidates = <_SelectedOriginalPage>[];
+    try {
+      for (final index in indexes) {
+        final source = await data.resolvePageSource(order, index, urls[index]);
+        candidates.add(_SelectedOriginalPage(
+            source: source,
+            workId: workId,
+            title: title,
+            url: urls[index],
+            eps: eps));
+      }
+      _SelectedOriginalPage? selected;
+      if (candidates.length == 1) {
+        selected = candidates.single;
+      } else {
+        selected = await showDialog<_SelectedOriginalPage>(
+          context: App.globalContext!,
+          builder: (dialogContext) => SimpleDialog(
+            title: Text('选择屏幕上的图片'.tl),
+            children: [
+              for (final candidate in candidates)
+                ListTile(
+                  title: Text((candidate.source.identity.page + 1).toString()),
+                  trailing: const Icon(Icons.arrow_right),
+                  onTap: () => Navigator.of(dialogContext).pop(candidate),
+                ),
+            ],
+          ),
+        );
+      }
+      for (final candidate in candidates) {
+        if (!identical(candidate, selected)) await candidate.source.dispose();
+      }
+      if (selected != null && !selected.source.isAuthoritativeOriginal) {
+        showToast(message: '当前来源最高可用画质'.tl);
+      }
+      return selected;
+    } catch (_) {
+      for (final candidate in candidates) {
+        await candidate.source.dispose();
+      }
+      rethrow;
+    }
   }
 
   void share() async {
-    var logic = StateController.find<ComicReadingPageLogic>();
-    int? index = logic.index - 1;
-    if (logic.readingMethod == ReadingMethod.topToBottomContinuously) {
-      index = await selectImage();
+    _SelectedOriginalPage? selected;
+    try {
+      selected = await _selectCurrentOriginal();
+      if (selected == null) return;
+      await shareImage(await selected.source.openOriginalFile());
+    } catch (error) {
+      showToast(message: error.toString());
+    } finally {
+      await selected?.source.dispose();
     }
-    if (index == null) {
-      return;
-    }
-
-    var file = await _getFileFromStream(
-        readingData.loadImage(logic.order, index, logic.urls[index]));
-
-    shareImage(file);
   }
 
-  Future<String?> _persistentCurrentImage() async {
-    var logic = StateController.find<ComicReadingPageLogic>();
-    int? index = logic.index - 1;
-    if (logic.readingMethod == ReadingMethod.topToBottomContinuously) {
-      index = await selectImage();
+  Future<_PersistentSelectedImage?> _persistentCurrentImage() async {
+    final selected = await _selectCurrentOriginal();
+    if (selected == null) return null;
+    try {
+      final file = await selected.source.openOriginalFile();
+      final path = await persistentCurrentImage(file,
+          identity: selected.source.identity);
+      return _PersistentSelectedImage(path: path, selected: selected);
+    } finally {
+      await selected.source.dispose();
     }
-    if (index == null) {
-      return null;
-    }
-
-    // For downloaded images, always try direct file read first.
-    // Don't depend on checkEpDownloaded — downloadedEps may not
-    // be populated yet, but the files are already on disk.
-    if (readingData.downloaded) {
-      try {
-        // Ensure downloadedEps is populated for checkEpDownloaded
-        if (readingData.downloadedEps.isEmpty) {
-          final comic =
-              await downloadManager.getComicOrNull(readingData.downloadId);
-          if (comic != null) {
-            readingData.downloadedEps = comic.downloadedEps;
-          }
-        }
-        final file = downloadManager.getImage(
-          readingData.downloadId,
-          readingData.hasEp ? logic.order : 0,
-          index,
-        );
-        if (file.existsSync()) {
-          return persistentCurrentImage(file);
-        }
-      } catch (_) {
-        // Fall through to stream-based loading as last resort
-      }
-    }
-
-    var file = await _getFileFromStream(
-        readingData.loadImage(logic.order, index, logic.urls[index]));
-
-    return persistentCurrentImage(file);
   }
 
   void saveCurrentImage() async {
-    var logic = StateController.find<ComicReadingPageLogic>();
-    int? index = logic.index - 1;
-    if (logic.readingMethod == ReadingMethod.topToBottomContinuously) {
-      index = await selectImage();
+    _SelectedOriginalPage? selected;
+    try {
+      selected = await _selectCurrentOriginal();
+      if (selected == null) return;
+      await saveImage(await selected.source.openOriginalFile());
+    } catch (error) {
+      showToast(message: error.toString());
+    } finally {
+      await selected?.source.dispose();
     }
-    if (index == null) {
-      return;
-    }
-
-    var file = await _getFileFromStream(
-        readingData.loadImage(logic.order, index, logic.urls[index]));
-
-    saveImage(file);
   }
 
   Widget? buildEpChangeButton(ComicReadingPageLogic logic) {

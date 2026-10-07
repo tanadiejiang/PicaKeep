@@ -69,9 +69,9 @@ extension ServerAppLibrary on PicaKeepAdminServer {
         return _jsonResponse({'error': 'method not allowed'}, statusCode: 405);
       }
       final managedOnlyParam =
-          request.url.queryParameters['managedOnly']?.trim().toLowerCase() ?? '';
-      final managedOnly =
-          managedOnlyParam == '1' || managedOnlyParam == 'true';
+          request.url.queryParameters['managedOnly']?.trim().toLowerCase() ??
+              '';
+      final managedOnly = managedOnlyParam == '1' || managedOnlyParam == 'true';
       final rootId = request.url.queryParameters['rootId']?.trim() ?? '';
       final visibleItems = rootId.isNotEmpty
           ? snapshot.items
@@ -265,6 +265,9 @@ extension ServerAppLibrary on PicaKeepAdminServer {
       if (request.method != 'GET') {
         return _jsonResponse({'error': 'method not allowed'}, statusCode: 405);
       }
+      if (request.url.queryParameters.containsKey('variant')) {
+        return _handleCoverVariant(request, item, rootPath: rootPath);
+      }
       if (item.isArchive) {
         final coverPath = item.coverPath?.trim() ?? '';
         if (coverPath.isEmpty || !isArchiveUri(coverPath)) {
@@ -289,6 +292,10 @@ extension ServerAppLibrary on PicaKeepAdminServer {
       }
       _coverPathCache[item.id] = coverPath;
       return _fileResponse(request, coverPath);
+    }
+
+    if (segments.length >= 8 && segments[4] == 'images') {
+      return _handlePageDerivative(request, item, rootPath: rootPath);
     }
 
     if (segments.length == 6 && segments[4] == 'episodes') {
@@ -328,10 +335,16 @@ extension ServerAppLibrary on PicaKeepAdminServer {
         return _jsonResponse({'error': 'page not found'}, statusCode: 404);
       }
       final imagePath = episode.imagePaths[pageIndex];
-      if (isArchiveUri(imagePath)) {
-        return _archiveBytesResponse(request, imagePath);
+      final sourceVersion = request.url.queryParameters['sourceVersion'];
+      if (sourceVersion != null && await _pageSourceVersion(imagePath) != sourceVersion) {
+        return _imageVersionConflict(await _pageSourceVersion(imagePath));
       }
-      return _fileResponse(request, imagePath);
+      if (isArchiveUri(imagePath)) {
+        final response = await _archiveBytesResponse(request, imagePath);
+        return sourceVersion == null ? response : _verifyOriginalResponse(response, imagePath, sourceVersion);
+      }
+      final response = await _fileResponse(request, imagePath);
+      return sourceVersion == null ? response : _verifyOriginalResponse(response, imagePath, sourceVersion);
     }
 
     return _jsonResponse({'error': 'not found'}, statusCode: 404);
@@ -645,6 +658,7 @@ extension ServerAppLibrary on PicaKeepAdminServer {
       'archivePasswordMatched': item.archivePasswordMatched,
       'archiveFormat': item.archiveFormat,
       'coverUrl': _buildItemCoverUrl(item),
+      'coverSourceVersion': _coverVersionToken(item),
       'detailUrl': '/api/library/items/$encodedId',
       'episodeCount': item.episodes.length,
       'hasMultipleEpisodes': item.hasMultipleEpisodes,

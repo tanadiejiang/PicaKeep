@@ -279,6 +279,35 @@ extension DownloadPageLogicCover on DownloadPageLogic {
       return null;
     }
 
+    if (item is LocalLibraryComicItem && item.isManagedDownloadItem) {
+      // current_download.json retains derived cover paths after the cache is
+      // cleared. Resolve lazily so LocalCoverCache can verify that file and
+      // recreate it from the authoritative download through privileged IO.
+      // Resolving mutates the item's source fingerprint. Keep the current
+      // provider across ordinary rebuilds, but honor source/session changes.
+      final provider = LocalLibraryManager().coverImageProviderForItem(item);
+      final cachedProvider = _coverImageProviders[item.id];
+      final sourcePrefix =
+          'local_cover::${App.dataPath}::${item.id}::${item.fileSystemPath}::';
+      if (provider == null) {
+        _coverImageProviders.remove(item.id);
+        return null;
+      }
+      if (provider is StreamImageProvider &&
+          cachedProvider is StreamImageProvider &&
+          cachedProvider.imageKey.startsWith(sourcePrefix) &&
+          // Factory keys end in generation and the three data/service versions.
+          cachedProvider.imageKey.split('::').reversed.take(4).join('::') ==
+              provider.imageKey.split('::').reversed.take(4).join('::')) {
+        return cachedProvider;
+      }
+      if (cachedProvider == provider) {
+        return cachedProvider;
+      }
+      _coverImageProviders[item.id] = provider;
+      return provider;
+    }
+
     final cachedProvider = _coverImageProviders[item.id];
     if (cachedProvider != null) {
       return cachedProvider;
@@ -294,13 +323,8 @@ extension DownloadPageLogicCover on DownloadPageLogic {
       if (coverPath != null &&
           coverPath.isNotEmpty &&
           coverPath != LocalLibraryManager.noCoverSentinel) {
-        // 本地项封面（managed 下载项 + non-managed 图集项）一律走
-        // privileged-aware 的 imageProviderForLocalPath，而非裸 FileImage(File(...))：
-        // root/shizuku 模式无 MANAGE_EXTERNAL_STORAGE，裸 FileImage 读外部路径会静默
-        // 失败破图，此 provider 在 dart:io 读不到时回退特权通道（_readFileBytes）补字节。
-        // full-access 模式下 dart:io 直接命中，行为不变。managed 项不再排后台迁移队列：
-        // 那个队列每个 item 至少两次特权通道，对已缓存封面只为得出"无事可做"，滚动时在
-        // 帧间隙持续打通道，是 root 模式列表滚动卡顿的来源。缺图项走下面 else 按需排队。
+        // Non-managed local collections keep their direct local_file path;
+        // root/shizuku reads still fall back to the privileged byte reader.
         provider = LocalLibraryManager().imageProviderForLocalPath(coverPath);
       } else if (coverPath == LocalLibraryManager.noCoverSentinel) {
         // 已持久化「无封面」标记——不入队、不走 root 通道，直接渲染占位图标。

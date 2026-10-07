@@ -27,6 +27,8 @@ import 'package:picakeep/foundation/download_snapshot_reader.dart';
 import 'package:picakeep/foundation/download_author_resolver.dart';
 import 'package:picakeep/foundation/illust_card_info_config.dart';
 import 'package:picakeep/foundation/illust_cover_size.dart';
+import 'package:picakeep/foundation/cover_thumbnail_cache.dart';
+import 'package:picakeep/foundation/image_pipeline/cover_thumbnail_size.dart';
 import 'package:picakeep/foundation/local_library.dart';
 import 'package:picakeep/foundation/local_cover_cache.dart';
 import 'package:picakeep/foundation/local_library_illust_view.dart';
@@ -58,6 +60,12 @@ import 'illust_scroll_anchor.dart';
 /// 与搜索面板的 `illustSearchPanelAnimationDuration`（220ms）分开取值：
 /// 标题切换是"整块内容替换"，比高度过渡稍快一点更利落。
 const Duration illustSearchTitleAnimationDuration = Duration(milliseconds: 200);
+
+typedef _IllustDecoration = ({
+  IllustLibraryEntry entry,
+  ImageProvider<Object>? cover,
+  int coverBucket
+});
 
 String _formatLocalLibrarySize(double sizeMb) {
   if (sizeMb >= 1024) {
@@ -776,9 +784,11 @@ class _LocalLibraryPageState extends State<LocalLibraryPage>
 
   /// 页面内容区是否正在滚动（驱动视图切换悬浮按钮的半透明）。
   final _scrollInteracting = ValueNotifier<bool>(false);
-  late final IllustWorkQueue<
-      ({IllustLibraryEntry entry, ImageProvider<Object>? cover})> _illustWork;
+  late final IllustWorkQueue<_IllustDecoration> _illustWork;
+  VoidCallback? _releaseIllustPersistenceDelay;
   final _illustCovers = <String, ImageProvider<Object>>{};
+  final _illustCoverBuckets = <String, int>{};
+  final _illustCoverTargets = <String, int>{};
   final _illustRevisions = <String, ValueNotifier<int>>{};
   final _illustCoverRetried = <String>{};
   final _illustAnchor = IllustScrollAnchor();
@@ -794,7 +804,9 @@ class _LocalLibraryPageState extends State<LocalLibraryPage>
   String? _filteredIllustCacheKey;
   int _illustGeneration = 0;
   bool _illustRouteActive = true, _illustAppActive = true;
-  int _illustThumbWidth = 768;
+  int _illustThumbWidth = 0;
+  int _illustLayoutRevision = 0;
+  late bool _illustRequestsPageCounts;
 
   void _updateIllustWorkState() => _illustWork.setActive(
       mounted && _isIllustView && _illustRouteActive && _illustAppActive);
@@ -813,6 +825,7 @@ class _LocalLibraryPageState extends State<LocalLibraryPage>
           return;
         }
         _illustCoverRetried.clear();
+        _illustCoverBuckets.clear();
         _illustWork.reset();
         _illustWork.setVisible(_illustLaidOut);
         _updateIllustWorkState();
@@ -826,33 +839,32 @@ class _LocalLibraryPageState extends State<LocalLibraryPage>
   void didChangeDependencies() {
     super.didChangeDependencies();
     _illustRouteActive = ModalRoute.isCurrentOf(context) ?? true;
-    final media = MediaQuery.of(context);
-    _illustThumbWidth = (media.size.width /
-            _illustViewWaterfallColumns *
-            media.devicePixelRatio *
-            1.35)
-        .ceil();
     _updateIllustWorkState();
   }
 
-  Future<({IllustLibraryEntry entry, ImageProvider<Object>? cover})?>
-      _resolveIllustDecoration(String id, bool Function() canContinue) async {
+  Future<_IllustDecoration?> _resolveIllustDecoration(
+      String id, bool Function() canContinue) async {
     final entry = _illustById[id];
     if (entry == null || !canContinue()) return null;
-    final cover = await _manager.prepareIllustCover(
-        entry.item, _illustThumbWidth,
+    final bucket = _illustCoverTargets[id] ?? _illustThumbWidth;
+    final existing = _illustCovers[id];
+    if (existing != null && (_illustCoverBuckets[id] ?? 0) >= bucket) {
+      return (
+        entry: entry,
+        cover: existing,
+        coverBucket: _illustCoverBuckets[id]!
+      );
+    }
+    final cover = await _manager.prepareIllustCover(entry.item, bucket,
         canContinue: canContinue);
     if (!canContinue()) return null;
     // Publish the prepared image before any directory count / ZIP inspection.
     // Metadata runs as a lower-priority stage under the same queue limit.
-    return (entry: entry, cover: cover);
+    return (entry: entry, cover: cover, coverBucket: bucket);
   }
 
-  Future<({IllustLibraryEntry entry, ImageProvider<Object>? cover})?>
-      _resolveIllustDetails(
-          String id,
-          ({IllustLibraryEntry entry, ImageProvider<Object>? cover}) value,
-          bool Function() canContinue) async {
+  Future<_IllustDecoration?> _resolveIllustDetails(
+      String id, _IllustDecoration value, bool Function() canContinue) async {
     if (!canContinue()) return null;
     final entry = value.entry;
     final info = await resolveIllustEntryInfo(
@@ -868,13 +880,12 @@ class _LocalLibraryPageState extends State<LocalLibraryPage>
           width: resolved?.width,
           height: resolved?.height,
           pageCount: resolved?.pageCount),
-      cover: value.cover
+      cover: value.cover,
+      coverBucket: value.coverBucket
     );
   }
 
-  void _publishIllustDecorations(
-      Map<String, ({IllustLibraryEntry entry, ImageProvider<Object>? cover})>
-          values) {
+  void _publishIllustDecorations(Map<String, _IllustDecoration> values) {
     if (!mounted) return;
     final generation = _illustGeneration;
     final filteredSnapshot = _filteredIllustEntries;
@@ -895,8 +906,11 @@ class _LocalLibraryPageState extends State<LocalLibraryPage>
         _illustById[id] = value.entry;
         changed = true;
       }
-      if (value.cover != null && _illustCovers[id] != value.cover) {
+      if (value.cover != null &&
+          value.coverBucket >= (_illustCoverBuckets[id] ?? 0) &&
+          !identical(_illustCovers[id], value.cover)) {
         _illustCovers[id] = value.cover!;
+        _illustCoverBuckets[id] = value.coverBucket;
         changed = true;
       }
       if (changed) {
@@ -923,7 +937,47 @@ class _LocalLibraryPageState extends State<LocalLibraryPage>
         .take((last - first + 1).clamp(0, entries.length))
         .map((e) => e.id)
         .toList();
+    _refreshIllustCoverTargets();
     _illustWork.setVisible(_illustLaidOut);
+  }
+
+  void _refreshIllustCoverTargets() {
+    if (_illustThumbWidth <= 0) return;
+    for (final id in _illustLaidOut) {
+      if (!_illustById.containsKey(id)) continue;
+      final previous = _illustCoverTargets[id];
+      if (previous == null) {
+        _illustCoverTargets[id] = _illustThumbWidth;
+      } else if (_illustThumbWidth > previous) {
+        _illustCoverTargets[id] = _illustThumbWidth;
+        _illustWork.retry(id);
+      }
+    }
+  }
+
+  void _setIllustCoverLayout(double contentWidth, int columns, double ratio) {
+    final columnWidth = (contentWidth -
+            illustWaterfallPadding.horizontal -
+            illustWaterfallSpacing * (columns - 1)) /
+        columns;
+    final frameWidth = math.max(1.0, columnWidth - illustCardGap * 2);
+    final target = illustCoverFrameTarget(Size(frameWidth, frameWidth), ratio);
+    final bucket = coverThumbnailWidthBucket(target.width);
+    if (bucket == _illustThumbWidth) return;
+    _illustThumbWidth = bucket;
+    final generation = _illustGeneration;
+    final revision = ++_illustLayoutRevision;
+    // Layout must not synchronously publish queue results into child builders.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted ||
+          !_isIllustView ||
+          generation != _illustGeneration ||
+          revision != _illustLayoutRevision) {
+        return;
+      }
+      _refreshIllustCoverTargets();
+      _illustWork.setVisible(_illustLaidOut);
+    });
   }
 
   bool get _isClientMode =>
@@ -1251,6 +1305,7 @@ class _LocalLibraryPageState extends State<LocalLibraryPage>
     if (!mounted || generation != _illustGeneration) return;
     _illustWork.reset();
     _illustCoverRetried.clear();
+    _illustCoverTargets.clear();
     if (mounted) {
       setState(() {
         _illustLoading = true;
@@ -1317,6 +1372,7 @@ class _LocalLibraryPageState extends State<LocalLibraryPage>
     });
     _illustById = {for (final entry in entries) entry.id: entry};
     _illustCovers.clear();
+    _illustCoverBuckets.clear();
     _illustInfo.clear();
     _filteredIllustCache = null;
     _updateIllustWorkState();
@@ -1372,10 +1428,20 @@ class _LocalLibraryPageState extends State<LocalLibraryPage>
   @override
   void initState() {
     super.initState();
+    _illustRequestsPageCounts = _illustCardInfoSpec.fields.contains('pages');
     _illustWork = IllustWorkQueue(
         resolve: _resolveIllustDecoration,
         resolveDetails: _resolveIllustDetails,
         publish: _publishIllustDecorations,
+        onCoverWorkChanged: (busy) {
+          if (busy) {
+            _releaseIllustPersistenceDelay ??=
+                CoverThumbnailCache.deferProviderPersistenceForVisibleWork();
+          } else {
+            _releaseIllustPersistenceDelay?.call();
+            _releaseIllustPersistenceDelay = null;
+          }
+        },
         isComplete: (value) => value.cover != null);
     WidgetsBinding.instance.addObserver(this);
     App.localDataVersion.addListener(_handleLocalDataChanged);
@@ -1430,11 +1496,15 @@ class _LocalLibraryPageState extends State<LocalLibraryPage>
       return;
     }
     setState(() {});
-    // 「页数」是"改了配置才需要补"的字段：用户在设置里勾上它时，
-    // 补页数的那趟流程可能根本没跑过（当时还没勾），所以这里补跑一次。
     if (_isIllustView && _illustEntries.isNotEmpty) {
-      _illustWork.reset();
       _filteredIllustCache = null;
+      final needsPages = _illustCardInfoSpec.fields.contains('pages');
+      if (needsPages && !_illustRequestsPageCounts) {
+        for (final entry in _illustById.values) {
+          if (entry.pageCount == null) _illustWork.retry(entry.id);
+        }
+      }
+      _illustRequestsPageCounts = needsPages;
     }
   }
 
@@ -2909,7 +2979,12 @@ class _LocalLibraryPageState extends State<LocalLibraryPage>
   /// 插画视图的内容 sliver（标签筛选条 + 瀑布流 + 三种状态）。
   Widget _buildIllustContent() {
     final entries = _filteredIllustEntries;
-    return LocalLibraryIllustSlivers(
+    final columns = _illustViewWaterfallColumns;
+    final ratio = MediaQuery.devicePixelRatioOf(context);
+    // Scroll offsets change SliverConstraints every frame. Keep the child
+    // widget stable so measuring column width does not rebuild the masonry
+    // delegate and all its already visible cards on each scroll update.
+    final content = LocalLibraryIllustSlivers(
       allEntries: _illustEntries,
       entries: entries,
       showTagFilter: false,
@@ -2917,7 +2992,7 @@ class _LocalLibraryPageState extends State<LocalLibraryPage>
       selectedTags: _selectedIllustTags,
       loading: _illustLoading,
       errorText: _illustErrorText,
-      columns: _illustViewWaterfallColumns,
+      columns: columns,
       itemBuilder: _buildIllustItem,
       onLayoutRange: (first, last) {
         if (mounted && identical(entries, _filteredIllustEntries)) {
@@ -2931,6 +3006,10 @@ class _LocalLibraryPageState extends State<LocalLibraryPage>
         if (!_selecting) _clearIllustSearch(includeFolder: true);
       },
     );
+    return SliverLayoutBuilder(builder: (context, constraints) {
+      _setIllustCoverLayout(constraints.crossAxisExtent, columns, ratio);
+      return content;
+    });
   }
 
   Widget _buildIllustItem(BuildContext context, IllustLibraryEntry entry) {
@@ -2946,6 +3025,7 @@ class _LocalLibraryPageState extends State<LocalLibraryPage>
   Widget _buildPreparedIllustItem(
       BuildContext context, IllustLibraryEntry entry) {
     final item = entry.item;
+    final cover = _illustCovers[entry.id];
     final raw = appdata.settings[illustCardInfoSettingIndex];
     final info = _illustInfo[entry.id];
     if (info == null || !identical(info.entry, entry) || info.settings != raw) {
@@ -2964,10 +3044,13 @@ class _LocalLibraryPageState extends State<LocalLibraryPage>
       // 必须走 manager 的 provider 工厂：它内部会按"是否处于 root/Shizuku
       // 特权模式"决定走 FileImage 快路径还是 StreamImageProvider，
       // 直接 FileImage 在特权模式下会整片破图（见 foundation/local_library.dart:1213）。
-      imageProvider: _illustCovers[entry.id],
+      imageProvider: cover,
       onCoverError: () {
-        if (mounted && _illustCoverRetried.add(entry.id)) {
+        if (mounted &&
+            identical(_illustCovers[entry.id], cover) &&
+            _illustCoverRetried.add(entry.id)) {
           _illustCovers.remove(entry.id);
+          _illustCoverBuckets.remove(entry.id);
           _illustRevisions[entry.id]?.value++;
           _illustWork.retry(entry.id);
         }
@@ -2984,7 +3067,8 @@ class _LocalLibraryPageState extends State<LocalLibraryPage>
       selecting: _selecting,
       selected: _isItemSelected(item),
       // 36 号：图片与信息**分区响应** —— 看图的人想马上翻，管理的人才会点文字。
-      onTap: () => _handleIllustImageTap(item),
+      onTap: () => _handleIllustImageTap(item,
+          cachedCoverPreview: _illustCovers[entry.id]),
       onInfoTap: () => _handleItemTap(item),
       onLongPress: () => _handleItemLongPress(item),
     );
@@ -2996,7 +3080,8 @@ class _LocalLibraryPageState extends State<LocalLibraryPage>
   /// [_handleItemTap] 的分支，理由分别是：
   /// - 多选态下点击只该切换选中，不该突然跳进阅读器；
   /// - 需要密码的压缩包这时读必然失败，得先走既有的密码流程。
-  void _handleIllustImageTap(DownloadedItem item) {
+  void _handleIllustImageTap(DownloadedItem item,
+      {ImageProvider<Object>? cachedCoverPreview}) {
     if (_selecting && _canSelectItem(item)) {
       _toggleItemSelection(item);
       return;
@@ -3009,7 +3094,7 @@ class _LocalLibraryPageState extends State<LocalLibraryPage>
       _handleRemoteArchivePasswordTap(item);
       return;
     }
-    _openReader(item);
+    _openReader(item, cachedCoverPreview: cachedCoverPreview);
   }
 
   /// 直接打开阅读器。
@@ -3018,9 +3103,12 @@ class _LocalLibraryPageState extends State<LocalLibraryPage>
   /// 单文件产物 / 远程）由各子类给出，这里**不自己造 `ReadingData`** ——
   /// 31 号的教训是同一个作品在两条链路上各造一次阅读数据，迟早出现
   /// "从详情页进得去、从列表进打不开"的分裂。
-  void _openReader(DownloadedItem item) {
+  void _openReader(DownloadedItem item,
+      {ImageProvider<Object>? cachedCoverPreview}) {
     _illustWork.setActive(false);
-    App.pushInner(() => item.createReadingPage()).whenComplete(() {
+    App.pushInner(() => item is LocalLibraryComicItem
+        ? item.createReadingPage(cachedCoverPreview: cachedCoverPreview)
+        : item.createReadingPage()).whenComplete(() {
       if (mounted) _updateIllustWorkState();
     });
   }

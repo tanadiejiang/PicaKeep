@@ -1,4 +1,5 @@
 import 'dart:typed_data';
+import 'dart:io';
 
 import 'archive_models.dart';
 
@@ -20,6 +21,17 @@ class ArchiveBackendCapabilities {
   final bool canReadEntryStreaming;
   final bool requiresExternalBinary;
   final int? hardEntrySizeLimitBytes;
+}
+
+abstract class StreamingArchiveBackend {
+  Future<File> materializeEntry(
+    String archivePath,
+    String entryPath,
+    File destination, {
+    String? password,
+    int maxBytes = 2 * 1024 * 1024 * 1024,
+    bool Function()? isCancelled,
+  });
 }
 
 abstract class ArchiveBackend {

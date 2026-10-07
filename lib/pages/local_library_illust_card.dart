@@ -20,17 +20,19 @@
 ///    把缓存冲掉并抬高老年代 GC 压力。做法沿用既有先例
 ///    `ComicTile._buildImage` 的 `optimizeCoverDecode` 分支
 ///    （`components/comic_tile.dart:370-394`）：按**实际显示宽度 × 设备像素比**算
-///    `cacheWidth`，用 `ResizeImage.resizeIfNeeded` 包一层。
+///    目标框，使用 `CoverDecodeTarget` 从实际编码宽高决定解码尺寸。
 ///
 ///    ⚠️ 32 号起"实际显示宽度"不再等于列宽：改成 `BoxFit.contain` 后，格子比例
 ///    与图不符时显示宽度会**小于**列宽（按高贴合），此时若仍按列宽解码就是白解
-///    一大截。见 [IllustCard._decodeWidthFor] 里对 `displayWidth` 的推导。
+///    一大截。目标 provider 按实际编码比例计算 contain 后所需的物理宽高。
 library;
 
 import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter/material.dart';
 import 'package:picakeep/components/comic_tag_wrap.dart';
 import 'package:picakeep/foundation/comic_tile_display_config.dart';
+import 'package:picakeep/foundation/image_pipeline/cover_decode_target.dart';
+import 'package:picakeep/foundation/image_pipeline/cover_thumbnail_size.dart';
 
 import 'package:picakeep/foundation/illust_card_info_config.dart';
 import 'package:picakeep/foundation/local_library_illust_view.dart';
@@ -46,11 +48,9 @@ const double illustCardGap = 3;
 /// 图片圆角。
 const double illustCardImageRadius = 4;
 
-/// 解码宽度的冗余系数。
-///
-/// 与 `comic_tile.dart` 的 `qualityScale = 1.35` 同口径：按精确列宽解码在
-/// 高分屏上会略糊，留 35% 余量后肉眼与不降采样无差别。
-const double _illustDecodeQualityScale = 1.35;
+({int width, int height}) illustCoverFrameTarget(
+        Size logicalFrame, double devicePixelRatio) =>
+    coverFramePhysicalTarget(logicalFrame, devicePixelRatio);
 
 /// 单个插画条目卡片（瀑布流的一格）。
 ///
@@ -324,14 +324,20 @@ class IllustCard extends StatelessWidget {
       builder: (context, constraints) {
         // 这里的约束来自 `AspectRatio` 内部的 `Stack(fit: expand)`，是**紧**的：
         // maxWidth = 列宽（已扣掉本控件的 Padding），maxHeight = 列宽 / aspectRatio。
-        final devicePixelRatio =
-            MediaQuery.of(context).devicePixelRatio.clamp(1.0, 3.0).toDouble();
-        final cacheWidth = _decodeWidthFor(constraints, devicePixelRatio);
-        final displayProvider = ResizeImage.resizeIfNeeded(
-          cacheWidth,
-          null,
-          provider,
-        );
+        final hasFrame = constraints.maxWidth.isFinite &&
+            constraints.maxHeight.isFinite &&
+            constraints.maxHeight > 0;
+        final target = hasFrame
+            ? illustCoverFrameTarget(
+                Size(constraints.maxWidth, constraints.maxHeight),
+                MediaQuery.devicePixelRatioOf(context))
+            : null;
+        final displayProvider = target != null
+            ? CoverDecodeTarget(provider,
+                frameWidth: target.width,
+                frameHeight: target.height,
+                fit: BoxFit.contain)
+            : provider;
         return Image(
           image: displayProvider,
           // **不裁切**（用户原话「这个图的比例没有完全显示」）。
@@ -356,42 +362,6 @@ class IllustCard extends StatelessWidget {
         );
       },
     );
-  }
-
-  /// 该按多少物理像素解码。
-  ///
-  /// `contain` 下的真实显示宽度 = 原图按"较小的那个缩放比"缩放后的宽度：
-  /// - 图比格子更"瘦"（`图比例 < 格子比例`）→ 按高贴合，显示宽度 = 格高 × 图比例；
-  /// - 否则按宽贴合，显示宽度 = 格宽。
-  ///
-  /// 格子的高已经由 [IllustLibraryEntry.aspectRatio] 决定，所以这个式子只用
-  /// `entry.aspectRatio` 与格子约束，**不需要等图片解码完**就知道该解多大 ——
-  /// 这正是"降采样不能丢"能做到的前提。
-  ///
-  /// 真实比例生效时 `图比例 == 格子比例`，两个分支等价、结果就是列宽 × DPR，
-  /// 与改动前逐像素一致（无回归）；只有比例未知（占位 3:4）时才会比列宽小，
-  /// 那正是需要省解码量的场景。
-  int? _decodeWidthFor(BoxConstraints constraints, double devicePixelRatio) {
-    final cellWidth = constraints.maxWidth;
-    final cellHeight = constraints.maxHeight;
-    if (!cellWidth.isFinite || cellWidth <= 0) {
-      return null;
-    }
-    var displayWidth = cellWidth;
-    if (cellHeight.isFinite && cellHeight > 0) {
-      final imageRatio = entry.aspectRatio;
-      if (imageRatio.isFinite && imageRatio > 0) {
-        final cellRatio = cellWidth / cellHeight;
-        if (imageRatio < cellRatio) {
-          displayWidth = cellHeight * imageRatio;
-        }
-      }
-    }
-    if (!displayWidth.isFinite || displayWidth <= 0) {
-      displayWidth = cellWidth;
-    }
-    return (displayWidth * devicePixelRatio * _illustDecodeQualityScale)
-        .round();
   }
 
   Widget _brokenImagePlaceholder(BuildContext context) {

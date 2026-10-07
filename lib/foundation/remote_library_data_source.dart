@@ -15,8 +15,15 @@ import 'package:picakeep/foundation/cache_file_inventory.dart';
 import 'package:picakeep/foundation/image_favorites.dart';
 import 'package:picakeep/foundation/image_loader/base_image_provider.dart';
 import 'package:picakeep/foundation/image_loader/stream_image_provider.dart';
+import 'package:picakeep/foundation/image_pipeline/derived_image_store.dart';
+import 'package:picakeep/foundation/image_pipeline/image_disk_quota.dart';
+import 'package:picakeep/foundation/image_pipeline/cover_target_provider.dart';
+import 'package:picakeep/foundation/image_pipeline/image_server_protocol.dart';
+import 'package:picakeep/foundation/image_pipeline/server_reader_page_source.dart';
+import 'package:picakeep/foundation/image_pipeline/reader_page_source.dart';
 import 'package:picakeep/foundation/local_favorites.dart';
 import 'package:picakeep/foundation/local_library_settings.dart';
+import 'package:picakeep/foundation/local_cover_cache.dart';
 import 'package:picakeep/foundation/log.dart';
 import 'package:picakeep/pages/reader/comic_reading_page.dart';
 import 'package:picakeep/network/remote_service_network_policy.dart';
@@ -886,6 +893,40 @@ class RemoteLibraryReadingData extends ReadingData {
   final RemoteLibraryComicItem item;
 
   @override
+  Future<StreamImageLoadResult> loadOriginalNetworkWithProgress(
+          int ep, int page, String url,
+          {StreamImageAbortSignal? abortSignal}) =>
+      item.client.loadImageWithProgress(url, abortSignal: abortSignal);
+
+  @override
+  Future<ReaderPageSource> resolvePageSource(
+      int ep, int page, String url) async {
+    final manifest = await item.client.fetchImageManifest(url);
+    if (manifest == null ||
+        !manifest.tilesAvailable ||
+        manifest.levels.isEmpty) {
+      return super.resolvePageSource(ep, page, url);
+    }
+    final original = await super.resolvePageSource(
+        ep, page, item.client.resolveUrlString(manifest.originalUrl));
+    return ServerReaderPageSource(
+        original: original,
+        manifest: manifest,
+        serverScope: item.client.baseUrl,
+        cacheRoot:
+            p.join(App.dataPath, 'cache', 'image_pipeline_v1', 'remote_reader'),
+        request: (target, {etag, maximumBodyBytes, localBody, abortSignal}) =>
+            item.client.loadImageDerivative(target,
+                etag: etag,
+                maximumBodyBytes: maximumBodyBytes ?? 32 * 1024 * 1024,
+                localBody: localBody,
+                abortSignal: abortSignal),
+        refreshManifest: () async {
+          await item.client.fetchImageManifest(url);
+        });
+  }
+
+  @override
   final FavoriteType favoriteType = const FavoriteType(0);
 
   @override
@@ -1008,6 +1049,8 @@ class RemoteCoverUnavailableException implements Exception {
 
 class _RemoteLibraryCoverDiskCache {
   static final Map<String, Future<File>> _pending = <String, Future<File>>{};
+  static int _publicationGeneration = 0;
+  static void invalidatePendingPublications() => _publicationGeneration++;
 
   /// Negative cache: URLs whose download recently failed. Keyed by url, value
   /// is the time the failure expires. While present and unexpired, we skip the
@@ -1070,10 +1113,10 @@ class _RemoteLibraryCoverDiskCache {
         '${Platform.pathSeparator}remote_library_covers',
       );
 
-  static File cachedFileFor(String url) {
+  static File cachedFileFor(String url, {String variant = 'legacy'}) {
     final uri = Uri.tryParse(url);
     final extension = _normalizedExtension(uri?.path ?? '');
-    final hash = _stableHash(url);
+    final hash = _stableHash('$url|$variant');
     return File(
       '${_cacheDirectory.path}${Platform.pathSeparator}$hash$extension',
     );
@@ -1081,16 +1124,21 @@ class _RemoteLibraryCoverDiskCache {
 
   static Future<File> ensureDownloaded(
     RemoteLibraryClient client,
-    String url,
-  ) async {
-    final target = cachedFileFor(url);
+    String url, {
+    int? frameWidth,
+    int? frameHeight,
+    BoxFit fit = BoxFit.contain,
+  }) async {
+    url = client._currentCoverUrl(url);
+    final variant = '$frameWidth:$frameHeight:${fit.name}';
+    final target = cachedFileFor(url, variant: variant);
     if (await _isUsable(target)) {
       return target;
     }
 
     // Recently failed (e.g. server has no image for this favorite): skip the
     // network so a grid full of missing covers does not flood the server.
-    if (_isInFailureWindow(url)) {
+    if (_isInFailureWindow('$url|$variant')) {
       throw const RemoteCoverUnavailableException();
     }
 
@@ -1100,7 +1148,9 @@ class _RemoteLibraryCoverDiskCache {
       return pending;
     }
 
-    final future = _download(client, url, target).whenComplete(() {
+    final future = _download(client, url, target,
+            frameWidth: frameWidth, frameHeight: frameHeight, fit: fit)
+        .whenComplete(() {
       _pending.remove(key);
     });
     _pending[key] = future;
@@ -1110,13 +1160,19 @@ class _RemoteLibraryCoverDiskCache {
   static Future<File> _download(
     RemoteLibraryClient client,
     String url,
-    File target,
-  ) async {
-    await target.parent.create(recursive: true);
-    final temp = File('${target.path}.part');
+    File target, {
+    int? frameWidth,
+    int? frameHeight,
+    BoxFit fit = BoxFit.contain,
+  }) async {
+    File? temp;
+    void Function()? releaseTemp;
+    ImageDiskReservation? disk;
+    StreamImageLoadResult? response;
+    final generation = _publicationGeneration;
+    final dataRoot = App.dataPath, cacheRoot = App.cachePath;
     IOSink? sink;
     try {
-      sink = temp.openWrite();
       // Route cover downloads through the BULK image pool (_httpClient), NOT
       // the control pool. Covers and the JSON control calls (folder list, item
       // list, /status probe) are shown together — a grid loads N cover streams
@@ -1127,33 +1183,92 @@ class _RemoteLibraryCoverDiskCache {
       // are never on screen at the same time as a cover grid, so they do not
       // contend. lightweight=false keeps covers off the control plane;
       // isCover=true makes them draw from the browse concurrency budget.
-      await for (final chunk
-          in client.loadImage(url, lightweight: false, isCover: true)) {
+      final derivative = await client.loadCoverDerivative(url,
+          minimumWidth: frameWidth, minimumHeight: frameHeight, fit: fit);
+      final effectiveUrl = client._currentCoverUrl(url);
+      final variant = '$frameWidth:$frameHeight:${fit.name}';
+      if (effectiveUrl != url) {
+        target = cachedFileFor(effectiveUrl, variant: variant);
+      }
+      response = derivative == null
+          ? await client.loadImageWithProgress(effectiveUrl, isCover: true)
+          : StreamImageLoadResult(
+              stream: Stream.value(derivative),
+              expectedTotalBytes: derivative.length);
+      final maximum = response.expectedTotalBytes ?? 64 * 1024 * 1024;
+      if (maximum <= 0 || maximum > 512 * 1024 * 1024) {
+        throw StateError('Cover input exceeds staging limit');
+      }
+      disk = await ImageDiskQuota.shared
+          .admitPublication(target.path, maximumBytes: maximum);
+      await target.parent.create(recursive: true);
+      temp =
+          File('${target.path}.${DateTime.now().microsecondsSinceEpoch}.part');
+      releaseTemp = DerivedImageStore.protectTemporaryPath(temp.path);
+      sink = temp.openWrite();
+      var bytes = 0;
+      await for (final chunk in response.stream) {
+        if (generation != _publicationGeneration ||
+            App.dataPath != dataRoot ||
+            App.cachePath != cacheRoot) {
+          throw StateError('Cover publication invalidated');
+        }
+        bytes += chunk.length;
+        if (bytes > maximum) throw StateError('Cover exceeds disk reservation');
         sink.add(chunk);
+        await sink.flush();
       }
       await sink.flush();
       await sink.close();
       sink = null;
+      if (bytes == 0 ||
+          (response.expectedTotalBytes != null && bytes != maximum)) {
+        throw StateError('Cover response length changed');
+      }
       if (await target.exists()) {
         await target.delete();
       }
+      if (generation != _publicationGeneration ||
+          App.dataPath != dataRoot ||
+          App.cachePath != cacheRoot) {
+        throw StateError('Cover publication invalidated');
+      }
       await temp.rename(target.path);
-      await _trimToLimit(protectedPath: target.path);
-      _failureUntil.remove(url);
+      final release = protectFile(target.path);
+      try {
+        await disk.commit([target.path]);
+      } catch (_) {
+        release();
+        rethrow;
+      }
+      unawaited(Future<void>(() async {
+        try {
+          await _trimToLimit(protectedPath: target.path);
+        } catch (_) {
+          /* A completed cover is independent of quota maintenance. */
+        } finally {
+          release();
+        }
+      }));
+      _failureUntil.remove('$url|$variant');
       return target;
     } catch (error) {
-      _recordFailure(url, error);
+      await response?.cancel?.call();
+      _recordFailure('$url|$frameWidth:$frameHeight:${fit.name}', error);
       try {
         await sink?.close();
       } catch (_) {}
       try {
-        if (await temp.exists()) {
+        if (temp != null && await temp.exists()) {
           await temp.delete();
         }
       } catch (_) {}
       // Collapse to a quiet, expected failure so the widget errorBuilder can
       // show a placeholder without the console being spammed by 404s.
       throw const RemoteCoverUnavailableException();
+    } finally {
+      releaseTemp?.call();
+      await disk?.abort();
     }
   }
 
@@ -1225,8 +1340,12 @@ class _RemoteLibraryCoverDiskCache {
       cacheRoot,
       '$dataRoot${Platform.pathSeparator}cache',
       '$dataRoot${Platform.pathSeparator}local_library_cache'
-          '${Platform.pathSeparator}covers${Platform.pathSeparator}thumbs',
+          '${Platform.pathSeparator}covers',
     ]);
+    final registeredCovers =
+        await LocalCoverCache.registeredReproduciblePaths();
+    final localCoverRoot = p.join(dataRoot, 'local_library_cache', 'covers');
+    final thumbRoot = p.join(localCoverRoot, 'thumbs');
     final normalizedProtected = _normalizePath(protectedPath);
     await trimCacheInventory(
       inventory,
@@ -1237,7 +1356,14 @@ class _RemoteLibraryCoverDiskCache {
           appdata.appSettings.cacheLimit * 1024 * 1024 == limitBytes,
       isProtected: (path) {
         final key = _normalizePath(path);
-        return key == normalizedProtected || _protectedFiles.containsKey(key);
+        if (p.isWithin(localCoverRoot, path) &&
+            !p.isWithin(thumbRoot, path) &&
+            !registeredCovers.contains(p.normalize(p.absolute(path)))) {
+          return true;
+        }
+        return key == normalizedProtected ||
+            _protectedFiles.containsKey(key) ||
+            DerivedImageStore.isPathLeased(path);
       },
     );
   }
@@ -1284,23 +1410,40 @@ class _RemoteLibraryCoverDiskCache {
 }
 
 class _RemoteLibraryCoverImageProvider
-    extends BaseImageProvider<_RemoteLibraryCoverImageProvider> {
+    extends BaseImageProvider<_RemoteLibraryCoverImageProvider>
+    implements CoverTargetProvider {
   const _RemoteLibraryCoverImageProvider({
     required this.client,
     required this.url,
+    this.frameWidth,
+    this.frameHeight,
+    this.fit = BoxFit.contain,
   });
 
   final RemoteLibraryClient client;
   final String url;
+  final int? frameWidth, frameHeight;
+  final BoxFit fit;
 
   @override
-  String get key => 'remote_cover::$url';
+  ImageProvider<Object> forCoverTarget(
+          {required int frameWidth,
+          required int frameHeight,
+          required BoxFit fit}) =>
+      _RemoteLibraryCoverImageProvider(
+          client: client,
+          url: client._currentCoverUrl(url),
+          frameWidth: frameWidth,
+          frameHeight: frameHeight,
+          fit: fit);
 
-  // 封面在列表里显示宽度约 150~200px，高 DPI 下放大到 480px 已足够清晰。
-  // 远程封面原图可能数千像素，全尺寸解码是滚动卡顿（UI isolate 解码回调）
-  // 与内存的主因，按此宽度缩放解码。
   @override
-  int? get targetDecodeWidth => 480;
+  String get key => 'remote_cover::$url::$frameWidth:$frameHeight:${fit.name}';
+
+  // The card supplies both physical dimensions and its real BoxFit. A second
+  // fixed-width decoder would override that decision and undersample covers.
+  @override
+  int? get targetDecodeWidth => null;
 
   // 远程封面已有磁盘缓存（_RemoteLibraryCoverDiskCache），不需要再把原始
   // 压缩字节缓存进堆——避免滚动时大量封面字节驻留堆触发老年代 GC（实测
@@ -1317,35 +1460,43 @@ class _RemoteLibraryCoverImageProvider
 
   @override
   Future<Uint8List> load(StreamController<ImageChunkEvent> chunkEvents) async {
-    File file = _RemoteLibraryCoverDiskCache.cachedFileFor(url);
-    if (!await _RemoteLibraryCoverDiskCache._isUsable(file)) {
-      file = await _RemoteLibraryCoverDiskCache.ensureDownloaded(client, url);
+    final file = await _RemoteLibraryCoverDiskCache.ensureDownloaded(
+        client, url,
+        frameWidth: frameWidth, frameHeight: frameHeight, fit: fit);
+    final release = _RemoteLibraryCoverDiskCache.protectFile(file.path);
+    try {
+      final totalBytes = await file.length();
+      final bytesBuilder = BytesBuilder(copy: false);
+      var cumulativeBytesLoaded = 0;
+      await for (final chunk in file.openRead()) {
+        bytesBuilder.add(chunk);
+        cumulativeBytesLoaded += chunk.length;
+        chunkEvents.add(
+          ImageChunkEvent(
+            cumulativeBytesLoaded: cumulativeBytesLoaded,
+            expectedTotalBytes: totalBytes > 0 ? totalBytes : null,
+          ),
+        );
+      }
+      return bytesBuilder.takeBytes();
+    } finally {
+      release();
     }
-
-    final totalBytes = await file.length();
-    final bytesBuilder = BytesBuilder(copy: false);
-    var cumulativeBytesLoaded = 0;
-    await for (final chunk in file.openRead()) {
-      bytesBuilder.add(chunk);
-      cumulativeBytesLoaded += chunk.length;
-      chunkEvents.add(
-        ImageChunkEvent(
-          cumulativeBytesLoaded: cumulativeBytesLoaded,
-          expectedTotalBytes: totalBytes > 0 ? totalBytes : null,
-        ),
-      );
-    }
-    return bytesBuilder.takeBytes();
   }
 }
 
 class RemoteLibraryDataSource {
   const RemoteLibraryDataSource();
+  static void invalidateCachePublications() =>
+      _RemoteLibraryCoverDiskCache.invalidatePendingPublications();
 
   /// Keeps an in-use cache file out of automatic/manual quota scans until the
   /// caller releases it. Explicit user cache clearing is intentionally separate.
   static VoidCallback protectCacheFile(String path) =>
       _RemoteLibraryCoverDiskCache.protectFile(path);
+  static bool isCacheFileProtected(String path) =>
+      _RemoteLibraryCoverDiskCache._protectedFiles
+          .containsKey(_RemoteLibraryCoverDiskCache._normalizePath(path));
 
   /// 手动按 cacheLimit 清理全部缓存目录（LRU 删最旧的到限制内）。
   /// 供工具页"缓存管理"等非远程浏览场景主动触发——平时 trim 只在远程封面
@@ -1524,6 +1675,8 @@ class RemoteLibraryClient {
   );
 
   final Map<String, RemoteLibraryComicItem> _detailCache = {};
+  final Map<String, String> _coverVersionAliases = {};
+  String _currentCoverUrl(String url) => _coverVersionAliases[url] ?? url;
   final Map<String, Future<RemoteLibraryComicItem>> _pendingDetailRequests = {};
   Future<_RemoteLibrarySnapshot>? _pendingSnapshotRequest;
   _RemoteLibrarySnapshot? _snapshotCache;
@@ -1531,6 +1684,8 @@ class RemoteLibraryClient {
   int? _lastLocalDataVersion;
   int? _lastServiceConfigVersion;
   int? _lastServiceRuntimeVersion;
+  ImageServerCapabilities? _imageCapabilities;
+  Future<ImageServerCapabilities>? _pendingImageCapabilities;
 
   static void rebuildAllTransports() {
     for (final client in _instances.values) {
@@ -1582,7 +1737,352 @@ class RemoteLibraryClient {
     _snapshotCache = null;
     _pendingSnapshotRequest = null;
     _detailCache.clear();
+    _coverVersionAliases.clear();
     _pendingDetailRequests.clear();
+    _imageCapabilities = null;
+    _pendingImageCapabilities = null;
+  }
+
+  Future<ImageServerCapabilities> imageCapabilities() async {
+    final existing = _imageCapabilities;
+    if (existing != null) return existing;
+    final pending = _pendingImageCapabilities;
+    if (pending != null) return pending;
+    final generation = _cacheGeneration;
+    final future = () async {
+      try {
+        final status = await _sendRequest('GET', '/status');
+        final capabilities =
+            ImageServerCapabilities.fromJson(status['imageCapabilities']);
+        if (_cacheGeneration == generation) _imageCapabilities = capabilities;
+        return capabilities;
+      } catch (_) {
+        return const ImageServerCapabilities();
+      }
+    }();
+    _pendingImageCapabilities = future;
+    try {
+      return await future;
+    } finally {
+      if (identical(_pendingImageCapabilities, future)) {
+        _pendingImageCapabilities = null;
+      }
+    }
+  }
+
+  Future<ImagePageManifest?> fetchImageManifest(
+    String pageUrl, {
+    StreamImageAbortSignal? abortSignal,
+  }) async {
+    if (!(await imageCapabilities()).manifests) return null;
+    final uri = resolveUri(pageUrl);
+    final response = await requestImageDerivative(
+        uri.replace(path: '${uri.path}/manifest', query: '').toString(),
+        abortSignal: abortSignal,
+        maximumBodyBytes: 64 * 1024);
+    if (response.statusCode == 404 || response.statusCode == 422) return null;
+    if (response.statusCode != 200) {
+      throw RemoteLibraryRequestException(
+          '远程图片信息请求失败：${response.statusCode}', response.statusCode);
+    }
+    return ImagePageManifest.fromJson(Map<String, dynamic>.from(
+        jsonDecode(utf8.decode(response.body)) as Map));
+  }
+
+  Future<Uint8List?> loadCoverDerivative(
+    String url, {
+    StreamImageAbortSignal? abortSignal,
+    int? minimumWidth,
+    int? minimumHeight,
+    BoxFit fit = BoxFit.contain,
+  }) async {
+    var uri = resolveUri(_currentCoverUrl(url));
+    final segments = uri.pathSegments;
+    if (segments.length != 5 ||
+        segments[0] != 'api' ||
+        segments[1] != 'library' ||
+        segments[2] != 'items' ||
+        segments[4] != 'cover') {
+      return null;
+    }
+    final capabilities = await imageCapabilities();
+    if (!capabilities.supportsCovers) return null;
+    var sourceVersion = uri.queryParameters['v'];
+    if (sourceVersion == null || sourceVersion.isEmpty) return null;
+    final widths = capabilities.coverWidths.toSet().toList()..sort();
+    final targetWidth = minimumWidth ?? 768;
+    var widthIndex = widths.indexWhere((width) => width >= targetWidth);
+    if (widthIndex < 0) return null;
+    final format = capabilities.coverFormats.contains('jpeg')
+        ? 'jpeg'
+        : capabilities.coverFormats.first;
+    var versionRefreshed = false;
+    for (var attempt = 0; attempt < widths.length + 4; attempt++) {
+      if (abortSignal?.isAborted == true) {
+        throw StateError('Image load aborted');
+      }
+      final response = await requestImageDerivative(
+          imageVariantUrl(uri.toString(),
+              width: widths[widthIndex],
+              format: format,
+              sourceVersion: sourceVersion!),
+          isCover: true,
+          abortSignal: abortSignal);
+      if (response.kind == ImageDerivativeResponseKind.ready) {
+        if (!response.isImage ||
+            response.headers['x-image-source-version'] != sourceVersion ||
+            !_looksLikeEncodedImage(response.body)) {
+          throw const RemoteLibraryDataSourceException('远程封面派生响应无效');
+        }
+        if (minimumWidth != null && minimumHeight != null) {
+          final width =
+              int.tryParse(response.headers['x-image-width'] ?? '') ?? 0;
+          final height =
+              int.tryParse(response.headers['x-image-height'] ?? '') ?? 0;
+          if (width <= 0 || height <= 0) {
+            throw const RemoteLibraryDataSourceException('远程封面尺寸无效');
+          }
+          final enough = fit == BoxFit.cover
+              ? width >= minimumWidth && height >= minimumHeight
+              : width >= minimumWidth || height >= minimumHeight;
+          if (!enough) {
+            if (++widthIndex >= widths.length) return null;
+            continue;
+          }
+        }
+        return response.body;
+      }
+      if (response.kind == ImageDerivativeResponseKind.preparing) {
+        if (attempt == 3) return null;
+        final delay = int.tryParse(response.headers['retry-after'] ?? '') ?? 1;
+        await Future<void>.delayed(
+            Duration(milliseconds: delay.clamp(0, 2) * 1000));
+        continue;
+      }
+      if (response.kind == ImageDerivativeResponseKind.versionChanged) {
+        if (versionRefreshed) {
+          throw const RemoteLibraryRequestException('封面持续变化，请稍后重试', 409);
+        }
+        final detail = await fetchItemDetail(segments[3], forceRefresh: true);
+        final refreshed = resolveUri(detail.coverUrl);
+        final version = refreshed.queryParameters['v'];
+        if (version == null ||
+            version.isEmpty ||
+            version == sourceVersion ||
+            refreshed.path != uri.path ||
+            refreshed.origin != uri.origin) {
+          throw const RemoteLibraryRequestException('封面版本刷新失败', 409);
+        }
+        versionRefreshed = true;
+        _coverVersionAliases[url] = refreshed.toString();
+        // New bytes are persisted under the refreshed URL/version. Drop the
+        // old in-memory key so later consumers resolve the current provider.
+        PaintingBinding.instance.imageCache.evict(
+            _RemoteLibraryCoverImageProvider(
+                client: this,
+                url: url,
+                frameWidth: minimumWidth,
+                frameHeight: minimumHeight,
+                fit: fit));
+        uri = refreshed;
+        sourceVersion = version;
+        continue;
+      }
+      if (response.statusCode == 404 || response.statusCode == 422) return null;
+      throw RemoteLibraryRequestException(
+          '远程封面派生请求失败：${response.statusCode}', response.statusCode);
+    }
+    return null;
+  }
+
+  Future<ImageDerivativeResponse> loadImageDerivative(
+    String url, {
+    String? etag,
+    int maximumBodyBytes = 32 * 1024 * 1024,
+    Future<Uint8List?> Function()? localBody,
+    bool isCover = false,
+    StreamImageAbortSignal? abortSignal,
+  }) async {
+    var conditional = etag;
+    var unconditionalRetry = false;
+    for (var attempt = 0; attempt < 5; attempt++) {
+      final response = await requestImageDerivative(url,
+          etag: conditional,
+          maximumBodyBytes: maximumBodyBytes,
+          isCover: isCover,
+          abortSignal: abortSignal);
+      if (response.kind == ImageDerivativeResponseKind.notModified) {
+        final bytes = await localBody?.call();
+        if (bytes != null &&
+            bytes.length <= maximumBodyBytes &&
+            _looksLikeEncodedImage(bytes)) {
+          return ImageDerivativeResponse(
+              statusCode: 200,
+              headers: {
+                ...response.headers,
+                'content-length': '${bytes.length}'
+              },
+              body: bytes);
+        }
+        if (unconditionalRetry) {
+          throw const RemoteLibraryDataSourceException('远程条件响应缺少本地正文');
+        }
+        conditional = null;
+        unconditionalRetry = true;
+        continue;
+      }
+      if (response.kind != ImageDerivativeResponseKind.preparing ||
+          attempt == 4) {
+        return response;
+      }
+      final delay = (int.tryParse(response.headers['retry-after'] ?? '') ?? 1)
+          .clamp(0, 2);
+      await Future<void>.delayed(Duration(seconds: delay));
+      if (abortSignal?.isAborted == true) {
+        throw StateError('Image load aborted');
+      }
+    }
+    throw StateError('Image derivative retry exhausted');
+  }
+
+  static bool _looksLikeEncodedImage(Uint8List bytes) =>
+      bytes.length >= 12 &&
+      ((bytes[0] == 0xff && bytes[1] == 0xd8) ||
+          (bytes[0] == 137 &&
+              bytes[1] == 80 &&
+              bytes[2] == 78 &&
+              bytes[3] == 71) ||
+          (ascii.decode(bytes.sublist(0, 4), allowInvalid: true) == 'RIFF' &&
+              ascii.decode(bytes.sublist(8, 12), allowInvalid: true) ==
+                  'WEBP'));
+
+  /// Read status bodies separately from image bodies; always recycle the pool.
+  Future<ImageDerivativeResponse> requestImageDerivative(
+    String url, {
+    String? etag,
+    bool isCover = false,
+    StreamImageAbortSignal? abortSignal,
+    int maximumBodyBytes = 32 * 1024 * 1024,
+  }) async {
+    final limiter = isCover ? _browseImageLimiter : _readerImageLimiter;
+    var acquired = false;
+    var released = false;
+    void release() {
+      if (acquired && !released) {
+        released = true;
+        limiter.release();
+      }
+    }
+
+    HttpClientRequest? request;
+    var bodyFinished = false;
+    try {
+      final permit = limiter.acquire();
+      await _withAbort<void>(permit, abortSignal, () {
+        unawaited(permit.then((_) {
+          acquired = true;
+          release();
+        }));
+      });
+      acquired = true;
+      if (abortSignal?.isAborted == true) {
+        throw StateError('Image load aborted');
+      }
+      final opening = _openWithTimeout(
+          _httpClient.getUrl(resolveUri(url)), const Duration(seconds: 5));
+      request = await _withAbort<HttpClientRequest>(opening, abortSignal, () {
+        unawaited(opening.then((lateRequest) => lateRequest.abort(),
+            onError: (_) {}));
+      });
+      if (abortSignal != null) {
+        unawaited(abortSignal.aborted.then((_) {
+          if (!bodyFinished) request?.abort();
+        }));
+      }
+      if (etag != null) {
+        request.headers.set(HttpHeaders.ifNoneMatchHeader, etag);
+      }
+      final response = await _withAbort<HttpClientResponse>(
+          request.close().timeout(const Duration(seconds: 10)),
+          abortSignal,
+          () => request?.abort());
+      final headers = <String, String>{};
+      response.headers.forEach(
+          (name, values) => headers[name.toLowerCase()] = values.join(', '));
+      final limit = response.statusCode == 200 ? maximumBodyBytes : 64 * 1024;
+      if (response.contentLength > limit) {
+        request.abort();
+        throw const RemoteLibraryDataSourceException('远程派生响应超过预算');
+      }
+      final bytes = BytesBuilder(copy: false);
+      await for (final chunk in _abortableDerivativeBody(
+          _guardedImageBody(request, response, release, () {}), abortSignal)) {
+        if (abortSignal?.isAborted == true) {
+          request.abort();
+          throw StateError('Image load aborted');
+        }
+        if (bytes.length + chunk.length > limit) {
+          request.abort();
+          throw const RemoteLibraryDataSourceException('远程派生响应超过预算');
+        }
+        bytes.add(chunk);
+      }
+      return ImageDerivativeResponse(
+          statusCode: response.statusCode,
+          headers: headers,
+          body: bytes.takeBytes());
+    } catch (_) {
+      request?.abort();
+      rethrow;
+    } finally {
+      bodyFinished = true;
+      release();
+    }
+  }
+
+  static Stream<List<int>> _abortableDerivativeBody(
+      Stream<List<int>> body, StreamImageAbortSignal? signal) async* {
+    if (signal == null) {
+      yield* body;
+      return;
+    }
+    StreamSubscription<List<int>>? subscription;
+    var finished = false;
+    final controller = StreamController<List<int>>(
+        onPause: () => subscription?.pause(),
+        onResume: () => subscription?.resume());
+    Future<void> abort() async {
+      if (finished) return;
+      finished = true;
+      // Cancelling the response stream releases its connection even after
+      // request.abort has become ineffective because headers already arrived.
+      await subscription?.cancel();
+      controller.addError(StateError('Image load aborted'));
+      await controller.close();
+    }
+
+    subscription =
+        body.listen(controller.add, onError: (Object error, StackTrace stack) {
+      if (finished) return;
+      finished = true;
+      controller.addError(error, stack);
+      unawaited(controller.close());
+    }, onDone: () {
+      if (finished) return;
+      finished = true;
+      unawaited(controller.close());
+    });
+    if (signal.isAborted) {
+      unawaited(abort());
+    } else {
+      unawaited(signal.aborted.then((_) => abort()));
+    }
+    try {
+      yield* controller.stream;
+    } finally {
+      finished = true;
+      await subscription.cancel();
+    }
   }
 
   factory RemoteLibraryClient.fromCurrentSettings() {
@@ -1605,7 +2105,7 @@ class RemoteLibraryClient {
   }
 
   ImageProvider<Object>? coverImageProviderForUrl(String url) {
-    final resolved = resolveUrlString(url);
+    final resolved = _currentCoverUrl(resolveUrlString(url));
     if (resolved.isEmpty) {
       return null;
     }
@@ -2256,7 +2756,12 @@ class RemoteLibraryClient {
     return null;
   }
 
-  Future<RemoteLibraryComicItem> fetchItemDetail(String itemId) async {
+  Future<RemoteLibraryComicItem> fetchItemDetail(String itemId,
+      {bool forceRefresh = false}) async {
+    if (forceRefresh) {
+      _detailCache.remove(itemId);
+      _pendingDetailRequests.remove(itemId);
+    }
     _invalidateCachesForAppStateIfNeeded();
     final cached = _detailCache[itemId];
     if (cached != null && cached.hasUsableDetailPayload) {
@@ -2480,14 +2985,25 @@ class RemoteLibraryClient {
       // Permit ownership transfers to the body stream — released in its finally
       // (on normal completion, error, or consumer cancellation).
       return StreamImageLoadResult(
-        stream: _guardedImageBody(
-          request,
-          response,
-          releasePermit,
-          () => _rebuildTransportsIfCurrent(transportGeneration),
-        ),
+        stream: _abortableDerivativeBody(
+            _guardedImageBody(
+              request,
+              response,
+              releasePermit,
+              () => _rebuildTransportsIfCurrent(transportGeneration),
+            ),
+            abortSignal),
         expectedTotalBytes:
             response.contentLength >= 0 ? response.contentLength : null,
+        cancel: () async {
+          try {
+            request?.abort();
+          } catch (_) {}
+          try {
+            await response.listen((_) {}, onError: (_) {}).cancel();
+          } catch (_) {}
+          releasePermit();
+        },
       );
     } on TimeoutException {
       // Critical: a front-end .timeout() does NOT cancel the underlying

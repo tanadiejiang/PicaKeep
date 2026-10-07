@@ -22,12 +22,14 @@ publish_to: 'none'
 #
 # 本轮曾因误用 split 装出 4002，为覆盖它把基准临时抬到 4003；现已卸载重装，
 # 基准回到 1 重新开始。
-version: 1.9.92+9
+version: 1.9.93+10
 
 environment:
   sdk: '>=3.3.0'
 
 dependencies:
+  picakeep_image_engine:
+    path: packages/picakeep_image_engine
   flutter:
     sdk: flutter
   shared_preferences: ^2.0.16

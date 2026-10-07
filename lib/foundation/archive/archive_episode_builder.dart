@@ -10,6 +10,19 @@ class ArchiveEpisodesBuildResult {
   final List<String> realNames;
 }
 
+/// Packaged local downloads contain a separate cover. All page-list consumers
+/// use the same exclusion, with the existing cover-only archive fallback.
+List<String> archiveReadingPageUris(Iterable<String> archiveUris) {
+  final original = archiveUris.toList();
+  final pages = original.where((uri) {
+    final entry = parseArchiveUri(uri)?.entryPath ?? uri;
+    final name = entry.split('/').last.toLowerCase();
+    return !const ['cover.jpg', 'cover.jpeg', 'cover.png', 'cover.webp']
+        .contains(name);
+  }).toList();
+  return pages.isNotEmpty ? pages : original;
+}
+
 ArchiveEpisodesBuildResult buildArchiveEpisodes(ArchiveIndex index) {
   final imageEntries = index.imageEntries;
   if (imageEntries.isEmpty) {

@@ -111,6 +111,13 @@ void main() {
   });
 
   group('Pixiv 分页解析', () {
+    test('original缺失必须保留事实，不把regular标作原文件', () {
+      final page = parsePixivPages([
+        {'urls': {'regular': 'regular-only'}, 'width': 1000, 'height': 2000},
+      ]).single;
+      expect(page.original, isEmpty);
+      expect(page.regular, 'regular-only');
+    });
     test('pages 数组按顺序解析且字段完整', () {
       final pages = parsePixivPages(<dynamic>[
         <String, dynamic>{

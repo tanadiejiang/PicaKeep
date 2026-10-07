@@ -9,7 +9,7 @@ import '../archive_backend.dart';
 import '../archive_errors.dart';
 import '../archive_models.dart';
 
-class DartZipBackend implements ArchiveBackend {
+class DartZipBackend implements ArchiveBackend, StreamingArchiveBackend {
   @override
   String get id => 'dart_zip';
 
@@ -20,7 +20,7 @@ class DartZipBackend implements ArchiveBackend {
         supportsZipCrypto: true,
         supportsAesZip: true,
         canListEntriesWithoutPassword: true,
-        canReadEntryStreaming: false,
+        canReadEntryStreaming: true,
       );
 
   @override
@@ -155,6 +155,221 @@ class DartZipBackend implements ArchiveBackend {
     }
   }
 
+  @override
+  Future<File> materializeEntry(
+    String archivePath,
+    String entryPath,
+    File destination, {
+    String? password,
+    int maxBytes = 2 * 1024 * 1024 * 1024,
+    bool Function()? isCancelled,
+  }) async {
+    if (!isValidArchiveEntryPath(entryPath)) {
+      throw const ArchiveFailure(
+          code: ArchiveErrorCode.entryNotFound,
+          debugMessage: 'Invalid archive member');
+    }
+    final entries = await _parseCentralDirectoryWithOffsets(archivePath);
+    final normalized = entryPath.replaceAll('\\', '/');
+    final match = entries
+        .where((entry) => entry.path == normalized && !entry.isDirectory)
+        .firstOrNull;
+    if (match == null) {
+      throw const ArchiveFailure(
+          code: ArchiveErrorCode.entryNotFound,
+          debugMessage: 'Archive member not found');
+    }
+    if (match.uncompressedSize > maxBytes || maxBytes < 0) {
+      throw StateError('Archive entry exceeds reserved disk bytes');
+    }
+    if (match.isEncrypted && (password == null || password.isEmpty)) {
+      throw const ArchiveFailure(
+          code: ArchiveErrorCode.passwordRequired,
+          debugMessage: 'Archive password required');
+    }
+    if (match.compressionMethod != 0 && match.compressionMethod != 8) {
+      throw ArchiveFailure(
+          code: ArchiveErrorCode.unsupportedFormat,
+          debugMessage:
+              'Unsupported compression method ${match.compressionMethod}');
+    }
+
+    final input = await File(archivePath).open();
+    RandomAccessFile? output;
+    RawZLibFilter? inflater;
+    try {
+      await input.setPosition(match.localHeaderOffset);
+      final header = await input.read(30);
+      if (header.length != 30 || _u32(header, 0) != 0x04034b50) {
+        throw const FormatException('Invalid ZIP local header');
+      }
+      final offset =
+          match.localHeaderOffset + 30 + _u16(header, 26) + _u16(header, 28);
+      await input.setPosition(offset);
+      var remaining = match.compressedSize;
+      List<int>? zipKeys;
+      pc.HMac? hmac;
+      _StreamingZipAesCtr? aes;
+      Uint8List? expectedMac;
+      if (match.isAesEncrypted) {
+        final saltLength = match.aesStrength == 1
+            ? 8
+            : match.aesStrength == 2
+                ? 12
+                : 16;
+        final keyLength = match.aesStrength == 1
+            ? 16
+            : match.aesStrength == 2
+                ? 24
+                : 32;
+        if (remaining < saltLength + 12) {
+          throw const FormatException('Truncated AES payload');
+        }
+        final prefix = await input.read(saltLength + 2);
+        final derived = _pbkdf2HmacSha1(
+            Uint8List.fromList(password!.codeUnits),
+            Uint8List.sublistView(prefix, 0, saltLength),
+            1000,
+            keyLength * 2 + 2);
+        if (!_bytesEqual(Uint8List.sublistView(derived, keyLength * 2),
+            Uint8List.sublistView(prefix, saltLength))) {
+          throw const ArchiveFailure(
+              code: ArchiveErrorCode.wrongPassword,
+              debugMessage: 'AES password verification failed');
+        }
+        aes = _StreamingZipAesCtr(Uint8List.sublistView(derived, 0, keyLength));
+        hmac = pc.HMac(pc.SHA1Digest(), 64)
+          ..init(pc.KeyParameter(
+              Uint8List.sublistView(derived, keyLength, keyLength * 2)));
+        final payloadOffset = offset + saltLength + 2;
+        remaining -= saltLength + 12;
+        await input.setPosition(payloadOffset + remaining);
+        expectedMac = await input.read(10);
+        await input.setPosition(payloadOffset);
+      } else if (match.isEncrypted) {
+        if (remaining < 12) {
+          throw const FormatException('Truncated ZipCrypto payload');
+        }
+        zipKeys = _zipCryptoInitKeys(password!);
+        final cryptoHeader = await input.read(12);
+        for (var index = 0; index < cryptoHeader.length; index++) {
+          final decoded = cryptoHeader[index] ^ _zipCryptoDecryptByte(zipKeys);
+          _zipCryptoUpdateKeys(zipKeys, decoded);
+          cryptoHeader[index] = decoded;
+        }
+        final check = (_u16(header, 6) & 8) != 0
+            ? (_u16(header, 10) >> 8) & 255
+            : (match.crc32 >> 24) & 255;
+        if (cryptoHeader.length != 12 || cryptoHeader[11] != check) {
+          throw const ArchiveFailure(
+              code: ArchiveErrorCode.wrongPassword,
+              debugMessage: 'ZipCrypto password verification failed');
+        }
+        remaining -= 12;
+      }
+
+      await destination.parent.create(recursive: true);
+      output = await destination.open(mode: FileMode.write);
+      if (match.compressionMethod == 8) {
+        inflater = RawZLibFilter.inflateFilter(windowBits: -15);
+      }
+      var total = 0;
+      var crc = 0xffffffff;
+      Future<void> writeChunk(List<int> bytes) async {
+        if (isCancelled?.call() == true) {
+          throw StateError('Archive extraction cancelled');
+        }
+        total += bytes.length;
+        if (total > maxBytes || total > match.uncompressedSize) {
+          throw StateError(
+              'Archive inflated output exceeds declared/reserved bytes');
+        }
+        for (final byte in bytes) {
+          crc = (crc >> 8) ^ _crcTable[(crc ^ byte) & 255];
+        }
+        await output!.writeFrom(bytes);
+      }
+
+      while (remaining > 0) {
+        if (isCancelled?.call() == true) {
+          throw StateError('Archive extraction cancelled');
+        }
+        final chunk =
+            await input.read(remaining > 64 * 1024 ? 64 * 1024 : remaining);
+        if (chunk.isEmpty) throw const FormatException('Truncated ZIP member');
+        remaining -= chunk.length;
+        if (hmac != null) hmac.update(chunk, 0, chunk.length);
+        if (aes != null) aes.xor(chunk);
+        if (zipKeys != null) {
+          for (var index = 0; index < chunk.length; index++) {
+            final byte = chunk[index] ^ _zipCryptoDecryptByte(zipKeys);
+            _zipCryptoUpdateKeys(zipKeys, byte);
+            chunk[index] = byte;
+          }
+        }
+        if (inflater == null) {
+          await writeChunk(chunk);
+        } else {
+          inflater.process(chunk, 0, chunk.length);
+          while (true) {
+            final decoded = inflater.processed(flush: false);
+            if (decoded == null) break;
+            await writeChunk(decoded);
+          }
+        }
+      }
+      if (inflater != null) {
+        while (true) {
+          final decoded = inflater.processed(flush: true, end: true);
+          if (decoded == null) break;
+          await writeChunk(decoded);
+        }
+      }
+      if (hmac != null) {
+        final mac = Uint8List(hmac.macSize);
+        hmac.doFinal(mac, 0);
+        if (!_bytesEqual(Uint8List.sublistView(mac, 0, 10), expectedMac!)) {
+          throw const ArchiveFailure(
+              code: ArchiveErrorCode.wrongPassword,
+              debugMessage: 'AES HMAC mismatch');
+        }
+      }
+      if (total != match.uncompressedSize) {
+        throw const FormatException('ZIP member size mismatch');
+      }
+      if ((!match.isAesEncrypted || match.aesVersion != 2) &&
+          ((crc ^ 0xffffffff) & 0xffffffff) != match.crc32) {
+        throw const FormatException('ZIP CRC32 mismatch');
+      }
+      await output.flush();
+      await output.close();
+      output = null;
+      return destination;
+    } catch (error) {
+      await output?.close();
+      output = null;
+      if (await destination.exists()) await destination.delete();
+      if (error is ArchiveFailure || error is StateError) rethrow;
+      throw ArchiveFailure(
+          code: error is FileSystemException
+              ? ArchiveErrorCode.ioError
+              : ArchiveErrorCode.corruptedArchive,
+          debugMessage: 'Bounded ZIP extraction failed: $error',
+          cause: error);
+    } finally {
+      await input.close();
+      await output?.close();
+    }
+  }
+
+  static final List<int> _crcTable = List.generate(256, (value) {
+    var crc = value;
+    for (var bit = 0; bit < 8; bit++) {
+      crc = (crc & 1) == 0 ? crc >> 1 : (crc >> 1) ^ 0xedb88320;
+    }
+    return crc;
+  });
+
   Future<Uint8List> _readZipCryptoEntry(
     String archivePath,
     _CdEntry match,
@@ -204,12 +419,14 @@ class DartZipBackend implements ArchiveBackend {
       header[i] = c;
     }
 
-    final checkByte =
-        (flags & 0x08) != 0 ? (lastModTime >> 8) & 0xFF : (localCrc32 >> 24) & 0xFF;
+    final checkByte = (flags & 0x08) != 0
+        ? (lastModTime >> 8) & 0xFF
+        : (localCrc32 >> 24) & 0xFF;
     if (header[11] != checkByte) {
       throw ArchiveFailure(
         code: ArchiveErrorCode.wrongPassword,
-        debugMessage: 'ZipCrypto password verification failed for ${match.path}',
+        debugMessage:
+            'ZipCrypto password verification failed for ${match.path}',
       );
     }
 
@@ -307,8 +524,7 @@ class DartZipBackend implements ArchiveBackend {
       );
     }
     final salt = Uint8List.sublistView(rawEncrypted, 0, saltLen);
-    final pwdVerify =
-        Uint8List.sublistView(rawEncrypted, saltLen, saltLen + 2);
+    final pwdVerify = Uint8List.sublistView(rawEncrypted, saltLen, saltLen + 2);
     final dataEnd = rawEncrypted.length - 10;
     final cipherData = Uint8List.fromList(
       Uint8List.sublistView(rawEncrypted, saltLen + 2, dataEnd),
@@ -539,6 +755,13 @@ class DartZipBackend implements ArchiveBackend {
       }
 
       await file.setPosition(cdOffset);
+      if (cdSize < 0 ||
+          cdSize > 64 * 1024 * 1024 ||
+          cdOffset < 0 ||
+          cdOffset + cdSize > fileSize) {
+        throw const FormatException(
+            'ZIP central directory exceeds bounded index limits');
+      }
       final cd = await file.read(cdSize);
 
       final entries = <_CdEntry>[];
@@ -555,6 +778,7 @@ class DartZipBackend implements ArchiveBackend {
         final isEncrypted = (flags & 0x1) != 0;
         var isAesEncrypted = false;
         var aesStrength = 0;
+        var aesVersion = 0;
         var compressionMethod = _u16(cd, pos + 10);
         var compressedSize = _u32(cd, pos + 20);
         var uncompressedSize = _u32(cd, pos + 24);
@@ -591,6 +815,7 @@ class DartZipBackend implements ArchiveBackend {
             }
           } else if (headerId == 0x9901 && dataSize >= 7) {
             final dp = dataStart;
+            aesVersion = _u16(cd, dp);
             aesStrength = cd[dp + 4];
             compressionMethod = _u16(cd, dp + 5);
             isAesEncrypted = true;
@@ -611,6 +836,8 @@ class DartZipBackend implements ArchiveBackend {
           isAesEncrypted: isAesEncrypted,
           compressionMethod: compressionMethod,
           aesStrength: aesStrength,
+          aesVersion: aesVersion,
+          crc32: _u32(cd, pos + 16),
         ));
         pos += 46 + fnLen + extraLen + commentLen;
       }
@@ -844,6 +1071,8 @@ class _CdEntry {
     this.isAesEncrypted = false,
     this.compressionMethod = 0,
     this.aesStrength = 0,
+    this.aesVersion = 0,
+    this.crc32 = 0,
   });
 
   final String path;
@@ -856,4 +1085,30 @@ class _CdEntry {
   final bool isAesEncrypted;
   final int compressionMethod;
   final int aesStrength;
+  final int aesVersion;
+  final int crc32;
+}
+
+class _StreamingZipAesCtr {
+  _StreamingZipAesCtr(Uint8List key)
+      : cipher = pc.AESEngine()..init(true, pc.KeyParameter(key));
+  final pc.AESEngine cipher;
+  final counter = Uint8List(16);
+  final block = Uint8List(16);
+  int nonce = 1;
+  int position = 16;
+  void xor(Uint8List data) {
+    for (var index = 0; index < data.length; index++) {
+      if (position == 16) {
+        counter[0] = nonce & 255;
+        counter[1] = (nonce >> 8) & 255;
+        counter[2] = (nonce >> 16) & 255;
+        counter[3] = (nonce >> 24) & 255;
+        cipher.processBlock(counter, 0, block, 0);
+        nonce++;
+        position = 0;
+      }
+      data[index] ^= block[position++];
+    }
+  }
 }

@@ -1,0 +1,182 @@
+cmake_minimum_required(VERSION 3.22)
+project(picakeep_image_core LANGUAGES C CXX)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+option(PKI_NATIVE_OPTIMIZE "Optimize codecs in debug/profile application builds" ON)
+if(PKI_NATIVE_OPTIMIZE)
+  if(MSVC)
+    string(REGEX REPLACE "/RTC[^ ]*|/Od|/Ob0" "" CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG}")
+    string(REGEX REPLACE "/RTC[^ ]*|/Od|/Ob0" "" CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG}")
+    add_compile_options(/O2)
+  else()
+    add_compile_options(-O2)
+  endif()
+endif()
+include(FetchContent)
+if(POLICY CMP0135)
+  cmake_policy(SET CMP0135 NEW)
+endif()
+if(POLICY CMP0169)
+  cmake_policy(SET CMP0169 OLD)
+endif()
+set(FETCHCONTENT_QUIET ON)
+set(SKIP_INSTALL_ALL ON CACHE BOOL "Dependencies are bundled, never installed system-wide" FORCE)
+if(WIN32 AND NOT ANDROID AND CMAKE_HOST_SYSTEM_PROCESSOR MATCHES "AMD64|amd64|x86_64")
+  FetchContent_Declare(pki_nasm
+    URL "${CMAKE_CURRENT_SOURCE_DIR}/vendor/nasm-2.16.03-win64.zip"
+    URL_HASH SHA256=3ee4782247bcb874378d02f7eab4e294a84d3d15f3f6ee2de2f47a46aa7226e6)
+  FetchContent_GetProperties(pki_nasm)
+  if(NOT pki_nasm_POPULATED)
+    FetchContent_Populate(pki_nasm)
+  endif()
+  set(CMAKE_ASM_NASM_COMPILER "${pki_nasm_SOURCE_DIR}/nasm.exe" CACHE FILEPATH "Pinned NASM for JPEG SIMD" FORCE)
+  set(WITH_SIMD ON CACHE BOOL "" FORCE)
+endif()
+set(ENABLE_SHARED OFF CACHE BOOL "" FORCE)
+set(ENABLE_STATIC ON CACHE BOOL "" FORCE)
+set(WITH_TURBOJPEG OFF CACHE BOOL "" FORCE)
+set(WITH_TOOLS OFF CACHE BOOL "" FORCE)
+set(WITH_TESTS OFF CACHE BOOL "" FORCE)
+set(WITH_CRT_DLL ON CACHE BOOL "" FORCE)
+set(PNG_SHARED OFF CACHE BOOL "" FORCE)
+set(PNG_TESTS OFF CACHE BOOL "" FORCE)
+set(PNG_TOOLS OFF CACHE BOOL "" FORCE)
+set(ZLIB_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(WEBP_BUILD_ANIM_UTILS OFF CACHE BOOL "" FORCE)
+set(WEBP_BUILD_CWEBP OFF CACHE BOOL "" FORCE)
+set(WEBP_BUILD_DWEBP OFF CACHE BOOL "" FORCE)
+set(WEBP_BUILD_GIF2WEBP OFF CACHE BOOL "" FORCE)
+set(WEBP_BUILD_IMG2WEBP OFF CACHE BOOL "" FORCE)
+set(WEBP_BUILD_VWEBP OFF CACHE BOOL "" FORCE)
+set(WEBP_BUILD_WEBPINFO OFF CACHE BOOL "" FORCE)
+set(WEBP_BUILD_WEBPMUX OFF CACHE BOOL "" FORCE)
+set(WEBP_BUILD_EXTRAS OFF CACHE BOOL "" FORCE)
+set(WEBP_BUILD_LIBWEBPMUX ON CACHE BOOL "" FORCE)
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+if(NOT CMAKE_BUILD_TYPE)
+  set(CMAKE_BUILD_TYPE Debug CACHE STRING "" FORCE)
+endif()
+
+function(pki_vendor name archive hash)
+  FetchContent_Declare(${name}
+    URL "${CMAKE_CURRENT_SOURCE_DIR}/vendor/${archive}"
+    URL_HASH "SHA256=${hash}")
+  FetchContent_GetProperties(${name})
+  if(NOT ${name}_POPULATED)
+    FetchContent_Populate(${name})
+  endif()
+  add_subdirectory("${${name}_SOURCE_DIR}" "${${name}_BINARY_DIR}" EXCLUDE_FROM_ALL)
+  set(${name}_SOURCE_DIR "${${name}_SOURCE_DIR}" PARENT_SCOPE)
+  set(${name}_BINARY_DIR "${${name}_BINARY_DIR}" PARENT_SCOPE)
+endfunction()
+pki_vendor(zlib zlib-1.3.1.tar.gz 17e88863f3600672ab49182f217281b6fc4d3c762bde361935e436a95214d05c)
+set(ZLIB_LIBRARY zlibstatic CACHE STRING "" FORCE)
+set(ZLIB_INCLUDE_DIR "${zlib_SOURCE_DIR};${zlib_BINARY_DIR}" CACHE STRING "" FORCE)
+pki_vendor(png libpng-1.6.59.tar.gz 2540302a1844ad2b2b501977abecfa850f265f97b78f065a712ab4074a89f5b5)
+get_target_property(PNG_LINKS png_static LINK_LIBRARIES)
+list(REMOVE_ITEM PNG_LINKS ZLIB::ZLIB)
+set_property(TARGET png_static PROPERTY LINK_LIBRARIES "${PNG_LINKS};$<BUILD_INTERFACE:zlibstatic>")
+get_target_property(PNG_INTERFACE png_static INTERFACE_LINK_LIBRARIES)
+list(REMOVE_ITEM PNG_INTERFACE ZLIB::ZLIB)
+set_property(TARGET png_static PROPERTY INTERFACE_LINK_LIBRARIES "${PNG_INTERFACE};$<BUILD_INTERFACE:zlibstatic>")
+FetchContent_Declare(jpeg
+  URL "${CMAKE_CURRENT_SOURCE_DIR}/vendor/libjpeg-turbo-3.1.3.tar.gz"
+  URL_HASH SHA256=3a13a5ba767dc8264bc40b185e41368a80d5d5f945944d1dbaa4b2fb0099f4e5)
+FetchContent_GetProperties(jpeg)
+if(NOT jpeg_POPULATED)
+  FetchContent_Populate(jpeg)
+endif()
+# Upstream requires standalone CMake roots. Its codec targets also work as a
+# subproject after binding root references to the jpeg project (tools disabled).
+# This reproducible integration patch changes build plumbing only.
+file(READ "${jpeg_SOURCE_DIR}/CMakeLists.txt" JPEG_CMAKE)
+string(REPLACE "CMAKE_SOURCE_DIR" "PROJECT_SOURCE_DIR" JPEG_CMAKE "${JPEG_CMAKE}")
+string(REPLACE "CMAKE_BINARY_DIR" "PROJECT_BINARY_DIR" JPEG_CMAKE "${JPEG_CMAKE}")
+string(REPLACE "if(NOT PROJECT_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)"
+  "if(FALSE)" JPEG_CMAKE "${JPEG_CMAKE}")
+file(WRITE "${jpeg_SOURCE_DIR}/CMakeLists.txt" "${JPEG_CMAKE}")
+set(CMAKE_INSTALL_DOCDIR "share/doc/picakeep_image_engine" CACHE PATH "" FORCE)
+add_subdirectory("${jpeg_SOURCE_DIR}" "${jpeg_BINARY_DIR}" EXCLUDE_FROM_ALL)
+pki_vendor(webp libwebp-1.6.0.tar.gz 93a852c2b3efafee3723efd4636de855b46f9fe1efddd607e1f42f60fc8f2136)
+# Hook libwebp's existing safe-allocation boundary. Pinning the source archive
+# makes these substitutions reproducible and fail visibly on version changes.
+file(READ "${webp_SOURCE_DIR}/src/utils/utils.c" WEBP_UTILS)
+string(REPLACE "ptr = malloc((size_t)(nmemb * size));"
+  "ptr = pki_codec_alloc((size_t)(nmemb * size));" WEBP_UTILS "${WEBP_UTILS}")
+string(REPLACE "ptr = calloc((size_t)nmemb, size);"
+  "ptr = pki_codec_calloc((size_t)nmemb, size);" WEBP_UTILS "${WEBP_UTILS}")
+string(REPLACE "free(ptr);" "pki_codec_free(ptr);" WEBP_UTILS "${WEBP_UTILS}")
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/webp_budget_utils.c"
+  "#include \"picakeep_image_engine.h\"\n${WEBP_UTILS}")
+foreach(WEBP_UTIL_TARGET webputils webputilsdecode)
+  get_target_property(UTIL_SOURCES ${WEBP_UTIL_TARGET} SOURCES)
+  list(FILTER UTIL_SOURCES EXCLUDE REGEX "[/\\\\]utils\\.c$")
+  set_property(TARGET ${WEBP_UTIL_TARGET} PROPERTY SOURCES "${UTIL_SOURCES}")
+  target_sources(${WEBP_UTIL_TARGET} PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/webp_budget_utils.c")
+  target_include_directories(${WEBP_UTIL_TARGET} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/include")
+endforeach()
+FetchContent_Declare(lcms
+  URL "${CMAKE_CURRENT_SOURCE_DIR}/vendor/lcms-2.17.tar.gz"
+  URL_HASH SHA256=6e6f6411db50e85ae8ff7777f01b2da0614aac13b7b9fcbea66dc56a1bc71418)
+FetchContent_GetProperties(lcms)
+if(NOT lcms_POPULATED)
+  FetchContent_Populate(lcms)
+endif()
+file(GLOB LCMS_SOURCES "${lcms_SOURCE_DIR}/src/*.c")
+add_library(pki_lcms STATIC ${LCMS_SOURCES})
+target_include_directories(pki_lcms PUBLIC "${lcms_SOURCE_DIR}/include")
+
+# Replace the documented system memory adapter, leaving the codec untouched.
+# Progressive coefficient arrays can then spill into managed backing files.
+get_target_property(JPEG_SOURCES jpeg-static SOURCES)
+list(FILTER JPEG_SOURCES EXCLUDE REGEX "jmemnobs\\.c$")
+set_property(TARGET jpeg-static PROPERTY SOURCES "${JPEG_SOURCES}")
+target_sources(jpeg-static PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/jpeg_memory.c")
+target_include_directories(jpeg-static PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/include")
+target_include_directories(jpeg-static PRIVATE "${jpeg_SOURCE_DIR}/src" "${jpeg_BINARY_DIR}")
+if(NOT MSVC)
+  target_compile_options(jpeg-static PRIVATE -fexceptions)
+  target_compile_options(png_static PRIVATE -fexceptions)
+endif()
+
+add_library(picakeep_image_engine SHARED src/image_core.cpp src/disk_space.cpp)
+target_include_directories(picakeep_image_engine PUBLIC include PRIVATE
+  "${jpeg_SOURCE_DIR}/src" "${jpeg_BINARY_DIR}"
+  "${webp_SOURCE_DIR}" "${webp_SOURCE_DIR}/src" "${png_SOURCE_DIR}" "${png_BINARY_DIR}")
+target_link_libraries(picakeep_image_engine PRIVATE jpeg-static png_static
+  zlibstatic webp webpdemux pki_lcms)
+target_compile_definitions(picakeep_image_engine PRIVATE PKI_EXPORTS NOMINMAX _CRT_SECURE_NO_WARNINGS)
+if(MSVC)
+  # Budget failure must remain an exception the C ABI can report. MSVC's debug
+  # iterator proxy allocates inside noexcept vector construction, bypassing it.
+  # Only this C-ABI DLL disables those checks; real codec allocations stay bound.
+  target_compile_definitions(picakeep_image_engine PRIVATE
+    $<$<CONFIG:Debug>:_ITERATOR_DEBUG_LEVEL=0>)
+  target_compile_options(picakeep_image_engine PRIVATE /EHs /W4)
+else()
+  target_compile_options(picakeep_image_engine PRIVATE -fexceptions -Wall -Wextra)
+endif()
+option(PKI_BUILD_TESTS "Build standalone image validation tool" OFF)
+if(PKI_BUILD_TESTS)
+  add_executable(pki_jpeg_scaled_reference tests/jpeg_scaled_reference.cpp)
+  target_include_directories(pki_jpeg_scaled_reference PRIVATE "${jpeg_SOURCE_DIR}/src" "${jpeg_BINARY_DIR}")
+  target_link_libraries(pki_jpeg_scaled_reference PRIVATE jpeg-static)
+  if(WIN32)
+    add_executable(pki_prepared_failure_probe tests/prepared_failure_probe.cpp)
+    target_link_libraries(pki_prepared_failure_probe PRIVATE picakeep_image_engine dbghelp)
+    add_executable(pki_allocator_budget_regression tests/allocator_budget_regression.cpp)
+    target_include_directories(pki_allocator_budget_regression PRIVATE include
+      "${jpeg_SOURCE_DIR}/src" "${jpeg_BINARY_DIR}" "${webp_SOURCE_DIR}"
+      "${webp_SOURCE_DIR}/src" "${png_SOURCE_DIR}" "${png_BINARY_DIR}")
+    target_link_libraries(pki_allocator_budget_regression PRIVATE jpeg-static png_static
+      zlibstatic webp webpdemux pki_lcms)
+    target_compile_definitions(pki_allocator_budget_regression PRIVATE
+      PKI_EXPORTS NOMINMAX _CRT_SECURE_NO_WARNINGS _ITERATOR_DEBUG_LEVEL=0)
+    target_compile_options(pki_allocator_budget_regression PRIVATE /EHs)
+  endif()
+  add_executable(pki_validate tests/validate.cpp)
+  target_include_directories(pki_validate PRIVATE include "${jpeg_SOURCE_DIR}/src"
+    "${jpeg_BINARY_DIR}" "${webp_SOURCE_DIR}/src" "${png_SOURCE_DIR}" "${png_BINARY_DIR}")
+  target_link_libraries(pki_validate PRIVATE picakeep_image_engine jpeg-static png_static
+    zlibstatic webp pki_lcms)
+endif()

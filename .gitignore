@@ -77,3 +77,16 @@ app.*.map.json
 
 # WebView APK test files (CF testing artifacts)
 webview*.apk
+
+# Native plugin Android build outputs
+/packages/picakeep_image_engine/android/.cxx/
+/packages/picakeep_image_engine/android/.gradle/
+
+# Image pipeline notes and compact evidence identities
+!docs/verification/image-pipeline-022/*.md
+!docs/verification/image-pipeline-022/make_zip_fixtures.py
+!docs/verification/image-pipeline-022/native-png-row-skip.patch
+!docs/verification/image-pipeline-022/baseline-input.json
+!docs/verification/image-pipeline-022/baseline-apk-metadata.json
+!docs/verification/image-pipeline-022/windows-surface-fix1006-runner-manifest.json
+!docs/verification/image-pipeline-022/local-evidence-index.json

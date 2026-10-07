@@ -65,6 +65,33 @@ class _ReadingSettingsState extends State<ReadingSettings> {
               i = 1;
             }),
           ),
+          ListTile(
+            leading: const Icon(Icons.image_outlined),
+            title: Text('图片显示'.tl),
+            trailing: Select(
+              initialValue: readerDisplayMode(
+                sourceKey: logic.data.sourceKey,
+                pipelineSetting:
+                    appdata.settings[readerImagePipelineSettingIndex],
+              ).index,
+              values: ['清晰优先'.tl, '预览优先'.tl],
+              onChange: (index) {
+                final config = ReaderImagePipelineSettings.tryParse(
+                      appdata.settings[readerImagePipelineSettingIndex],
+                    ) ??
+                    const ReaderImagePipelineSettings();
+                appdata.settings[readerImagePipelineSettingIndex] = config
+                    .withMode(
+                      readerReadingIsComic(logic.data.sourceKey),
+                      ReaderDisplayMode.values[index],
+                    )
+                    .encode();
+                appdata.updateSettings();
+                logic.update();
+                setState(() {});
+              },
+            ),
+          ),
           if (appdata.settings[9] == "5" || appdata.settings[9] == "6")
             ListTile(
               leading: const Icon(Icons.auto_awesome_motion),
@@ -332,7 +359,8 @@ class _ReadingSettingsState extends State<ReadingSettings> {
                               max: 1600,
                               min: 600,
                               divisions: 50,
-                              value: (double.tryParse(appdata.settings[116]) ?? 980)
+                              value: (double.tryParse(appdata.settings[116]) ??
+                                      980)
                                   .clamp(600, 1600)
                                   .toDouble(),
                               overlayColor: WidgetStateColor.resolveWith(

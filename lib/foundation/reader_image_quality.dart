@@ -24,6 +24,98 @@
 /// 插画/图集默认高清（一话往往就一两张图，值得看细节）。
 library;
 
+import 'dart:convert';
+
+/// Versioned reader policy. Legacy quality switches remain at 159/160 for
+/// backup compatibility; neither can cap the v2 reader's final resolution.
+const readerImagePipelineSettingIndex = 165;
+
+enum ReaderDisplayMode {
+  sharpFirst,
+  previewFirst;
+
+  static ReaderDisplayMode fromValue(Object? value) =>
+      value == 'previewFirst' ? previewFirst : sharpFirst;
+}
+
+class ReaderImagePipelineSettings {
+  const ReaderImagePipelineSettings({
+    this.comic = ReaderDisplayMode.sharpFirst,
+    this.illust = ReaderDisplayMode.sharpFirst,
+    this.legacyComic = '0',
+    this.legacyIllust = '1',
+  });
+
+  final ReaderDisplayMode comic;
+  final ReaderDisplayMode illust;
+  final String legacyComic;
+  final String legacyIllust;
+
+  static ReaderImagePipelineSettings? tryParse(String? value) {
+    try {
+      final data = jsonDecode(value ?? '');
+      if (data is! Map ||
+          data['schema'] != 2 ||
+          data['comic'] is! Map ||
+          data['illust'] is! Map) {
+        return null;
+      }
+      final comicValue = data['comic']['displayMode'];
+      final illustValue = data['illust']['displayMode'];
+      if (!['sharpFirst', 'previewFirst'].contains(comicValue) ||
+          !['sharpFirst', 'previewFirst'].contains(illustValue)) {
+        return null;
+      }
+      final legacy = data['legacyQuality'];
+      return ReaderImagePipelineSettings(
+        comic: ReaderDisplayMode.fromValue(comicValue),
+        illust: ReaderDisplayMode.fromValue(illustValue),
+        legacyComic: legacy is Map ? legacy['comic']?.toString() ?? '0' : '0',
+        legacyIllust: legacy is Map ? legacy['illust']?.toString() ?? '1' : '1',
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
+  ReaderImagePipelineSettings withMode(bool isComic, ReaderDisplayMode mode) =>
+      ReaderImagePipelineSettings(
+        comic: isComic ? mode : comic,
+        illust: isComic ? illust : mode,
+        legacyComic: legacyComic,
+        legacyIllust: legacyIllust,
+      );
+
+  String encode() => jsonEncode({
+        'schema': 2,
+        'comic': {'displayMode': comic.name},
+        'illust': {'displayMode': illust.name},
+        'legacyQuality': {'comic': legacyComic, 'illust': legacyIllust},
+        'legacyCaptured': true,
+      });
+}
+
+String normalizeReaderImagePipelineSettings(
+  String? value, {
+  String? legacyComic,
+  String? legacyIllust,
+}) =>
+    (ReaderImagePipelineSettings.tryParse(value) ??
+            ReaderImagePipelineSettings(
+              legacyComic: legacyComic ?? '<missing>',
+              legacyIllust: legacyIllust ?? '<missing>',
+            ))
+        .encode();
+
+ReaderDisplayMode readerDisplayMode({
+  required String sourceKey,
+  required String pipelineSetting,
+}) {
+  final config = ReaderImagePipelineSettings.tryParse(pipelineSetting) ??
+      const ReaderImagePipelineSettings();
+  return readerReadingIsComic(sourceKey) ? config.comic : config.illust;
+}
+
 /// `settings[]` 下标：**漫画**阅读高清模式（默认关）。
 const int readerHighQualityComicSettingIndex = 159;
 

@@ -39,6 +39,18 @@ void main() {
     expect(inventory.files.map((e) => e.path),
         [p.normalize(old.path), p.normalize(newer.path)]);
   });
+  test('purpose accounting separates covers, tiles and active workspaces',
+      () async {
+    await create('cache/remote_library_covers/cover.jpg', 7, 0);
+    await create('cache/image_pipeline_v1/readerTile/tile.png', 11, 1);
+    await create('cache/image_pipeline/native_backing/source.rgba', 13, 2);
+    await create('cache/image_pipeline_v1/inputs/source.img', 17, 3);
+    await create('cache/online_images/original.png', 19, 4);
+    final inventory = await scanCacheFiles([p.join(workspace.path, 'cache')]);
+    expect(inventory.totalBytes, 67);
+    expect(inventory.purposeBytes,
+        {'cover': 7, 'readerTile': 11, 'workspace': 13, 'original': 36});
+  });
 
   test('under limit retains everything; over limit deletes oldest only',
       () async {
@@ -52,6 +64,56 @@ void main() {
         limitBytes: 30, isCurrent: () => true, isProtected: (_) => false);
     expect(await old.exists(), isFalse);
     expect(await newer.exists(), isTrue);
+  });
+
+  for (final backingDirectory in ['native_backing', 'cover_backing']) {
+    test('general trim evicts recent $backingDirectory before an old cover',
+        () async {
+      final cover = await create('covers/old.jpg', 100, 0);
+      final backing = await create(
+          'cache/image_pipeline/$backingDirectory/new.rgba', 100, 1);
+      final inventory = await scanCacheFiles([workspace.path]);
+      expect(p.equals(inventory.files.first.path, cover.path), isTrue,
+          reason: 'the public scan retains its modification-time ordering');
+      await trimCacheInventory(inventory,
+          limitBytes: 100, isCurrent: () => true, isProtected: (_) => false);
+      expect(await cover.exists(), isTrue);
+      expect(await backing.exists(), isFalse,
+          reason: 'remote maintenance and admission must use the same policy');
+      expect(p.equals(inventory.files.first.path, cover.path), isTrue,
+          reason: 'trimming must not mutate a caller-owned inventory');
+    });
+  }
+
+  test('general trim checks protection before preferring scratch candidates',
+      () async {
+    final cover = await create('covers/old.jpg', 100, 0);
+    final leased = await create('cache/native_backing/active.rgba', 100, 1);
+    final partial = await create('cache/cover_backing/download.part', 100, 2);
+    final inventory =
+        await scanCacheFiles([workspace.path], includePartial: true);
+    await trimCacheInventory(inventory,
+        limitBytes: 100,
+        isCurrent: () => true,
+        isProtected: (path) => p.equals(path, leased.path));
+    expect(await cover.exists(), isFalse,
+        reason: 'cover preference does not relax the existing quota');
+    expect(await leased.exists(), isTrue);
+    expect(await partial.exists(), isTrue);
+  });
+
+  test('scratch comparator ignores substring directory names and filenames',
+      () {
+    final old = DateTime(2000), recent = DateTime(2001);
+    CacheFileSnapshot snapshot(String path, DateTime stamp) =>
+        CacheFileSnapshot(p.join(workspace.path, path), 100, stamp, stamp);
+    final cover = snapshot('covers/old.jpg', old);
+    final backing = snapshot('cache/cover_backing/new.rgba', recent);
+    final similar = snapshot('cache/native_backing_backup/new.rgba', recent);
+    final filename = snapshot('cache/native_backing', recent);
+    expect(compareCacheEvictionCandidates(backing, cover), lessThan(0));
+    expect(compareCacheEvictionCandidates(similar, cover), greaterThan(0));
+    expect(compareCacheEvictionCandidates(filename, cover), greaterThan(0));
   });
 
   test('protected, partial and changed files survive cleanup', () async {

@@ -5,17 +5,20 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:archive/archive_io.dart';
-import 'package:flutter/painting.dart';
+import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:image/image.dart' as img;
 import 'package:path/path.dart' as p;
 import 'package:path_provider_platform_interface/path_provider_platform_interface.dart';
 import 'package:picakeep/base.dart';
 import 'package:picakeep/foundation/app.dart';
+import 'package:picakeep/foundation/cover_thumbnail_cache.dart';
+import 'package:picakeep/foundation/image_pipeline/image_disk_quota.dart';
 import 'package:picakeep/foundation/archive/archive_registry.dart';
 import 'package:picakeep/foundation/local_cover_cache.dart';
 import 'package:picakeep/foundation/local_data_source.dart';
 import 'package:picakeep/foundation/local_library.dart';
+import 'package:picakeep/foundation/local_library_settings.dart';
 import 'package:picakeep/foundation/image_loader/stream_image_provider.dart';
 import 'package:picakeep/foundation/local_trash_store.dart';
 import 'package:picakeep/foundation/pixiv_download_naming.dart';
@@ -36,7 +39,7 @@ Future<ImageInfo> _decode(ImageProvider provider) async {
   final result = Completer<ImageInfo>();
   final stream = provider.resolve(ImageConfiguration.empty);
   final listener = ImageStreamListener((frame, _) {
-    if (!result.isCompleted) result.complete(frame);
+    if (!result.isCompleted) result.complete(frame.clone());
   }, onError: (Object e, StackTrace? s) {
     if (!result.isCompleted) result.completeError(e, s);
   });
@@ -48,10 +51,20 @@ Future<ImageInfo> _decode(ImageProvider provider) async {
   }
 }
 
+Future<ImageInfo> _decodeAndPaint(
+    WidgetTester tester, ImageProvider provider) async {
+  final frame = (await tester.runAsync(() => _decode(provider)))!;
+  await tester.pumpWidget(Directionality(
+      textDirection: TextDirection.ltr,
+      child: SizedBox(width: 128, height: 128, child: Image(image: provider))));
+  return frame;
+}
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   final saved = List<String>.of(appdata.settings);
   final provider = PathProviderPlatform.instance;
+  final savedDiskQuota = ImageDiskQuota.overrideForTesting;
   late Directory workspace;
   late PixivLibrary library;
   final manager = LocalLibraryManager();
@@ -63,9 +76,18 @@ void main() {
           () => DynamicLibrary.open(
               p.join(Directory.current.path, 'windows', 'sqlite3.dll')));
     }
-    workspace = await Directory.systemTemp.createTemp('pk46_integration_');
+    final parent = Platform.isWindows
+        ? Directory(r'E:\picakeep-image-pipeline-022-work')
+        : Directory.systemTemp;
+    await parent.create(recursive: true);
+    workspace = await parent.createTemp('pk46_integration_');
     PathProviderPlatform.instance = _Paths(workspace.path);
     await App.init(dataPathOverride: p.join(workspace.path, 'app'));
+    ImageDiskQuota.overrideForTesting = ImageDiskQuota(
+        roots: () => [App.cachePath, LocalCoverCache.rootDirectory().path],
+        idleLimitBytes: () => 512 << 20,
+        space: (_) async =>
+            const ImageDiskSpace(100 << 30, 'cover-test-volume'));
     ArchiveRegistry.initDefaults();
     library = PixivLibrary(p.join(workspace.path, 'pixiv'));
     await library.initialize();
@@ -74,6 +96,9 @@ void main() {
     setManagedDataSourceMode(managedDataSourceModeCurrentOnly);
   });
   tearDownAll(() async {
+    await CoverThumbnailCache.waitForProviderPersistenceForTesting();
+    await CoverThumbnailCache.waitForMaintenanceForTesting();
+    ImageDiskQuota.overrideForTesting = savedDiskQuota;
     appdata.settings
       ..clear()
       ..addAll(saved);
@@ -83,6 +108,21 @@ void main() {
     PaintingBinding.instance.imageCache.clearLiveImages();
     await workspace.delete(recursive: true);
   });
+  tearDown(() async {
+    await CoverThumbnailCache.waitForProviderPersistenceForTesting();
+    await CoverThumbnailCache.waitForMaintenanceForTesting();
+  });
+  Future<List<File>> displayFiles() async {
+    final root =
+        Directory(p.join(LocalCoverCache.rootDirectory().path, 'thumbs'));
+    if (!await root.exists()) return [];
+    return root
+        .list()
+        .where((entry) => entry is File && entry.path.endsWith('.png'))
+        .cast<File>()
+        .toList();
+  }
+
   Future<void> seed(PixivFolder folder, String shape, String id) async {
     final name =
         shape == 'directory' ? id : '$id.${shape == 'zip' ? 'zip' : 'png'}';
@@ -181,21 +221,29 @@ void main() {
     expect(
         refreshed.any((i) => i.originalId == 'pixiv_manual_refresh'), isTrue);
   });
-  test('prepared illustration covers stay internal and decode from file buffer',
-      () async {
-    final item = (await manager.getManagedDownloads())
+  testWidgets(
+      'prepared illustration covers stay internal and decode from file buffer',
+      (tester) async {
+    final item = (await tester.runAsync(manager.getManagedDownloads))!
         .firstWhere((i) => i.originalId == 'pixiv_single');
-    final provider =
-        await manager.prepareIllustCover(item, 384, canContinue: () => true);
-    expect(provider, isA<FileImage>());
-    expect(
-        p.isWithin(LocalCoverCache.rootDirectory().path,
-            (provider as FileImage).file.path),
-        isTrue);
-    final frame = await _decode(provider);
+    final provider = await tester.runAsync(
+        () => manager.prepareIllustCover(item, 384, canContinue: () => true));
+    expect(provider, isNotNull);
+    final frame = await _decodeAndPaint(tester, provider!);
     expect(frame.image.width, 12);
     expect(frame.image.height, 18);
     frame.dispose();
+    await tester
+        .runAsync(CoverThumbnailCache.waitForProviderPersistenceForTesting);
+    final files = (await tester.runAsync(displayFiles))!;
+    expect(files.isNotEmpty, isTrue);
+    expect(
+        files.every((file) =>
+            p.isWithin(LocalCoverCache.rootDirectory().path, file.path)),
+        isTrue);
+    await tester.pumpWidget(const SizedBox.shrink());
+    PaintingBinding.instance.imageCache.clear();
+    PaintingBinding.instance.imageCache.clearLiveImages();
   });
   test('legacy no-cover flag without live negative record is retried',
       () async {
@@ -240,37 +288,65 @@ void main() {
     App.notifyLocalDataChanged();
     expect(buildWithoutIO(), isNot(prepared));
   });
-  test(
+  testWidgets(
       'source replacement invalidates display; unchanged warm cover reuses thumbnail',
-      () async {
-    final folder = await library.createFolder('replace');
-    await seed(folder, 'single', 'pixiv_replace');
-    final item = (await manager.getManagedDownloads())
-        .singleWhere((i) => i.originalId == 'pixiv_replace');
-    final first = await manager.prepareIllustCover(item, 384,
-        canContinue: () => true) as FileImage;
-    final before = await File(first.file.path).lastModified();
-    expect(await manager.prepareIllustCover(item, 384, canContinue: () => true),
-        first);
-    expect(await File(first.file.path).lastModified(), before);
-    await File(item.fileSystemPath!)
-        .writeAsBytes(img.encodePng(img.Image(width: 30, height: 40)));
-    final replacement = await manager.prepareIllustCover(item, 384,
-        canContinue: () => true) as FileImage;
+      (tester) async {
+    final item = (await tester.runAsync(() async {
+      final folder = await library.createFolder('replace');
+      await seed(folder, 'single', 'pixiv_replace');
+      return (await manager.getManagedDownloads())
+          .singleWhere((i) => i.originalId == 'pixiv_replace');
+    }))!;
+    final first = (await tester.runAsync(
+        () => manager.prepareIllustCover(item, 384, canContinue: () => true)))!;
+    final originalFrame = await _decodeAndPaint(tester, first);
+    expect((originalFrame.image.width, originalFrame.image.height), (12, 18));
+    originalFrame.dispose();
+    await tester
+        .runAsync(CoverThumbnailCache.waitForProviderPersistenceForTesting);
+    await tester.pumpWidget(const SizedBox.shrink());
+    PaintingBinding.instance.imageCache.clear();
+    PaintingBinding.instance.imageCache.clearLiveImages();
+    final cached = (await tester.runAsync(() async => {
+          for (final file in await displayFiles())
+            file.path: await file.lastModified()
+        }))!;
+    expect(cached, isNotEmpty);
+    final warm = await tester.runAsync(
+        () => manager.prepareIllustCover(item, 384, canContinue: () => true));
+    expect(warm, first);
+    final warmFrame = await _decodeAndPaint(tester, warm!);
+    expect((warmFrame.image.width, warmFrame.image.height), (12, 18));
+    warmFrame.dispose();
+    expect(
+        await tester.runAsync(() async => {
+              for (final file in await displayFiles())
+                file.path: await file.lastModified()
+            }),
+        cached);
+    await tester.runAsync(() => File(item.fileSystemPath!)
+        .writeAsBytes(img.encodePng(img.Image(width: 30, height: 40))));
+    final replacement = (await tester.runAsync(
+        () => manager.prepareIllustCover(item, 384, canContinue: () => true)))!;
     expect(replacement, isNot(first));
-    final frame = await _decode(replacement);
+    final frame = await _decodeAndPaint(tester, replacement);
     expect((frame.image.width, frame.image.height), (30, 40));
     frame.dispose();
+    await tester
+        .runAsync(CoverThumbnailCache.waitForProviderPersistenceForTesting);
+    await tester.pumpWidget(const SizedBox.shrink());
+    PaintingBinding.instance.imageCache.clear();
+    PaintingBinding.instance.imageCache.clearLiveImages();
   });
-  test(
-      'non-managed external cover is staged once into the internal thumbnail cache',
-      () async {
+  testWidgets(
+      'non-managed external cover produces a reusable internal thumbnail',
+      (tester) async {
     final source = File(p.join(workspace.path, 'album.png'));
-    await source.writeAsBytes(bytes);
+    await tester.runAsync(() => source.writeAsBytes(bytes));
     final item = LocalLibraryComicItem(
         itemId: 'local_album::stage',
         originalId: 'stage',
-        type: (await manager.getManagedDownloads()).first.type,
+        type: (await tester.runAsync(manager.getManagedDownloads))!.first.type,
         name: 'album',
         subTitle: '',
         tags: [],
@@ -285,18 +361,30 @@ void main() {
         localStorageExists: true,
         canDelete: false,
         aliases: []);
-    final first = await manager.prepareIllustCover(item, 384,
-        canContinue: () => true) as FileImage;
-    expect(p.isWithin(LocalCoverCache.rootDirectory().path, first.file.path),
+    final first = (await tester.runAsync(
+        () => manager.prepareIllustCover(item, 384, canContinue: () => true)))!;
+    final frame = await _decodeAndPaint(tester, first);
+    expect((frame.image.width, frame.image.height), (12, 18));
+    frame.dispose();
+    await tester
+        .runAsync(CoverThumbnailCache.waitForProviderPersistenceForTesting);
+    final cached = (await tester.runAsync(displayFiles))!;
+    expect(cached, isNotEmpty);
+    expect(
+        cached.every((file) =>
+            p.isWithin(LocalCoverCache.rootDirectory().path, file.path)),
         isTrue);
     expect(item.localCoverPath, source.path,
         reason: 'metadata retains actual source dimensions');
     final reads = _CountSourceReads(source.path);
-    final warm = await IOOverrides.runWithIOOverrides(
+    final warm = await tester.runAsync(() => IOOverrides.runWithIOOverrides(
         () => manager.prepareIllustCover(item, 384, canContinue: () => true),
-        reads);
+        reads));
     expect(warm, first);
     expect(reads.reads, 0, reason: 'warm display must not read source bytes');
+    await tester.pumpWidget(const SizedBox.shrink());
+    PaintingBinding.instance.imageCache.clear();
+    PaintingBinding.instance.imageCache.clearLiveImages();
   });
   test(
       'wide display fallback invalidates Flutter image cache after replacement',
@@ -305,17 +393,18 @@ void main() {
     await seed(folder, 'single', 'pixiv_wide');
     final item = (await manager.getManagedDownloads())
         .singleWhere((i) => i.originalId == 'pixiv_wide');
-    final first = await manager.prepareIllustCover(item, 2000,
-        canContinue: () => true) as FileImage;
+    final first = (await manager.prepareIllustCover(item, 2000,
+        canContinue: () => true))!;
     final oldFrame = await _decode(first);
     expect(oldFrame.image.width, 12);
     oldFrame.dispose();
     await File(item.fileSystemPath!)
         .writeAsBytes(img.encodePng(img.Image(width: 90, height: 40)));
-    final next = await manager.prepareIllustCover(item, 2000,
-        canContinue: () => true) as FileImage;
-    expect(next.file.path, first.file.path,
-        reason: 'internal full-size cache is updated in place');
+    final coverPath = item.localCoverPath;
+    final next = (await manager.prepareIllustCover(item, 2000,
+        canContinue: () => true))!;
+    expect(item.localCoverPath, coverPath,
+        reason: 'the registered internal source copy remains addressable');
     expect(next, isNot(first));
     final newFrame = await _decode(next);
     expect((newFrame.image.width, newFrame.image.height), (90, 40));
@@ -345,6 +434,11 @@ void main() {
         aliases: []);
     expect(manager.coverImageProviderForItem(item), isA<FileImage>(),
         reason: 'ordinary album grids retain their file-buffer fast path');
+    // This test exercises the privileged staging fallback. Ordinary readable
+    // originals now skip the full read and are decoded from their file buffer.
+    final rootMode = appdata.settings[androidRootModeSettingIndex];
+    appdata.settings[androidRootModeSettingIndex] = '1';
+    addTearDown(() => appdata.settings[androidRootModeSettingIndex] = rootMode);
     final gate = Completer<void>();
     final reads = _CountSourceReads(source.path, beforeRead: gate.future);
     var firstActive = true;
@@ -355,7 +449,7 @@ void main() {
           manager.prepareIllustCover(item, 384, canContinue: () => firstActive);
       await reads.started.future;
       final second = manager.prepareIllustCover(item, 384, canContinue: () {
-        if (++secondChecks >= 4 && !secondStaging.isCompleted) {
+        if (++secondChecks >= 5 && !secondStaging.isCompleted) {
           secondStaging.complete();
         }
         return true;
@@ -367,7 +461,11 @@ void main() {
         gate.complete();
       }
       expect(await first, isNull);
-      expect(await second, isA<FileImage>());
+      final prepared = await second;
+      expect(prepared, isNotNull);
+      final frame = await _decode(prepared!);
+      expect((frame.image.width, frame.image.height), (12, 18));
+      frame.dispose();
       expect(reads.reads, 1);
     }, reads);
   });
@@ -383,8 +481,12 @@ void main() {
     expect(await manager.resolveCoverPathForItem(item), isNull);
     await source.writeAsBytes(bytes);
     await manager.beginIllustCoverSession();
-    expect(await manager.prepareIllustCover(item, 384, canContinue: () => true),
-        isA<FileImage>());
+    final prepared =
+        await manager.prepareIllustCover(item, 384, canContinue: () => true);
+    expect(prepared, isNotNull);
+    final frame = await _decode(prepared!);
+    expect((frame.image.width, frame.image.height), (12, 18));
+    frame.dispose();
     expect(await source.readAsBytes(), bytes);
   });
   test(
@@ -438,6 +540,9 @@ class _ObservedFile implements File {
   Future<FileStat> stat() => file.stat();
   @override
   Future<bool> exists() => file.exists();
+  @override
+  Future<RandomAccessFile> open({FileMode mode = FileMode.read}) =>
+      file.open(mode: mode);
   @override
   Future<Uint8List> readAsBytes() async {
     onRead();

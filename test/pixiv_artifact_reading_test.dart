@@ -3,6 +3,8 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:picakeep/foundation/archive/archive_models.dart';
 import 'package:picakeep/foundation/archive/archive_registry.dart';
+import 'package:picakeep/foundation/image_pipeline/derived_image_store.dart';
+import 'package:picakeep/foundation/image_pipeline/reader_page_source.dart';
 import 'package:picakeep/foundation/def.dart';
 import 'package:picakeep/foundation/local_library.dart';
 import 'package:picakeep/foundation/pixiv_artifact.dart';
@@ -35,7 +37,8 @@ void main() {
     } catch (_) {}
   });
 
-  String pathIn(String name) => '${tempRoot.path}${Platform.pathSeparator}$name';
+  String pathIn(String name) =>
+      '${tempRoot.path}${Platform.pathSeparator}$name';
 
   /// 页面内容各不相同，便于断言"读出来的就是那一页"。
   List<int> pageBytes(int page) =>
@@ -70,9 +73,7 @@ void main() {
       sourceKey: 'pixiv',
       directoryPath: directoryPath,
       hasEp: hasEp,
-      eps: hasEp
-          ? const <String, String>{'1': '第1话', '2': '第2话'}
-          : null,
+      eps: hasEp ? const <String, String>{'1': '第1话', '2': '第2话'} : null,
       comicType: ComicType.pixiv,
       // 空 episodeFiles = 逼 `loadEp` 走"现场按路径列页"这条路，
       // 也就是本次改造真正改到的那一段。
@@ -133,6 +134,47 @@ void main() {
       }
     });
 
+    test('原文件页按成员实际长度计费，使用中保护，释放后删除临时成员', () async {
+      final dir = await writeFlatWork(dirName: 'original-source');
+      final zip = File(pathIn('original-source.zip'));
+      await packagePixivDirectoryToStoreZip(sourceDir: dir, target: zip);
+      final data = readingDataFor(zip.path);
+      final pages = await data.loadEp(0);
+      final baseline = ImageTemporaryPool.shared.reservedBytes;
+      final source = await data.resolvePageSource(0, 1, pages[1]);
+      final original = await source.openOriginalFile();
+      expect(await original.readAsBytes(), pageBytes(2));
+      expect(source.identity.page, 1);
+      expect(source.identity.sourceKey, 'pixiv');
+      expect(ImageTemporaryPool.shared.reservedBytes,
+          baseline + pageBytes(2).length);
+      final release = ReaderPageFileLease.acquire(original);
+      final disposal = source.dispose();
+      await Future<void>.delayed(Duration.zero);
+      expect(await original.exists(), isTrue);
+      expect(ImageTemporaryPool.shared.reservedBytes,
+          baseline + pageBytes(2).length);
+      release();
+      await disposal;
+      expect(await original.exists(), isFalse);
+      expect(await zip.exists(), isTrue);
+      expect(ImageTemporaryPool.shared.reservedBytes, baseline);
+    });
+
+    test('选择后 ZIP 被替换会明确失败，不导出新版本成员', () async {
+      final dir = await writeFlatWork(dirName: 'replaced-source');
+      final zip = File(pathIn('replaced-source.zip'));
+      await packagePixivDirectoryToStoreZip(sourceDir: dir, target: zip);
+      final data = readingDataFor(zip.path);
+      final pages = await data.loadEp(0);
+      final source = await data.resolvePageSource(0, 0, pages[0]);
+      final baseline = ImageTemporaryPool.shared.reservedBytes;
+      await zip.writeAsBytes([1, 2, 3]);
+      await expectLater(source.openOriginalFile(), throwsStateError);
+      await source.dispose();
+      expect(ImageTemporaryPool.shared.reservedBytes, baseline);
+    });
+
     test('压缩包的图片 key 带包指纹（换包不会命中旧缓存）', () async {
       final dir = await writeFlatWork(dirName: 'keys');
       final zip = File(pathIn('keys.zip'));
@@ -183,6 +225,18 @@ void main() {
 
       expect(files, <String>[file.path]);
       expect(await data.loadImage(0, 0, files.first).first, pageBytes(7));
+    });
+
+    test('原文件资源释放不会删除用户单图，也不占临时预算', () async {
+      final file =
+          await File(pathIn('single-original.jpg')).writeAsBytes(pageBytes(8));
+      final data = readingDataFor(file.path);
+      final source = await data.resolvePageSource(0, 0, file.path);
+      final baseline = ImageTemporaryPool.shared.reservedBytes;
+      expect((await source.openOriginalFile()).path, file.path);
+      await source.dispose();
+      expect(await file.readAsBytes(), pageBytes(8));
+      expect(ImageTemporaryPool.shared.reservedBytes, baseline);
     });
 
     test('页号不是 0/1 时返回空列表（有章节语义时）', () async {

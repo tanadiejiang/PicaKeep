@@ -372,8 +372,8 @@ List<PixivPage> parsePixivPages(dynamic body) {
       thumbMini: _pickUrl(urls, const <String>['thumb_mini', 'thumb']),
       small: _pickUrl(urls, const <String>['small']),
       regular: _pickUrl(urls, const <String>['regular']),
-      // original 缺失时回退 regular：宁可给次一档图，也不要空 URL 导致阅读器白屏。
-      original: _pickUrl(urls, const <String>['original', 'regular']),
+      // Preserve absence so a regular rendition is never labelled original.
+      original: _pickUrl(urls, const <String>['original']),
       width: _int(page['width']),
       height: _int(page['height']),
     );

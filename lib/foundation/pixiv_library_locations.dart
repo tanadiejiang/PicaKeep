@@ -6,6 +6,7 @@ import 'package:uuid/uuid.dart';
 import 'app.dart';
 import 'local_trash_store.dart';
 import 'pixiv_library.dart';
+import 'windows_rename_retry.dart';
 
 File get _locations =>
     File(p.join(App.dataPath, 'pixiv_library_locations.json'));
@@ -195,7 +196,7 @@ Future<void> _finishRelocation(File journal, Map<String, dynamic> data,
         throw StateError('下载根副本校验失败');
       }
       if (Directory(to).existsSync()) await Directory(to).delete();
-      await Directory(temp).rename(to);
+      await retryWindowsRename(() => Directory(temp).rename(to));
     }
     stage('published');
   }

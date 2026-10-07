@@ -1,0 +1,954 @@
+{
+  "schema": "picakeep-local-evidence-index-v1",
+  "capturedUtc": "2026-10-07T13:19:20.1991636Z",
+  "policy": "Raw report bodies remain local and ignored; paths, lengths and hashes are retained in Git",
+  "fileCount": 189,
+  "totalBytes": 246711360,
+  "files": [
+    {
+      "path": "android-lifecycle-surfacefix1006.jsonl",
+      "sha256": "d450620a803bbb25d2c957534b3b0ffe5ee57a6720c97cd4607011ed57736283",
+      "bytes": 152127
+    },
+    {
+      "path": "android-native-16kb-check.json",
+      "sha256": "e75a3eaba7a623f21b2b1c97a80edfbd85686d4424c8173dd207faaf760b5abc",
+      "bytes": 24190
+    },
+    {
+      "path": "android-native-16kb-plugin.json",
+      "sha256": "ec71d489d049c3af40f6cb4639eb26048f0071036e5cf7ca28a68fc343bf067f",
+      "bytes": 1351
+    },
+    {
+      "path": "android-native-16kb-roi-fixed.json",
+      "sha256": "7974d935e70292cda523a944d8e5469ffe34e0a555e7771ec483f6bb1766e07b",
+      "bytes": 25160
+    },
+    {
+      "path": "android-native-v9-alignment.json",
+      "sha256": "f37f8fe7d2c11d035377f5a95a1d9f646f28e67869d4cc192cbf3ded9459f6cb",
+      "bytes": 29089
+    },
+    {
+      "path": "color-animation-alpha-v6-redmi1006.json",
+      "sha256": "44d97598a44823a94ce2b6cb1be28d82edb6c90509f25717f21f18b54b899408",
+      "bytes": 400969
+    },
+    {
+      "path": "color-animation-alpha-v6-windows.json",
+      "sha256": "cf5e8e4f7069cd679e0773f16cfa0f8f9a8dd5dd8d4633e99a339c6c30d72039",
+      "bytes": 347807
+    },
+    {
+      "path": "color-animation-surface-fix-redmi1006-incomplete.json",
+      "sha256": "2931b9d754c186d409f4105873c4a3eed1be71f2ec0e2593c6bd45825f7e8e40",
+      "bytes": 208408
+    },
+    {
+      "path": "color-animation-v10-float-image-incomplete-redmi1006.json",
+      "sha256": "d5311972c3c6c1cc4ff950d3e1a8320e79628dadf0fc221ccce70e09b526dfb2",
+      "bytes": 505897
+    },
+    {
+      "path": "color-animation-v10-float-readback-capability-redmi1006.json",
+      "sha256": "c3d74404d2f83c2f4b6a0d0559a8b85391fee5c92a7a840fd050e7d7b9c9987d",
+      "bytes": 505271
+    },
+    {
+      "path": "color-animation-v10-initial-incomplete-redmi1006.json",
+      "sha256": "18a4b3493d668efb9554e5d418dac6049ff11a87bba157f2d1dfdb438597d767",
+      "bytes": 505905
+    },
+    {
+      "path": "color-animation-v3-redmi1006.json",
+      "sha256": "36432566cb50b67a2856f42a7fbc50843d3a716c5db4c1515bb9f58ea0676a31",
+      "bytes": 398959
+    },
+    {
+      "path": "color-diagnostics-v7-redmi1006.json",
+      "sha256": "73fffbfdb64594060e4ca55c04aff4e81dbada5da18ea7d56b381609de0e8a7d",
+      "bytes": 545175
+    },
+    {
+      "path": "color-precision-flutter-tester1006.json",
+      "sha256": "0beca75b56a30f7d8be5e97119f351cf0a4a947d644302fa3d7701be9b367cef",
+      "bytes": 323397
+    },
+    {
+      "path": "color-precision-v10-float-image-incomplete-redmi1006.json",
+      "sha256": "99aa53719765f2bcd9152d174ced921439055289019c1f1e47a06272c32116c8",
+      "bytes": 268339
+    },
+    {
+      "path": "color-precision-v10-float-readback-artifacts.tar.gz",
+      "sha256": "51d04ce8bcfc736b70804f464841676031d5831ba0c9c592405ed67efd3890b2",
+      "bytes": 2988852
+    },
+    {
+      "path": "color-precision-v10-float-readback-capability-redmi1006.json",
+      "sha256": "5f726cb16bcf6ec7d2daa9ec6f89efc3c0dec2f2133060de5be4ea44137bcd6f",
+      "bytes": 531461
+    },
+    {
+      "path": "color-precision-v10-initial-incomplete-redmi1006.json",
+      "sha256": "f5907b1d65fde720b4655bfd983077d2f7d060c2e620fc5075bd419daf6cc42b",
+      "bytes": 268153
+    },
+    {
+      "path": "color-precision-v7-redmi1006.json",
+      "sha256": "f2defa9ff05cb6dd05eaea2213bcc31d58528c19edafdd99a0dace4ed9d5e50e",
+      "bytes": 389992
+    },
+    {
+      "path": "color-precision-v9-redmi1006.json",
+      "sha256": "63a85e270ce9085c15fac552d2923d4c8447e189d23bb54f5d9942020a433b33",
+      "bytes": 452662
+    },
+    {
+      "path": "color-v8-redmi1006-first.json",
+      "sha256": "b72b7cda6d924555885623e6ea71c47ff681bc1cd01921a64593865fe3535e16",
+      "bytes": 515320
+    },
+    {
+      "path": "color-v8-redmi1006-repeat.json",
+      "sha256": "ebd32b32fd4ca32ee6fc66814779e11d7649d6855f731a93c4dd34be082356fc",
+      "bytes": 515348
+    },
+    {
+      "path": "color-v9-redmi1006.json",
+      "sha256": "23cbc143f1d571bd1f690ac9ddf557947074c5173361182a6cf2fbe025510fcf",
+      "bytes": 505078
+    },
+    {
+      "path": "cover-4k-png384-candidate1006.json",
+      "sha256": "9343bb259a5d5d59889fc9b4499809b308f4074bda9b9b37c514256d70f12b2c",
+      "bytes": 239109
+    },
+    {
+      "path": "cover-4k-png384-default1006.json",
+      "sha256": "9ac3990f21174b26d62a9f364382ba2e90d8687de47c9befc3866314e7affeba",
+      "bytes": 189599
+    },
+    {
+      "path": "cover-android-4k-candidate1006.json",
+      "sha256": "c96bef97730632228e340aa1a2c7e4bf4a93de4f42ad65e1f2fceff43d23bc13",
+      "bytes": 241696
+    },
+    {
+      "path": "cover-android-4k-default1006.json",
+      "sha256": "71dc8c451bf596ff1ee670f47ee81397db6198cf42b541b535c9a34914bcc77c",
+      "bytes": 206031
+    },
+    {
+      "path": "cover-android-flutter-cold-30.json",
+      "sha256": "f1dce4b99dd1ad89ac033227c59d355f9cd68faaef09c7d41e6a0b7b400dafc0",
+      "bytes": 30363
+    },
+    {
+      "path": "cover-android-zip-candidate1006.json",
+      "sha256": "a87263f0f791752b6ae14391bd1a82c912836ef729cbde917ddac4407b67a5e9",
+      "bytes": 229789
+    },
+    {
+      "path": "cover-android-zip-default1006.json",
+      "sha256": "1f211427fc989eaf80f77fca06a7c4183a2f05e23091e8acf125d44f3c57c531",
+      "bytes": 193840
+    },
+    {
+      "path": "cover-real-jpeg-384-redmi-30.json",
+      "sha256": "cdab6da9c03aba10a3f41b1142a623654c91e8cf6e00fa2a8f8477a4c6582897",
+      "bytes": 190473
+    },
+    {
+      "path": "cover-real-jpeg-384-windows-30.json",
+      "sha256": "916e86e656b89d97a4511b2ea8af2a10409ec3f5a9d79c53396e2253a95e9f76",
+      "bytes": 196411
+    },
+    {
+      "path": "cover-real-jpeg-768-at352-redmi-30.json",
+      "sha256": "e2cc7c861f9fa0d2bb19954447ab54195b5a9b6b99196f9bccbc4e617f249087",
+      "bytes": 190504
+    },
+    {
+      "path": "cover-real-jpeg-768-at352-windows-30.json",
+      "sha256": "c27cee02c31ecbbe8deaf4a339843ca4d459fddf0638ccde028c50b8f9022a5a",
+      "bytes": 186809
+    },
+    {
+      "path": "cover-real-zip-png-384-at768-redmi-30.json",
+      "sha256": "63231e886b2997e0d70eba7a4c508821f45015c3d1e78d64945aa0f416941cfc",
+      "bytes": 201334
+    },
+    {
+      "path": "cover-real-zip-png-384-at768-windows-30.json",
+      "sha256": "37f9b09856a75e753151cdad0709094e60427f3b5e690ffc83b94a85b9495948",
+      "bytes": 196150
+    },
+    {
+      "path": "cover-real-zip-png-768-redmi-30.json",
+      "sha256": "6eab6c963b84b2b6b30b9c6c9652408b383c2e127c7255be03eb9065ae025dc7",
+      "bytes": 191225
+    },
+    {
+      "path": "cover-real-zip-png-768-windows-30.json",
+      "sha256": "14aac99963fcf302cf86cb237365c270646b25b0d43634583d4db6e1c76e103a",
+      "bytes": 187242
+    },
+    {
+      "path": "cover-redmi-after-frame-30.json",
+      "sha256": "763042bdc9e66aa5f8a879e7bc0662ccb90c2f9b7e59101eba0c1777124381ec",
+      "bytes": 92989
+    },
+    {
+      "path": "cover-redmi-native32-30.json",
+      "sha256": "71fcffd78a1ef044bf78a57fa18c22d4243828d4f7fb4e6150c9bb52bd48f39e",
+      "bytes": 35005
+    },
+    {
+      "path": "cover-windows-after-frame-30.json",
+      "sha256": "a451833e9e7b828beb124ba2e00154d22a47264770195346f4881f4253e4736b",
+      "bytes": 87978
+    },
+    {
+      "path": "cover-windows-flutter-cold-30.json",
+      "sha256": "aa986e4909d006697d7cbd690bff0ecbb9de3441fb9da5d4140740e3cd292293",
+      "bytes": 29093
+    },
+    {
+      "path": "cover-windows-native32-30.json",
+      "sha256": "f3b735185e8553249ea9bb61a623ea2ae42c0ed3bcf5617525257c767f68a793",
+      "bytes": 34843
+    },
+    {
+      "path": "cover-zip-png768-candidate1006.json",
+      "sha256": "e1f06f668e2503a9b4a952d84785a2c19dda152e3a1238803a5fa95a99190ab0",
+      "bytes": 242461
+    },
+    {
+      "path": "cover-zip-png768-default1006.json",
+      "sha256": "4aae899e7bd9b197a7a3d80a23944d5af0fbd591376b47ad568206a7318239b4",
+      "bytes": 191544
+    },
+    {
+      "path": "device-input-redmi-k30i-5g.json",
+      "sha256": "339c0a17aa862d59a6b3133b52401d9091773b6dc1bc69f7e097fd39f89f1944",
+      "bytes": 18345
+    },
+    {
+      "path": "flutter-raw-upload-sdk-evidence.json",
+      "sha256": "1a659fc87e3740ffd68a46a2c4a64b4a42b1f8cecee3d05964ea3a538e35ec0d",
+      "bytes": 2975
+    },
+    {
+      "path": "native-cover-encoder-benchmark.json",
+      "sha256": "6ab880ae727eec18b848e909b4fc5e3b5b5561e40d29e19f77b3ce837b248869",
+      "bytes": 3009
+    },
+    {
+      "path": "native-decode-benchmark.json",
+      "sha256": "3b4a3eb4ec74d969f8e35bdc4a0e0cedae90c4fa5f71f5be7a76393cc82255ac",
+      "bytes": 18296
+    },
+    {
+      "path": "native-disk-space-dart-windows.json",
+      "sha256": "0e9bb9a5ac4c503a05ff211b6c23744923c4d033f989e651c289c74594cf8694",
+      "bytes": 848
+    },
+    {
+      "path": "native-disk-space-missing-dll.json",
+      "sha256": "a316fd22b27db60436e8239b480b1e6f106a494e1a0caccc3725e8202262c955",
+      "bytes": 123
+    },
+    {
+      "path": "native-disk-space-old-dll.json",
+      "sha256": "fe925acb2a0feef4b198d43feb403cef1d98a78318bd4152648605de83c427d0",
+      "bytes": 121
+    },
+    {
+      "path": "native-disk-space-windows-os.json",
+      "sha256": "ec02455e0d2a5246384b302a679507244e7cdeda8914da44d2bf7ae723238430",
+      "bytes": 3628
+    },
+    {
+      "path": "native-ordinary-4000x6000-jpeg-fit-30.json",
+      "sha256": "86e7f5c2182c28b40e4f111a0c4fa86e49373240ca356ef0919c2ea41becdbc7",
+      "bytes": 15760
+    },
+    {
+      "path": "native-ordinary-4000x6000-png-fit-30.json",
+      "sha256": "fd695f4b0c02475e2e5c254b3f5526779870d8a37133022aa1aaa9923e053a44",
+      "bytes": 14893
+    },
+    {
+      "path": "native-pixel-verification.json",
+      "sha256": "a746c0a4ef71882cc73aeb9ba7bf2fafdabcc14d3f0fc53f08e38a300d551b32",
+      "bytes": 4341
+    },
+    {
+      "path": "native-png-hotloop-final-30.json",
+      "sha256": "3060a81d2a444407ad46410aa739ea3ee02c8d26346271e7617463400f29f476",
+      "bytes": 212965
+    },
+    {
+      "path": "native-png-hotloop-initial-30.json",
+      "sha256": "c2199398643e1d8c44795bec1172e6e1322cbcf5be60218363e903d1fe6c9eb7",
+      "bytes": 130171
+    },
+    {
+      "path": "native-png-row-skip-extreme-failures.json",
+      "sha256": "50c206d406397ec746fdc83a0f4141725b16e7f39b7923bfa4140802ffd1ab2b",
+      "bytes": 10905
+    },
+    {
+      "path": "native-png-row-skip-quality.json",
+      "sha256": "ba16d00aa4ba0fdfa4da54d6197c5b4b3cf835308f63371ae90e2e53449e7254",
+      "bytes": 4339
+    },
+    {
+      "path": "native-prepared-backend-test.log",
+      "sha256": "5ab33a161ec3c4bdc3d4e45f8fb5be750c8b6e71ff9daa5e33bb9c584affdbe0",
+      "bytes": 586
+    },
+    {
+      "path": "native-prepared-budget-crash-original.log",
+      "sha256": "fd209f1a6adbfb9f5955b3fc003832ded66d2867a6f8ce4fad9b6e9cdcc7e527",
+      "bytes": 2193
+    },
+    {
+      "path": "native-prepared-exhausted-encode.log",
+      "sha256": "3b91dda64490b57ac73181522658046d28a4658ce20d80030632e1489e7c00e2",
+      "bytes": 250
+    },
+    {
+      "path": "native-prepared-exhausted-stl.log",
+      "sha256": "a864a86aa9d6acc89ef06f71c82209621b689324dd692d0784ab08b406834b70",
+      "bytes": 65
+    },
+    {
+      "path": "native-prepared-final-analyze.log",
+      "sha256": "8a77644628c83b4ceb28726f51f1ddc8fd52dc1987b1a6715f7fd9b34839916b",
+      "bytes": 281
+    },
+    {
+      "path": "native-prepared-low-budget.json",
+      "sha256": "8624a4eda6565a74ee26f2af22a63e680dbb5a926d89270c2f99c5ecbb0c07c6",
+      "bytes": 1703
+    },
+    {
+      "path": "native-prepared-metadata-pressure.log",
+      "sha256": "0b6581bd523b5f9e855b6a7a7c01a5c521b3934767cb4b91a0b18640bfeda821",
+      "bytes": 95
+    },
+    {
+      "path": "native-prepared-old-symbol-test.log",
+      "sha256": "f50fb209b78b6809e25579aa6939235e9a4f48beffa6e95a8a22ad507d13e7a4",
+      "bytes": 595
+    },
+    {
+      "path": "native-prepared-pixel-regression.json",
+      "sha256": "a61f203114a693d79d60dcb36215529bd9fe8f88cffd45cd915561c730c50361",
+      "bytes": 4339
+    },
+    {
+      "path": "native-prepared-read-verification.json",
+      "sha256": "776963fd7cc9fe9ab9685beffa30bc6dce5be6c6fd452da5a42fab9a88e05370",
+      "bytes": 8554
+    },
+    {
+      "path": "native-prepared-worker-lifecycle.json",
+      "sha256": "fcc971ec637808199f1c0f35db84d504beede2ee1848249bc65a5dc163e88a63",
+      "bytes": 3507
+    },
+    {
+      "path": "native-prepared-worker-test.json",
+      "sha256": "7eff84f01254afef052905cfd4552fb1a8fa7e93a5731d60627cfff49243a615",
+      "bytes": 482
+    },
+    {
+      "path": "native-reader-redmi-tile-stage-analysis.json",
+      "sha256": "a479d3379e002fe85062164f5c28709f404af7296cc3f5b13ac8069f791ec3da",
+      "bytes": 97663
+    },
+    {
+      "path": "native-results.json",
+      "sha256": "34d9eba29581969e53412c3cbf4e2012cecba523bdd9afc86a0f3fe5bd4aba9f",
+      "bytes": 15942
+    },
+    {
+      "path": "native-shared-backing-baseline-30.json",
+      "sha256": "dd5afb8c16935a538a8cc2bea8dc158fe33e42fd91bd72bc2afd83f040dafb0e",
+      "bytes": 19596
+    },
+    {
+      "path": "native-shared-backing-candidate-30.json",
+      "sha256": "b93ed49041193515eb737a69dbb853d166f4adbfe89104741d772203e1c99e60",
+      "bytes": 19557
+    },
+    {
+      "path": "native-shared-backing-safety.json",
+      "sha256": "e3af84d3a86c97bc4a1a2e67e126f4c1177b60736a198c301d36041a6cac63da",
+      "bytes": 2377
+    },
+    {
+      "path": "native-worker-pool-lifecycle-final.json",
+      "sha256": "5b7e8824304e9d2edf7c587b4ee060905d0fbe392a95e9907d23bae90eb2e6ab",
+      "bytes": 7056
+    },
+    {
+      "path": "native-worker-pool-lifecycle-regression.json",
+      "sha256": "f3b078d4e73ba0024eb6fc0d3099e1ad1a65c00a95d6cc1c90277fbc9abdd5ed",
+      "bytes": 6318
+    },
+    {
+      "path": "native-worker-pool-regression.json",
+      "sha256": "ea33fccea18c1b43c9a46a32ce71a1234c546bf456943ffa02c0a88978b8c346",
+      "bytes": 2281
+    },
+    {
+      "path": "normal-ui-android-v10-byte-audit1006.json",
+      "sha256": "aa4ce61bf5403174628b1fe99a5823f082eae7f8fe10713ff38735fe2855780f",
+      "bytes": 8702
+    },
+    {
+      "path": "os-rss-cover-redmi-first.jsonl",
+      "sha256": "250ec5d3c6a3726ad6245f771c7e38b3aced70874c23c73de3329edc2765a5ed",
+      "bytes": 10827
+    },
+    {
+      "path": "os-rss-windows-exited-target.jsonl",
+      "sha256": "6c07591ee235e3f3cc50df869974c43293e9da56b524a64eef4462d09894322f",
+      "bytes": 905
+    },
+    {
+      "path": "os-rss-windows-powershell-calibration.jsonl",
+      "sha256": "582559567a90231a0e882d05dbe9737e7b48366fe8059c4604ace1c688013bc7",
+      "bytes": 1771
+    },
+    {
+      "path": "reader-4000-jpeg-redmi-30.json",
+      "sha256": "d1a65ae9a3720038687faedbf287b1664762525b84accb26554ad4b638e07b7a",
+      "bytes": 9468346
+    },
+    {
+      "path": "reader-4000-jpeg-redmi-first-failed.json",
+      "sha256": "e394e06e119186bfc25dc94ea3477d2752daf379469b42613828818d916c2777",
+      "bytes": 3295
+    },
+    {
+      "path": "reader-4000-jpeg-windows-30.json",
+      "sha256": "892146094269a55f7da5ee575a1f0aaa0e74fb61674c7f30a97a743dfe1205fe",
+      "bytes": 2935075
+    },
+    {
+      "path": "reader-4000-png-redmi-30.json",
+      "sha256": "e47508e0929feababdea905a0267d13b79dc4dabb6ad92afe409f4c7d20e6bad",
+      "bytes": 8280989
+    },
+    {
+      "path": "reader-4000-png-windows-30.json",
+      "sha256": "77d43140b0c9285b4113379cd5cdcb2149213644438f3afcdda283ac067b44e6",
+      "bytes": 3711311
+    },
+    {
+      "path": "reader-android-final-smoke.json",
+      "sha256": "886fe08358b177f065bd97a2c9102cd9b0423bb911b25168389c06ca8c7159bb",
+      "bytes": 39580
+    },
+    {
+      "path": "reader-android-first-smoke.json",
+      "sha256": "da93e272846587ccb201fc2248d1a099afe41c7c7ec612c28833e5614da6512e",
+      "bytes": 47233
+    },
+    {
+      "path": "reader-android-matrix-first.json",
+      "sha256": "d15b619709d7ba02e82068d5bbe906032c3fe81489bbd7e5a1ed5dce01f69f71",
+      "bytes": 1407174
+    },
+    {
+      "path": "reader-bounded-png-fit-redmi-30.json",
+      "sha256": "f58c0864440cbb83225a80b5d7cffbfbc26095677c7ca55e84bedbf78dd43f6a",
+      "bytes": 2641190
+    },
+    {
+      "path": "reader-final-default-lifecycle-redmi.json",
+      "sha256": "8967e356510b6b6bb3dd44839ef583ff00c2d8c03b8ce8a0d2c710bacbc946c7",
+      "bytes": 311675
+    },
+    {
+      "path": "reader-final-quality-redmi-66.json",
+      "sha256": "24b426a345504e9141b488a787b917f8abd91c0e4d3ad4d6b88761902ffa1551",
+      "bytes": 597516
+    },
+    {
+      "path": "reader-final-quality-windows-66-recovery.json",
+      "sha256": "99360b8b2fa700919a0e31414022611c4edf6312b22edcc3d5293db9229f3297",
+      "bytes": 605505
+    },
+    {
+      "path": "reader-final-raw-async-no-persist-redmi-30.json",
+      "sha256": "4c364c7f97f93bcbc9b12fe1115ca0ee3248cfd536e9dcc20bca79f48bf5f08d",
+      "bytes": 8305570
+    },
+    {
+      "path": "reader-final-raw-sync-no-persist-redmi-30.json",
+      "sha256": "4592936a1598640ccc1c2ac49ca5cf06d6840339b3bf3e257b2ae80c3a1e1293",
+      "bytes": 7996019
+    },
+    {
+      "path": "reader-final-raw-sync-quality-redmi-66.json",
+      "sha256": "494909a8b6f58a858ee220269c2ec19c66cf3812f5ca02336b84106ada87d812",
+      "bytes": 580817
+    },
+    {
+      "path": "reader-flat-v2-frozen-runner.json",
+      "sha256": "a26a5b68c23f8a895b4c3266712267716adb91589e33c8dbefc6f5c8444f1409",
+      "bytes": 530
+    },
+    {
+      "path": "reader-flat-v2-prepared-off-windows.json",
+      "sha256": "37857f77c9ae01a34a8dfce4efcd936878a6e71f04a8f95c5318d62e354801db",
+      "bytes": 6813499
+    },
+    {
+      "path": "reader-flat-v2-prepared-off-windows.log",
+      "sha256": "18e7f9a7e45a751541e52132ac6fd58b5187d8bb02cae9ace6889f212f1e44c0",
+      "bytes": 6031539
+    },
+    {
+      "path": "reader-flat-v2-prepared-off-windows.stderr",
+      "sha256": "7f3e74d2933f3ffab0417868c67f25971520dc22c1f46ea1305980cade8e1441",
+      "bytes": 148
+    },
+    {
+      "path": "reader-flat-v2-prepared-on-redmi-first-incomplete.json",
+      "sha256": "c6d56f8b690612f78ec9c861c718b3eb16e095980c967d26e4bf71cc6d673426",
+      "bytes": 7446347
+    },
+    {
+      "path": "reader-flat-v2-prepared-on-windows.json",
+      "sha256": "ed979915ffbac3cb52c0551431850e5d1bf1c21400cf057528fbdb13f55ba163",
+      "bytes": 6038950
+    },
+    {
+      "path": "reader-flat-v2-prepared-on-windows.log",
+      "sha256": "6b9d67b6c1b485435da35d5800b253fca491adb0571c9f001615c165027a7b49",
+      "bytes": 5572997
+    },
+    {
+      "path": "reader-flat-v2-prepared-on-windows.stderr",
+      "sha256": "c8f99cae5f32de08d3e098626efbb11fe97c8df78b6747a55a27cf6c0e7cc28e",
+      "bytes": 444
+    },
+    {
+      "path": "reader-flat-v2-prepared-quality-redmi-66.json",
+      "sha256": "e76a200920330e3a6e8d24fca2251079deb38e03ec2e8ba7767e395410639b07",
+      "bytes": 609064
+    },
+    {
+      "path": "reader-flat-v2-quality-formats-windows.json",
+      "sha256": "0285a46ed34b0205d9d36f6ca920227ebea6849744e4faf0667b302dda34706a",
+      "bytes": 6650126
+    },
+    {
+      "path": "reader-flat-v2-quality-formats-windows.log",
+      "sha256": "7bcab50f69751629c6946b95ee5220cf709f589c2ba329fbf59e9eb328dc6d09",
+      "bytes": 3476890
+    },
+    {
+      "path": "reader-flat-v2-quality-formats-windows.stderr",
+      "sha256": "55202042d56807b932ab0feb5b2b846e38c806f08baa4638b03ae0de73db8e00",
+      "bytes": 1406
+    },
+    {
+      "path": "reader-flat-v2-surface-fix-prepared-off-redmi1006.json",
+      "sha256": "2fef9f9d7f7aa70fdcdf9260f18155059725620def850fdb6fcd9d923d13ab1d",
+      "bytes": 10017574
+    },
+    {
+      "path": "reader-flat-v2-surface-fix-prepared-on-redmi1006.json",
+      "sha256": "9babf992760e65a8edc1cf3c67a93cd92096664f4da67af5fa0cc17eef178e4f",
+      "bytes": 8706370
+    },
+    {
+      "path": "reader-flat-v2-surface-fix-quality-prepared-redmi1006.json",
+      "sha256": "6cc62db8aa8a20e489f09dcb3d5149d91d45bed2ea49199e8a89a7e81b8464f1",
+      "bytes": 618337
+    },
+    {
+      "path": "reader-lifecycle-internal-redmi-surfacefix1006.json",
+      "sha256": "6996d2f680baa625515ae8b88243f9c6428edd1a786756783d06c830a8abc050",
+      "bytes": 222254
+    },
+    {
+      "path": "reader-lifecycle-os-redmi-surfacefix1006.json",
+      "sha256": "9ab192047f7aeabff0e15a183e58e1eed6743e03ed92a5a95441dd799c7bd1c5",
+      "bytes": 222221
+    },
+    {
+      "path": "reader-native-large-fit-jpeg-redmi-30.json",
+      "sha256": "0e9cf7497a2e790c60480abb6ede1e9501b7e06c3b8ee95f0d7592c8fd210b06",
+      "bytes": 3427487
+    },
+    {
+      "path": "reader-ordinary-adaptive-redmi-30.json",
+      "sha256": "8383fcb0392dfd2ec3624580a6760ab963e9676a204fbdfc0f01c29702223aa2",
+      "bytes": 378648
+    },
+    {
+      "path": "reader-ordinary-adaptive-windows-30.json",
+      "sha256": "f2d459a945d08fb10e7f70c76ed0c305c5d4a25139428ea174e40f91a4378e55",
+      "bytes": 377811
+    },
+    {
+      "path": "reader-ordinary-full-redmi-30.json",
+      "sha256": "4979fd37758cb9654ab2fd3e673543becf9d2f79b11dfd2ea0a9d59ab2544ef0",
+      "bytes": 378816
+    },
+    {
+      "path": "reader-ordinary-full-windows-30.json",
+      "sha256": "876e5c1828da0c02b08f37469655f11e9ee55066564009a1f87637702cde25a3",
+      "bytes": 413087
+    },
+    {
+      "path": "reader-pool-redmi-full-30.json",
+      "sha256": "d764961591e8e43d86140c66103293ea30e6918315684078f09a4679c71af7a3",
+      "bytes": 5071525
+    },
+    {
+      "path": "reader-pool-windows-continuous-smoke.json",
+      "sha256": "1b9b62c4c0183213fb2f1973e37b5b546179fe3c6559fbde86be64efb456722a",
+      "bytes": 227256
+    },
+    {
+      "path": "reader-pool-windows-full-30.json",
+      "sha256": "8f82f01925f54fd5c1b4d28ca313834252a9e747a2bba22cbdf4576855f33ca9",
+      "bytes": 5707739
+    },
+    {
+      "path": "reader-raw-sync-first-stall-redmi.json",
+      "sha256": "eb33365a07daab647a11467dd2528f2752a8855d69cd122b11fa91395925adc4",
+      "bytes": 1759
+    },
+    {
+      "path": "reader-raw-sync-unit-validation.json",
+      "sha256": "76187cc3f748a8d9d5d07e66316112e58e42f8c03f58549684bf6c1418ef4f84",
+      "bytes": 1743
+    },
+    {
+      "path": "reader-redmi-fixed-30.json",
+      "sha256": "864831729e4e13d72c5078caa1f54af794ab757d830eb25871c4c43aeefbd0d5",
+      "bytes": 4470594
+    },
+    {
+      "path": "reader-redmi-roi-diagnostic-first.json",
+      "sha256": "c4c6bfc920bbbef5efa201705c912448f174846eb6e1089396eb0dd7c533c983",
+      "bytes": 6998
+    },
+    {
+      "path": "reader-redmi-roi-fixed-smoke.json",
+      "sha256": "1d25172a89b4cfd9f472d673e7474a9295ef4facfaa85152fda1b6a821389be9",
+      "bytes": 247401
+    },
+    {
+      "path": "reader-resolved-adaptive-windows-30.json",
+      "sha256": "21cb693f5a352c39a95035ecf66287c86a75e4b7ac3615dceb5e6c2451cc8f1d",
+      "bytes": 345552
+    },
+    {
+      "path": "reader-shared-1024-redmi-30.json",
+      "sha256": "5a7b18af5e6bc5fc865faf156b74371f8ccebf86f2285377cdaba0288c2302bc",
+      "bytes": 5104601
+    },
+    {
+      "path": "reader-shared-1024-windows-30.json",
+      "sha256": "a2f2c89ec60e6f77e60f6ad6fef4f0032125a218508c7f675dc71a9f80434a4c",
+      "bytes": 3112382
+    },
+    {
+      "path": "reader-shared-512-redmi-30.json",
+      "sha256": "4c2e4e87203254b3edbddf2f53be2667e1f8532c4028cc9e1a76aeab2c109995",
+      "bytes": 6714252
+    },
+    {
+      "path": "reader-shared-512-windows-30.json",
+      "sha256": "28c914785ea40f55af00f66c8d3c3aad273432c46cba6eb2e65806b9ec7b04cd",
+      "bytes": 4965728
+    },
+    {
+      "path": "reader-surface-cache-quality-redmi-66.json",
+      "sha256": "fb33f3e4c6d579dd905734a51406e66823afc6ba19d19a6d377188ac54029993",
+      "bytes": 768388
+    },
+    {
+      "path": "reader-surface-cache-quality-windows-66.json",
+      "sha256": "eb9cbf468719fee327ec382bc5251211702a37b30359d821479a2005cb914aed",
+      "bytes": 527055
+    },
+    {
+      "path": "reader-surface-quality-windows-44.json",
+      "sha256": "a5fd484e92f3e637083562122ae37d65cd2600e300ec248da54a2c43a5f484fd",
+      "bytes": 240798
+    },
+    {
+      "path": "reader-surface-quality-windows-first-failed.json",
+      "sha256": "cda61701003305cd987b596759a315f214ffde6e65c3a9c2627c0003422416d2",
+      "bytes": 93365
+    },
+    {
+      "path": "reader-unified-quality-redmi-66.json",
+      "sha256": "01f6b0bb5b80197e0090babd7b42a6d2c663c5af9ed423356ef13b204a3e755f",
+      "bytes": 629438
+    },
+    {
+      "path": "reader-v6-prepared-off-redmi1006.json",
+      "sha256": "e689f20db2e2fb1ee04b0b3f566fd9a9e123ec5afdae06037fddd16583351279",
+      "bytes": 10343287
+    },
+    {
+      "path": "reader-v6-prepared-on-redmi1006.json",
+      "sha256": "6c229363280beb997d108f25c9da8f00789c2a71075b07e0ab78e84548cd237d",
+      "bytes": 9078342
+    },
+    {
+      "path": "reader-v9-admission-off-n30-redmi1006.json",
+      "sha256": "326a202114f5ceae935ac3510e2bde6719ae384f9c882f6e9792188c7cb626bc",
+      "bytes": 665094
+    },
+    {
+      "path": "reader-v9-admission-on-n30-redmi1006.json",
+      "sha256": "b58bdb17fd065ed8302a439cd06f2374000da377d9581a2c3448eba2c203b51d",
+      "bytes": 707484
+    },
+    {
+      "path": "reader-v9-lifecycle-baseline-armed-os-analysis-redmi1006.json",
+      "sha256": "e8e7225e49b6ba75b7ae216aab7eee468d01b59c3d89b308becc2e794bbf53fd",
+      "bytes": 13055
+    },
+    {
+      "path": "reader-v9-lifecycle-baseline-armed-redmi1006.json",
+      "sha256": "f6ac3e7103eb9096436fc1be40905ff25cd5137b25d3d1745fb4ea4600ca76fa",
+      "bytes": 153399
+    },
+    {
+      "path": "reader-v9-lifecycle-baseline-armed-redmi1006.jsonl",
+      "sha256": "153310b5ba473b59e9dfa8c8f311f41f315e077ca7715d703d43447fe26b14aa",
+      "bytes": 304322
+    },
+    {
+      "path": "reader-v9-lifecycle-os-redmi1006.json",
+      "sha256": "6981ace3b7683db85f7995e70b0fd32b668f9e51faa08cd112878ef391ea486e",
+      "bytes": 153369
+    },
+    {
+      "path": "reader-v9-lifecycle-os-redmi1006.jsonl",
+      "sha256": "65f2073c17bd53d6ee2b49067228f4aedc86d3cdcee929fabd8bd33b282addcb",
+      "bytes": 242954
+    },
+    {
+      "path": "reader-v9-original-export-redmi1006.json",
+      "sha256": "d3fd9d5cf31207e597b36dd662e25707b78305bc70d6ded87ba435181dd67286",
+      "bytes": 5499
+    },
+    {
+      "path": "reader-v9-quality-formats-redmi1006.json",
+      "sha256": "48564fd9a1df680313cc756bc282a5fab27a661fc7d71f2a7cc23e44b13d5313",
+      "bytes": 11337797
+    },
+    {
+      "path": "reader-v9-quality-formats-windows.json",
+      "sha256": "7c4b7b5f6728e3f10faf7298a726756ffd48ee86a57acf1315a7ba167276d067",
+      "bytes": 6435606
+    },
+    {
+      "path": "reader-v9-surface-quality-redmi1006.json",
+      "sha256": "b5351601a9a3f22f28cb9fbac6bf8f006a4e754416c8c5aaf7b5e60b25c5cdf2",
+      "bytes": 659692
+    },
+    {
+      "path": "reader-v9-surface-quality-windows.json",
+      "sha256": "e075943818603896fcc637eed4345fa1348247d02e1f99d668bf94cfc0f6fede",
+      "bytes": 777472
+    },
+    {
+      "path": "reader-viewport-region-redmi-30.json",
+      "sha256": "44c8a9f12597059ea8499e0c6e7d989a75af1e7aff422f3a4ef13837a29457db",
+      "bytes": 3736634
+    },
+    {
+      "path": "reader-viewport-region-windows-30.json",
+      "sha256": "e1a634155d2a4418071a5132d8beea1cba0765774dbaba661b51960ee4642620",
+      "bytes": 1923763
+    },
+    {
+      "path": "reader-windows-first-smoke.json",
+      "sha256": "74afa1da0119b38361fc11c4a26501c7d5262827bf685071cb53f940a6cf68eb",
+      "bytes": 47128
+    },
+    {
+      "path": "reader-windows-fixed-30.json",
+      "sha256": "df89dd322a822daa4c0eeb9daaf226cce8f085295d8dfc56f5d71f9177e32bae",
+      "bytes": 4496348
+    },
+    {
+      "path": "reader-windows-matrix-first.json",
+      "sha256": "ccffeaef1dc9cc277dfd35fade4b0a9b217e66b4501e8de195ddc71c13b19296",
+      "bytes": 2415243
+    },
+    {
+      "path": "reader-windows-quality-final.json",
+      "sha256": "c72469fd7223f55258f1b67043f5326e38db3917c027dca00831a1fd73453aa8",
+      "bytes": 29157
+    },
+    {
+      "path": "reader-windows-surface-fix1006-prepared-off-process.json",
+      "sha256": "f74f7d186f8f06f2f38bc8ae7cfa734102a1282df7bd8b0a250b8350e7690e40",
+      "bytes": 977
+    },
+    {
+      "path": "reader-windows-surface-fix1006-prepared-off.json",
+      "sha256": "7ff52b5cd16ef48ee7f97b948121ac510b77d740773347a816125d0914ea2e6c",
+      "bytes": 6910530
+    },
+    {
+      "path": "reader-windows-surface-fix1006-prepared-off.log",
+      "sha256": "83ff9b16b9b0cede8d2175f0774863c1488df737bcbea46a454397de591b6ee4",
+      "bytes": 6135462
+    },
+    {
+      "path": "reader-windows-surface-fix1006-prepared-off.stderr",
+      "sha256": "7f3e74d2933f3ffab0417868c67f25971520dc22c1f46ea1305980cade8e1441",
+      "bytes": 148
+    },
+    {
+      "path": "reader-windows-surface-fix1006-prepared-on-process.json",
+      "sha256": "272e7f336d9a2d7f1b951381917e67b92858e2636fa78b07d5ff91de6243367e",
+      "bytes": 972
+    },
+    {
+      "path": "reader-windows-surface-fix1006-prepared-on.json",
+      "sha256": "7f8518157efcabfacf5b937c42bc4287bb37ac2bea583f7f73131e8e0947c9ab",
+      "bytes": 6236211
+    },
+    {
+      "path": "reader-windows-surface-fix1006-prepared-on.log",
+      "sha256": "e830166e288bdbd088fbdb2b90c866a632582e0b754b1e3d71534202df02ba9d",
+      "bytes": 5785361
+    },
+    {
+      "path": "reader-windows-surface-fix1006-prepared-on.stderr",
+      "sha256": "7f3e74d2933f3ffab0417868c67f25971520dc22c1f46ea1305980cade8e1441",
+      "bytes": 148
+    },
+    {
+      "path": "real-source-full-workflow.json",
+      "sha256": "0ca8af82b9cd91809661d4884ff096bc5d145aeec50e17e58c68a199fd0a8ad4",
+      "bytes": 8685
+    },
+    {
+      "path": "real-source-remote-workflow-final.json",
+      "sha256": "d5c27be9dd0b0341a89aa433d64a237f15c7e28322df441402d399dfb99e4cf7",
+      "bytes": 9001
+    },
+    {
+      "path": "real-source-remote-workflow.json",
+      "sha256": "d5c27be9dd0b0341a89aa433d64a237f15c7e28322df441402d399dfb99e4cf7",
+      "bytes": 9001
+    },
+    {
+      "path": "server-production-headless-before-quota.json",
+      "sha256": "5fe484c516a47022de5731a6824cad122fb42e4fda652688fee6f9e56f782713",
+      "bytes": 3112
+    },
+    {
+      "path": "server-production-headless-quota-profile.json",
+      "sha256": "3b71ebacc6274301f4c688986075c1c8755047c46d794ac443397ceb1418df03",
+      "bytes": 3130
+    },
+    {
+      "path": "windows-surface-fix1006-build.log",
+      "sha256": "8cbe054f650b91aa181096208ecf7b3e661d5bb75a65e9533891bd67dd945004",
+      "bytes": 5139
+    },
+    {
+      "path": "color-precision-artifacts-redmi1006/640x960-16bit-icc.png-0-direct-original-roi-overlay-twice-medium-actual.png",
+      "sha256": "58940320044d193114e94ee19383fb7de9cbcbe273ca1e2f38dd7df6a5e272a6",
+      "bytes": 49170
+    },
+    {
+      "path": "color-precision-artifacts-redmi1006/640x960-16bit-icc.png-0-direct-original-roi-overlay-twice-medium-reference.png",
+      "sha256": "35a289a41a55972ea8726837f9b018101b8e13a9029365afde97ef9e1d79c7ac",
+      "bytes": 53890
+    },
+    {
+      "path": "color-precision-artifacts-redmi1006/640x960-16bit-icc.png-0-direct-original-roi-overlay-twice-none-actual.png",
+      "sha256": "58940320044d193114e94ee19383fb7de9cbcbe273ca1e2f38dd7df6a5e272a6",
+      "bytes": 49170
+    },
+    {
+      "path": "color-precision-artifacts-redmi1006/640x960-16bit-icc.png-0-direct-original-roi-overlay-twice-none-reference.png",
+      "sha256": "35a289a41a55972ea8726837f9b018101b8e13a9029365afde97ef9e1d79c7ac",
+      "bytes": 53890
+    },
+    {
+      "path": "color-precision-artifacts-redmi1006/640x960-16bit-icc.png-1-direct-original-roi-overlay-twice-medium-actual.png",
+      "sha256": "bb8cccf861513ffd5987bb7fed0b5bd6c6e504de4cec6fecd2b7fb37d74e7f92",
+      "bytes": 46936
+    },
+    {
+      "path": "color-precision-artifacts-redmi1006/640x960-16bit-icc.png-1-direct-original-roi-overlay-twice-medium-reference.png",
+      "sha256": "ea4558d2a11f968b494d749f9b16b95255a66d93eea20532a88f350b9ab62a49",
+      "bytes": 51287
+    },
+    {
+      "path": "color-precision-artifacts-redmi1006/640x960-16bit-icc.png-1-direct-original-roi-overlay-twice-none-actual.png",
+      "sha256": "bb8cccf861513ffd5987bb7fed0b5bd6c6e504de4cec6fecd2b7fb37d74e7f92",
+      "bytes": 46936
+    },
+    {
+      "path": "color-precision-artifacts-redmi1006/640x960-16bit-icc.png-1-direct-original-roi-overlay-twice-none-reference.png",
+      "sha256": "ea4558d2a11f968b494d749f9b16b95255a66d93eea20532a88f350b9ab62a49",
+      "bytes": 51287
+    },
+    {
+      "path": "color-precision-artifacts-redmi1006/640x960-gray-16bit-icc.png-0-direct-original-roi-overlay-twice-medium-actual.png",
+      "sha256": "11727545049a7bf1a03eb034364f67ea6251151bf51ddc081937acf49a9a17bf",
+      "bytes": 58316
+    },
+    {
+      "path": "color-precision-artifacts-redmi1006/640x960-gray-16bit-icc.png-0-direct-original-roi-overlay-twice-medium-reference.png",
+      "sha256": "59b0083c1de35117f5a1e795c2044d5c5f87e6176d9b60cca21fc10e1d0f7a0d",
+      "bytes": 55096
+    },
+    {
+      "path": "color-precision-artifacts-redmi1006/640x960-gray-16bit-icc.png-0-direct-original-roi-overlay-twice-none-actual.png",
+      "sha256": "11727545049a7bf1a03eb034364f67ea6251151bf51ddc081937acf49a9a17bf",
+      "bytes": 58316
+    },
+    {
+      "path": "color-precision-artifacts-redmi1006/640x960-gray-16bit-icc.png-0-direct-original-roi-overlay-twice-none-reference.png",
+      "sha256": "59b0083c1de35117f5a1e795c2044d5c5f87e6176d9b60cca21fc10e1d0f7a0d",
+      "bytes": 55096
+    },
+    {
+      "path": "color-precision-artifacts-redmi1006/640x960-gray-16bit-icc.png-1-direct-original-roi-overlay-twice-medium-actual.png",
+      "sha256": "4a2b642ca3065d7bb78422264f6324d765937fc6b32cfeaccd530cc5ea6d1c70",
+      "bytes": 58204
+    },
+    {
+      "path": "color-precision-artifacts-redmi1006/640x960-gray-16bit-icc.png-1-direct-original-roi-overlay-twice-medium-reference.png",
+      "sha256": "52423a58534e62ae51316a5b085a23259e13f86ecb0d91dfdee959534d72031f",
+      "bytes": 54932
+    },
+    {
+      "path": "color-precision-artifacts-redmi1006/640x960-gray-16bit-icc.png-1-direct-original-roi-overlay-twice-none-actual.png",
+      "sha256": "4a2b642ca3065d7bb78422264f6324d765937fc6b32cfeaccd530cc5ea6d1c70",
+      "bytes": 58204
+    },
+    {
+      "path": "color-precision-artifacts-redmi1006/640x960-gray-16bit-icc.png-1-direct-original-roi-overlay-twice-none-reference.png",
+      "sha256": "52423a58534e62ae51316a5b085a23259e13f86ecb0d91dfdee959534d72031f",
+      "bytes": 54932
+    }
+  ]
+}

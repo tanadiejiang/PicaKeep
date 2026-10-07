@@ -206,7 +206,9 @@ void main() {
             : await manager.enqueueKomiic(_komiic());
     expect(result.success, isTrue);
     await waitTask(manager.tasks.single);
-    expect(manager.tasks.single.currentEp, 20);
+    expect(manager.tasks.single.currentEp, 20,
+        reason: 'Unexpected initial stop: ${manager.tasks.single.error}; '
+            'requested chapters: $reads; written pages: ${writes.length}');
     expect(manager.tasks.single.completedChapters,
         List.generate(19, (i) => i).toSet());
     await manager.persistQueue();

@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:ui' as ui;
 
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart' hide Row;
@@ -10,6 +11,7 @@ import 'package:sqlite3/sqlite3.dart';
 import 'package:picakeep/foundation/image_loader/stream_image_provider.dart';
 import 'package:picakeep/foundation/privileged_storage_access.dart';
 import 'package:picakeep/pages/reader/comic_reading_page.dart';
+import 'package:picakeep/pages/reader/reader_image_surface.dart';
 
 import '../base.dart';
 import 'app.dart';
@@ -32,6 +34,8 @@ import 'log.dart';
 import 'pixiv_download_root.dart';
 import 'pixiv_library.dart';
 import 'pixiv_library_locations.dart';
+import 'image_pipeline/image_background_notifications.dart';
+import 'image_pipeline/reader_page_source.dart';
 
 part 'local_library_manager_settings.dart';
 part 'local_library_query.dart';
@@ -462,12 +466,14 @@ class LocalLibraryComicItem extends DownloadedItem {
   }
 
   @override
-  Widget createReadingPage({int? ep, int? page}) {
-    final data = createLocalReadingData();
+  Widget createReadingPage(
+      {int? ep, int? page, ImageProvider<Object>? cachedCoverPreview}) {
+    final data = createLocalReadingData(cachedCoverPreview: cachedCoverPreview);
     return ComicReadingPage(data, page ?? 1, ep ?? (data.hasEp ? 1 : 0));
   }
 
-  LocalPathReadingData createLocalReadingData() {
+  LocalPathReadingData createLocalReadingData(
+      {ImageProvider<Object>? cachedCoverPreview}) {
     final hasEp = hasMultipleEpisodes;
     final epsMap = hasEp
         ? {
@@ -492,6 +498,10 @@ class LocalLibraryComicItem extends DownloadedItem {
       downloadedEpisodeIndexes: downloadedEps,
       supportsImageSort: isAlbum && !isArchiveItem,
       archiveChapterRealNames: isArchiveItem ? _archiveChapterRealNames : null,
+      cachedPreviewLoader: cachedCoverPreview == null
+          ? null
+          : (original) => LocalLibraryManager.instance
+              .cloneIllustReaderPreview(this, cachedCoverPreview, original),
     );
     return data;
   }
@@ -516,6 +526,7 @@ class LocalPathReadingData extends ReadingData {
     required Iterable<int> downloadedEpisodeIndexes,
     this.supportsImageSort = false,
     this.archiveChapterRealNames,
+    this.cachedPreviewLoader,
   }) : _episodeFiles = {
           for (final entry in episodeFiles.entries)
             entry.key: List<String>.from(entry.value),
@@ -530,6 +541,36 @@ class LocalPathReadingData extends ReadingData {
   final bool supportsImageSort;
 
   final List<String>? archiveChapterRealNames;
+
+  final Future<ui.Image?> Function(ReaderResolvedOriginal)? cachedPreviewLoader;
+
+  @override
+  Future<ui.Image?> loadCachedPreview(
+      int ep, int page, String url, ReaderResolvedOriginal original) async {
+    final loader = cachedPreviewLoader;
+    final key = hasEp ? ep : 0;
+    final files = _episodeFiles[key];
+    final identity = original.source.identity;
+    if (loader == null ||
+        hasEp ||
+        ep != 0 ||
+        page != 0 ||
+        files == null ||
+        files.length != 1 ||
+        isArchiveUri(url) ||
+        original.source is! FileReaderPageSource ||
+        !original.source.isAuthoritativeOriginal ||
+        original.source.isPreviewOnly ||
+        identity.workId != id ||
+        identity.episode != ep ||
+        identity.page != page ||
+        !_sameLocalReaderPath(files.single, url) ||
+        !_sameLocalReaderPath(url, original.file.path)) {
+      return null;
+    }
+    await original.verifyCurrent();
+    return loader(original);
+  }
 
   @override
   String epDisplayName(int index) {
@@ -688,6 +729,15 @@ class LocalPathReadingData extends ReadingData {
 bool readArchiveUseChapterNumber() =>
     appdata.settings[archiveUseChapterNumberSettingIndex] == '1';
 
+bool _sameLocalReaderPath(String left, String right) {
+  String normalized(String value) {
+    final path = p.normalize(p.absolute(value));
+    return Platform.isWindows ? path.toLowerCase() : path;
+  }
+
+  return normalized(left) == normalized(right);
+}
+
 Future<void> writeArchiveUseChapterNumber(bool value) async {
   appdata.settings[archiveUseChapterNumberSettingIndex] = value ? '1' : '0';
   await appdata.updateSettings();
@@ -711,6 +761,23 @@ class LocalLibraryManager {
   final Map<String, Future<String?>> _coverResolutions = {};
   final Map<String, _IllustCoverStage> _illustCoverStages = {};
   int _coverSession = 0;
+  final Map<String, String> _preparedSourceVersions = {};
+
+  void _queueChangedCovers(Iterable<LocalLibraryComicItem> items) {
+    var added = 0;
+    final alive = <String>{};
+    for (final item in items) {
+      alive.add(item.id);
+      final path = item.localCoverPath;
+      if (path == null || path.isEmpty || path == noCoverSentinel) continue;
+      final version =
+          '${item.fileSystemPath}|${item.sourceRowTimeMillis}|${item._coverSourceFingerprint}';
+      if (_preparedSourceVersions[item.id] == version) continue;
+      _preparedSourceVersions[item.id] = version;
+      if (++added <= 12) ImageBackgroundNotifications.committed(path);
+    }
+    _preparedSourceVersions.removeWhere((id, _) => !alive.contains(id));
+  }
 
   /// A new page/permission session may retry failed reads without discarding
   /// successfully cached covers or touching any downloaded content.
@@ -1051,9 +1118,9 @@ class LocalLibraryManager {
     }
     final known =
         await LocalCoverCache.lookup(entryKey, fingerprint: sourceFingerprint);
-    if (known != null &&
-        _isUnifiedLocalCoverPath(known) &&
-        await _hasUsableManagedCoverCache(item, known)) {
+    // lookup already verifies the application-owned file exists and is nonempty.
+    // Do not repeat that check through the privileged storage helper.
+    if (known != null && _isUnifiedLocalCoverPath(known)) {
       return known;
     }
     final sourcePath = await IllustCoverDiagnostics.measure(
@@ -1078,16 +1145,19 @@ class LocalLibraryManager {
     }
     // plan/12：字节落进**统一封面缓存**（`App.dataPath/local_library_cache/covers`），
     // 由 `LocalCoverCache` 负责原子写入、指纹、索引与负缓存清理。
-    final stored = await LocalCoverCache.storeBytes(
-      entryKey: entryKey,
-      bytes: bytes,
-      fingerprint: sourceFingerprint,
-      extension: _coverCacheExtensionForPath(sourcePath),
-    );
+    final stored = await IllustCoverDiagnostics.measure(
+        'source.store',
+        () => LocalCoverCache.storeBytes(
+              entryKey: entryKey,
+              bytes: bytes,
+              fingerprint: sourceFingerprint,
+              extension: _coverCacheExtensionForPath(sourcePath),
+            ));
     if (stored == null || stored.isEmpty) {
       return null;
     }
-    await _persistManagedDownloadCoverCachePath(item, stored);
+    await IllustCoverDiagnostics.measure('source.persist',
+        () => _persistManagedDownloadCoverCachePath(item, stored));
     return stored;
   }
 
@@ -1101,24 +1171,6 @@ class LocalLibraryManager {
         .replaceAll('\\', '/')
         .toLowerCase();
     return normalized == root || normalized.startsWith('$root/');
-  }
-
-  Future<bool> _hasUsableManagedCoverCache(
-    LocalLibraryComicItem item,
-    String? coverPath,
-  ) async {
-    final normalized = coverPath?.trim() ?? '';
-    if (normalized.isEmpty || !await _fileExists(normalized)) {
-      return false;
-    }
-    // plan/12：不再要求"必须在 managed_download_covers 目录下"。
-    //
-    // 封面缓存已统一到 `App.dataPath/local_library_cache/covers`
-    //（`LocalCoverCache`），而**旧缓存仍在 `managed_download_covers`**、
-    // 压缩包解出的封面也归统一根 —— 用"目录前缀"当判据会把后两者全部判成
-    // "不可用"，于是每次进页面都重解一遍封面（甚至反复覆盖）。判据回归本质：
-    // **文件在、且非空**，就是可用缓存。
-    return true;
   }
 
   /// 一条本地条目在统一封面缓存里的键（plan/12）。
@@ -1138,7 +1190,7 @@ class LocalLibraryManager {
   // 它用"路径前缀是否在 managed_download_covers 下"判断缓存是否可用 ——
   // 封面缓存统一到 `App.dataPath/local_library_cache/covers` 之后这个判据
   // 必然为假，会把**所有**缓存判成不可用（于是每次进页面重解一遍）。
-  // 判据已回归本质：文件在且非空即可用（见 `_hasUsableManagedCoverCache`）。
+  // 判据已回归本质：文件在且非空即可用，由 LocalCoverCache.lookup 核验。
 
   Future<void> _persistManagedDownloadCoverCachePath(
     LocalLibraryComicItem item,
@@ -1221,6 +1273,22 @@ class LocalLibraryManager {
         return null;
       }
     }
+    // A single-image Pixiv artifact is already the cover. Check its real file
+    // type before probing impossible children such as image.png/cover.jpg;
+    // each missing child is redundant IO (and a separate privileged lookup
+    // when Root/Shizuku access is enabled).
+    // The shared helper deliberately rejects directories named *.png/*.jpg.
+    if (_isVisibleImagePath(dirPath)) {
+      final fileArtifact = await _buildFileArtifactEpisodeFiles(dirPath, 0);
+      if (fileArtifact != null && fileArtifact.isNotEmpty) {
+        return fileArtifact.first;
+      }
+      // The direct type probe can fail under scoped storage. The privileged
+      // stat contract also accepts regular files only, never a same-name dir.
+      if (await PrivilegedStorageAccess.fileStat(dirPath) != null) {
+        return dirPath;
+      }
+    }
     for (final candidate in const [
       'cover.jpg',
       'cover.jpeg',
@@ -1299,35 +1367,197 @@ class LocalLibraryManager {
       LocalLibraryComicItem item, int width,
       {required bool Function() canContinue}) async {
     if (!canContinue()) return null;
-    var cover = await resolveCoverPathForItem(item);
+    final cover = await IllustCoverDiagnostics.measure(
+        'source.total', () => _resolveIllustCoverSource(item, canContinue));
     if (cover == null || !canContinue()) return null;
-    if (!_isUnifiedLocalCoverPath(cover)) {
-      cover = await _stageIllustCover(item, cover, canContinue);
-    }
-    if (cover == null || !canContinue()) return null;
-    final prepared = await CoverThumbnailCache.prepareDisplay(cover, width,
-        canContinue: canContinue);
+    final preparedProvider = await CoverThumbnailCache.prepareProvider(
+        cover, width,
+        canContinue: canContinue,
+        trace: IllustCoverDiagnostics.enabled ? CoverThumbnailTrace() : null);
     if (!canContinue()) return null;
     IllustCoverDiagnostics.event('provider.ready');
-    // Only an application-internal file reaches FileImage; privileged external
-    // storage was read through the storage helper exactly once on a cache miss.
-    if (prepared != null && prepared != cover) return FileImage(File(prepared));
-    // Large-width / decode-failure fallback can be overwritten in place by the
-    // cover store. FileImage(path) alone would keep the old decoded pixels.
-    final fingerprint = await LocalCoverCache.fingerprintForAsync(File(cover));
-    if (!canContinue()) return null;
-    return _VersionedCoverFileImage(File(cover), fingerprint);
+    // Ordinary readable originals use the same bounded file-buffer decoder as
+    // cached sources. Privileged storage still stages through its read helper.
+    // Failed decode admission must not restart an unrestricted original codec.
+    return preparedProvider;
   }
+
+  Future<ui.Image?> cloneIllustReaderPreview(LocalLibraryComicItem item,
+      ImageProvider<Object> provider, ReaderResolvedOriginal original) async {
+    final artifact = item.fileSystemPath;
+    if (item.isArchiveItem ||
+        item.hasMultipleEpisodes ||
+        artifact == null ||
+        !_sameLocalReaderPath(artifact, original.file.path)) {
+      return null;
+    }
+    await original.verifyCurrent();
+    final direct = await CoverThumbnailCache.cloneCachedReaderPreview(provider,
+        original: original.file,
+        snapshot: original.fileSnapshot,
+        originalSize: original.metadata.size);
+    if (direct != null) return direct;
+    final fingerprint = '${original.file.path}|${original.fileSnapshot.size}|'
+        '${original.fileSnapshot.modified.millisecondsSinceEpoch}';
+    for (final key in <String>[
+      _coverCacheEntryKey(item),
+      _illustCoverStageEntryKey(item, original.file.path),
+    ]) {
+      final alias = await LocalCoverCache.lookup(key, fingerprint: fingerprint);
+      if (alias == null || !_isUnifiedLocalCoverPath(alias)) continue;
+      final cached = await CoverThumbnailCache.cloneCachedReaderPreview(
+          provider,
+          original: original.file,
+          snapshot: original.fileSnapshot,
+          originalSize: original.metadata.size,
+          validatedAliasPath: alias);
+      if (cached != null) return cached;
+    }
+    return null;
+  }
+
+  /// Illustration preparation can borrow an ordinary source without making the
+  /// public cover-path API stop returning registered internal managed covers.
+  /// Existing valid raw caches remain the first choice, retaining their thumbs.
+  Future<String?> _resolveIllustCoverSource(
+      LocalLibraryComicItem item, bool Function() canContinue) async {
+    if (!canContinue() || !item.localStorageExists) return null;
+    if (_isAndroidPrivilegedAccessEnabled()) {
+      return _resolveStagedIllustCoverSource(item, canContinue);
+    }
+
+    String? source;
+    if (item.isManagedDownloadItem) {
+      final artifact = item.fileSystemPath;
+      if (artifact == null || artifact.isEmpty) return null;
+      final fingerprint =
+          await LocalCoverCache.fingerprintForAsync(File(artifact));
+      if (!canContinue()) return null;
+      item._coverSourceFingerprint = fingerprint;
+      final known = await LocalCoverCache.lookup(_coverCacheEntryKey(item),
+          fingerprint: fingerprint);
+      if (!canContinue()) return null;
+      if (known != null && _isUnifiedLocalCoverPath(known)) {
+        item._localCoverPath = known;
+        return known;
+      }
+      source = await IllustCoverDiagnostics.measure(
+          'source.resolve', () => _resolveManagedDownloadSourceCoverPath(item));
+    } else {
+      final cached = item.localCoverPath?.trim();
+      if (cached != null &&
+          cached.isNotEmpty &&
+          cached != noCoverSentinel &&
+          await _fileExists(cached)) {
+        source = cached;
+      } else {
+        final artifact = item.fileSystemPath;
+        if (artifact == null || artifact.isEmpty) return null;
+        source = await _resolveNonManagedCoverPath(item, artifact);
+        if (source != null) item._localCoverPath = source;
+      }
+      if (source != null && !_isUnifiedLocalCoverPath(source)) {
+        final fingerprint =
+            await LocalCoverCache.fingerprintForAsync(File(source));
+        if (!canContinue()) return null;
+        final known = await LocalCoverCache.lookup(
+            _illustCoverStageEntryKey(item, source),
+            fingerprint: fingerprint);
+        if (!canContinue()) return null;
+        // Keep the original metadata hint, even when borrowing its old copy.
+        if (known != null) return known;
+      }
+    }
+    if (source == null || source.isEmpty || !canContinue()) return null;
+    if (_isUnifiedLocalCoverPath(source)) {
+      // Archive materialization already owns a usable local file; do not copy
+      // its uncompressed member into a second managed-cover cache entry.
+      item._localCoverPath = source;
+      return source;
+    }
+    if (!p.isAbsolute(source) || source.contains('://')) {
+      return _resolveStagedIllustCoverSource(item, canContinue);
+    }
+    final readability = await IllustCoverDiagnostics.measure(
+        'source.readability',
+        () => _probeIllustCoverSource(source!, canContinue));
+    if (!canContinue() || readability == _IllustCoverReadability.obsolete) {
+      return null;
+    }
+    if (readability == _IllustCoverReadability.inaccessible) {
+      return _resolveStagedIllustCoverSource(item, canContinue);
+    }
+    // This is a page/detail geometry hint only. Managed source-cache JSON is
+    // still written exclusively by the existing internal-cover resolver.
+    item._localCoverPath = source;
+    IllustCoverDiagnostics.event('source.direct');
+    return source;
+  }
+
+  Future<String?> _resolveStagedIllustCoverSource(
+      LocalLibraryComicItem item, bool Function() canContinue) async {
+    final source = await resolveCoverPathForItem(item);
+    if (source == null || !canContinue()) return null;
+    if (_isUnifiedLocalCoverPath(source)) return source;
+    return _stageIllustCover(item, source, canContinue);
+  }
+
+  /// Exists/stat alone cannot prove Dart can read a scoped-storage file. Open a
+  /// bounded prefix and compare the source version after closing the handle.
+  /// An obsolete source is never repaired by copying a newer version mid-job.
+  Future<_IllustCoverReadability> _probeIllustCoverSource(
+      String source, bool Function() canContinue) async {
+    RandomAccessFile? opened;
+    var readCompleted = false;
+    try {
+      final file = File(source);
+      final before = await file.stat();
+      if (!canContinue()) return _IllustCoverReadability.obsolete;
+      if (before.type != FileSystemEntityType.file || before.size == 0) {
+        return _IllustCoverReadability.inaccessible;
+      }
+      opened = await file.open();
+      if (!canContinue()) return _IllustCoverReadability.obsolete;
+      final prefix = await opened.read(32);
+      readCompleted = true;
+      await opened.close();
+      opened = null;
+      if (!canContinue() || prefix.isEmpty) {
+        return _IllustCoverReadability.obsolete;
+      }
+      final after = await file.stat();
+      if (!canContinue() ||
+          after.type != FileSystemEntityType.file ||
+          after.size != before.size ||
+          after.modified != before.modified) {
+        return _IllustCoverReadability.obsolete;
+      }
+      return _IllustCoverReadability.readable;
+    } on FileSystemException {
+      return canContinue() && !readCompleted
+          ? _IllustCoverReadability.inaccessible
+          : _IllustCoverReadability.obsolete;
+    } finally {
+      try {
+        await opened?.close();
+      } on FileSystemException {
+        // The fallback handles inaccessible sources; no handle may escape.
+      }
+    }
+  }
+
+  String _illustCoverStageEntryKey(LocalLibraryComicItem item, String source) =>
+      LocalCoverCache.entryKeyFor(
+          sourceId: 'illust::${item.id}',
+          originalId: item.originalId,
+          sourceRelative: source);
 
   Future<String?> _stageIllustCover(LocalLibraryComicItem item, String source,
       bool Function() canContinue) async {
     if (!canContinue()) return null;
     final fingerprint = await LocalCoverCache.fingerprintForAsync(File(source));
     if (!canContinue()) return null;
-    final key = LocalCoverCache.entryKeyFor(
-        sourceId: 'illust::${item.id}',
-        originalId: item.originalId,
-        sourceRelative: source);
+    final key = _illustCoverStageEntryKey(item, source);
     final taskKey = '${App.dataPath}::$key::$fingerprint';
     final active = _illustCoverStages[taskKey];
     if (active != null) {
@@ -1595,25 +1825,12 @@ class LocalLibraryManager {
   }
 }
 
+enum _IllustCoverReadability { readable, inaccessible, obsolete }
+
 class _IllustCoverStage {
   final List<bool Function()> consumers = [];
   late final Future<String?> result;
   bool get canContinue => consumers.any((isActive) => isActive());
-}
-
-class _VersionedCoverFileImage extends FileImage {
-  const _VersionedCoverFileImage(super.file, this.fingerprint);
-  final String fingerprint;
-
-  @override
-  bool operator ==(Object other) =>
-      other is _VersionedCoverFileImage &&
-      other.file.path == file.path &&
-      other.scale == scale &&
-      other.fingerprint == fingerprint;
-
-  @override
-  int get hashCode => Object.hash(file.path, scale, fingerprint);
 }
 
 class _Semaphore {

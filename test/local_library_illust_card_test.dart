@@ -23,6 +23,7 @@ import 'package:picakeep/foundation/download_model.dart';
 import 'package:picakeep/components/comic_tag_wrap.dart';
 import 'package:picakeep/foundation/comic_tile_display_config.dart';
 import 'package:picakeep/foundation/illust_card_info_config.dart';
+import 'package:picakeep/foundation/image_pipeline/cover_decode_target.dart';
 import 'package:picakeep/foundation/local_library.dart';
 import 'package:picakeep/foundation/local_library_illust_view.dart';
 import 'package:picakeep/pages/local_library_illust_card.dart';
@@ -503,8 +504,8 @@ void main() {
       );
       await tester.pump();
       final provider = _imageIn(tester).image;
-      if (provider is ResizeImage) {
-        return provider.width;
+      if (provider is CoverDecodeTarget) {
+        return provider.frameWidth;
       }
       return null;
     }
@@ -572,8 +573,8 @@ void main() {
       );
       await tester.pump();
       final provider = _imageIn(tester).image;
-      expect(provider, isA<ResizeImage>());
-      final cacheWidth = (provider as ResizeImage).width!;
+      expect(provider, isA<CoverDecodeTarget>());
+      final cacheWidth = (provider as CoverDecodeTarget).frameWidth;
       // 格子与图同比例（都取自 entry.aspectRatio），所以这里等于列宽口径。
       expect(cacheWidth, (imageWidth * 3.0 * 1.35).round());
       // 关键：cacheWidth 一定是**有限正数**（降采样没被丢掉）

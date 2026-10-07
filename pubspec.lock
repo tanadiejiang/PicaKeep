@@ -789,6 +789,13 @@ packages:
       url: "https://github.com/wgh136/photo_view"
     source: git
     version: "0.14.0"
+  picakeep_image_engine:
+    dependency: "direct main"
+    description:
+      path: "packages/picakeep_image_engine"
+      relative: true
+    source: path
+    version: "0.1.0"
   platform:
     dependency: transitive
     description:
@@ -1308,4 +1315,4 @@ packages:
     version: "3.1.3"
 sdks:
   dart: ">=3.11.0 <4.0.0"
-  flutter: ">=3.38.4"
+  flutter: ">=3.41.0"

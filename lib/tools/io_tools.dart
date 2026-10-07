@@ -6,6 +6,12 @@ import 'dart:math';
 import 'package:flutter/painting.dart';
 import 'package:picakeep/foundation/app.dart';
 import 'package:picakeep/foundation/image_loader/base_image_provider.dart';
+import 'package:picakeep/foundation/image_pipeline/derived_image_store.dart';
+import 'package:picakeep/foundation/image_pipeline/background_image_preparer.dart';
+import 'package:picakeep/foundation/cover_thumbnail_cache.dart';
+import 'package:picakeep/foundation/local_cover_cache.dart';
+import 'package:picakeep/foundation/remote_library_data_source.dart';
+import 'package:path/path.dart' as p;
 
 String bytesLengthToReadableSize(int length, {bool useBase2 = false}) {
   const suffixes = ["B", "KB", "MB", "GB", "TB", "PB"];
@@ -40,6 +46,14 @@ Future<void> safeCreateDirectory(Directory dir) async {
 }
 
 Future<void> eraseCache() async {
+  final dataRoot = App.dataPath;
+  final cacheRoot = App.cachePath;
+  DerivedImageStore.invalidateWithin(p.join(dataRoot, 'cache'));
+  DerivedImageStore.invalidateWithin(cacheRoot);
+  CoverThumbnailCache.invalidatePendingPublications();
+  LocalCoverCache.invalidatePendingPublications();
+  RemoteLibraryDataSource.invalidateCachePublications();
+  BackgroundImagePreparer.instance.invalidate();
   BaseImageProvider.clearCache();
   final imageCache = PaintingBinding.instance.imageCache;
   imageCache.clear();
@@ -55,15 +69,41 @@ Future<void> eraseCache() async {
   ];
 
   for (final cacheDirectory in cacheDirectories) {
-    if (!await cacheDirectory.exists()) {
+    if (await FileSystemEntity.type(cacheDirectory.path, followLinks: false) !=
+        FileSystemEntityType.directory) {
       continue;
     }
 
-    await for (final entity in cacheDirectory.list(followLinks: false)) {
+    await for (final entity
+        in cacheDirectory.list(recursive: true, followLinks: false)) {
+      if (App.dataPath != dataRoot || App.cachePath != cacheRoot) return;
+      if (entity is! File ||
+          DerivedImageStore.isPathLeased(entity.path) ||
+          RemoteLibraryDataSource.isCacheFileProtected(entity.path)) {
+        continue;
+      }
+      final canonical = p.normalize(p.absolute(entity.path));
+      if (!p.isWithin(
+          p.normalize(p.absolute(cacheDirectory.path)), canonical)) {
+        continue;
+      }
       try {
-        await entity.delete(recursive: true);
+        await entity.delete();
       } catch (_) {}
     }
+  }
+  final registered = await LocalCoverCache.registeredReproduciblePaths();
+  final coverRoot = p.join(dataRoot, 'local_library_cache', 'covers');
+  for (final path in registered) {
+    if (App.dataPath != dataRoot ||
+        !p.isWithin(coverRoot, path) ||
+        DerivedImageStore.isPathLeased(path) ||
+        RemoteLibraryDataSource.isCacheFileProtected(path)) {
+      continue;
+    }
+    try {
+      await File(path).delete();
+    } catch (_) {}
   }
   App.notifyLocalDataChanged();
 }

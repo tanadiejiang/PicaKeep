@@ -21,6 +21,8 @@ import 'package:picakeep/base.dart';
 import 'package:picakeep/foundation/app.dart';
 import 'package:picakeep/foundation/cover_thumbnail_cache.dart';
 import 'package:picakeep/foundation/local_cover_cache.dart';
+import 'package:picakeep/foundation/image_pipeline/image_disk_quota.dart';
+import 'support/image_disk_quota_fixture.dart';
 
 class _Paths extends PathProviderPlatform {
   _Paths(this.root);
@@ -40,6 +42,7 @@ void main() {
   late String dataPath;
   final savedPaths = PathProviderPlatform.instance;
   final savedSettings = List<String>.of(appdata.settings);
+  final savedQuota = ImageDiskQuota.overrideForTesting;
 
   setUpAll(() async {
     workspace = await Directory.systemTemp.createTemp('pk_cover_cache_');
@@ -48,9 +51,12 @@ void main() {
     // "缓存落在 App.dataPath 而不是 support 目录"（计划风险第 1 条的用意）。
     dataPath = '${workspace.path}/data';
     await App.init(dataPathOverride: dataPath);
+    installTaskDiskQuota(() => [dataPath]);
   });
 
   tearDownAll(() async {
+    await ImageDiskQuota.shared.drain();
+    ImageDiskQuota.overrideForTesting = savedQuota;
     PathProviderPlatform.instance = savedPaths;
     appdata.settings
       ..clear()
@@ -299,5 +305,48 @@ void main() {
       await LocalCoverCache.adoptLegacyCovers();
       expect(await LocalCoverCache.lookup('legacy::half.jpg.part'), isNull);
     });
+  });
+
+  test('large shared index is denied before IO and preserves its previous body',
+      () async {
+    final old = await LocalCoverCache.storeBytes(
+        entryKey: 'index-before',
+        bytes: bytesOf('before-cover'),
+        fingerprint: 'before',
+        extension: '.png');
+    expect(old, isNotNull);
+    final index = File(
+        p.join(dataPath, 'local_library_cache', kLocalCoverCacheIndexName));
+    final previous = await index.readAsBytes();
+    final manual = File(p.join(index.parent.path, 'manual-cover.png'));
+    await manual.writeAsBytes(bytesOf('manual-original'));
+    final normal = ImageDiskQuota.overrideForTesting;
+    final denied = ImageDiskQuota(
+        roots: () => [LocalCoverCache.rootDirectory().path],
+        idleLimitBytes: () => 128 << 20,
+        headroomBytes: 1,
+        space: (path) async => ImageDiskSpace(
+            path.endsWith(kLocalCoverCacheIndexName) ? 40000 : 1 << 30,
+            'task'));
+    ImageDiskQuota.overrideForTesting = denied;
+    try {
+      final cover = await LocalCoverCache.storeBytes(
+          entryKey: 'large-index',
+          bytes: bytesOf('new-cover'),
+          fingerprint: List.filled(100000, 'x').join(),
+          extension: '.png');
+      expect(cover, isNotNull,
+          reason: 'Index pressure does not invalidate a completed cover');
+      expect(await File(cover!).readAsBytes(), bytesOf('new-cover'));
+      expect(denied.rejectedCount, 1);
+      expect(denied.lastRejection, contains('余量'));
+      expect(denied.pendingCount, 0);
+      expect(await index.readAsBytes(), previous);
+      expect(await File('${index.path}.part').exists(), isFalse);
+      expect(await manual.readAsBytes(), bytesOf('manual-original'));
+    } finally {
+      await denied.drain();
+      ImageDiskQuota.overrideForTesting = normal;
+    }
   });
 }

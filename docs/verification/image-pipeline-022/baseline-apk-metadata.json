@@ -1,0 +1,10 @@
+{
+  "package": "lingxue.picakeep",
+  "versionName": "1.9.91",
+  "versionCode": 8,
+  "mode": "profile",
+  "apk": "E:/picakeep-image-pipeline-022-baseline/build/app/outputs/flutter-apk/app-profile.apk",
+  "sha256": "E2B03C1CDA2557E1715B7C1439B9F06B56547758F61845D151BE402FC7D8B74E",
+  "branch": "main",
+  "commit": "cf5223f1430ccdb812a5cb4c3fafef89887a856a"
+}

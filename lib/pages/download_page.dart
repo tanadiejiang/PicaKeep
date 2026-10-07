@@ -20,6 +20,7 @@ import 'package:picakeep/foundation/archive/archive_password_store.dart';
 import 'package:picakeep/foundation/local_data_source.dart';
 import 'package:picakeep/foundation/local_favorites.dart';
 import 'package:picakeep/foundation/local_library.dart';
+import 'package:picakeep/foundation/image_loader/stream_image_provider.dart';
 import 'package:picakeep/foundation/local_library_settings.dart';
 import 'package:picakeep/foundation/local_library_illust_view.dart';
 import 'package:picakeep/foundation/log.dart';
@@ -915,9 +916,8 @@ class _DownloadPageState extends State<DownloadPage>
                 // ——**不是** `favoriteTarget`：后者是各源的"来源标识号"，
                 // 例如 jm 会被剥掉前缀变成 `123`（见 `_favoriteTargetForDownloaded`），
                 // 与历史键并非同一口径。收藏侧由 `isFavoriteOverride` 单独提供。
-                comicId: item is LocalLibraryComicItem
-                    ? item.originalId
-                    : item.id,
+                comicId:
+                    item is LocalLibraryComicItem ? item.originalId : item.id,
                 name: item.name,
                 author: viewModel.author,
                 imagePath: coverFile,
@@ -1382,8 +1382,8 @@ class _DownloadPageState extends State<DownloadPage>
                 value: view,
                 label: _downloadedLibraryViewLabel(view),
                 icon: _downloadedLibraryViewIcon(view),
-                enabled:
-                    view == _DownloadedLibraryView.local || logic.remoteAvailable,
+                enabled: view == _DownloadedLibraryView.local ||
+                    logic.remoteAvailable,
                 disabledReason: '远程服务不可用',
               ),
           ],
@@ -2614,7 +2614,9 @@ class _DownloadedComicInfoViewState extends State<DownloadedComicInfoView> {
     final resolvedCoverPath = _resolvedCoverPath?.trim();
     final comic = _comic;
     ImageProvider<Object>? coverProvider;
-    if (resolvedCoverPath != null && resolvedCoverPath.isNotEmpty) {
+    if (comic is LocalLibraryComicItem && comic.isManagedDownloadItem) {
+      coverProvider = LocalLibraryManager().coverImageProviderForItem(comic);
+    } else if (resolvedCoverPath != null && resolvedCoverPath.isNotEmpty) {
       coverProvider =
           LocalLibraryManager().imageProviderForLocalPath(resolvedCoverPath);
     } else if (comic is LocalLibraryComicItem) {

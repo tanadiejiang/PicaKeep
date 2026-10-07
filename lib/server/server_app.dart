@@ -1,6 +1,10 @@
 import 'dart:convert';
 import 'dart:io';
 import 'dart:async';
+import 'dart:math' as math;
+
+import 'package:crypto/crypto.dart';
+import 'package:path/path.dart' as p;
 
 import 'package:shelf/shelf.dart';
 import 'package:shelf/shelf_io.dart' as shelf_io;
@@ -14,12 +18,20 @@ import '../foundation/archive/archive_models.dart';
 import '../foundation/archive/archive_reading_service.dart';
 import '../foundation/archive/archive_registry.dart';
 import '../foundation/app.dart';
+import '../base.dart' show appdata;
+import '../foundation/cache_file_inventory.dart';
 import '../foundation/local_trash_store.dart';
 import '../foundation/local_library_settings.dart';
 import '../foundation/privileged_storage_access.dart';
 import '../foundation/trash.dart';
 import '../foundation/local_favorites.dart';
 import '../foundation/image_favorites.dart';
+import '../foundation/image_pipeline/derived_image_store.dart';
+import '../foundation/image_pipeline/image_derivative_renderer.dart';
+import '../foundation/image_pipeline/image_derivative_service.dart';
+import '../foundation/image_pipeline/image_server_protocol.dart';
+import '../foundation/image_pipeline/image_work_scheduler.dart';
+import 'package:picakeep_image_engine/picakeep_image_engine.dart';
 import 'library_event_bus.dart';
 import 'library_trash_store.dart';
 import 'local_resource_scanner.dart';
@@ -40,17 +52,32 @@ part 'server_app_favorites.dart';
 part 'server_app_files.dart';
 part 'server_app_status.dart';
 part 'server_app_util.dart';
+part 'server_app_images.dart';
 
 class PicaKeepAdminServer {
   PicaKeepAdminServer({
     required this.configPath,
     ServerRuntimeState? runtimeState,
+    ImageDerivativeRenderer? imageRenderer,
+    Duration imageResponseWait = const Duration(milliseconds: 120),
   })  : _state = runtimeState ?? ServerRuntimeState(),
+        _imageRenderer = imageRenderer ??
+            (PicakeepImageEngine.isAvailable
+                ? const NativeImageDerivativeRenderer()
+                : const BoundedDartImageDerivativeRenderer()),
+        _imageResponseWait = imageResponseWait,
         _trashStore = LibraryTrashStore(
           '${App.dataPath}${Platform.pathSeparator}library_trash.json',
         );
 
   final String configPath;
+  final ImageDerivativeRenderer _imageRenderer;
+  final Duration _imageResponseWait;
+  ImageDerivativeService? _imageDerivatives;
+  Future<void>? _imageMaintenance;
+  final Map<String, ImageDerivativeProbe> _imageProbeCache = {};
+  final Map<String, String> _backgroundCoverVersions = {};
+  final Map<String, Future<_ServerReadableImage>> _readableImages = {};
   final ServerRuntimeState _state;
   final LocalResourceScanner _scanner = LocalResourceScanner();
   final LibraryTrashStore _trashStore;
@@ -118,6 +145,7 @@ class PicaKeepAdminServer {
           'Listening on http://${_server!.address.address}:${_server!.port}';
       _restartLibraryWatchers();
       _state.markRunning(message);
+      _queueImagePreparation(_snapshot!);
       stdout.writeln('[PicaKeepServer] $message');
     } catch (e, s) {
       _server = null;
@@ -149,6 +177,14 @@ class PicaKeepAdminServer {
       }
       await _eventBus.close();
       _webUserStore.dispose();
+      _imageDerivatives?.dispose();
+      _imageDerivatives = null;
+      _imageProbeCache.clear();
+      _backgroundCoverVersions.clear();
+      for (final source in _readableImages.values) {
+        unawaited(source.then((value) => value.dispose(), onError: (_) {}));
+      }
+      _readableImages.clear();
       await server.close(force: true);
       _state.markStopped('服务已停止');
     } catch (e, s) {
@@ -162,6 +198,7 @@ class PicaKeepAdminServer {
   Future<ServerResourceSnapshot> rescanResources() async {
     final snapshot = await _scanResources();
     _setSnapshot(snapshot, emitEvent: true);
+    _queueImagePreparation(snapshot);
     _state.addLog('scan', '已重新扫描本地资源');
     return snapshot;
   }
@@ -173,6 +210,7 @@ class PicaKeepAdminServer {
     await reloadManagedDataStoresForServerConfig(newConfig);
     final snapshot = await _scanResources();
     _setSnapshot(snapshot, emitEvent: true);
+    _queueImagePreparation(snapshot);
     _restartLibraryWatchers();
     _state.addLog('config', '已热更新配置 + 重新扫描');
     return snapshot;

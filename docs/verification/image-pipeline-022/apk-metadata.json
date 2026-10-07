@@ -1,0 +1,32 @@
+{
+  "package": "lingxue.picakeep",
+  "versionName": "1.9.92",
+  "versionCode": 9,
+  "mode": "profile",
+  "entrypoint": "lib/main.dart",
+  "dartDefines": [],
+  "apk": "D:\\picakeep-image-pipeline-022-work\\picakeep-large-open-first-normal-profile1007.apk",
+  "bytes": 61906601,
+  "sha256": "C1BB13A72E01937BAB239AFA31722A0D79687EA44D7AF927CFF90793BAA1F895",
+  "signerSha256": "31b4434516ccc1f58add7cc5cd4b6786e995c957d5891d3685e4c75a7a58d7c7",
+  "signatureVerified": true,
+  "zipCrcVerified": true,
+  "installedDevices": [
+    {
+      "serial": "f294cd23",
+      "endpoint": "192.168.5.12:5555",
+      "installedAt": "2026-10-07T19:59:17+08:00",
+      "appLaunched": false,
+      "dataPreserved": true
+    },
+    {
+      "serial": "8021129d",
+      "endpoint": "192.168.5.3:5555",
+      "installedAt": "2026-10-07T20:00:25+08:00",
+      "appLaunched": true,
+      "dataPreserved": true
+    }
+  ],
+  "intendedCommitVersion": "1.9.93+10",
+  "newBuildPerformedDuringCommitPreparation": false
+}

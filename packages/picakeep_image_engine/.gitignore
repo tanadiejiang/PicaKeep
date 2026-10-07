@@ -1,0 +1,7 @@
+native/build/
+native/tests/fixtures/
+.dart_tool/
+build/
+*.raw
+*.partial
+*.coeff-*

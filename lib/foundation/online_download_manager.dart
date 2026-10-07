@@ -13,6 +13,7 @@ import 'package:sqlite3/sqlite3.dart';
 
 import 'package:picakeep/base.dart';
 import 'package:picakeep/foundation/app.dart';
+import 'package:picakeep/foundation/image_pipeline/image_background_notifications.dart';
 import 'package:picakeep/foundation/chapter_download_state.dart';
 import 'package:picakeep/foundation/download.dart';
 import 'package:picakeep/foundation/download_model.dart';
@@ -1406,6 +1407,7 @@ class OnlineDownloadManager {
           .toList();
       task._chapterResumeIndex = pending.isEmpty ? null : pending.first;
       await _saveQueue(requireSuccess: true);
+      ImageBackgroundNotifications.committed(p.join(root.path, '${index + 1}'));
       App.notifyLocalDataChanged();
     } catch (_) {
       if (!wasVerified) {
@@ -1805,6 +1807,7 @@ class OnlineDownloadManager {
           directory: safeDirectory,
         );
         task.completed = true;
+        ImageBackgroundNotifications.committed(p.join(downloadRoot, safeDirectory));
         App.notifyLocalDataChanged();
       } else {
         // ── 归档模式（type 1=Original / 2=Resample）───────────────────────
@@ -1922,6 +1925,7 @@ class OnlineDownloadManager {
         );
         task.currentPage = 100;
         task.completed = true;
+        ImageBackgroundNotifications.committed(p.join(downloadRoot, safeDirectory));
         App.notifyLocalDataChanged();
       }
     } on _OnlineDownloadCancelled catch (_) {
@@ -2039,6 +2043,7 @@ class OnlineDownloadManager {
         directory: safeDirectory,
       );
       task.completed = true;
+      ImageBackgroundNotifications.committed(p.join(downloadRoot, safeDirectory));
       App.notifyLocalDataChanged();
     } on _OnlineDownloadCancelled catch (_) {
       if (!task.paused && !task.waitingForNetwork) task.cancelled = true;
@@ -2085,6 +2090,7 @@ class OnlineDownloadManager {
       if (library.find(folder.id, task.taskId) case final existing?) {
         await PixivLibrary.snapshotOf(existing.path);
         task.completed = true;
+        ImageBackgroundNotifications.committed(existing.path);
         return;
       }
       final reusable = library
@@ -2238,6 +2244,7 @@ class OnlineDownloadManager {
       );
       await _deletePixivSourceDir(root);
       task.completed = true;
+      ImageBackgroundNotifications.committed(p.join(downloadRoot, artifactDirectory));
       App.notifyLocalDataChanged();
     } on _OnlineDownloadCancelled catch (_) {
       if (!task.paused && !task.waitingForNetwork) task.cancelled = true;

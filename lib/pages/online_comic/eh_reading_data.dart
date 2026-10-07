@@ -60,7 +60,19 @@ class EhReadingData extends ReadingData {
 
   /// 缓存键与 ep 无关，仅 link + page（公共契约）。
   @override
-  String buildImageKey(int ep, int page, String url) => '${gallery.link}$page';
+  String buildImageKey(int ep, int page, String url) =>
+      originalNetworkCacheIdentity(ep, page, url);
+
+  @override
+  Future<ReaderPageSource> resolvePageSource(
+      int ep, int page, String url) async {
+    if (downloaded && checkEpDownloaded(ep)) {
+      return super.resolvePageSource(ep, page, url);
+    }
+    final (target, _) = await EhNetwork().getEhImageUrl(gallery, page + 1);
+    return networkPageSource(ep, page, target,
+        headers: EhNetwork().galleryHeaders(gallery.link));
+  }
 
   /// 逐页解密并加载：
   /// 1. [EhNetwork.getEhImageUrl] 解密拿已验证可用直链（page 0-based → 1-based）。
@@ -71,6 +83,7 @@ class EhReadingData extends ReadingData {
     final (imageUrl, _) = await EhNetwork().getEhImageUrl(gallery, page + 1);
     final result = await OnlineImageManager.instance.getImage(
       imageUrl,
+      cacheIdentity: originalNetworkCacheIdentity(ep, page, imageUrl),
       headers: EhNetwork().galleryHeaders(gallery.link),
     );
     yield* result.stream;

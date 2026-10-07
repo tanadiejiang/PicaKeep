@@ -1,0 +1,889 @@
+{
+  "scope": "Changed and new production files in approved commit 1.9.93+10; installed snapshot remains 1.9.92+9",
+  "capturedUtc": "2026-10-07T13:19:20.7926046Z",
+  "branch": "main",
+  "baseCommit": "cf5223f1430ccdb812a5cb4c3fafef89887a856a",
+  "installedVersion": "1.9.92+9",
+  "intendedCommitVersion": "1.9.93+10",
+  "originatingManifestSha256": "379f03404335e1e9346f8fae0b44947c8b563ef231d922b18ada441850e85048",
+  "originatingManifestInputCount": 872,
+  "preVersionBumpInstalledSourceDifferences": [],
+  "installedSourceDifferences": [
+    "pubspec.yaml"
+  ],
+  "versionOnlyChanges": [
+    "pubspec.yaml"
+  ],
+  "files": [
+    {
+      "installedSnapshotSha256": "1a0e5b06da1eddcdd53fe8d0978ce3c215700027e01bb1bdbac1ee4cd2a80e8f",
+      "bytes": 4877,
+      "path": "android/app/src/main/java/io/flutter/plugins/GeneratedPluginRegistrant.java",
+      "sha256": "1a0e5b06da1eddcdd53fe8d0978ce3c215700027e01bb1bdbac1ee4cd2a80e8f"
+    },
+    {
+      "installedSnapshotSha256": "17be38d8132b0a87a0af215267651c2786c7d56d6b7f7b1e1a46caf59c4a8208",
+      "bytes": 92472,
+      "path": "android/app/src/main/kotlin/lingxue/picakeep/MainActivity.kt",
+      "sha256": "17be38d8132b0a87a0af215267651c2786c7d56d6b7f7b1e1a46caf59c4a8208"
+    },
+    {
+      "installedSnapshotSha256": "750dc248d3b3ab124a96ee79d49cc73df30b9d3d218d846ae8e087d159a07ca0",
+      "bytes": 64702,
+      "path": "assets/translation.json",
+      "sha256": "750dc248d3b3ab124a96ee79d49cc73df30b9d3d218d846ae8e087d159a07ca0"
+    },
+    {
+      "installedSnapshotSha256": "64cc3cd49c1657e067ae770fb3b3f0d2d9be061baa354a7901b995a950470454",
+      "bytes": 32477,
+      "path": "lib/base.dart",
+      "sha256": "64cc3cd49c1657e067ae770fb3b3f0d2d9be061baa354a7901b995a950470454"
+    },
+    {
+      "installedSnapshotSha256": "1faaa1d481849726e5ce7410a6f09fb17987c4244efdc7c61e3d1d2d7b9e1bf7",
+      "bytes": 29316,
+      "path": "lib/components/comic_tile.dart",
+      "sha256": "1faaa1d481849726e5ce7410a6f09fb17987c4244efdc7c61e3d1d2d7b9e1bf7"
+    },
+    {
+      "installedSnapshotSha256": "5ec861626fd1372af06d0a2c490d57492d581d9af529ac0cc33637dff34a7705",
+      "bytes": 13269,
+      "path": "lib/foundation/app.dart",
+      "sha256": "5ec861626fd1372af06d0a2c490d57492d581d9af529ac0cc33637dff34a7705"
+    },
+    {
+      "installedSnapshotSha256": "6e309d321501dedcafd7a520820dbf954b55836f5828bcd34e39d83ac97dba8c",
+      "bytes": 1293,
+      "path": "lib/foundation/archive/archive_backend.dart",
+      "sha256": "6e309d321501dedcafd7a520820dbf954b55836f5828bcd34e39d83ac97dba8c"
+    },
+    {
+      "installedSnapshotSha256": "e5a1dd865c6e27e72881ba2fef1b6fc2b4a730f687bd4c4fb3e166237db7d4f4",
+      "bytes": 5162,
+      "path": "lib/foundation/archive/archive_episode_builder.dart",
+      "sha256": "e5a1dd865c6e27e72881ba2fef1b6fc2b4a730f687bd4c4fb3e166237db7d4f4"
+    },
+    {
+      "installedSnapshotSha256": "9df7e8f95242c76f10385594a6d06fbaff230e5b5ded28dc1eb4460454bb8dfb",
+      "bytes": 15227,
+      "path": "lib/foundation/archive/archive_reading_service.dart",
+      "sha256": "9df7e8f95242c76f10385594a6d06fbaff230e5b5ded28dc1eb4460454bb8dfb"
+    },
+    {
+      "installedSnapshotSha256": "d419f3bdf1739ee161c344e237511151ac87c286d3438ab25ebecdd298c4c941",
+      "bytes": 36280,
+      "path": "lib/foundation/archive/backends/dart_zip_backend.dart",
+      "sha256": "d419f3bdf1739ee161c344e237511151ac87c286d3438ab25ebecdd298c4c941"
+    },
+    {
+      "installedSnapshotSha256": "3f04e9612d0029e467b89efb2f130f250c973186da96997ff8b0c68c051984aa",
+      "bytes": 7137,
+      "path": "lib/foundation/cache_file_inventory.dart",
+      "sha256": "3f04e9612d0029e467b89efb2f130f250c973186da96997ff8b0c68c051984aa"
+    },
+    {
+      "installedSnapshotSha256": "dac3d7e6ffd4553552a0d0cffc105fce8cab818b1da1ce0fdb6e325fd3726e95",
+      "bytes": 73740,
+      "path": "lib/foundation/cover_thumbnail_cache.dart",
+      "sha256": "dac3d7e6ffd4553552a0d0cffc105fce8cab818b1da1ce0fdb6e325fd3726e95"
+    },
+    {
+      "installedSnapshotSha256": "4bc1746e552d20eda108c53e42ffc231263ff48556317fb75b61d9720c642411",
+      "bytes": 25280,
+      "path": "lib/foundation/download_directory_migration.dart",
+      "sha256": "4bc1746e552d20eda108c53e42ffc231263ff48556317fb75b61d9720c642411"
+    },
+    {
+      "installedSnapshotSha256": "17ac40d942388cc98952002012ffe8b1004540e4278539307961fb45544ef8a3",
+      "bytes": 5088,
+      "path": "lib/foundation/image_loader/base_image_provider.dart",
+      "sha256": "17ac40d942388cc98952002012ffe8b1004540e4278539307961fb45544ef8a3"
+    },
+    {
+      "installedSnapshotSha256": "c476665ffde5beaa176fe015f1e00fa94b9a229ca3d3b1764da88f62ce734228",
+      "bytes": 9748,
+      "path": "lib/foundation/image_loader/jm_image_recombine.dart",
+      "sha256": "c476665ffde5beaa176fe015f1e00fa94b9a229ca3d3b1764da88f62ce734228"
+    },
+    {
+      "installedSnapshotSha256": "d86980b7ba1006769c19f751f678f0ccb05529482420a0be12e1f009143c560a",
+      "bytes": 3404,
+      "path": "lib/foundation/image_loader/stream_image_provider.dart",
+      "sha256": "d86980b7ba1006769c19f751f678f0ccb05529482420a0be12e1f009143c560a"
+    },
+    {
+      "installedSnapshotSha256": "c1a6806abc1b6c89a0ddc664e3632a7bbb3b420fee698e5a2c55b88d054a69c5",
+      "bytes": 3034,
+      "path": "lib/foundation/image_pipeline/background_image_preparer.dart",
+      "sha256": "c1a6806abc1b6c89a0ddc664e3632a7bbb3b420fee698e5a2c55b88d054a69c5"
+    },
+    {
+      "installedSnapshotSha256": "67a7649e08309bab2ac232f9d6a564553899903becf8db89a1d02eda2e0931fd",
+      "bytes": 4508,
+      "path": "lib/foundation/image_pipeline/cover_decode_target.dart",
+      "sha256": "67a7649e08309bab2ac232f9d6a564553899903becf8db89a1d02eda2e0931fd"
+    },
+    {
+      "installedSnapshotSha256": "dba179b56da9454aac03b223636cd89b2734ebc3507c3d701a72c1b97e363c55",
+      "bytes": 887,
+      "path": "lib/foundation/image_pipeline/cover_target_provider.dart",
+      "sha256": "dba179b56da9454aac03b223636cd89b2734ebc3507c3d701a72c1b97e363c55"
+    },
+    {
+      "installedSnapshotSha256": "20480adf2de95e23016ed87b1fac196c7e4e1aa6032049a651aa50c4c966c174",
+      "bytes": 703,
+      "path": "lib/foundation/image_pipeline/cover_thumbnail_size.dart",
+      "sha256": "20480adf2de95e23016ed87b1fac196c7e4e1aa6032049a651aa50c4c966c174"
+    },
+    {
+      "installedSnapshotSha256": "4718d5e59f06a232dda945223155657a37b2c2a62eae517bafaf52e66e18fdeb",
+      "bytes": 16415,
+      "path": "lib/foundation/image_pipeline/derived_image_store.dart",
+      "sha256": "4718d5e59f06a232dda945223155657a37b2c2a62eae517bafaf52e66e18fdeb"
+    },
+    {
+      "installedSnapshotSha256": "34d821080f923c5f0a8c1d81b37a02bc8b019e0c3801f3194746842ecf727b1c",
+      "bytes": 404,
+      "path": "lib/foundation/image_pipeline/image_background_notifications.dart",
+      "sha256": "34d821080f923c5f0a8c1d81b37a02bc8b019e0c3801f3194746842ecf727b1c"
+    },
+    {
+      "installedSnapshotSha256": "3f059338236809fb9f55eaf50552fffe0f161571d72cb0f8fb8e00162d8ea688",
+      "bytes": 10094,
+      "path": "lib/foundation/image_pipeline/image_derivative_renderer.dart",
+      "sha256": "3f059338236809fb9f55eaf50552fffe0f161571d72cb0f8fb8e00162d8ea688"
+    },
+    {
+      "installedSnapshotSha256": "2a6f10486338a103be93ea1af7e4ae82cde1085ee3418f00af701d63eb03bd25",
+      "bytes": 7008,
+      "path": "lib/foundation/image_pipeline/image_derivative_service.dart",
+      "sha256": "2a6f10486338a103be93ea1af7e4ae82cde1085ee3418f00af701d63eb03bd25"
+    },
+    {
+      "installedSnapshotSha256": "3316241274b027d822f6d8ed27d25d070514cccf4a874e84fa92788a9c772971",
+      "bytes": 20070,
+      "path": "lib/foundation/image_pipeline/image_disk_quota.dart",
+      "sha256": "3316241274b027d822f6d8ed27d25d070514cccf4a874e84fa92788a9c772971"
+    },
+    {
+      "installedSnapshotSha256": "46e1948f289239750b5c09223aac4e2fc9fc7866261371a9a2ec0009fa6d5a75",
+      "bytes": 8760,
+      "path": "lib/foundation/image_pipeline/image_server_protocol.dart",
+      "sha256": "46e1948f289239750b5c09223aac4e2fc9fc7866261371a9a2ec0009fa6d5a75"
+    },
+    {
+      "installedSnapshotSha256": "f3c8b600681c3ba6ab94b18ffc13b06f8d9a1a1bf6e3f39d3fa94d65b7adb9c3",
+      "bytes": 9638,
+      "path": "lib/foundation/image_pipeline/image_work_scheduler.dart",
+      "sha256": "f3c8b600681c3ba6ab94b18ffc13b06f8d9a1a1bf6e3f39d3fa94d65b7adb9c3"
+    },
+    {
+      "installedSnapshotSha256": "6871ddc4ac8a0681cc2fb27c287df660d688833874713d7c1c2e469dca58c6e2",
+      "bytes": 1940,
+      "path": "lib/foundation/image_pipeline/native_disk_work.dart",
+      "sha256": "6871ddc4ac8a0681cc2fb27c287df660d688833874713d7c1c2e469dca58c6e2"
+    },
+    {
+      "installedSnapshotSha256": "5982d88066b2e94223069925057eb731ca4c4fadde67a778778cc5e7e36af521",
+      "bytes": 12046,
+      "path": "lib/foundation/image_pipeline/native_image_disk_plan.dart",
+      "sha256": "5982d88066b2e94223069925057eb731ca4c4fadde67a778778cc5e7e36af521"
+    },
+    {
+      "installedSnapshotSha256": "c5f5c41618897368da433ff516606079f976acd32c0340ec0a3a96f6ec503e2c",
+      "bytes": 7954,
+      "path": "lib/foundation/image_pipeline/ordinary_jpeg_cover_policy.dart",
+      "sha256": "c5f5c41618897368da433ff516606079f976acd32c0340ec0a3a96f6ec503e2c"
+    },
+    {
+      "installedSnapshotSha256": "aaa0ea7c2d65e7ff4887724b475453945f237f873334d1b33559d3a226e08fb8",
+      "bytes": 2808,
+      "path": "lib/foundation/image_pipeline/original_image_operations.dart",
+      "sha256": "aaa0ea7c2d65e7ff4887724b475453945f237f873334d1b33559d3a226e08fb8"
+    },
+    {
+      "installedSnapshotSha256": "668f70a314cb01c20792690be8afa34c9f97af82c26b775c0b9d707784070c84",
+      "bytes": 10145,
+      "path": "lib/foundation/image_pipeline/reader_original_raster_handoff.dart",
+      "sha256": "668f70a314cb01c20792690be8afa34c9f97af82c26b775c0b9d707784070c84"
+    },
+    {
+      "installedSnapshotSha256": "a24139b33b9d012b4cfb91d5fc6fe0394ace78833e29c167f60c4108ec45ea5d",
+      "bytes": 10843,
+      "path": "lib/foundation/image_pipeline/reader_page_source.dart",
+      "sha256": "a24139b33b9d012b4cfb91d5fc6fe0394ace78833e29c167f60c4108ec45ea5d"
+    },
+    {
+      "installedSnapshotSha256": "883c13cd9aa97767188b42d76d78d722fcbebe5211e00c825ce2b1a5618e5a8e",
+      "bytes": 30051,
+      "path": "lib/foundation/image_pipeline/reader_raster_backend.dart",
+      "sha256": "883c13cd9aa97767188b42d76d78d722fcbebe5211e00c825ce2b1a5618e5a8e"
+    },
+    {
+      "installedSnapshotSha256": "15f2dc4faf25e0ba895e69a0c184a8a8b4d4b8b9f07b70939824ab2684316baa",
+      "bytes": 9698,
+      "path": "lib/foundation/image_pipeline/reader_raster_cache.dart",
+      "sha256": "15f2dc4faf25e0ba895e69a0c184a8a8b4d4b8b9f07b70939824ab2684316baa"
+    },
+    {
+      "installedSnapshotSha256": "54034e68f181f3e0a7494df22ad50efc6181137a63b2566671f5cd11cea48b60",
+      "bytes": 525,
+      "path": "lib/foundation/image_pipeline/reader_raster_diagnostics.dart",
+      "sha256": "54034e68f181f3e0a7494df22ad50efc6181137a63b2566671f5cd11cea48b60"
+    },
+    {
+      "installedSnapshotSha256": "181d8e7543987aea9c64ef2c08dd31a5a6f43e91b1e30b9f73e4a01526f55cd9",
+      "bytes": 5520,
+      "path": "lib/foundation/image_pipeline/reader_raw_image_decoder.dart",
+      "sha256": "181d8e7543987aea9c64ef2c08dd31a5a6f43e91b1e30b9f73e4a01526f55cd9"
+    },
+    {
+      "installedSnapshotSha256": "db5ea9717e8e2606eeb5e7d1df776b1ee7b4c71b58be5598954413c73fd6f64b",
+      "bytes": 13464,
+      "path": "lib/foundation/image_pipeline/reader_session_raster_cache.dart",
+      "sha256": "db5ea9717e8e2606eeb5e7d1df776b1ee7b4c71b58be5598954413c73fd6f64b"
+    },
+    {
+      "installedSnapshotSha256": "def208b0c833a41345e99ffeab1a6d36a4edcc7b08c52a7df0864c9741847c3d",
+      "bytes": 2935,
+      "path": "lib/foundation/image_pipeline/reader_viewport.dart",
+      "sha256": "def208b0c833a41345e99ffeab1a6d36a4edcc7b08c52a7df0864c9741847c3d"
+    },
+    {
+      "installedSnapshotSha256": "302b52ec2771fc2729b8546a4e93269f618c85e91f10851d9186822d15d09703",
+      "bytes": 16723,
+      "path": "lib/foundation/image_pipeline/server_reader_page_source.dart",
+      "sha256": "302b52ec2771fc2729b8546a4e93269f618c85e91f10851d9186822d15d09703"
+    },
+    {
+      "installedSnapshotSha256": "a7c733cdde7d3da6aff4a07e90686ba18dd524bf198ecfba8698e81cd658dcec",
+      "bytes": 26594,
+      "path": "lib/foundation/local_cover_cache.dart",
+      "sha256": "a7c733cdde7d3da6aff4a07e90686ba18dd524bf198ecfba8698e81cd658dcec"
+    },
+    {
+      "installedSnapshotSha256": "982627bfb849762607bf474c7bd52a00082f674aa748c0ec974644e91a60780e",
+      "bytes": 5290,
+      "path": "lib/foundation/local_library_query.dart",
+      "sha256": "982627bfb849762607bf474c7bd52a00082f674aa748c0ec974644e91a60780e"
+    },
+    {
+      "installedSnapshotSha256": "75a17773da39641a488dfe9c98e4504fe74fc4df538f10da93bd97b61cd7f9d9",
+      "bytes": 44643,
+      "path": "lib/foundation/local_library_scan.dart",
+      "sha256": "75a17773da39641a488dfe9c98e4504fe74fc4df538f10da93bd97b61cd7f9d9"
+    },
+    {
+      "installedSnapshotSha256": "a3b7599d27c4b5b89573239d30949e369a45137d6507ca07e7094ce0c8c4461c",
+      "bytes": 41052,
+      "path": "lib/foundation/local_library_static.dart",
+      "sha256": "a3b7599d27c4b5b89573239d30949e369a45137d6507ca07e7094ce0c8c4461c"
+    },
+    {
+      "installedSnapshotSha256": "2880ea7e0b1e168faf5554747ba795616980a215f8d4ccd99e373a960ed8e3b0",
+      "bytes": 64560,
+      "path": "lib/foundation/local_library.dart",
+      "sha256": "2880ea7e0b1e168faf5554747ba795616980a215f8d4ccd99e373a960ed8e3b0"
+    },
+    {
+      "installedSnapshotSha256": "447ca45cff1e5f6bc3f38c0e763db65ece430b9d688366f4c013c8b5d4c94735",
+      "bytes": 166255,
+      "path": "lib/foundation/online_download_manager.dart",
+      "sha256": "447ca45cff1e5f6bc3f38c0e763db65ece430b9d688366f4c013c8b5d4c94735"
+    },
+    {
+      "installedSnapshotSha256": "ce842473114c9814aa98d89171fd37852990f2e3d8e1e00f73bea03f3b0f5143",
+      "bytes": 9240,
+      "path": "lib/foundation/pixiv_library_locations.dart",
+      "sha256": "ce842473114c9814aa98d89171fd37852990f2e3d8e1e00f73bea03f3b0f5143"
+    },
+    {
+      "installedSnapshotSha256": "d8694801a7af75c477a0434802ed7768a2c5b43a4741d24c38ec086c56b1d2f9",
+      "bytes": 43036,
+      "path": "lib/foundation/pixiv_library.dart",
+      "sha256": "d8694801a7af75c477a0434802ed7768a2c5b43a4741d24c38ec086c56b1d2f9"
+    },
+    {
+      "installedSnapshotSha256": "331ed1a72c8b619e1ec98d6ed849c5e07294662dd5c21910dac22203f8d73ff1",
+      "bytes": 13272,
+      "path": "lib/foundation/privileged_storage_access_flutter.dart",
+      "sha256": "331ed1a72c8b619e1ec98d6ed849c5e07294662dd5c21910dac22203f8d73ff1"
+    },
+    {
+      "installedSnapshotSha256": "0233297566683dfaed915f6272919592b72166eeef80ed6538c6f950c8e0cf4c",
+      "bytes": 4295,
+      "path": "lib/foundation/privileged_storage_access_io.dart",
+      "sha256": "0233297566683dfaed915f6272919592b72166eeef80ed6538c6f950c8e0cf4c"
+    },
+    {
+      "installedSnapshotSha256": "d7b743922ef4fd4c568b97b6293a56b7826c8c95ab67761287e140379c71d6b4",
+      "bytes": 7326,
+      "path": "lib/foundation/reader_image_quality.dart",
+      "sha256": "d7b743922ef4fd4c568b97b6293a56b7826c8c95ab67761287e140379c71d6b4"
+    },
+    {
+      "installedSnapshotSha256": "31459184c48d112b7e23d7d4c4b20137ad166160d2d153b8b9ae49038e922630",
+      "bytes": 108752,
+      "path": "lib/foundation/remote_library_data_source.dart",
+      "sha256": "31459184c48d112b7e23d7d4c4b20137ad166160d2d153b8b9ae49038e922630"
+    },
+    {
+      "installedSnapshotSha256": "d4c9363616f6139e705431bdbedbfdfc8fe77137d47a9698b3548f83b2a77b23",
+      "bytes": 1755,
+      "path": "lib/foundation/verification_server_paths.dart",
+      "sha256": "d4c9363616f6139e705431bdbedbfdfc8fe77137d47a9698b3548f83b2a77b23"
+    },
+    {
+      "installedSnapshotSha256": "5970bb3e95ceeb8d9239c9ba04d99bc485d3f305456bbcbbac5b921dab0636b7",
+      "bytes": 807,
+      "path": "lib/foundation/windows_rename_retry.dart",
+      "sha256": "5970bb3e95ceeb8d9239c9ba04d99bc485d3f305456bbcbbac5b921dab0636b7"
+    },
+    {
+      "installedSnapshotSha256": "c09529988d24a222034e1a135c8252c7088063a4311f4825f71e8b876bfc641a",
+      "bytes": 20973,
+      "path": "lib/main.dart",
+      "sha256": "c09529988d24a222034e1a135c8252c7088063a4311f4825f71e8b876bfc641a"
+    },
+    {
+      "installedSnapshotSha256": "9b42d1997b6f698c9b33104127c89574a1b4b0cb44ee270eada2abcf8a9ea0a7",
+      "bytes": 8053,
+      "path": "lib/network/online_image/online_image_cache.dart",
+      "sha256": "9b42d1997b6f698c9b33104127c89574a1b4b0cb44ee270eada2abcf8a9ea0a7"
+    },
+    {
+      "installedSnapshotSha256": "539adff88989d5e54a2cba72e41e3de4b117a18b8d37a42f42efad93df622d53",
+      "bytes": 6899,
+      "path": "lib/network/online_image/online_image_manager.dart",
+      "sha256": "539adff88989d5e54a2cba72e41e3de4b117a18b8d37a42f42efad93df622d53"
+    },
+    {
+      "installedSnapshotSha256": "ad6872b6a9afdfda75a4a1551f354834d699afba33c540b2e553542500da4855",
+      "bytes": 46688,
+      "path": "lib/network/pixiv_network/pixiv_parsing.dart",
+      "sha256": "ad6872b6a9afdfda75a4a1551f354834d699afba33c540b2e553542500da4855"
+    },
+    {
+      "installedSnapshotSha256": "00690ccac62b3db24949c1d61ed89b3c235554d9e079e8667044483eeff8bd0a",
+      "bytes": 15513,
+      "path": "lib/pages/download_page_logic_cover.dart",
+      "sha256": "00690ccac62b3db24949c1d61ed89b3c235554d9e079e8667044483eeff8bd0a"
+    },
+    {
+      "installedSnapshotSha256": "e677262ffe5a8fa584f43f0db9d8a9e9d835447f11d504fd85a13f00fd23294e",
+      "bytes": 94867,
+      "path": "lib/pages/download_page.dart",
+      "sha256": "e677262ffe5a8fa584f43f0db9d8a9e9d835447f11d504fd85a13f00fd23294e"
+    },
+    {
+      "installedSnapshotSha256": "3482d0dd05200a1610bc52ccab4d59ae6f1e9f782d0f6d0843e7c661271f7a44",
+      "bytes": 9833,
+      "path": "lib/pages/illust_work_queue.dart",
+      "sha256": "3482d0dd05200a1610bc52ccab4d59ae6f1e9f782d0f6d0843e7c661271f7a44"
+    },
+    {
+      "installedSnapshotSha256": "02355227883da58e4764b113d3498ebde4b1fa161c8b102030d90d3e5e819386",
+      "bytes": 19044,
+      "path": "lib/pages/local_library_illust_card.dart",
+      "sha256": "02355227883da58e4764b113d3498ebde4b1fa161c8b102030d90d3e5e819386"
+    },
+    {
+      "installedSnapshotSha256": "db419692ab91e4abe1b7d0b00ef63dcf917ce4384c694d2938cdad5ca6127d49",
+      "bytes": 13632,
+      "path": "lib/pages/local_library_illust_view.dart",
+      "sha256": "db419692ab91e4abe1b7d0b00ef63dcf917ce4384c694d2938cdad5ca6127d49"
+    },
+    {
+      "installedSnapshotSha256": "3d02f75ce8b0a618a86aa36840d52e5de86273500e42219745d0779e4d85fe16",
+      "bytes": 142924,
+      "path": "lib/pages/local_library_page.dart",
+      "sha256": "3d02f75ce8b0a618a86aa36840d52e5de86273500e42219745d0779e4d85fe16"
+    },
+    {
+      "installedSnapshotSha256": "dc10d09d6231cecdb10ce1cb959808906675a26cd8ba3e5c52b3d175989e03ca",
+      "bytes": 3270,
+      "path": "lib/pages/online_comic/eh_reading_data.dart",
+      "sha256": "dc10d09d6231cecdb10ce1cb959808906675a26cd8ba3e5c52b3d175989e03ca"
+    },
+    {
+      "installedSnapshotSha256": "98643862d3b6e6ad61a0b6c55c325cad857feb8cd96ab24a52b264ff6535351b",
+      "bytes": 2413,
+      "path": "lib/pages/online_comic/jm_reading_data.dart",
+      "sha256": "98643862d3b6e6ad61a0b6c55c325cad857feb8cd96ab24a52b264ff6535351b"
+    },
+    {
+      "installedSnapshotSha256": "5f95674df8be99ff07873fabb4a0c336bdd628aa659e73d2ca65636fe132f2e0",
+      "bytes": 4492,
+      "path": "lib/pages/online_comic/komiic_reading_data.dart",
+      "sha256": "5f95674df8be99ff07873fabb4a0c336bdd628aa659e73d2ca65636fe132f2e0"
+    },
+    {
+      "installedSnapshotSha256": "013b3bba5d3f34735a53f2e1f65b16e135a41cd560de76159cb695f7e3e127b0",
+      "bytes": 2759,
+      "path": "lib/pages/online_comic/nhentai_reading_data.dart",
+      "sha256": "013b3bba5d3f34735a53f2e1f65b16e135a41cd560de76159cb695f7e3e127b0"
+    },
+    {
+      "installedSnapshotSha256": "cb30e09e880635b2856b9d269cd35f91d9be6f1aed07d71d3d057b133c85f4c0",
+      "bytes": 1520,
+      "path": "lib/pages/online_comic/picacg_reading_data.dart",
+      "sha256": "cb30e09e880635b2856b9d269cd35f91d9be6f1aed07d71d3d057b133c85f4c0"
+    },
+    {
+      "installedSnapshotSha256": "b3e5bd738df9007bac7fe7bf0eafdb2dcbd2c65dd55d74d81fe5193d0e4b6fd0",
+      "bytes": 4493,
+      "path": "lib/pages/online_comic/pixiv_reading_data.dart",
+      "sha256": "b3e5bd738df9007bac7fe7bf0eafdb2dcbd2c65dd55d74d81fe5193d0e4b6fd0"
+    },
+    {
+      "installedSnapshotSha256": "cc1d0c1289fd2efbbc557163f71bf5e9161ccf7d95044698942202de8df6940c",
+      "bytes": 33512,
+      "path": "lib/pages/reader/comic_reading_page.dart",
+      "sha256": "cc1d0c1289fd2efbbc557163f71bf5e9161ccf7d95044698942202de8df6940c"
+    },
+    {
+      "installedSnapshotSha256": "45e1078fb85556361a6f61e4a5227b5c7a1c5720b27f32441ac2f00a89fcdaa5",
+      "bytes": 16865,
+      "path": "lib/pages/reader/image_view.dart",
+      "sha256": "45e1078fb85556361a6f61e4a5227b5c7a1c5720b27f32441ac2f00a89fcdaa5"
+    },
+    {
+      "installedSnapshotSha256": "0604836b208f5e5b9bb7fb5a11f3745c26667aea4411e844ab0f350e20266efa",
+      "bytes": 13796,
+      "path": "lib/pages/reader/image.dart",
+      "sha256": "0604836b208f5e5b9bb7fb5a11f3745c26667aea4411e844ab0f350e20266efa"
+    },
+    {
+      "installedSnapshotSha256": "3afda75d682083460e11e1786d5de9fe9965a8514ab721a31a3b96c757c8dffe",
+      "bytes": 61588,
+      "path": "lib/pages/reader/reader_image_surface.dart",
+      "sha256": "3afda75d682083460e11e1786d5de9fe9965a8514ab721a31a3b96c757c8dffe"
+    },
+    {
+      "installedSnapshotSha256": "38332bf9c0c6640394034bfd4e3e194639f4f840f355dcceb3d47e22cde46634",
+      "bytes": 25714,
+      "path": "lib/pages/reader/reader_page_image.dart",
+      "sha256": "38332bf9c0c6640394034bfd4e3e194639f4f840f355dcceb3d47e22cde46634"
+    },
+    {
+      "installedSnapshotSha256": "4f2488419561142da466358193f485d3138b69a0e88574451652912364570f62",
+      "bytes": 17970,
+      "path": "lib/pages/reader/reading_data.dart",
+      "sha256": "4f2488419561142da466358193f485d3138b69a0e88574451652912364570f62"
+    },
+    {
+      "installedSnapshotSha256": "345e8064cdc0bc57728da90470945c9702d3b5eb243ed5085a062c2069a5f627",
+      "bytes": 15157,
+      "path": "lib/pages/reader/reading_logic.dart",
+      "sha256": "345e8064cdc0bc57728da90470945c9702d3b5eb243ed5085a062c2069a5f627"
+    },
+    {
+      "installedSnapshotSha256": "237af34f391d0f959e82a21cab237a02dc5e9546b9e97dbb45ff4dfa62ddebba",
+      "bytes": 20240,
+      "path": "lib/pages/reader/reading_settings.dart",
+      "sha256": "237af34f391d0f959e82a21cab237a02dc5e9546b9e97dbb45ff4dfa62ddebba"
+    },
+    {
+      "installedSnapshotSha256": "abaa115a5c2c56d116b073af2619c971cc7900964f07389ff354d35b95036cc3",
+      "bytes": 472,
+      "path": "lib/pages/reader/reading_type.dart",
+      "sha256": "abaa115a5c2c56d116b073af2619c971cc7900964f07389ff354d35b95036cc3"
+    },
+    {
+      "installedSnapshotSha256": "c465ecf7812fbb6879c0db9b1f2168a1fe56b9523b486c768af96b990387ac59",
+      "bytes": 19575,
+      "path": "lib/pages/reader/tool_bar.dart",
+      "sha256": "c465ecf7812fbb6879c0db9b1f2168a1fe56b9523b486c768af96b990387ac59"
+    },
+    {
+      "installedSnapshotSha256": "5ab2800de9a0de8859c77914bd9c964f4243948c413c14c24c5f77bfce8a2adf",
+      "bytes": 6290,
+      "path": "lib/pages/settings/reading_settings.dart",
+      "sha256": "5ab2800de9a0de8859c77914bd9c964f4243948c413c14c24c5f77bfce8a2adf"
+    },
+    {
+      "installedSnapshotSha256": "e30784fbec215f345673eef14d0d328854f3d8091467fadbd7de074d16b58db0",
+      "bytes": 30193,
+      "path": "lib/pages/tools.dart",
+      "sha256": "e30784fbec215f345673eef14d0d328854f3d8091467fadbd7de074d16b58db0"
+    },
+    {
+      "installedSnapshotSha256": "080d68b7e2c86b546626bed9b9969e6326f592df82b53e37d820ed34851572da",
+      "bytes": 16134,
+      "path": "lib/server/local_resource_scanner_custom.dart",
+      "sha256": "080d68b7e2c86b546626bed9b9969e6326f592df82b53e37d820ed34851572da"
+    },
+    {
+      "installedSnapshotSha256": "c10a5c9412ab6b4f615976c1862fef3820bbfa07b83098431bfef01d5bae35a8",
+      "bytes": 25255,
+      "path": "lib/server/server_app_images.dart",
+      "sha256": "c10a5c9412ab6b4f615976c1862fef3820bbfa07b83098431bfef01d5bae35a8"
+    },
+    {
+      "installedSnapshotSha256": "43fa3d1803b07c6c41279c2b3ca155e4d6d0c2783ec2ae90477387a272441c30",
+      "bytes": 25477,
+      "path": "lib/server/server_app_library.dart",
+      "sha256": "43fa3d1803b07c6c41279c2b3ca155e4d6d0c2783ec2ae90477387a272441c30"
+    },
+    {
+      "installedSnapshotSha256": "00ea0710a451b44af2979c8d40ec7fe9a02ec763e9188fe4ca8528a0d0e61de4",
+      "bytes": 7183,
+      "path": "lib/server/server_app_routing.dart",
+      "sha256": "00ea0710a451b44af2979c8d40ec7fe9a02ec763e9188fe4ca8528a0d0e61de4"
+    },
+    {
+      "installedSnapshotSha256": "d0e32f3cce063ddb9f552d04e57c03487eb2e74ca9b8b3df9cc0b0a5a778fdcc",
+      "bytes": 4869,
+      "path": "lib/server/server_app_status.dart",
+      "sha256": "d0e32f3cce063ddb9f552d04e57c03487eb2e74ca9b8b3df9cc0b0a5a778fdcc"
+    },
+    {
+      "installedSnapshotSha256": "75db726f8b77f551c6a5d814eb4483cf7fed2a3874cb7658d705bba5341581c2",
+      "bytes": 10500,
+      "path": "lib/server/server_app.dart",
+      "sha256": "75db726f8b77f551c6a5d814eb4483cf7fed2a3874cb7658d705bba5341581c2"
+    },
+    {
+      "installedSnapshotSha256": "6a158729f694dc94d8fa4f1d1907b879db3599acb645ac2b69593ab23d5489ca",
+      "bytes": 1161,
+      "path": "lib/tools/android_original_gallery.dart",
+      "sha256": "6a158729f694dc94d8fa4f1d1907b879db3599acb645ac2b69593ab23d5489ca"
+    },
+    {
+      "installedSnapshotSha256": "b2cbb98fade5165bc3c122896088ce7d09dc966eb1fc6036bde6b7875ffc669a",
+      "bytes": 3858,
+      "path": "lib/tools/io_tools.dart",
+      "sha256": "b2cbb98fade5165bc3c122896088ce7d09dc966eb1fc6036bde6b7875ffc669a"
+    },
+    {
+      "installedSnapshotSha256": "a981a1e280e203777eb9de1a9d4315cdd6f94927af3e1e7fd3f303fe0b0d49d0",
+      "bytes": 5335,
+      "path": "lib/tools/save_image.dart",
+      "sha256": "a981a1e280e203777eb9de1a9d4315cdd6f94927af3e1e7fd3f303fe0b0d49d0"
+    },
+    {
+      "installedSnapshotSha256": "8e5be76683365008a59e08a5c5bbe2a805ad0f560e7b5cd2795ab186f295ef6b",
+      "bytes": 82,
+      "path": "packages/picakeep_image_engine/.gitignore",
+      "sha256": "8e5be76683365008a59e08a5c5bbe2a805ad0f560e7b5cd2795ab186f295ef6b"
+    },
+    {
+      "installedSnapshotSha256": "41c42738aeadf7767bd647183dc21ff67add228c2e94938dc40a9278de8149ed",
+      "bytes": 1004,
+      "path": "packages/picakeep_image_engine/android/build.gradle",
+      "sha256": "41c42738aeadf7767bd647183dc21ff67add228c2e94938dc40a9278de8149ed"
+    },
+    {
+      "installedSnapshotSha256": "343d5be1ac17cdd45d1a2f2ddc616c509290e655869125a9422a96d88aa66066",
+      "bytes": 72,
+      "path": "packages/picakeep_image_engine/android/src/main/AndroidManifest.xml",
+      "sha256": "343d5be1ac17cdd45d1a2f2ddc616c509290e655869125a9422a96d88aa66066"
+    },
+    {
+      "installedSnapshotSha256": "2ab4379995ab3275f2f4f71a8a96b2d8eb9de4a89efddcf7d40296dd94c10afc",
+      "bytes": 539,
+      "path": "packages/picakeep_image_engine/android/src/main/cpp/CMakeLists.txt",
+      "sha256": "2ab4379995ab3275f2f4f71a8a96b2d8eb9de4a89efddcf7d40296dd94c10afc"
+    },
+    {
+      "installedSnapshotSha256": "196bfbee1a2b803d22a16b0e5c35ceb6a161cab691d4d6fc55d810b6f22ac568",
+      "bytes": 238,
+      "path": "packages/picakeep_image_engine/android/src/main/cpp/jni_bridge.cpp",
+      "sha256": "196bfbee1a2b803d22a16b0e5c35ceb6a161cab691d4d6fc55d810b6f22ac568"
+    },
+    {
+      "installedSnapshotSha256": "4c656139158b1eaf08968ea8138a1034c577cc73ca9d0ecb8607008ab0d7724a",
+      "bytes": 961,
+      "path": "packages/picakeep_image_engine/android/src/main/kotlin/lingxue/picakeep/image_engine/PicakeepImageEnginePlugin.kt",
+      "sha256": "4c656139158b1eaf08968ea8138a1034c577cc73ca9d0ecb8607008ab0d7724a"
+    },
+    {
+      "installedSnapshotSha256": "b663e30227353bd519fc8605892300e68b7df05c9398c131405007b1b7faa180",
+      "bytes": 3473,
+      "path": "packages/picakeep_image_engine/DEPENDENCIES.md",
+      "sha256": "b663e30227353bd519fc8605892300e68b7df05c9398c131405007b1b7faa180"
+    },
+    {
+      "installedSnapshotSha256": "a6eb70c42f8e515ae1891f1352f73c1b7392c8ad7964d338150b25697e21a480",
+      "bytes": 19123,
+      "path": "packages/picakeep_image_engine/lib/picakeep_image_engine.dart",
+      "sha256": "a6eb70c42f8e515ae1891f1352f73c1b7392c8ad7964d338150b25697e21a480"
+    },
+    {
+      "installedSnapshotSha256": "873f8a5f42b02a304ca44b5497a587eb7aaef6adc36a53a0b8bc16c9f544e887",
+      "bytes": 7576,
+      "path": "packages/picakeep_image_engine/lib/src/bindings.dart",
+      "sha256": "873f8a5f42b02a304ca44b5497a587eb7aaef6adc36a53a0b8bc16c9f544e887"
+    },
+    {
+      "installedSnapshotSha256": "385ff35e4e4b079575e0f5778175e956b490a55689b327728dd3b2e006e269e1",
+      "bytes": 14784,
+      "path": "packages/picakeep_image_engine/lib/src/worker_pool.dart",
+      "sha256": "385ff35e4e4b079575e0f5778175e956b490a55689b327728dd3b2e006e269e1"
+    },
+    {
+      "installedSnapshotSha256": "86a42280e6c7a0d3f9081a8a381385ec20d604738b2ec6d9e5346b5cf09edfaa",
+      "bytes": 29615,
+      "path": "packages/picakeep_image_engine/LICENSE",
+      "sha256": "86a42280e6c7a0d3f9081a8a381385ec20d604738b2ec6d9e5346b5cf09edfaa"
+    },
+    {
+      "installedSnapshotSha256": "d194c8979c1c1b782ec9c3b7173202f4793af020e43b58f0ef069e2c69e0b458",
+      "bytes": 9707,
+      "path": "packages/picakeep_image_engine/native/CMakeLists.txt",
+      "sha256": "d194c8979c1c1b782ec9c3b7173202f4793af020e43b58f0ef069e2c69e0b458"
+    },
+    {
+      "installedSnapshotSha256": "a3ca0b7cb87e95b79fe661cffb8c821427098c393086ce596f642e2a47c2aad1",
+      "bytes": 3380,
+      "path": "packages/picakeep_image_engine/native/include/picakeep_image_engine.h",
+      "sha256": "a3ca0b7cb87e95b79fe661cffb8c821427098c393086ce596f642e2a47c2aad1"
+    },
+    {
+      "installedSnapshotSha256": "d32b5eb924d799f6470839ec7a82fc4ffb7c1297903518a548eed9a217c0cfc1",
+      "bytes": 5003,
+      "path": "packages/picakeep_image_engine/native/src/disk_space.cpp",
+      "sha256": "d32b5eb924d799f6470839ec7a82fc4ffb7c1297903518a548eed9a217c0cfc1"
+    },
+    {
+      "installedSnapshotSha256": "481b3c2623cacbd191aef93e81c04eaa55bc682dc1e6b197a61c2e930b40fba3",
+      "bytes": 71340,
+      "path": "packages/picakeep_image_engine/native/src/image_core.cpp",
+      "sha256": "481b3c2623cacbd191aef93e81c04eaa55bc682dc1e6b197a61c2e930b40fba3"
+    },
+    {
+      "installedSnapshotSha256": "c99b429478208fe8738bd755c6ac3f526f17f4b2fbddc9a2764c1d6ec375d97b",
+      "bytes": 2468,
+      "path": "packages/picakeep_image_engine/native/src/jpeg_memory.c",
+      "sha256": "c99b429478208fe8738bd755c6ac3f526f17f4b2fbddc9a2764c1d6ec375d97b"
+    },
+    {
+      "installedSnapshotSha256": "6688ce21053280b7a21bb5872cc3e77ae174544a11963e816dafb901c1d556d7",
+      "bytes": 1156,
+      "path": "packages/picakeep_image_engine/native/tests/allocator_budget_regression.cpp",
+      "sha256": "6688ce21053280b7a21bb5872cc3e77ae174544a11963e816dafb901c1d556d7"
+    },
+    {
+      "installedSnapshotSha256": "a3cad6331d47322d896395042b8171f9d704e0162784ef71e7b937a3c339807b",
+      "bytes": 4161,
+      "path": "packages/picakeep_image_engine/native/tests/benchmark_encoders.py",
+      "sha256": "a3cad6331d47322d896395042b8171f9d704e0162784ef71e7b937a3c339807b"
+    },
+    {
+      "installedSnapshotSha256": "5eddc93e0f29148fa04ee81a33df630e94da5e4040b8ccc4790b3e55a0d922d0",
+      "bytes": 3228,
+      "path": "packages/picakeep_image_engine/native/tests/benchmark_fit.py",
+      "sha256": "5eddc93e0f29148fa04ee81a33df630e94da5e4040b8ccc4790b3e55a0d922d0"
+    },
+    {
+      "installedSnapshotSha256": "aef35f970a49d1c2621df81d104bba73c503edb5225a735675eadab44d666006",
+      "bytes": 19824,
+      "path": "packages/picakeep_image_engine/native/tests/benchmark_png_hotloop.py",
+      "sha256": "aef35f970a49d1c2621df81d104bba73c503edb5225a735675eadab44d666006"
+    },
+    {
+      "installedSnapshotSha256": "dcc20c3a3e15848cc450be6047c2b236c0ddcf639fab79822ca4a84b1ef9fdde",
+      "bytes": 7212,
+      "path": "packages/picakeep_image_engine/native/tests/benchmark_shared_backing.py",
+      "sha256": "dcc20c3a3e15848cc450be6047c2b236c0ddcf639fab79822ca4a84b1ef9fdde"
+    },
+    {
+      "installedSnapshotSha256": "5fbb7170538c9cd4802577073492e480339600db963d8a654507425e4d006229",
+      "bytes": 5494,
+      "path": "packages/picakeep_image_engine/native/tests/check_android_alignment.py",
+      "sha256": "5fbb7170538c9cd4802577073492e480339600db963d8a654507425e4d006229"
+    },
+    {
+      "installedSnapshotSha256": "e9d4d697499577dd09d5ad14baad9925fa445b4bbb288294e7d22f6d76f97dfe",
+      "bytes": 2694,
+      "path": "packages/picakeep_image_engine/native/tests/dart_disk_space_test.dart",
+      "sha256": "e9d4d697499577dd09d5ad14baad9925fa445b4bbb288294e7d22f6d76f97dfe"
+    },
+    {
+      "installedSnapshotSha256": "5b45142c2c920d0a1cb6ad8c5d3edc7794b902f2a766753268625462df9d4429",
+      "bytes": 3079,
+      "path": "packages/picakeep_image_engine/native/tests/dart_prepared_read_test.dart",
+      "sha256": "5b45142c2c920d0a1cb6ad8c5d3edc7794b902f2a766753268625462df9d4429"
+    },
+    {
+      "installedSnapshotSha256": "d1a96bf5fc611b16d0afde1494a1f2f63db7a9d2ff863176f640218a7e63401f",
+      "bytes": 3411,
+      "path": "packages/picakeep_image_engine/native/tests/dart_smoke.dart",
+      "sha256": "d1a96bf5fc611b16d0afde1494a1f2f63db7a9d2ff863176f640218a7e63401f"
+    },
+    {
+      "installedSnapshotSha256": "9ceee2e1637ad6cf4aebc506e074db47349a57a20a81c6686745c848a8caaeca",
+      "bytes": 13313,
+      "path": "packages/picakeep_image_engine/native/tests/dart_worker_pool_lifecycle_cases.txt",
+      "sha256": "9ceee2e1637ad6cf4aebc506e074db47349a57a20a81c6686745c848a8caaeca"
+    },
+    {
+      "installedSnapshotSha256": "c4aa3672dc774b445063a8abff231c63964860c4a7c67052f5a7782637081b86",
+      "bytes": 2641,
+      "path": "packages/picakeep_image_engine/native/tests/dart_worker_pool_lifecycle_test.dart",
+      "sha256": "c4aa3672dc774b445063a8abff231c63964860c4a7c67052f5a7782637081b86"
+    },
+    {
+      "installedSnapshotSha256": "cf593e1e4364937af05e50944264472aa964ab73cf5f55a1b834ea31d4ef67ac",
+      "bytes": 4758,
+      "path": "packages/picakeep_image_engine/native/tests/dart_worker_pool_test.dart",
+      "sha256": "cf593e1e4364937af05e50944264472aa964ab73cf5f55a1b834ea31d4ef67ac"
+    },
+    {
+      "installedSnapshotSha256": "099f805a26f255fdf387d73feed31eee632e99387685c25cf1df91b80be34d76",
+      "bytes": 609,
+      "path": "packages/picakeep_image_engine/native/tests/disk_space_query.cpp",
+      "sha256": "099f805a26f255fdf387d73feed31eee632e99387685c25cf1df91b80be34d76"
+    },
+    {
+      "installedSnapshotSha256": "4aab9219c2203bfba997f70327050a7ac2b2b58ad4e16f619fe80199fc684788",
+      "bytes": 2379,
+      "path": "packages/picakeep_image_engine/native/tests/jpeg_scaled_reference.cpp",
+      "sha256": "4aab9219c2203bfba997f70327050a7ac2b2b58ad4e16f619fe80199fc684788"
+    },
+    {
+      "installedSnapshotSha256": "a139daec07789ea0df38cc6ef87a380e0126e44aca4d05e86d3ee068bd1289c0",
+      "bytes": 4436,
+      "path": "packages/picakeep_image_engine/native/tests/make_color_animation_fixtures.py",
+      "sha256": "a139daec07789ea0df38cc6ef87a380e0126e44aca4d05e86d3ee068bd1289c0"
+    },
+    {
+      "installedSnapshotSha256": "b75a88456259cf646bf8a4b0e8ddfcc0f88d12cc72f0ab6e65f68a6fc428bf45",
+      "bytes": 2786,
+      "path": "packages/picakeep_image_engine/native/tests/make_fixtures.py",
+      "sha256": "b75a88456259cf646bf8a4b0e8ddfcc0f88d12cc72f0ab6e65f68a6fc428bf45"
+    },
+    {
+      "installedSnapshotSha256": "88aaabedc3e8c138b0afd210256db20c33a25fa5d805c00b743833da3b6cc121",
+      "bytes": 783,
+      "path": "packages/picakeep_image_engine/native/tests/make_metadata_pressure_fixture.py",
+      "sha256": "88aaabedc3e8c138b0afd210256db20c33a25fa5d805c00b743833da3b6cc121"
+    },
+    {
+      "installedSnapshotSha256": "1d1994309b975a021196e9ccdc2ba6287020fa724255a8b6d54fb2aa03a0b9f9",
+      "bytes": 3603,
+      "path": "packages/picakeep_image_engine/native/tests/prepared_failure_probe.cpp",
+      "sha256": "1d1994309b975a021196e9ccdc2ba6287020fa724255a8b6d54fb2aa03a0b9f9"
+    },
+    {
+      "installedSnapshotSha256": "ca6368e230839d8a83254d45fc5f53cfdcd5e5948951cf734883930cd95ef0fd",
+      "bytes": 18870,
+      "path": "packages/picakeep_image_engine/native/tests/validate.cpp",
+      "sha256": "ca6368e230839d8a83254d45fc5f53cfdcd5e5948951cf734883930cd95ef0fd"
+    },
+    {
+      "installedSnapshotSha256": "dcd8e15f39a41db1b3fb91dcd08d0d7c97860d2f0f0472dfb549f51643c66ff2",
+      "bytes": 13248,
+      "path": "packages/picakeep_image_engine/native/tests/verify_jpeg_ceil_fit.py",
+      "sha256": "dcd8e15f39a41db1b3fb91dcd08d0d7c97860d2f0f0472dfb549f51643c66ff2"
+    },
+    {
+      "installedSnapshotSha256": "fd69a2c2230460244d33a852a903f5c68ef64a3fc3bc7eb8a9536c8a92e0c690",
+      "bytes": 9944,
+      "path": "packages/picakeep_image_engine/native/tests/verify_pixels.py",
+      "sha256": "fd69a2c2230460244d33a852a903f5c68ef64a3fc3bc7eb8a9536c8a92e0c690"
+    },
+    {
+      "installedSnapshotSha256": "c6ce352dc97879b8b9100c9b95426c4abe639d93bbeff4170bdf7f082db99c8a",
+      "bytes": 6814,
+      "path": "packages/picakeep_image_engine/native/tests/verify_prepared_read.py",
+      "sha256": "c6ce352dc97879b8b9100c9b95426c4abe639d93bbeff4170bdf7f082db99c8a"
+    },
+    {
+      "installedSnapshotSha256": "29680ec5d1bb0a447538af3c75482396bb26848b73d5ca44c8a0a01f028cfa89",
+      "bytes": 7000,
+      "path": "packages/picakeep_image_engine/native/tests/verify_shared_backing.py",
+      "sha256": "29680ec5d1bb0a447538af3c75482396bb26848b73d5ca44c8a0a01f028cfa89"
+    },
+    {
+      "installedSnapshotSha256": "6e6f6411db50e85ae8ff7777f01b2da0614aac13b7b9fcbea66dc56a1bc71418",
+      "bytes": 5257509,
+      "path": "packages/picakeep_image_engine/native/vendor/lcms-2.17.tar.gz",
+      "sha256": "6e6f6411db50e85ae8ff7777f01b2da0614aac13b7b9fcbea66dc56a1bc71418"
+    },
+    {
+      "installedSnapshotSha256": "3a13a5ba767dc8264bc40b185e41368a80d5d5f945944d1dbaa4b2fb0099f4e5",
+      "bytes": 2516606,
+      "path": "packages/picakeep_image_engine/native/vendor/libjpeg-turbo-3.1.3.tar.gz",
+      "sha256": "3a13a5ba767dc8264bc40b185e41368a80d5d5f945944d1dbaa4b2fb0099f4e5"
+    },
+    {
+      "installedSnapshotSha256": "2540302a1844ad2b2b501977abecfa850f265f97b78f065a712ab4074a89f5b5",
+      "bytes": 1600400,
+      "path": "packages/picakeep_image_engine/native/vendor/libpng-1.6.59.tar.gz",
+      "sha256": "2540302a1844ad2b2b501977abecfa850f265f97b78f065a712ab4074a89f5b5"
+    },
+    {
+      "installedSnapshotSha256": "93a852c2b3efafee3723efd4636de855b46f9fe1efddd607e1f42f60fc8f2136",
+      "bytes": 3833512,
+      "path": "packages/picakeep_image_engine/native/vendor/libwebp-1.6.0.tar.gz",
+      "sha256": "93a852c2b3efafee3723efd4636de855b46f9fe1efddd607e1f42f60fc8f2136"
+    },
+    {
+      "installedSnapshotSha256": "3ee4782247bcb874378d02f7eab4e294a84d3d15f3f6ee2de2f47a46aa7226e6",
+      "bytes": 513543,
+      "path": "packages/picakeep_image_engine/native/vendor/nasm-2.16.03-win64.zip",
+      "sha256": "3ee4782247bcb874378d02f7eab4e294a84d3d15f3f6ee2de2f47a46aa7226e6"
+    },
+    {
+      "installedSnapshotSha256": "17e88863f3600672ab49182f217281b6fc4d3c762bde361935e436a95214d05c",
+      "bytes": 1572744,
+      "path": "packages/picakeep_image_engine/native/vendor/zlib-1.3.1.tar.gz",
+      "sha256": "17e88863f3600672ab49182f217281b6fc4d3c762bde361935e436a95214d05c"
+    },
+    {
+      "installedSnapshotSha256": "777213f43cd98c5b30f7278c949a170211707e5aa6aa47eedb6193f9317f6ffb",
+      "bytes": 450,
+      "path": "packages/picakeep_image_engine/pubspec.yaml",
+      "sha256": "777213f43cd98c5b30f7278c949a170211707e5aa6aa47eedb6193f9317f6ffb"
+    },
+    {
+      "installedSnapshotSha256": "9031f4908dd5c2049e71b995e7c25e0b0c3ee8181436685cd2acf1b7c2549e5a",
+      "bytes": 3016,
+      "path": "packages/picakeep_image_engine/README.md",
+      "sha256": "9031f4908dd5c2049e71b995e7c25e0b0c3ee8181436685cd2acf1b7c2549e5a"
+    },
+    {
+      "installedSnapshotSha256": "f4d89e5be069cb6ee0896276382e291f549deaaab50449785dfcf852d42794b9",
+      "bytes": 745,
+      "path": "packages/picakeep_image_engine/windows/CMakeLists.txt",
+      "sha256": "f4d89e5be069cb6ee0896276382e291f549deaaab50449785dfcf852d42794b9"
+    },
+    {
+      "installedSnapshotSha256": "4c989c6f2d95f747c3ba6fe4d3868cd9e58fb75158da73efd1522fa852df8910",
+      "bytes": 472,
+      "path": "packages/picakeep_image_engine/windows/include/picakeep_image_engine/picakeep_image_engine_plugin_c_api.h",
+      "sha256": "4c989c6f2d95f747c3ba6fe4d3868cd9e58fb75158da73efd1522fa852df8910"
+    },
+    {
+      "installedSnapshotSha256": "98365353e7f83f6a7dd3c738088690996a9910172aaab4adf469f622293a210a",
+      "bytes": 1242,
+      "path": "packages/picakeep_image_engine/windows/picakeep_image_engine_plugin_c_api.cpp",
+      "sha256": "98365353e7f83f6a7dd3c738088690996a9910172aaab4adf469f622293a210a"
+    },
+    {
+      "installedSnapshotSha256": "3731d1d9f4e4555d8b611f257391c00341ab54a67bb576ed36166fa5ed6ea54f",
+      "bytes": 42463,
+      "path": "pubspec.lock",
+      "sha256": "3731d1d9f4e4555d8b611f257391c00341ab54a67bb576ed36166fa5ed6ea54f"
+    },
+    {
+      "installedSnapshotSha256": "860225e0ae9f512ac5b41f06eb05e286a215133265dac9c893704c627e8a7f12",
+      "bytes": 4251,
+      "path": "pubspec.yaml",
+      "sha256": "3e8689a9156cae4a5930b9857a9dae2fddf3ba8e349f457caf81902a3b9b6cc5"
+    },
+    {
+      "installedSnapshotSha256": "7a7b40124c5ad2db5557ada010c41688e79edd3f1215156405b78bb5950848c8",
+      "bytes": 2135,
+      "path": "windows/flutter/generated_plugin_registrant.cc",
+      "sha256": "7a7b40124c5ad2db5557ada010c41688e79edd3f1215156405b78bb5950848c8"
+    },
+    {
+      "installedSnapshotSha256": "d059bc34591aae58e8a32ff99b24004507b80e59ff25b3e2c97bf2c7c3174604",
+      "bytes": 987,
+      "path": "windows/flutter/generated_plugins.cmake",
+      "sha256": "d059bc34591aae58e8a32ff99b24004507b80e59ff25b3e2c97bf2c7c3174604"
+    }
+  ]
+}

@@ -372,12 +372,7 @@ Future<List<String>> _buildArchiveEpisodeFilesForEp(
 /// 与 [_sortedImageFilesForPath] 同口径：**全被剔光时回退到原列表** ——
 /// 一个"只有 cover.jpg"的包该显示那一页，而不是变成打不开的空列表。
 List<String> _withoutArchiveCoverEntries(List<String> archiveUris) {
-  final visible = archiveUris
-      .where(
-        (uri) => !_isCoverLikePath(parseArchiveUri(uri)?.entryPath ?? uri),
-      )
-      .toList();
-  return visible.isNotEmpty ? visible : List<String>.from(archiveUris);
+  return archiveReadingPageUris(archiveUris);
 }
 
 List<String> _buildLocalEpisodeNames(int episodeCount) {

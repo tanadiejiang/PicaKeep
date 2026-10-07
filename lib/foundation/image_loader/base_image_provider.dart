@@ -30,8 +30,9 @@ abstract class BaseImageProvider<T extends BaseImageProvider<T>>
       // 字节缓存：原始压缩字节在堆上驻留是滚动时老年代 GC 的主要压力源，
       // 而它们本就有磁盘缓存兜底，无需再在堆里缓一份。
       if (cacheRawBytes) {
-        final cachedData = _cache[cacheKey];
+        final cachedData = _cache.remove(cacheKey);
         if (cachedData != null && cachedData.isNotEmpty) {
+          _cache[cacheKey] = cachedData;
           data = cachedData;
         } else {
           if (cachedData != null) {
@@ -41,9 +42,13 @@ abstract class BaseImageProvider<T extends BaseImageProvider<T>>
           if (data.isEmpty) {
             throw Exception('Empty image data');
           }
-          _checkCacheSize();
-          _cache[cacheKey] = data;
-          _cacheSize += data.length;
+          if (data.length <= _cacheSizeLimit) {
+            final previous = _cache.remove(cacheKey);
+            _cacheSize -= previous?.length ?? 0;
+            _cache[cacheKey] = data;
+            _cacheSize += data.length;
+            _checkCacheSize();
+          }
         }
       } else {
         data = await load(chunkEvents);

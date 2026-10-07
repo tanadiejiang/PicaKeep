@@ -11,6 +11,7 @@ import 'package:crypto/crypto.dart';
 import 'package:path/path.dart' as p;
 import 'package:sqlite3/sqlite3.dart';
 import 'package:uuid/uuid.dart';
+import 'image_pipeline/image_background_notifications.dart';
 
 part 'pixiv_library_maintenance.dart';
 
@@ -585,6 +586,7 @@ class PixivLibrary {
         }
       }
       _journal(op, 'transfer', data, 'complete');
+      ImageBackgroundNotifications.committed(destination);
     } catch (e) {
       // Preserve the last committed stage, not a generic failure stage.
       final db = openDownloads(root);

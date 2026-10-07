@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -9,6 +10,8 @@ import 'package:picakeep/base.dart';
 import 'package:picakeep/comic_source/comic_source.dart';
 import 'package:picakeep/components/components.dart';
 import 'package:picakeep/foundation/app.dart';
+import 'package:picakeep/foundation/history.dart';
+import 'package:picakeep/foundation/local_favorites.dart';
 import 'package:picakeep/foundation/comic_tile_display_config.dart';
 import 'package:picakeep/foundation/explore/explore_bindings.dart';
 import 'package:picakeep/foundation/explore/explore_models.dart';
@@ -31,6 +34,31 @@ class _Paths extends PathProviderPlatform {
   Future<String?> getApplicationCachePath() async => path;
   @override
   Future<String?> getApplicationSupportPath() async => path;
+}
+
+// These widget tests verify navigation/cache behavior, not settings storage.
+// Real file writes started in FakeAsync can leave an open handle at shutdown.
+final class _ViewSettingsIO extends IOOverrides {
+  _ViewSettingsIO(this.settingsPath);
+  final String settingsPath;
+  @override
+  File createFile(String path) =>
+      path == settingsPath ? _ViewSettingsFile(path) : super.createFile(path);
+}
+
+class _ViewSettingsFile implements File {
+  _ViewSettingsFile(this.path);
+  @override
+  final String path;
+  @override
+  Future<File> writeAsString(String contents,
+          {FileMode mode = FileMode.write,
+          Encoding encoding = utf8,
+          bool flush = false}) async =>
+      this;
+  @override
+  dynamic noSuchMethod(Invocation invocation) =>
+      throw StateError('Unexpected settings fixture I/O');
 }
 
 BaseComic _comic(String id,
@@ -193,13 +221,18 @@ void main() {
   late List<ComicSource> sources;
   late List<String> settings, keywords;
   final paths = PathProviderPlatform.instance;
+  final savedIOOverrides = IOOverrides.current;
   late _Provider provider;
   setUpAll(() async {
     temp = await Directory.systemTemp.createTemp('pk-recommend-waterfall-');
     PathProviderPlatform.instance = _Paths(temp.path);
     await App.init(dataPathOverride: temp.path);
+    IOOverrides.global = _ViewSettingsIO('${App.dataPath}/settings');
   });
   tearDownAll(() async {
+    HistoryManager().dispose();
+    LocalFavoritesManager().dispose();
+    IOOverrides.global = savedIOOverrides;
     PathProviderPlatform.instance = paths;
     await temp.delete(recursive: true);
   });
@@ -796,6 +829,8 @@ void main() {
         final scroll = listScroll(tester);
         final overviewReads = provider.overviews;
         final listReads = provider.lists;
+        final rankingWasVisited =
+            provider.requests.any((r) => r.entryId == provider.rankingId);
 
         appdata.settings[illustWaterfallColumnsSettingIndex] = '3';
         appdata.settings[comicTileDisplayConfigSettingIndex] =
@@ -818,7 +853,15 @@ void main() {
         expectListLayout(tester, sourceKey);
         expect(listScroll(tester), same(scroll));
         expect(provider.overviews, overviewReads);
-        expect(provider.lists, listReads + 1);
+        // Explore intentionally remembers the last tab across page instances.
+        // A ranking already loaded during initial restore must stay cached;
+        // a newly visited ranking makes exactly one request.
+        expect(provider.lists, listReads + (rankingWasVisited ? 0 : 1));
+        expect(
+            provider.requests
+                .where((r) => r.entryId == provider.rankingId)
+                .length,
+            1);
         expect(
             provider.overviewRequests.every((r) =>
                 r.sourceKey == sourceKey && r.entryId == provider.recommendId),

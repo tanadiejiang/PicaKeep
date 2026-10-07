@@ -105,6 +105,13 @@ extension ToolBar on ComicReadingPage {
                       child: Text(text),
                     ),
                     const Spacer(),
+                    Tooltip(
+                      message: '原始像素'.tl,
+                      child: IconButton(
+                        icon: const Icon(Icons.zoom_in_map),
+                        onPressed: logic.showNativePixels,
+                      ),
+                    ),
                     if (App.isWindows)
                       Tooltip(
                         message: "${"全屏".tl}(F12)",
@@ -169,25 +176,27 @@ extension ToolBar on ComicReadingPage {
                         icon: const Icon(Icons.favorite_outline),
                         onPressed: () async {
                           try {
-                            final id =
-                                "${logic.data.sourceKey}-${logic.data.id}";
-                            var image = await _persistentCurrentImage();
+                            final image = await _persistentCurrentImage();
                             if (image != null) {
+                              final selected = image.selected;
+                              final identity = selected.source.identity;
+                              final id = selected.workId;
                               var otherInfo = <String, dynamic>{};
-                              otherInfo["eps"] =
-                                  readingData.eps?.keys.toList() ?? [];
-                              otherInfo["url"] = logic.urls[logic.index - 1];
-                              otherInfo["sourceKey"] = logic.data.sourceKey;
-                              otherInfo["downloadId"] = logic.data.downloadId;
+                              otherInfo["eps"] = selected.eps;
+                              otherInfo["url"] = selected.url;
+                              otherInfo["sourceKey"] = identity.sourceKey;
+                              otherInfo["downloadId"] = identity.downloadId;
+                              otherInfo["sourceVersion"] =
+                                  identity.sourceVersion;
                               var favorite = ImageFavorite(
                                   id,
-                                  image,
-                                  readingData.title,
-                                  logic.order,
-                                  logic.index,
+                                  image.path,
+                                  selected.title,
+                                  identity.episode,
+                                  identity.page + 1,
                                   otherInfo);
                               if (!ImageFavoriteManager.exist(
-                                  id, logic.order, logic.index)) {
+                                  id, identity.episode, identity.page + 1)) {
                                 ImageFavoriteManager.add(favorite);
                                 showToast(message: "已添加至图片收藏".tl);
                               } else {

@@ -27,9 +27,11 @@ extension ServerAppRouting on PicaKeepAdminServer {
     return response.change(headers: {
       'access-control-allow-origin': '*',
       'access-control-allow-methods': 'GET, POST, PUT, DELETE, OPTIONS',
-      'access-control-allow-headers': 'Authorization, Content-Type, Range',
+      'access-control-allow-headers':
+          'Authorization, Content-Type, Range, If-None-Match',
       'access-control-expose-headers':
-          'Content-Range, Accept-Ranges, Content-Length',
+          'Content-Range, Accept-Ranges, Content-Length, ETag, Retry-After, '
+              'X-Image-Width, X-Image-Height, X-Image-Source-Version',
     });
   }
 

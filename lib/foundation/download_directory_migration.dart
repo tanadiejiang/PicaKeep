@@ -2,6 +2,8 @@ import 'dart:io';
 
 import 'package:path/path.dart' as p;
 
+import 'windows_rename_retry.dart';
+
 /// 下载目录迁移里使用的数据库文件名。
 const String kDownloadDatabaseFileName = 'download.db';
 
@@ -542,8 +544,7 @@ Future<bool> hasPendingDownloadEntries(String from, {String? to}) async {
       if (p.basename(entity.path) == kDownloadDatabaseFileName) {
         continue;
       }
-      if (targetPath.isNotEmpty &&
-          _isOnPathToTarget(entity.path, targetPath)) {
+      if (targetPath.isNotEmpty && _isOnPathToTarget(entity.path, targetPath)) {
         continue;
       }
       return true;
@@ -620,9 +621,9 @@ Future<void> _copyEntityRaw(
 Future<void> _renameTo(String fromPath, String toPath) async {
   final type = await FileSystemEntity.type(fromPath, followLinks: false);
   if (type == FileSystemEntityType.directory) {
-    await Directory(fromPath).rename(toPath);
+    await retryWindowsRename(() => Directory(fromPath).rename(toPath));
   } else {
-    await File(fromPath).rename(toPath);
+    await retryWindowsRename(() => File(fromPath).rename(toPath));
   }
 }
 

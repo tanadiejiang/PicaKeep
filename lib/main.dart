@@ -14,6 +14,7 @@ import 'foundation/appearance_settings.dart';
 import 'foundation/archive/archive_registry.dart';
 import 'foundation/explore/explore_bindings.dart';
 import 'foundation/history.dart';
+import 'foundation/image_pipeline/background_image_preparer.dart';
 import 'foundation/local_favorites.dart';
 import 'foundation/log_file_service.dart';
 import 'foundation/ai/ai_download_queue.dart';
@@ -21,6 +22,7 @@ import 'foundation/online_download_manager.dart';
 import 'foundation/remote_library_event_channel.dart';
 import 'foundation/remote_library_data_source.dart';
 import 'foundation/untranslated_tags/untranslated_tag_coordinator.dart';
+import 'foundation/verification_server_paths.dart';
 import 'network/cookie_jar.dart';
 import 'network/jm_network/jm_network.dart';
 import 'pages/auth_page.dart';
@@ -37,6 +39,8 @@ Future<void> main(List<String> args) async {
   AppStartupTrace.log('main.start');
   WidgetsFlutterBinding.ensureInitialized();
   AppStartupTrace.log('widgetsBinding.ready');
+  // Validate the explicit test-only option before any normal data initializer.
+  resolveVerificationServerPaths(args);
 
   // Headless 服务端模式：无界面、直接启动本地服务（供无显示器环境如 NAS 使用，
   // 由 xvfb 包裹运行）。不调用 runApp / window_manager，仅复用与桌面版完全相同的
@@ -60,10 +64,13 @@ Future<void> main(List<String> args) async {
 }
 
 Future<void> _runHeadlessServer(List<String> args) async {
-  final dataPathOverride = _resolveHeadlessDataPathOverride(args);
+  final verificationPaths = resolveVerificationServerPaths(args);
+  final dataPathOverride =
+      verificationPaths?.dataRoot ?? _resolveHeadlessDataPathOverride(args);
   await App.init(
     dataPathOverride: dataPathOverride,
-    migrateExistingData: true,
+    cachePathOverride: verificationPaths?.cacheRoot,
+    migrateExistingData: verificationPaths == null,
   );
   await appdata.readEssentialData();
   ArchiveRegistry.initDefaults();
@@ -72,7 +79,7 @@ Future<void> _runHeadlessServer(List<String> args) async {
   await _initializeOnlineFoundation();
 
   final runtime = LocalServerRuntime.instance;
-  final configPath = _parseConfigPathArg(args);
+  final configPath = verificationPaths?.configPath ?? _parseConfigPathArg(args);
   if (configPath != null) {
     runtime.configPathOverride = configPath;
   }
@@ -172,6 +179,7 @@ Future<void> _initializeApplication() async {
 }
 
 Future<void> _initializeOnlineFoundation() async {
+  BackgroundImagePreparer.instance.activate();
   SingleInstanceCookieJar('${App.dataPath}${Platform.pathSeparator}cookies.db');
   await ComicSource.init();
   await AiDownloadQueue.instance.load();

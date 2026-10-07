@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
@@ -8,6 +9,10 @@ import 'package:picakeep/base.dart';
 import 'package:picakeep/foundation/comic_tile_display_config.dart';
 import 'package:picakeep/foundation/history.dart';
 import 'package:picakeep/foundation/local_favorites.dart';
+import 'package:picakeep/foundation/image_pipeline/cover_decode_target.dart';
+import 'package:picakeep/foundation/image_pipeline/cover_thumbnail_size.dart';
+import 'package:picakeep/foundation/image_loader/base_image_provider.dart';
+import 'package:picakeep/foundation/image_loader/stream_image_provider.dart';
 
 class DownloadedComicTile extends StatelessWidget {
   const DownloadedComicTile({
@@ -360,41 +365,219 @@ class DownloadedComicTile extends StatelessWidget {
       return const Center(child: Icon(Icons.image_not_supported));
     }
     if (!optimizeCoverDecode) {
-      return Image(
-        image: resolvedProvider,
-        fit: BoxFit.cover,
-        height: double.infinity,
-        gaplessPlayback: false,
-        filterQuality: FilterQuality.medium,
-        errorBuilder: (_, __, ___) =>
-            const Center(child: Icon(Icons.image_not_supported)),
-      );
+      return _buildCoverImage(resolvedProvider, resolvedProvider,
+          gaplessPlayback: false);
     }
     return LayoutBuilder(
       builder: (context, constraints) {
-        final devicePixelRatio =
-            MediaQuery.of(context).devicePixelRatio.clamp(1.0, 3.0).toDouble();
-        const qualityScale = 1.35;
-        final cacheWidth = constraints.maxWidth.isFinite
-            ? (constraints.maxWidth * devicePixelRatio * qualityScale).round()
+        final target = constraints.maxWidth.isFinite &&
+                constraints.maxHeight.isFinite &&
+                constraints.maxHeight > 0
+            ? coverFramePhysicalTarget(
+                Size(constraints.maxWidth, constraints.maxHeight),
+                MediaQuery.devicePixelRatioOf(context))
             : null;
-        final displayProvider = ResizeImage.resizeIfNeeded(
-          cacheWidth,
-          null,
-          resolvedProvider,
-        );
-        return Image(
-          image: displayProvider,
-          fit: BoxFit.cover,
-          height: double.infinity,
-          gaplessPlayback: true,
-          filterQuality: FilterQuality.medium,
-          errorBuilder: (_, __, ___) =>
-              const Center(child: Icon(Icons.image_not_supported)),
-        );
+        final displayProvider = target != null
+            ? CoverDecodeTarget(resolvedProvider,
+                frameWidth: target.width,
+                frameHeight: target.height,
+                fit: BoxFit.cover)
+            : resolvedProvider;
+        return _buildCoverImage(resolvedProvider, displayProvider,
+            gaplessPlayback: true);
       },
     );
   }
+
+  Widget _buildCoverImage(ImageProvider<Object> sourceProvider,
+      ImageProvider<Object> displayProvider,
+      {required bool gaplessPlayback}) {
+    final isLocal = sourceProvider is FileImage ||
+        (sourceProvider is StreamImageProvider &&
+            (sourceProvider.imageKey.startsWith('local_cover::') ||
+                sourceProvider.imageKey.startsWith('local_file::')));
+    if (isLocal) {
+      return _RecoverableLocalComicCover(
+          sourceProvider: sourceProvider,
+          displayProvider: displayProvider,
+          gaplessPlayback: gaplessPlayback);
+    }
+    return Image(
+      image: displayProvider,
+      fit: BoxFit.cover,
+      height: double.infinity,
+      gaplessPlayback: gaplessPlayback,
+      filterQuality: FilterQuality.medium,
+      errorBuilder: (_, __, ___) =>
+          const Center(child: Icon(Icons.image_not_supported)),
+    );
+  }
+}
+
+/// Evicting an error from ImageCache does not detach an already failed Image.
+/// A local storage read may recover after the provider's transient-cache TTL,
+/// so remount that Image once, without retrying network covers or every rebuild.
+class _RecoverableLocalComicCover extends StatefulWidget {
+  const _RecoverableLocalComicCover({
+    required this.sourceProvider,
+    required this.displayProvider,
+    required this.gaplessPlayback,
+  });
+
+  final ImageProvider<Object> sourceProvider, displayProvider;
+  final bool gaplessPlayback;
+
+  @override
+  State<_RecoverableLocalComicCover> createState() =>
+      _RecoverableLocalComicCoverState();
+}
+
+class _RecoverableLocalComicCoverState
+    extends State<_RecoverableLocalComicCover> with WidgetsBindingObserver {
+  static const _retryDelay = Duration(seconds: 5);
+  Timer? _retryTimer;
+  bool _failed = false, _retryUsed = false, _retrying = false;
+  bool _routeActive = true, _appActive = true;
+  int _revision = 0, _sourceGeneration = 0;
+  late ImageProvider<Object> _displayProvider;
+
+  bool get _canRetry => mounted && _routeActive && _appActive;
+
+  @override
+  void initState() {
+    super.initState();
+    _displayProvider = widget.displayProvider;
+    _appActive = WidgetsBinding.instance.lifecycleState == null ||
+        WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed;
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _routeActive = TickerMode.valuesOf(context).enabled;
+    if (!_routeActive) {
+      _cancelRetry();
+    } else {
+      _queueRetry();
+    }
+  }
+
+  @override
+  void didUpdateWidget(covariant _RecoverableLocalComicCover oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.sourceProvider != widget.sourceProvider) {
+      _cancelRetry();
+      _sourceGeneration++;
+      _revision++;
+      _failed = _retryUsed = _retrying = false;
+    }
+    if (!_sameDisplayTarget(_displayProvider, widget.displayProvider)) {
+      _displayProvider = widget.displayProvider;
+    }
+  }
+
+  bool _sameDisplayTarget(
+      ImageProvider<Object> before, ImageProvider<Object> after) {
+    if (before is CoverDecodeTarget && after is CoverDecodeTarget) {
+      return before.imageProvider == after.imageProvider &&
+          before.frameWidth == after.frameWidth &&
+          before.frameHeight == after.frameHeight &&
+          before.fit == after.fit &&
+          before.maximumEdge == after.maximumEdge &&
+          before.maximumPixels == after.maximumPixels;
+    }
+    return before == after;
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    final wasActive = _appActive;
+    _appActive = state == AppLifecycleState.resumed;
+    if (!_appActive) {
+      _cancelRetry();
+    } else if (!wasActive && _failed) {
+      // Permission helpers can recover while the application is backgrounded.
+      // Only failed cards get one new opportunity in this foreground session.
+      _retryUsed = false;
+      _queueRetry();
+    }
+  }
+
+  void _cancelRetry() {
+    _retryTimer?.cancel();
+    _retryTimer = null;
+  }
+
+  void _queueRetry() {
+    if (!_canRetry ||
+        !_failed ||
+        _retryUsed ||
+        _retrying ||
+        _retryTimer != null) {
+      return;
+    }
+    _retryTimer = Timer(_retryDelay, () {
+      _retryTimer = null;
+      unawaited(_retry());
+    });
+  }
+
+  Future<void> _retry() async {
+    if (!_canRetry || !_failed || _retryUsed || _retrying) return;
+    final generation = _sourceGeneration;
+    final source = widget.sourceProvider;
+    final display = widget.displayProvider;
+    _retrying = true;
+    if (source is BaseImageProvider) {
+      // A codec failure may have cached malformed bytes before decoding failed.
+      BaseImageProvider.evictKey(source.key);
+    }
+    try {
+      await display.evict(
+          configuration: createLocalImageConfiguration(context));
+    } catch (_) {
+      // A provider that cannot obtain its key still receives only one retry.
+    }
+    if (!mounted || generation != _sourceGeneration) return;
+    _retrying = false;
+    if (!_canRetry) return;
+    setState(() {
+      _retryUsed = true;
+      _failed = false;
+      _displayProvider = widget.displayProvider;
+      _revision++;
+    });
+  }
+
+  @override
+  void dispose() {
+    _cancelRetry();
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => Image(
+        key: ValueKey(_revision),
+        image: _displayProvider,
+        fit: BoxFit.cover,
+        height: double.infinity,
+        gaplessPlayback: widget.gaplessPlayback,
+        filterQuality: FilterQuality.medium,
+        frameBuilder: (_, child, frame, __) {
+          if (frame != null) {
+            _failed = false;
+            _cancelRetry();
+          }
+          return child;
+        },
+        errorBuilder: (_, __, ___) {
+          _failed = true;
+          _queueRetry();
+          return const Center(child: Icon(Icons.image_not_supported));
+        },
+      );
 }
 
 class _ComicDescription extends StatelessWidget {

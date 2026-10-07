@@ -34,6 +34,7 @@ extension LocalLibraryScan on LocalLibraryManager {
 
     _loaded = true;
     await _autoUnlockEncryptedArchives();
+    _queueChangedCovers(_items);
   }
 
   Future<List<LocalLibraryComicItem>> getAll() async {

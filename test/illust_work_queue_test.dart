@@ -3,6 +3,75 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:picakeep/pages/illust_work_queue.dart';
 
 void main() {
+  testWidgets('visible work claim excludes metadata and releases on pause',
+      (tester) async {
+    final cover = Completer<int?>();
+    final details = Completer<int?>();
+    final changes = <bool>[];
+    final queue = IllustWorkQueue<int>(
+        resolve: (_, __) => cover.future,
+        resolveDetails: (_, __, ___) => details.future,
+        onCoverWorkChanged: changes.add,
+        publish: (_) {});
+    queue.setVisible(['first']);
+    expect(changes, [true]);
+    queue.setActive(false);
+    expect(changes, [true, false]);
+    queue.setActive(true);
+    expect(changes, [true, false, true]);
+    cover.complete(1);
+    await tester.pump();
+    expect(queue.active, 1, reason: 'only metadata remains active');
+    expect(changes, [true, false, true, false]);
+    details.complete(1);
+    await tester.pump();
+    queue.setVisible(['next']);
+    expect(changes.last, isTrue);
+    queue.dispose();
+    expect(changes.last, isFalse);
+    await tester.pump();
+  });
+
+  testWidgets('cover bucket upgrade rejects late decode and retains one slot',
+      (tester) async {
+    var target = 384;
+    final pending = <({int bucket, Completer<int?> result})>[];
+    final continuations = <bool Function()>[];
+    final visible = <String, int>{'item': 384};
+    final queue = IllustWorkQueue<int>(
+        concurrency: 1,
+        resolve: (_, canContinue) {
+          continuations.add(canContinue);
+          final result = Completer<int?>();
+          pending.add((bucket: target, result: result));
+          return result.future;
+        },
+        publish: visible.addAll);
+    queue.setVisible(['item']);
+    target = 768;
+    queue.retry('item');
+    target = 1536;
+    queue.retry('item');
+    expect(continuations.single(), isFalse);
+    expect(pending, hasLength(1));
+    expect(queue.active, 1);
+    expect(visible['item'], 384);
+    pending.first.result.complete(384);
+    await tester.pump();
+    expect(visible['item'], 384,
+        reason: 'late decode cannot replace old cover');
+    expect(pending.map((work) => work.bucket), [384, 1536]);
+    expect(queue.peakActive, 1);
+    pending.last.result.complete(1536);
+    await tester.pump();
+    expect(visible['item'], 1536);
+    queue.setVisible(['item']);
+    await tester.pump(const Duration(seconds: 10));
+    expect(pending, hasLength(2));
+    expect(queue.active, 0);
+    queue.dispose();
+  });
+
   testWidgets('queue bounds concurrency and drops offscreen pending work',
       (tester) async {
     final tasks = <String, Completer<String?>>{};

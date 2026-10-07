@@ -1,0 +1,19 @@
+name: picakeep_image_engine
+description: Budgeted original-pixel image regions for PicaKeep.
+version: 0.1.0
+publish_to: none
+environment:
+  sdk: '>=3.11.0 <4.0.0'
+  flutter: '>=3.41.0'
+dependencies:
+  flutter:
+    sdk: flutter
+  ffi: ^2.1.4
+flutter:
+  plugin:
+    platforms:
+      android:
+        package: lingxue.picakeep.image_engine
+        pluginClass: PicakeepImageEnginePlugin
+      windows:
+        pluginClass: PicakeepImageEnginePluginCApi

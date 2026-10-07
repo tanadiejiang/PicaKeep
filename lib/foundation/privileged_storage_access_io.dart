@@ -1,5 +1,12 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
+
+class PrivilegedFileStat {
+  const PrivilegedFileStat({required this.size, required this.modifiedMillis});
+  final int size;
+  final int modifiedMillis;
+}
 
 class LocalDirectoryEntry {
   const LocalDirectoryEntry({
@@ -15,6 +22,65 @@ class LocalDirectoryEntry {
 
 class PrivilegedStorageAccess {
   PrivilegedStorageAccess._();
+
+  static Future<PrivilegedFileStat?> fileStat(String path) async {
+    try {
+      final stat = await File(path).stat();
+      if (stat.type != FileSystemEntityType.file) return null;
+      return PrivilegedFileStat(
+          size: stat.size,
+          modifiedMillis: stat.modified.millisecondsSinceEpoch);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static Future<File> copyFileToManagedFile(
+    String sourcePath,
+    File destination, {
+    int maxBytes = 2 * 1024 * 1024 * 1024,
+    bool Function()? isCancelled,
+    Future<void>? cancelled,
+  }) async {
+    var cancellationRequested = isCancelled?.call() == true;
+    if (cancelled != null) {
+      unawaited(cancelled.then((_) => cancellationRequested = true));
+    }
+    bool copyCancelled() =>
+        cancellationRequested || isCancelled?.call() == true;
+    if (copyCancelled()) throw StateError('Original file copy cancelled');
+    final stat = await fileStat(sourcePath);
+    if (stat == null) {
+      throw FileSystemException('Original file is unavailable', sourcePath);
+    }
+    if (stat.size > maxBytes) {
+      throw StateError('Original file exceeds reserved disk bytes');
+    }
+    await destination.parent.create(recursive: true);
+    if (copyCancelled()) throw StateError('Original file copy cancelled');
+    final output = await destination.open(mode: FileMode.write);
+    var total = 0;
+    var succeeded = false;
+    try {
+      await for (final chunk in File(sourcePath).openRead()) {
+        if (copyCancelled()) {
+          throw StateError('Original file copy cancelled');
+        }
+        total += chunk.length;
+        if (total > maxBytes) {
+          throw StateError('Original file exceeds reserved disk bytes');
+        }
+        await output.writeFrom(chunk);
+      }
+      if (copyCancelled()) throw StateError('Original file copy cancelled');
+      await output.flush();
+      succeeded = true;
+      return destination;
+    } finally {
+      await output.close();
+      if (!succeeded && await destination.exists()) await destination.delete();
+    }
+  }
 
   static Future<bool> directoryExists(String path) async {
     try {

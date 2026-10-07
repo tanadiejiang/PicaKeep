@@ -7,6 +7,7 @@ list(APPEND FLUTTER_PLUGIN_LIST
   dynamic_color
   file_selector_windows
   flutter_inappwebview_windows
+  picakeep_image_engine
   screen_retriever_windows
   share_plus
   sqlite3_flutter_libs

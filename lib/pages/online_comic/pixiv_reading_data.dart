@@ -6,12 +6,13 @@ part of pica_reader;
 /// [PixivNetwork.getComicPages] 一次性返回全部页的多档 URL，故 [loadEpNetwork]
 /// 直接返回按画质档位挑选后的 URL 列表，[loadImageNetwork] 带 Referer 头直连下载。
 class PixivReadingData extends ReadingData {
-  PixivReadingData({required this.comic, this.originalQuality = false});
+  PixivReadingData({required this.comic, this.originalQuality = true});
 
   final PixivComicInfo comic;
 
   /// 是否为原图画质：true 取 `urls.original`，false 取 `urls.regular`。
   final bool originalQuality;
+  List<PixivPage> _pages = const [];
 
   @override
   String get title => comic.title;
@@ -42,21 +43,19 @@ class PixivReadingData extends ReadingData {
 
   /// 取本作品全部页图。
   ///
-  /// 优先按 [originalQuality] 选档；若目标档位为空串（Pixiv 对部分老作品不下发
-  /// original），按 regular → small → thumbMini 顺序回退到第一个非空者，
-  /// 保证阅读器永远拿不到空 URL。
+  /// 原图始终是正式阅读输入；只有来源明确未下发 original 时，才使用
+  /// regular → small → thumbMini，并在资源上标记最高可用画质。
   @override
   Future<List<String>> loadEpNetwork(int ep) async {
     final res = await PixivNetwork().getComicPages(comic.id);
     if (res.error) {
       throw Exception(res.errorMessageWithoutNull);
     }
+    _pages = List<PixivPage>.unmodifiable(res.data);
     return [
       for (final page in res.data)
-        originalQuality
-            ? _firstNonEmpty(
-                [page.original, page.regular, page.small, page.thumbMini])
-            : _firstNonEmpty([page.regular, page.small, page.thumbMini]),
+        _firstNonEmpty(
+            [page.original, page.regular, page.small, page.thumbMini]),
     ];
   }
 
@@ -72,13 +71,54 @@ class PixivReadingData extends ReadingData {
 
   /// 缓存键与 ep 无关，仅 id + page（Pixiv 无章节概念）。
   @override
-  String buildImageKey(int ep, int page, String url) => '${comic.id}$page';
+  String buildImageKey(int ep, int page, String url) =>
+      originalNetworkCacheIdentity(ep, page, url);
+
+  @override
+  Size? imageSize(int ep, int page, String url) {
+    final source = _pages.elementAtOrNull(page);
+    return source != null && source.width > 0 && source.height > 0
+        ? Size(source.width.toDouble(), source.height.toDouble())
+        : null;
+  }
+
+  @override
+  Future<ReaderPageSource> resolvePageSource(
+      int ep, int page, String url) async {
+    if (downloaded && checkEpDownloaded(ep)) {
+      return super.resolvePageSource(ep, page, url);
+    }
+    if (_pages.isEmpty) await loadEpNetwork(ep);
+    final candidate = _pages.elementAtOrNull(page);
+    if (candidate == null) throw StateError('Pixiv page is unavailable');
+    final original = candidate.original.isNotEmpty;
+    final target = _firstNonEmpty([
+      candidate.original,
+      candidate.regular,
+      candidate.small,
+      candidate.thumbMini
+    ]);
+    if (target.isEmpty) throw StateError('Pixiv page has no available source');
+    return networkPageSource(
+      ep, page, target,
+      headers: const {
+        'Referer': 'https://www.pixiv.net/',
+        'User-Agent': PixivNetwork.pixivWebUA
+      },
+      isOriginal: original,
+      // Original dimensions cannot describe the actual regular rendition.
+      width: original && candidate.width > 0 ? candidate.width : null,
+      height: original && candidate.height > 0 ? candidate.height : null,
+      sourceTier: original ? 'original' : 'bestAvailable',
+    );
+  }
 
   /// url 是 [loadEpNetwork] 返回的 CDN 直链，带 Referer 与统一 UA 规避防盗链。
   @override
   Stream<List<int>> loadImageNetwork(int ep, int page, String url) async* {
     final result = await OnlineImageManager.instance.getImage(
       url,
+      cacheIdentity: originalNetworkCacheIdentity(ep, page, url),
       headers: const {
         'Referer': 'https://www.pixiv.net/',
         'User-Agent': PixivNetwork.pixivWebUA,

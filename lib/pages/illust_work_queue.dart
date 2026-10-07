@@ -9,6 +9,7 @@ class IllustWorkQueue<T> {
     required this.resolve,
     required this.publish,
     this.resolveDetails,
+    this.onCoverWorkChanged,
     this.concurrency = 2,
     this.isComplete,
     this.retryDelay = const Duration(seconds: 5),
@@ -22,6 +23,7 @@ class IllustWorkQueue<T> {
   final Future<T?> Function(String key, T value, bool Function() canContinue)?
       resolveDetails;
   final void Function(Map<String, T> values) publish;
+  final void Function(bool busy)? onCoverWorkChanged;
   final int concurrency;
   final Duration retryDelay;
   final int maxAutomaticRetries;
@@ -46,10 +48,22 @@ class IllustWorkQueue<T> {
   bool _active = true, _scrolling = false, _disposed = false;
   int _generation = 0;
   int started = 0, peakActive = 0;
+  bool _reportedCoverWork = false;
   int get queued => _pending.length + _pendingDetails.length;
   int get active => _running.length;
   bool get _canRun => !_disposed && _active;
   bool get _canRunDetails => _canRun && !_scrolling && _idle == null;
+
+  void _reportCoverWork() {
+    final busy = _canRun &&
+        (_scrolling ||
+            _idle != null ||
+            _pending.isNotEmpty ||
+            _running.values.any((work) => !work.details));
+    if (busy == _reportedCoverWork) return;
+    _reportedCoverWork = busy;
+    onCoverWorkChanged?.call(busy);
+  }
 
   void _mark(String event) {
     IllustCoverDiagnostics.event('queue.$event', arguments: {
@@ -76,6 +90,7 @@ class IllustWorkQueue<T> {
     _failures.clear();
     _cancelRetries();
     _visible = {};
+    _reportCoverWork();
     _mark('reset');
   }
 
@@ -104,6 +119,7 @@ class IllustWorkQueue<T> {
   void setActive(bool value) {
     if (value != _active) _mark(value ? 'foreground' : 'paused');
     _active = value;
+    _reportCoverWork();
     if (value) setVisible(_visible);
   }
 
@@ -140,6 +156,7 @@ class IllustWorkQueue<T> {
   }
 
   void _drain() {
+    _reportCoverWork();
     if (!_canRun) return;
     final values = <String, T>{};
     for (final key in _visible) {
@@ -186,6 +203,7 @@ class IllustWorkQueue<T> {
       if (_running.length > peakActive) peakActive = _running.length;
       unawaited(_run(key, token, isDetails));
     }
+    _reportCoverWork();
   }
 
   void _scheduleRetry(String key) {
@@ -282,5 +300,6 @@ class IllustWorkQueue<T> {
     _ready.clear();
     _readyDetails.clear();
     _visible.clear();
+    _reportCoverWork();
   }
 }

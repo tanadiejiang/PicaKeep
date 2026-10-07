@@ -1,5 +1,12 @@
 {
   "zh_TW": {
+    "漫画图片显示": "漫畫圖片顯示",
+    "插画 / 图集图片显示": "插畫 / 圖集圖片顯示",
+    "图片显示": "圖片顯示",
+    "清晰优先": "清晰優先",
+    "原始像素": "原始像素",
+    "当前来源最高可用画质": "目前來源最高可用畫質",
+    "预览优先": "預覽優先",
     "有可用更新": "有可用更新",
     "漫画阅读高清模式": "漫畫閱讀高清模式",
     "插画 / 图集阅读高清模式": "插畫 / 圖集閱讀高清模式",
@@ -653,6 +660,13 @@
     "@pages 页": "@pages 頁"
   },
   "en_US": {
+    "漫画图片显示": "Comic image display",
+    "插画 / 图集图片显示": "Illustration image display",
+    "图片显示": "Image display",
+    "清晰优先": "Sharp first",
+    "原始像素": "Native pixels",
+    "当前来源最高可用画质": "Best available quality from this source",
+    "预览优先": "Preview first",
     "漫画阅读高清模式": "High quality mode for comics",
     "插画 / 图集阅读高清模式": "High quality mode for illustrations / albums",
     "有可用更新": "Updates available",

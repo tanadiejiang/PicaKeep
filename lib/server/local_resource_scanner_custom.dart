@@ -367,13 +367,17 @@ extension LocalResourceScannerCustom on LocalResourceScanner {
             built.episodeFiles.length,
           ),
           path: archivePath,
-          imageCount: built.episodeFiles[sortedEpisodeIndexes[i]]?.length ?? 0,
+          imageCount: archiveReadingPageUris(
+                  built.episodeFiles[sortedEpisodeIndexes[i]] ?? const [])
+              .length,
           totalBytes: 0,
           coverPath: coverUri,
-          imagePaths:
-              built.episodeFiles[sortedEpisodeIndexes[i]] ?? const <String>[],
+          imagePaths: archiveReadingPageUris(
+              built.episodeFiles[sortedEpisodeIndexes[i]] ?? const []),
           imageSizes: List<ServerResourceImageSize?>.filled(
-            built.episodeFiles[sortedEpisodeIndexes[i]]?.length ?? 0,
+            archiveReadingPageUris(
+                    built.episodeFiles[sortedEpisodeIndexes[i]] ?? const [])
+                .length,
             null,
           ),
         ),

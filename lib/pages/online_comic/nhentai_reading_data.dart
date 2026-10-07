@@ -61,13 +61,20 @@ class NhentaiReadingData extends ReadingData {
 
   /// 缓存键与 ep 无关，仅 id + page（公共契约）。
   @override
-  String buildImageKey(int ep, int page, String url) => '${comic.id}$page';
+  String buildImageKey(int ep, int page, String url) => originalNetworkCacheIdentity(ep, page, url);
+
+  @override
+  Future<ReaderPageSource> resolvePageSource(int ep, int page, String url) async {
+    if (downloaded && checkEpDownloaded(ep)) return super.resolvePageSource(ep, page, url);
+    return networkPageSource(ep, page, url, headers: const {'Referer': 'https://nhentai.net/'});
+  }
 
   /// url 是 [loadEpNetwork] 返回的 CDN 直链，带 Referer 头规避防盗链，无需解密。
   @override
   Stream<List<int>> loadImageNetwork(int ep, int page, String url) async* {
     final result = await OnlineImageManager.instance.getImage(
       url,
+      cacheIdentity: originalNetworkCacheIdentity(ep, page, url),
       headers: const {'Referer': 'https://nhentai.net/'},
     );
     yield* result.stream;

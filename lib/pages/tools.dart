@@ -8,6 +8,8 @@ import 'package:picakeep/foundation/app.dart';
 import 'package:picakeep/foundation/archive/archive_memory_cache.dart';
 import 'package:picakeep/foundation/archive/archive_reading_service.dart';
 import 'package:picakeep/foundation/local_library_settings.dart';
+import 'package:picakeep/foundation/cache_file_inventory.dart';
+import 'package:picakeep/foundation/image_pipeline/derived_image_store.dart';
 import 'package:picakeep/foundation/remote_library_data_source.dart';
 import 'package:picakeep/pages/app_capabilities_page.dart';
 import 'package:picakeep/pages/eh_subscription_page.dart';
@@ -40,6 +42,7 @@ class _ToolsPageState extends State<ToolsPage> {
   bool _onlineToolsExpanded = false;
   bool _loadingCacheSize = false;
   int? _cacheSizeBytes;
+  Map<String, int> _cachePurposeBytes = const {};
   late List<String> _orderedExternalIds;
   late Set<String> _visibleExternalIds;
 
@@ -127,40 +130,24 @@ class _ToolsPageState extends State<ToolsPage> {
     // 先按 cacheLimit 清理超限的旧缓存（LRU），再统计——否则 trim 只在远程
     // 封面下载后触发，平时缓存会一直超限不降，工具页显示的"当前"也下不来。
     await RemoteLibraryDataSource.trimCacheToLimit();
-    final size = await _calculateCacheSize();
+    final inventory = await _calculateCacheSize();
     if (!mounted) {
       return;
     }
     setState(() {
-      _cacheSizeBytes = size;
+      _cacheSizeBytes = inventory.totalBytes;
+      _cachePurposeBytes = inventory.purposeBytes;
       _loadingCacheSize = false;
     });
   }
 
-  Future<int> _calculateCacheSize() async {
-    var total = 0;
-    final cacheDirectories = <Directory>[
-      Directory(App.cachePath),
-      Directory('${App.dataPath}${Platform.pathSeparator}cache'),
-      Directory('${App.dataPath}${Platform.pathSeparator}local_library_cache'
-          '${Platform.pathSeparator}covers${Platform.pathSeparator}thumbs'),
-    ];
-    for (final cacheDirectory in cacheDirectories) {
-      if (!await cacheDirectory.exists()) {
-        continue;
-      }
-      await for (final entity in cacheDirectory.list(
-        recursive: true,
-        followLinks: false,
-      )) {
-        if (entity is File) {
-          try {
-            total += await entity.length();
-          } catch (_) {}
-        }
-      }
-    }
-    return total;
+  Future<CacheFileInventory> _calculateCacheSize() async {
+    return scanCacheFiles([
+      App.cachePath,
+      '${App.dataPath}${Platform.pathSeparator}cache',
+      '${App.dataPath}${Platform.pathSeparator}local_library_cache'
+          '${Platform.pathSeparator}covers',
+    ]);
   }
 
   String get _cacheLimitText {
@@ -313,7 +300,8 @@ class _ToolsPageState extends State<ToolsPage> {
         content: TextField(
           controller: controller,
           keyboardType: TextInputType.number,
-          decoration: const InputDecoration(suffixText: 'MB', hintText: '8~256'),
+          decoration:
+              const InputDecoration(suffixText: 'MB', hintText: '8~256'),
           autofocus: true,
         ),
         actions: [
@@ -333,7 +321,8 @@ class _ToolsPageState extends State<ToolsPage> {
     );
     if (value != null) {
       final clamped = value.clamp(8, 256);
-      appdata.settings[archiveReadingCacheLimitMbSettingIndex] = clamped.toString();
+      appdata.settings[archiveReadingCacheLimitMbSettingIndex] =
+          clamped.toString();
       await appdata.updateSettings();
       ArchiveMemoryCache.instance.setLimitMB(clamped);
       if (mounted) setState(() {});
@@ -351,7 +340,8 @@ class _ToolsPageState extends State<ToolsPage> {
     );
   }
 
-  Future<void> _openWebview(BuildContext context, String url, String title) async {
+  Future<void> _openWebview(
+      BuildContext context, String url, String title) async {
     await Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => AppWebview(
@@ -437,8 +427,10 @@ class _ToolsPageState extends State<ToolsPage> {
         App.pushInner(() => NhentaiComicPageV2(id));
         return;
       }
-    } else if (host.contains('18comic.vip') || host.contains('18comic.org') ||
-               host.contains('jmcomic') || result.toLowerCase().contains('jm')) {
+    } else if (host.contains('18comic.vip') ||
+        host.contains('18comic.org') ||
+        host.contains('jmcomic') ||
+        result.toLowerCase().contains('jm')) {
       // JM链接：https://18comic.vip/album/123456/ 或包含 jm 关键字
       final match = RegExp(r'/album/(\d+)|/(\d+)').firstMatch(uri.path);
       if (match != null) {
@@ -556,6 +548,26 @@ class _ToolsPageState extends State<ToolsPage> {
                   trailing: const Icon(Icons.chevron_right),
                   onTap: () => _clearCache(context),
                 ),
+                Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                    child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          for (final category in const {
+                            'cover': '封面',
+                            'preview': '预览',
+                            'readerLevel': '阅读清晰层',
+                            'readerTile': '阅读分块',
+                            'original': '原图临时文件',
+                            'workspace': '图片处理临时文件',
+                            'other': '其它缓存',
+                          }.entries)
+                            Text(
+                                '${category.value.tl}：${bytesLengthToReadableSize(_cachePurposeBytes[category.key] ?? 0)}'),
+                          Text(
+                              '${'正在处理的临时空间'.tl}：${bytesLengthToReadableSize(ImageTemporaryPool.shared.reservedBytes)} / '
+                              '${bytesLengthToReadableSize(ImageTemporaryPool.shared.maximumBytes)}'),
+                        ])),
                 ListTile(
                   leading: const Icon(Icons.folder_zip_outlined),
                   title: Text('压缩包阅读缓存大小限制'.tl),

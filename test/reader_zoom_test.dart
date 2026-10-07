@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart';
@@ -8,12 +9,18 @@ import 'package:picakeep/base.dart';
 import 'package:picakeep/foundation/app.dart';
 import 'package:picakeep/foundation/image_loader/stream_image_provider.dart';
 import 'package:picakeep/foundation/local_favorites.dart';
+import 'package:picakeep/foundation/image_pipeline/image_work_scheduler.dart';
+import 'package:picakeep/foundation/image_pipeline/reader_page_source.dart';
+import 'package:picakeep/foundation/image_pipeline/reader_raster_backend.dart';
+import 'package:picakeep/foundation/image_pipeline/reader_viewport.dart';
+import 'package:picakeep/pages/reader/reader_image_surface.dart';
 import 'package:picakeep/pages/reader/comic_reading_page.dart';
 
 class _MemoryReadingData extends ReadingData {
-  _MemoryReadingData(this.bytes);
+  _MemoryReadingData(this.bytes, this.file);
 
   final Uint8List bytes;
+  final File file;
   ImageProvider? provider;
   bool hasChapters = false;
 
@@ -47,11 +54,84 @@ class _MemoryReadingData extends ReadingData {
   ImageProvider createImageProvider(int ep, int page, String url,
           {StreamImageAbortSignal? abortSignal}) =>
       provider ?? MemoryImage(bytes);
+
+  @override
+  Future<ReaderPageSource> resolvePageSource(
+          int ep, int page, String url) async =>
+      _ZoomPageSource(
+          file,
+          ReaderPageIdentity(
+              sourceKey: sourceKey,
+              workId: id,
+              downloadId: downloadId,
+              episode: ep,
+              page: page,
+              sourceVersion: 'test-original'),
+          provider is _DeferredImage
+              ? (provider as _DeferredImage).metadata
+              : Future.value(_ZoomBackend.metadata));
+}
+
+class _ZoomPageSource extends FileReaderPageSource
+    implements RasterReaderPageSource {
+  _ZoomPageSource(File file, ReaderPageIdentity identity, this.metadata)
+      : rasterLocator = file,
+        super(identity: identity, file: file, width: 400, height: 600);
+  final Future<ReaderRasterMetadata> metadata;
+  @override
+  final File rasterLocator;
+  @override
+  ReaderRasterBackend get rasterBackend => const _ZoomBackend();
+  @override
+  Future<ReaderRasterMetadata> openRasterMetadata() => metadata;
+}
+
+class _ZoomBackend extends ReaderRasterBackend {
+  const _ZoomBackend();
+  static const metadata = ReaderRasterMetadata(
+      size: Size(400, 600),
+      animated: false,
+      format: 'test-png',
+      workingBytes: 1);
+  @override
+  bool get requiresFileBacking => false;
+  @override
+  Future<ReaderRasterMetadata> probe(File file) async => metadata;
+  @override
+  Future<ui.Image> decode(File file, ReaderTileDemand demand,
+      {required String backingPath,
+      required int memoryBudgetBytes,
+      required bool Function() isCancelled,
+      Future<void>? cancelled}) async {
+    if (isCancelled()) throw const ImageWorkCancelled();
+    final recorder = ui.PictureRecorder();
+    Canvas(recorder).drawRect(
+        Rect.fromLTWH(0, 0, demand.outputWidth.toDouble(),
+            demand.outputHeight.toDouble()),
+        Paint()..color = Colors.blue);
+    final picture = recorder.endRecording();
+    try {
+      return picture.toImageSync(demand.outputWidth, demand.outputHeight);
+    } finally {
+      picture.dispose();
+    }
+  }
 }
 
 class _DeferredImage extends ImageProvider<_DeferredImage> {
   _DeferredImage(this.image);
   final Future<ui.Image> image;
+  Future<ReaderRasterMetadata>? _metadata;
+  Future<ReaderRasterMetadata> get metadata =>
+      _metadata ??= image.then((value) {
+        final result = ReaderRasterMetadata(
+            size: Size(value.width.toDouble(), value.height.toDouble()),
+            animated: false,
+            format: 'test-png',
+            workingBytes: 1);
+        value.dispose();
+        return result;
+      });
 
   @override
   Future<_DeferredImage> obtainKey(ImageConfiguration configuration) =>
@@ -82,9 +162,24 @@ void main() {
   late List<String> originalSettings;
   late ComicReadingPage page;
   late ComicReadingPageLogic logic;
+  late Directory taskRoot;
+  late File originalFile;
 
   setUpAll(() async {
+    final base = Platform.isWindows
+        ? Directory(r'E:\picakeep-image-pipeline-022-runtime')
+        : Directory.systemTemp;
+    await base.create(recursive: true);
+    taskRoot = await base.createTemp('reader-zoom-');
+    App.dataPath = taskRoot.path;
+    App.cachePath = '${taskRoot.path}/cache';
+    await Directory(App.cachePath).create(recursive: true);
     bytes = await _imageBytes();
+    originalFile =
+        await File('${taskRoot.path}/original.png').writeAsBytes(bytes);
+  });
+  tearDownAll(() async {
+    if (await taskRoot.exists()) await taskRoot.delete(recursive: true);
   });
   setUp(() {
     originalSettings = List.of(appdata.settings);
@@ -94,7 +189,7 @@ void main() {
     appdata.settings[55] = '0';
     TapController.reset();
     TapController.lastScrollTime = DateTime(2023);
-    page = ComicReadingPage(_MemoryReadingData(bytes), 1, 1);
+    page = ComicReadingPage(_MemoryReadingData(bytes, originalFile), 1, 1);
     logic = StateController.find<ComicReadingPageLogic>();
     logic.urls = ['0', '1'];
     logic.isLoading = false;
@@ -108,6 +203,20 @@ void main() {
     appdata.settings = originalSettings;
     TapController.reset();
   });
+
+  Future<void> waitForOriginal(WidgetTester tester) async {
+    for (var i = 0; i < 80; i++) {
+      await tester.pump(const Duration(milliseconds: 16));
+      await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 2)));
+      if (ReaderSurfaceDiagnostics.residentBytes > 0 &&
+          !ImageWorkScheduler.shared.hasWork) {
+        return;
+      }
+    }
+    expect(ReaderSurfaceDiagnostics.residentBytes, greaterThan(0),
+        reason: 'Original source should resolve before gesture assertions');
+  }
 
   Future<void> pumpReader(WidgetTester tester, {bool preload = true}) async {
     tester.view.physicalSize = const Size(400, 800);
@@ -128,8 +237,7 @@ void main() {
       })),
     ));
     if (preload) {
-      await tester.runAsync(
-          () => precacheImage(MemoryImage(bytes), App.globalContext!));
+      await waitForOriginal(tester);
       await tester.pumpAndSettle();
     } else {
       await tester.pump(const Duration(milliseconds: 20));
@@ -321,6 +429,7 @@ void main() {
     final frame = await tester.runAsync(() => codec!.getNextFrame());
     image.complete(frame!.image);
     codec!.dispose();
+    await waitForOriginal(tester);
     await tester.pumpAndSettle();
     final controller = logic.photoViewControllers[1]!;
     final initial = controller.scale!;
@@ -342,6 +451,8 @@ void main() {
       (tester) async {
     await pumpReader(tester);
     await tester.dragFrom(const Offset(340, 400), const Offset(-300, 0));
+    await tester.pump(const Duration(milliseconds: 400));
+    await waitForOriginal(tester);
     await tester.pumpAndSettle();
     expect(logic.index, 2);
     final controller = logic.photoViewControllers[2]!;
@@ -405,6 +516,7 @@ void main() {
       expect(controller.scale, greaterThan(initial));
       await a.up();
       await b.up();
+      await waitForOriginal(tester);
       await tester.pumpAndSettle();
       expect(logic.tools, isFalse);
     });

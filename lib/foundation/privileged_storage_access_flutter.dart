@@ -1,9 +1,16 @@
 import 'dart:io';
+import 'dart:async';
 
 import 'package:flutter/services.dart';
 
 import '../base.dart';
 import 'package:picakeep/foundation/local_library_settings.dart';
+
+class PrivilegedFileStat {
+  const PrivilegedFileStat({required this.size, required this.modifiedMillis});
+  final int size;
+  final int modifiedMillis;
+}
 
 /// Lightweight, cross-file descriptor returned by [PrivilegedStorageAccess.listDirectoryEntries].
 ///
@@ -44,6 +51,119 @@ class PrivilegedStorageAccess {
   static const MethodChannel _storageAccessChannel =
       MethodChannel('lingxue.picakeep/storage_access');
 
+  static Future<PrivilegedFileStat?> fileStat(String path) async {
+    final method = _androidPrivilegedAccessMethod('statFile');
+    // In privileged mode a visible mountpoint does not establish readability.
+    if (Platform.isAndroid && method != null) {
+      final result = await _storageAccessChannel
+          .invokeMapMethod<String, Object>(method, {'path': path});
+      if (result == null) return null;
+      return PrivilegedFileStat(
+        size: (result['size'] as num).toInt(),
+        modifiedMillis: (result['modifiedMillis'] as num).toInt(),
+      );
+    }
+    try {
+      final stat = await File(path).stat();
+      if (stat.type != FileSystemEntityType.file) return null;
+      return PrivilegedFileStat(
+          size: stat.size,
+          modifiedMillis: stat.modified.millisecondsSinceEpoch);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static Future<File> copyFileToManagedFile(
+    String sourcePath,
+    File destination, {
+    int maxBytes = 2 * 1024 * 1024 * 1024,
+    bool Function()? isCancelled,
+    Future<void>? cancelled,
+  }) async {
+    var cancellationRequested = isCancelled?.call() == true;
+    if (cancelled != null) {
+      unawaited(cancelled.then((_) => cancellationRequested = true));
+    }
+    bool copyCancelled() =>
+        cancellationRequested || isCancelled?.call() == true;
+    if (copyCancelled()) {
+      throw StateError('Original file copy cancelled');
+    }
+    await destination.parent.create(recursive: true);
+    final method = _androidPrivilegedAccessMethod('copyFileToManaged');
+    if (Platform.isAndroid && method != null) {
+      final requestId =
+          '${DateTime.now().microsecondsSinceEpoch}-${destination.path.hashCode}';
+      var finished = false;
+      final stat = await fileStat(sourcePath);
+      if (stat == null) {
+        throw FileSystemException('Original file is unavailable', sourcePath);
+      }
+      if (stat.size > maxBytes) {
+        throw StateError('Original file exceeds reserved disk bytes');
+      }
+      if (copyCancelled()) throw StateError('Original file copy cancelled');
+      // Register only once a native job will be sent. An aborted stat/preflight
+      // must not leave a cancellation ID with no job to remove it.
+      if (cancelled != null) {
+        unawaited(cancelled.then((_) async {
+          if (!finished) {
+            try {
+              await _storageAccessChannel.invokeMethod<Object>(
+                  'cancelCopyToManaged', {'requestId': requestId});
+            } catch (_) {}
+          }
+        }));
+      }
+      try {
+        await _storageAccessChannel.invokeMethod<Object>(method, {
+          'path': sourcePath,
+          'destination': destination.path,
+          'maxBytes': maxBytes,
+          'requestId': requestId,
+        });
+      } finally {
+        finished = true;
+      }
+      if (copyCancelled()) {
+        if (await destination.exists()) await destination.delete();
+        throw StateError('Original file copy cancelled');
+      }
+      return destination;
+    }
+    final stat = await fileStat(sourcePath);
+    if (stat == null) {
+      throw FileSystemException('Original file is unavailable', sourcePath);
+    }
+    if (stat.size > maxBytes) {
+      throw StateError('Original file exceeds reserved disk bytes');
+    }
+    if (copyCancelled()) throw StateError('Original file copy cancelled');
+    final output = await destination.open(mode: FileMode.write);
+    var total = 0;
+    var succeeded = false;
+    try {
+      await for (final chunk in File(sourcePath).openRead()) {
+        if (copyCancelled()) {
+          throw StateError('Original file copy cancelled');
+        }
+        total += chunk.length;
+        if (total > maxBytes) {
+          throw StateError('Original file exceeds reserved disk bytes');
+        }
+        await output.writeFrom(chunk);
+      }
+      if (copyCancelled()) throw StateError('Original file copy cancelled');
+      await output.flush();
+      succeeded = true;
+      return destination;
+    } finally {
+      await output.close();
+      if (!succeeded && await destination.exists()) await destination.delete();
+    }
+  }
+
   /// Returns `true` if [path] refers to an existing directory, consulting
   /// the privileged channel when `dart:io` cannot see it.
   static Future<bool> directoryExists(String path) async {
@@ -75,8 +195,7 @@ class PrivilegedStorageAccess {
         return await file.length();
       }
     } catch (_) {}
-    final bytes = await _readFileWithPrivilegedAccess(path);
-    return bytes?.length;
+    return (await fileStat(path))?.size;
   }
 
   /// Reads the full contents of [path]. Returns `null` when the file does
@@ -222,6 +341,10 @@ class PrivilegedStorageAccess {
           return 'readFileWithRoot';
         case 'exists':
           return 'existsWithRoot';
+        case 'statFile':
+          return 'statFileWithRoot';
+        case 'copyFileToManaged':
+          return 'copyFileToManagedWithRoot';
       }
     }
 
@@ -237,6 +360,10 @@ class PrivilegedStorageAccess {
           return 'readFileWithShizuku';
         case 'exists':
           return 'existsWithShizuku';
+        case 'statFile':
+          return 'statFileWithShizuku';
+        case 'copyFileToManaged':
+          return 'copyFileToManagedWithShizuku';
       }
     }
     return null;

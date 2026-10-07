@@ -21,86 +21,71 @@ const Set<PointerDeviceKind> _kTouchLikeDeviceTypes = <PointerDeviceKind>{
   PointerDeviceKind.unknown
 };
 
-class _ReaderImageRequest {
-  const _ReaderImageRequest({required this.provider});
-
-  final ImageProvider provider;
-}
-
 extension ImageExt on ComicReadingPage {
-  bool _isReaderImageWidthLimited() {
-    return appdata.settings[43] == "1";
-  }
+  bool _isReaderImageWidthLimited() => appdata.settings[43] == "1";
+  double _maxReaderImageWidth() =>
+      (double.tryParse(appdata.settings[116]) ?? 980)
+          .clamp(600, 1600)
+          .toDouble();
+  double _clampReaderImageWidth(double width) => _isReaderImageWidthLimited()
+      ? math.min(width, _maxReaderImageWidth())
+      : width;
 
-  double _maxReaderImageWidth() {
-    return (double.tryParse(appdata.settings[116]) ?? 980)
-        .clamp(600, 1600)
-        .toDouble();
-  }
-
-  double _clampReaderImageWidth(double rawWidth) {
-    if (!_isReaderImageWidthLimited()) {
-      return rawWidth;
-    }
-    return math.min(rawWidth, _maxReaderImageWidth());
-  }
-
-  bool _shouldUseOriginalLocalImageStrategy(ComicReadingPageLogic logic) {
-    return logic.data.supportsLocalImageSort;
-  }
-
-  _ReaderImageRequest _createReaderImageRequest(
-    BuildContext context,
-    ComicReadingPageLogic logic,
-    int index,
-    String target, {
-    double? layoutWidth,
-  }) {
-    final provider = createImageProvider(type, logic, index, target);
-    if (_shouldUseOriginalLocalImageStrategy(logic)) {
-      return _ReaderImageRequest(provider: provider);
-    }
-    // 39 号「高清模式」= **直接原图**（用户原话「高清模式其实就是直接原图」）：
-    // 跳过下面那次按屏幕宽度算的降采样，让 `Image` 按图片自身的分辨率解码。
-    //
-    // 为什么必须是开关而不是一律不降采样：漫画一部单行本几十页大图，
-    // 全分辨率解码会显著吃内存（`BaseImageProvider` 的原始字节缓存上限只有
-    // 50 MB FIFO）；而插画一话往往就一两张图，值得看细节。用户因此要求
-    // 漫画默认低清、插画/图集默认高清，两套开关各自记忆。
-    if (readerHighQualityEnabled(
-      sourceKey: logic.data.sourceKey,
-      comicSetting: appdata.settings[readerHighQualityComicSettingIndex],
-      illustSetting: appdata.settings[readerHighQualityIllustSettingIndex],
-    )) {
-      return _ReaderImageRequest(provider: provider);
-    }
-    final mediaQuery = MediaQuery.of(context);
-    final devicePixelRatio =
-        mediaQuery.devicePixelRatio.clamp(1.0, 2.5).toDouble();
-    final size = mediaQuery.size;
-
-    int? cacheWidth;
-
-    if (logic.readingMethod == ReadingMethod.topToBottomContinuously) {
-      final width = layoutWidth ?? size.width;
-      cacheWidth = (width * devicePixelRatio).round();
-    } else if (logic.readingMethod.isTwoPage) {
-      cacheWidth = ((size.width / 2) * devicePixelRatio * 1.35).round();
-    } else {
-      cacheWidth = (size.width * devicePixelRatio * 1.6).round();
-    }
-
-    return _ReaderImageRequest(
-      provider: ResizeImage.resizeIfNeeded(cacheWidth, null, provider),
-    );
-  }
-
-  /// build comic image
   Widget buildComicView(
       ComicReadingPageLogic logic, BuildContext context, String target) {
     ScrollExtension.futurePosition = null;
+    final decoration = BoxDecoration(
+        color: useDarkBackground
+            ? Colors.black
+            : Theme.of(context).colorScheme.surface);
+    final mode = readerDisplayMode(
+        sourceKey: logic.data.sourceKey,
+        pipelineSetting: appdata.settings[readerImagePipelineSettingIndex]);
+    final viewportKey = logic.readerViewportKey;
     double topPullDistance = 0;
     double bottomPullDistance = 0;
+
+    BoxFit getFit() => switch (appdata.settings[41]) {
+          "1" => BoxFit.fitWidth,
+          "2" => BoxFit.fitHeight,
+          _ => BoxFit.contain,
+        };
+
+    Widget page(int imageIndex,
+        {PhotoViewController? controller,
+        double? continuousWidth,
+        Alignment alignment = Alignment.center,
+        BoxFit fit = BoxFit.contain,
+        int? controllerIndex}) {
+      if (imageIndex < 0 || imageIndex >= logic.urls.length) {
+        return const SizedBox();
+      }
+      final episode = logic.order;
+      final url = logic.urls[imageIndex];
+      return ReaderPageImage(
+        key: ValueKey('$episode:$imageIndex:$url'),
+        resourceKey: '$episode:$imageIndex:$url',
+        loadSource: () =>
+            logic.data.resolvePageSource(episode, imageIndex, url),
+        loadCachedPreview: (original) =>
+            logic.data.loadCachedPreview(episode, imageIndex, url, original),
+        viewportKey: viewportKey,
+        sessionRasterCache: logic.sessionRasterCache,
+        transformChanges: logic.viewportChanges,
+        mode: mode,
+        controller: controller,
+        continuousWidth: continuousWidth,
+        fit: fit,
+        alignment: alignment,
+        backgroundDecoration: decoration,
+        nativeScaleChanged: controllerIndex == null
+            ? null
+            : (scale) => logic.nativePixelScales[controllerIndex] = logic
+                    .readingMethod.isTwoPage
+                ? math.max(logic.nativePixelScales[controllerIndex] ?? 0, scale)
+                : scale,
+      );
+    }
 
     bool handleContinuousOverscroll(OverscrollNotification notification) {
       if (!logic.data.hasEp) return false;
@@ -128,482 +113,242 @@ extension ImageExt on ComicReadingPage {
       return false;
     }
 
-    Widget buildType4() {
-      return LayoutBuilder(
-        builder: (context, constraints) {
-          final decodeWidth = constraints.maxWidth;
-          final listWidth = _clampReaderImageWidth(constraints.maxWidth);
+    Widget continuous() => LayoutBuilder(builder: (context, constraints) {
+          final width = _clampReaderImageWidth(constraints.maxWidth);
           return NotificationListener<OverscrollNotification>(
             onNotification: handleContinuousOverscroll,
             child: Center(
-              child: SizedBox(
-                width: listWidth,
-                child: ScrollablePositionedList.builder(
-                  itemScrollController: logic.itemScrollController,
-                  itemPositionsListener: logic.itemScrollListener,
-                  itemCount: logic.urls.length,
-                  addSemanticIndexes: false,
-                  minCacheExtent: MediaQuery.of(context).size.height * 3,
-                  scrollController: logic.scrollController,
-                  scrollBehavior: const MaterialScrollBehavior().copyWith(
-                      scrollbars: false, dragDevices: _kTouchLikeDeviceTypes),
-                  physics: (logic.noScroll ||
-                          logic.isCtrlPressed ||
-                          logic.mouseScroll)
-                      ? const NeverScrollableScrollPhysics()
-                      : const ClampingScrollPhysics(),
-                  itemBuilder: (context, index) {
-                    return LayoutBuilder(builder: (context, constraints) {
-                      final width = constraints.maxWidth;
-
-                      precacheComicImage(logic, context, index + 1, target);
-
-                      if (_shouldUseOriginalLocalImageStrategy(logic)) {
-                        return Center(
-                          child: ComicImage(
-                            filterQuality: FilterQuality.high,
-                            image:
-                                createImageProvider(type, logic, index, target),
-                            knownImageSize: logic.data.imageSize(
-                              logic.order,
-                              index,
-                              logic.urls[index],
-                            ),
-                            width: width,
-                            fit: BoxFit.contain,
-                          ),
-                        );
-                      }
-
-                      final imageRequest = _createReaderImageRequest(
-                        context,
-                        logic,
-                        index,
-                        target,
-                        layoutWidth: decodeWidth,
-                      );
-                      return Center(
-                        child: ComicImage(
-                          filterQuality: FilterQuality.high,
-                          image: imageRequest.provider,
-                          knownImageSize: logic.data.imageSize(
-                            logic.order,
-                            index,
-                            logic.urls[index],
-                          ),
-                          width: width,
-                          fit: BoxFit.contain,
-                        ),
-                      );
-                    });
-                  },
-                ),
+                child: SizedBox(
+              width: width,
+              child: ScrollablePositionedList.builder(
+                itemScrollController: logic.itemScrollController,
+                itemPositionsListener: logic.itemScrollListener,
+                itemCount: logic.urls.length,
+                addSemanticIndexes: false,
+                minCacheExtent: MediaQuery.of(context).size.height,
+                scrollController: logic.scrollController,
+                scrollBehavior: const MaterialScrollBehavior().copyWith(
+                    scrollbars: false, dragDevices: _kTouchLikeDeviceTypes),
+                physics:
+                    (logic.noScroll || logic.isCtrlPressed || logic.mouseScroll)
+                        ? const NeverScrollableScrollPhysics()
+                        : const ClampingScrollPhysics(),
+                itemBuilder: (_, index) => page(index,
+                    continuousWidth: width, controllerIndex: -(index + 1)),
               ),
-            ),
+            )),
           );
-        },
-      );
-    }
+        });
 
-    final decoration = BoxDecoration(
-      color: useDarkBackground
-          ? Colors.black
-          : Theme.of(context).colorScheme.surface,
-    );
-
-    Widget buildType123() {
-      return LayoutBuilder(
-        builder: (context, constraints) {
-          final galleryWidth = _clampReaderImageWidth(constraints.maxWidth);
+    Widget single() => LayoutBuilder(builder: (context, constraints) {
+          final axis =
+              appdata.settings[9] == "3" ? Axis.vertical : Axis.horizontal;
           return DecoratedBox(
-            decoration: decoration,
-            child: Center(
-              child: SizedBox(
-                width: galleryWidth,
-                height: constraints.maxHeight,
-                child: PhotoViewGallery.builder(
-                  backgroundDecoration: decoration,
-                  key: Key(logic.readingMethod.index.toString()),
-                  reverse: appdata.settings[9] == "2",
-                  scrollDirection: appdata.settings[9] != "3"
-                      ? Axis.horizontal
-                      : Axis.vertical,
-                  itemCount: logic.urls.length + 2,
-                  builder: (BuildContext context, int index) {
-                    ImageProvider? imageProvider;
-                    if (index != 0 && index != logic.urls.length + 1) {
-                      if (_shouldUseOriginalLocalImageStrategy(logic)) {
-                        imageProvider =
-                            createImageProvider(type, logic, index - 1, target);
+              decoration: decoration,
+              child: Center(
+                child: SizedBox(
+                  width: _clampReaderImageWidth(constraints.maxWidth),
+                  height: constraints.maxHeight,
+                  child: PageView.builder(
+                    key: ValueKey(
+                        'single:${logic.order}:${logic.readingMethod.index}'),
+                    controller: logic.pageController,
+                    reverse: appdata.settings[9] == "2",
+                    scrollDirection: axis,
+                    itemCount: logic.urls.length + 2,
+                    itemBuilder: (_, index) {
+                      if (index == 0 || index == logic.urls.length + 1) {
+                        return const SizedBox();
+                      }
+                      return PhotoViewGestureDetectorScope(
+                          axis: axis,
+                          child: page(index - 1,
+                              controller:
+                                  logic.ensurePhotoViewController(index),
+                              controllerIndex: index,
+                              fit: getFit()));
+                    },
+                    onPageChanged: (i) {
+                      if (i == 0) {
+                        if (!logic.data.hasEp) {
+                          logic.jumpByDeviceType(1);
+                          return;
+                        }
+                        logic.jumpToLastChapter();
+                      } else if (i == logic.urls.length + 1) {
+                        if (!logic.data.hasEp) {
+                          logic.jumpByDeviceType(i - 1);
+                          return;
+                        }
+                        logic.jumpToNextChapter();
                       } else {
-                        imageProvider = _createReaderImageRequest(
-                          context,
-                          logic,
-                          index - 1,
-                          target,
-                          layoutWidth: galleryWidth,
-                        ).provider;
+                        logic.index = i;
+                        logic.update();
                       }
-                    } else {
-                      return PhotoViewGalleryPageOptions.customChild(
-                        scaleStateController: PhotoViewScaleStateController(),
-                        child: const SizedBox(),
-                      );
-                    }
-
-                    precacheComicImage(logic, context, index, target);
-
-                    BoxFit getFit() {
-                      switch (appdata.settings[41]) {
-                        case "1":
-                          return BoxFit.fitWidth;
-                        case "2":
-                          return BoxFit.fitHeight;
-                        default:
-                          return BoxFit.contain;
-                      }
-                    }
-
-                    logic.photoViewControllers[index] ??= PhotoViewController();
-
-                    final fit = getFit();
-                    return PhotoViewGalleryPageOptions(
-                      filterQuality: FilterQuality.high,
-                      imageProvider: imageProvider,
-                      fit: fit,
-                      controller: logic.photoViewControllers[index],
-                      // 39 号：显式钉住缩放的下限与初值。
-                      //
-                      // 参考 `ghboke/core-ui` 的 `ImageViewPlus`：它的
-                      // `freePan` **默认关**，语义是"图片 ≤ 画布时强制居中，
-                      // 只有放大到溢出才能拖"，且 `minZoom` 有明确下限。
-                      // 迁移到这里的对应做法就是——**缩小的下限 = 适配屏幕**，
-                      // 再缩就回弹，而不是停在比适配更小的尺寸上
-                      // （用户原话：「缩小手势时不是自己归位，而是能更小（定住）」）。
-                      minScale: PhotoViewComputedScale.contained,
-                      // The local PhotoView fork computes fitWidth/fitHeight
-                      // after decoding and rejects an explicit initial scale.
-                      initialScale: fit == BoxFit.contain
-                          ? PhotoViewComputedScale.contained
-                          : null,
-                      // 上限**不显式设**：默认的 `covered * 2.5` 对"细长条"
-                      // 这类适配后很窄的图更合适，写死 `contained * N` 反而
-                      // 会让它们放不大。
-                      errorBuilder: (_, error, s, retry) {
-                        return Center(
-                          child: SizedBox(
-                            height: 300,
-                            width: 400,
-                            child: Column(
-                              children: [
-                                Expanded(
-                                  child: Center(
-                                    child: Text(
-                                      error.toString(),
-                                      style: TextStyle(
-                                          color: appdata
-                                                  .appSettings.useDarkBackground
-                                              ? Colors.white
-                                              : null),
-                                      maxLines: 3,
-                                    ),
-                                  ),
-                                ),
-                                const SizedBox(
-                                  height: 4,
-                                ),
-                                MouseRegion(
-                                  cursor: SystemMouseCursors.click,
-                                  child: Listener(
-                                    onPointerDown: (details) {
-                                      TapController.ignoreNextTap = true;
-                                      retry();
-                                    },
-                                    child: const SizedBox(
-                                      width: 84,
-                                      height: 36,
-                                      child: Center(
-                                        child: Text(
-                                          "Retry",
-                                          style: TextStyle(color: Colors.blue),
-                                        ),
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                                const SizedBox(
-                                  height: 16,
-                                ),
-                              ],
-                            ),
-                          ),
-                        );
-                      },
-                      heroAttributes: PhotoViewHeroAttributes(
-                          tag: "$index/${logic.urls.length}"),
-                    );
-                  },
-                  pageController: logic.pageController,
-                  loadingBuilder: (context, event) => Center(
-                    child: SizedBox(
-                      width: 20.0,
-                      height: 20.0,
-                      child: CircularProgressIndicator(
-                        backgroundColor:
-                            context.colorScheme.surfaceContainerHigh,
-                        value: event == null || event.expectedTotalBytes == null
-                            ? null
-                            : event.cumulativeBytesLoaded /
-                                event.expectedTotalBytes!,
-                      ),
-                    ),
+                    },
                   ),
-                  onPageChanged: (i) {
-                    if (i == 0) {
-                      if (!logic.data.hasEp) {
-                        logic.jumpByDeviceType(1);
-                        return;
-                      }
-                      logic.jumpToLastChapter();
-                    } else if (i == logic.urls.length + 1) {
-                      if (!logic.data.hasEp) {
-                        logic.jumpByDeviceType(i - 1);
-                        return;
-                      }
-                      logic.jumpToNextChapter();
-                    } else {
-                      logic.index = i;
-                      logic.update();
-                    }
-                  },
                 ),
-              ),
-            ),
-          );
-        },
-      );
-    }
+              ));
+        });
 
-    Widget buildComicImageOrEmpty(
-        {required int imageIndex,
-        required BoxFit fit,
-        required Alignment alignment,
-        double? layoutWidth}) {
-      if (imageIndex < 0 || imageIndex >= logic.urls.length) {
-        return const SizedBox();
-      }
-
-      final imageRequest = _createReaderImageRequest(
-        context,
-        logic,
-        imageIndex,
-        target,
-        layoutWidth: layoutWidth,
-      );
-      return ComicImage(
-        key: ValueKey(imageIndex),
-        image: imageRequest.provider,
-        knownImageSize: logic.data.imageSize(
-          logic.order,
-          imageIndex,
-          logic.urls[imageIndex],
-        ),
-        fit: fit,
-        alignment: alignment,
-      );
-    }
-
-    Widget buildType56() {
-      int calcItemCount() {
-        int count = logic.urls.length ~/ 2;
-        if (logic.urls.length % 2 != 0) {
-          count++;
-        } else if (logic.singlePageForFirstScreen) {
-          count++;
-        }
-        return count + 2;
-      }
-
-      return LayoutBuilder(
-        builder: (context, constraints) {
-          final galleryWidth = _clampReaderImageWidth(constraints.maxWidth);
-          final pageWidth = galleryWidth / 2;
-          return DecoratedBox(
-            decoration: decoration,
-            child: Center(
-              child: SizedBox(
-                width: galleryWidth,
-                height: constraints.maxHeight,
-                child: PhotoViewGallery.builder(
-                  key: Key(logic.readingMethod.index.toString()),
-                  backgroundDecoration: decoration,
-                  itemCount: calcItemCount(),
-                  reverse: logic.readingMethod == ReadingMethod.twoPageReversed,
-                  builder: (BuildContext context, int index) {
-                    if (index == 0 || index == calcItemCount() - 1) {
-                      return PhotoViewGalleryPageOptions.customChild(
-                          child: const SizedBox());
-                    }
-                    precacheComicImage(logic, context, index * 2 + 1, target);
-
-                    logic.photoViewControllers[index] ??= PhotoViewController();
-
-                    int firstImage = index * 2 - 2;
-                    if (firstImage % 2 != 0) {
-                      firstImage++;
-                    }
-                    if (logic.singlePageForFirstScreen) {
-                      firstImage--;
-                    }
-                    var images = <int>[firstImage, firstImage + 1];
-                    if (logic.readingMethod == ReadingMethod.twoPageReversed) {
-                      images = images.reversed.toList();
-                    }
-
-                    return PhotoViewGalleryPageOptions.customChild(
-                        controller: logic.photoViewControllers[index],
-                        child: Row(
-                          children: [
-                            Expanded(
-                              child: buildComicImageOrEmpty(
-                                imageIndex: images[0],
-                                fit: BoxFit.contain,
-                                alignment: Alignment.centerRight,
-                                layoutWidth: pageWidth,
-                              ),
-                            ),
-                            Expanded(
-                              child: buildComicImageOrEmpty(
-                                imageIndex: images[1],
-                                fit: BoxFit.contain,
-                                alignment: Alignment.centerLeft,
-                                layoutWidth: pageWidth,
-                              ),
-                            ),
-                          ],
-                        ));
-                  },
-                  pageController: logic.pageController,
-                  onPageChanged: (i) {
-                    if (i == 0) {
-                      if (!logic.data.hasEp || logic.order == 1) {
-                        logic.pageController.jumpByDeviceType(1);
-                        return;
-                      }
-                      logic.jumpToLastChapter();
-                    } else if (i == calcItemCount() - 1) {
-                      if (!logic.data.hasEp ||
-                          logic.order == logic.data.eps?.length) {
-                        logic.pageController.jumpByDeviceType(
-                            logic.pageController.page!.round() - 1);
-                        return;
-                      }
-                      logic.jumpToNextChapter();
-                    } else {
-                      logic.index = logic.singlePageForFirstScreen
-                          ? (i * 2 - 2).clamp(1, logic.urls.length)
-                          : i * 2 - 1;
-                      logic.update();
-                    }
-                  },
-                ),
-              ),
-            ),
-          );
-        },
-      );
-    }
-
-    Widget body;
-
-    if (["1", "2", "3"].contains(appdata.settings[9])) {
-      body = buildType123();
-    } else if (appdata.settings[9] == "4") {
-      logic.photoViewControllers[0] ??= PhotoViewController();
-      body = PhotoView.customChild(
-          backgroundDecoration: decoration,
-          key: Key(logic.order.toString()),
-          minScale: 1.0,
-          maxScale: 2.5,
-          strictScale: true,
-          controller: logic.photoViewControllers[0],
-          onScaleEnd: (context, detail, value) {
-            var prev = logic.currentScale;
-            logic.currentScale = value.scale ?? 1.0;
-            if ((prev <= 1.05 && logic.currentScale > 1.05) ||
-                (prev > 1.05 && logic.currentScale <= 1.05)) {
-              logic.update();
-            }
-            if (appdata.settings[43] != "1") {
-              return false;
-            }
-            return updateLocation(context, logic.photoViewController);
-          },
-          child: buildType4());
-    } else {
-      body = buildType56();
-    }
-
-    void onPointerSignal(PointerSignalEvent pointerSignal) {
-      logic.mouseScroll = pointerSignal.kind == PointerDeviceKind.mouse;
-      if (pointerSignal is PointerScrollEvent && !logic.isCtrlPressed) {
-        if (logic.readingMethod != ReadingMethod.topToBottomContinuously) {
-          pointerSignal.scrollDelta.dy > 0
-              ? logic.jumpToNextPage()
-              : logic.jumpToLastPage();
-        } else {
-          if ((logic.scrollController.position.pixels ==
-                      logic.scrollController.position.minScrollExtent &&
-                  pointerSignal.scrollDelta.dy < 0) ||
-              (logic.scrollController.position.pixels ==
-                      logic.scrollController.position.maxScrollExtent &&
-                  pointerSignal.scrollDelta.dy > 0)) {
-            logic.photoViewController.updateMultiple(
-                position: logic.photoViewController.position -
-                    Offset(0, pointerSignal.scrollDelta.dy));
-          } else if (!App.isMacOS) {
-            logic.scrollController.smoothTo(pointerSignal.scrollDelta.dy);
+    Widget doublePage() => LayoutBuilder(builder: (context, constraints) {
+          int count = (logic.urls.length + 1) ~/ 2;
+          if (logic.urls.length.isEven && logic.singlePageForFirstScreen) {
+            count++;
           }
+          final itemCount = count + 2;
+          final width = _clampReaderImageWidth(constraints.maxWidth);
+          return DecoratedBox(
+              decoration: decoration,
+              child: Center(
+                child: SizedBox(
+                  width: width,
+                  height: constraints.maxHeight,
+                  child: PhotoViewGallery.builder(
+                    key: ValueKey(
+                        'double:${logic.order}:${logic.readingMethod.index}'),
+                    backgroundDecoration: decoration,
+                    itemCount: itemCount,
+                    reverse:
+                        logic.readingMethod == ReadingMethod.twoPageReversed,
+                    pageController: logic.pageController,
+                    builder: (_, index) {
+                      if (index == 0 || index == itemCount - 1) {
+                        return PhotoViewGalleryPageOptions.customChild(
+                            child: const SizedBox());
+                      }
+                      final first = index * 2 -
+                          2 -
+                          (logic.singlePageForFirstScreen ? 1 : 0);
+                      var images = [first, first + 1];
+                      if (logic.readingMethod ==
+                          ReadingMethod.twoPageReversed) {
+                        images = images.reversed.toList();
+                      }
+                      return PhotoViewGalleryPageOptions.customChild(
+                          controller: logic.ensurePhotoViewController(index),
+                          childSize: Size(width, constraints.maxHeight),
+                          minScale: 1.0,
+                          initialScale: 1.0,
+                          maxScale: 64.0,
+                          child: Row(children: [
+                            Expanded(
+                                child: page(images[0],
+                                    controllerIndex: index,
+                                    alignment: Alignment.centerRight)),
+                            Expanded(
+                                child: page(images[1],
+                                    controllerIndex: index,
+                                    alignment: Alignment.centerLeft)),
+                          ]));
+                    },
+                    onPageChanged: (i) {
+                      if (i == 0) {
+                        if (!logic.data.hasEp || logic.order == 1) {
+                          logic.pageController.jumpByDeviceType(1);
+                          return;
+                        }
+                        logic.jumpToLastChapter();
+                      } else if (i == itemCount - 1) {
+                        if (!logic.data.hasEp ||
+                            logic.order == logic.data.eps?.length) {
+                          logic.pageController.jumpByDeviceType(i - 1);
+                          return;
+                        }
+                        logic.jumpToNextChapter();
+                      } else {
+                        logic.index = logic.singlePageForFirstScreen
+                            ? (i * 2 - 2).clamp(1, logic.urls.length)
+                            : i * 2 - 1;
+                        logic.update();
+                      }
+                    },
+                  ),
+                ),
+              ));
+        });
+
+    final Widget body;
+    if (logic.readingMethod.index < 3) {
+      body = single();
+    } else if (logic.readingMethod == ReadingMethod.topToBottomContinuously) {
+      body = PhotoView.customChild(
+        backgroundDecoration: decoration,
+        key: ValueKey('continuous:${logic.order}'),
+        minScale: 1.0,
+        maxScale: 64.0,
+        strictScale: true,
+        controller: logic.ensurePhotoViewController(0),
+        onScaleEnd: (context, detail, value) {
+          final previous = logic.currentScale;
+          logic.currentScale = value.scale ?? 1;
+          if ((previous <= 1.05) != (logic.currentScale <= 1.05)) {
+            logic.update();
+          }
+          return appdata.settings[43] == "1" &&
+              updateLocation(context, logic.photoViewController);
+        },
+        child: continuous(),
+      );
+    } else {
+      body = doublePage();
+    }
+
+    void onPointerSignal(PointerSignalEvent signal) {
+      logic.mouseScroll = signal.kind == PointerDeviceKind.mouse;
+      if (signal is! PointerScrollEvent || logic.isCtrlPressed) return;
+      if (logic.readingMethod != ReadingMethod.topToBottomContinuously) {
+        signal.scrollDelta.dy > 0
+            ? logic.jumpToNextPage()
+            : logic.jumpToLastPage();
+      } else if (logic.scrollController.hasClients) {
+        final position = logic.scrollController.position;
+        if ((position.pixels == position.minScrollExtent &&
+                signal.scrollDelta.dy < 0) ||
+            (position.pixels == position.maxScrollExtent &&
+                signal.scrollDelta.dy > 0)) {
+          logic.photoViewController.updateMultiple(
+              position: logic.photoViewController.position -
+                  Offset(0, signal.scrollDelta.dy));
+        } else if (!App.isMacOS) {
+          logic.scrollController.smoothTo(signal.scrollDelta.dy);
         }
       }
     }
 
     return Positioned.fill(
       top: App.isDesktop ? MediaQuery.of(context).padding.top : 0,
-      child: Listener(
-        onPointerSignal: onPointerSignal,
-        onPointerPanZoomUpdate: (event) {
-          if (event.kind == PointerDeviceKind.trackpad &&
-              logic.readingMethod == ReadingMethod.topToBottomContinuously) {
-            if (event.scale == 1.0) {
-              logic.scrollController.smoothTo(0 - event.panDelta.dy * 1.2);
+      child: SizedBox(
+        key: viewportKey,
+        child: Listener(
+          onPointerSignal: onPointerSignal,
+          onPointerPanZoomUpdate: (event) {
+            if (event.kind == PointerDeviceKind.trackpad &&
+                event.scale == 1.0 &&
+                logic.readingMethod == ReadingMethod.topToBottomContinuously) {
+              logic.scrollController.smoothTo(-event.panDelta.dy * 1.2);
             }
-          }
-        },
-        onPointerDown: (details) => logic.mouseScroll = false,
-        child: NotificationListener<ScrollUpdateNotification>(
-          child: body,
-          onNotification: (notification) {
-            TapController.lastScrollTime = DateTime.now();
-            // update floating button
-            var length = logic.data.eps?.length ?? 1;
-            if (!logic.scrollController.hasClients) return false;
-            if (logic.scrollController.position.pixels -
-                        logic.scrollController.position.minScrollExtent <=
-                    0 &&
-                logic.order != 0) {
-              logic.showFloatingButton(-1);
-            } else if (logic.scrollController.position.pixels -
-                        logic.scrollController.position.maxScrollExtent >=
-                    0 &&
-                logic.order < length) {
-              logic.showFloatingButton(1);
-            } else {
-              logic.showFloatingButton(0);
-            }
-
-            return true;
           },
+          onPointerDown: (_) => logic.mouseScroll = false,
+          child: NotificationListener<ScrollUpdateNotification>(
+            child: body,
+            onNotification: (_) {
+              logic.notifyViewportChanged();
+              TapController.lastScrollTime = DateTime.now();
+              if (!logic.scrollController.hasClients) return false;
+              final position = logic.scrollController.position;
+              if (position.pixels <= position.minScrollExtent &&
+                  logic.order > 1) {
+                logic.showFloatingButton(-1);
+              } else if (position.pixels >= position.maxScrollExtent &&
+                  logic.order < (logic.data.eps?.length ?? 1)) {
+                logic.showFloatingButton(1);
+              } else {
+                logic.showFloatingButton(0);
+              }
+              return true;
+            },
+          ),
         ),
       ),
     );
@@ -660,46 +405,6 @@ extension ImageExt on ComicReadingPage {
     return false;
   }
 
-  /// preload image
-  void precacheComicImage(ComicReadingPageLogic logic, BuildContext context,
-      int index, String target) {
-    if (logic.requestedLoadingItems.length != logic.length + 1) {
-      logic.requestedLoadingItems = List.filled(logic.length + 1, false);
-    }
-
-    var precacheEnd = int.parse(appdata.settings[28]) + index;
-    if (precacheEnd > logic.urls.length) {
-      precacheEnd = logic.urls.length;
-    }
-    for (var current = index; current < precacheEnd; current++) {
-      if (current < 0 ||
-          current >= logic.urls.length ||
-          logic.requestedLoadingItems[current]) {
-        continue;
-      }
-      logic.requestedLoadingItems[current] = true;
-      precacheImage(
-        _createReaderImageRequest(context, logic, current, target).provider,
-        context,
-      );
-    }
-    if (!ImageManager.haveTask) {
-      var extraEnd = precacheEnd + 3;
-      if (extraEnd > logic.urls.length) {
-        extraEnd = logic.urls.length;
-      }
-      for (var current = precacheEnd; current < extraEnd; current++) {
-        if (current < 0 ||
-            current >= logic.urls.length ||
-            logic.requestedLoadingItems[current]) {
-          continue;
-        }
-        logic.requestedLoadingItems[current] = true;
-        precacheImage(
-          _createReaderImageRequest(context, logic, current, target).provider,
-          context,
-        );
-      }
-    }
-  }
+  // PageView's adjacent pages and one continuous viewport provide bounded
+  // original-file prefetch. No whole-image precache or fictitious idle queue.
 }

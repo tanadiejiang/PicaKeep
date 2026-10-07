@@ -1,24 +1,41 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:ui' as ui;
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:image/image.dart' as img;
 import 'package:path/path.dart' as p;
 import 'package:picakeep/base.dart';
 import 'package:picakeep/foundation/app.dart';
 import 'package:picakeep/foundation/cover_thumbnail_cache.dart';
+import 'package:picakeep/foundation/image_pipeline/image_disk_quota.dart';
 import 'package:picakeep/foundation/remote_library_data_source.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   late Directory workspace;
+  final savedDiskQuota = ImageDiskQuota.overrideForTesting;
+  ImageDiskQuota testQuota({int available = 100 << 30}) => ImageDiskQuota(
+      roots: () => [App.cachePath, p.join(App.dataPath, 'local_library_cache')],
+      idleLimitBytes: () => 512 << 20,
+      space: (_) async => ImageDiskSpace(available, 'cover-test-volume'));
   setUpAll(() async {
-    workspace = await Directory.systemTemp.createTemp('pk51_thumbs_');
+    final parent = Platform.isWindows
+        ? Directory(r'E:\picakeep-image-pipeline-022-work')
+        : Directory.systemTemp;
+    await parent.create(recursive: true);
+    workspace = await parent.createTemp('pk51_thumbs_');
     App.dataPath = p.join(workspace.path, 'app');
     App.cachePath = p.join(workspace.path, 'cache');
+    ImageDiskQuota.overrideForTesting = testQuota();
   });
-  tearDownAll(() async => workspace.delete(recursive: true));
+  tearDownAll(() async {
+    ImageDiskQuota.overrideForTesting = savedDiskQuota;
+    await workspace.delete(recursive: true);
+  });
   tearDown(() async {
+    CoverThumbnailCache.beforeProviderPersistenceForTesting = null;
+    await CoverThumbnailCache.waitForProviderPersistenceForTesting();
     await CoverThumbnailCache.waitForMaintenanceForTesting();
     CoverThumbnailCache.maintenanceForTesting = null;
   });
@@ -38,6 +55,273 @@ void main() {
     descriptor.dispose();
     buffer.dispose();
     return size;
+  }
+
+  testWidgets('visible cover backlog defers encoding while pixels can paint',
+      (tester) async {
+    final firstRelease =
+        CoverThumbnailCache.deferProviderPersistenceForVisibleWork();
+    final lastRelease =
+        CoverThumbnailCache.deferProviderPersistenceForVisibleWork();
+    var encoders = 0;
+    CoverThumbnailCache.beforeProviderPersistenceForTesting = () async {
+      encoders++;
+    };
+    try {
+      final path = await tester
+          .runAsync(() => source(512, 256, name: 'idle-persistence.png'));
+      final provider = await tester.runAsync(() =>
+          CoverThumbnailCache.prepareProvider(path!, 384,
+              canContinue: () => true));
+      await tester.pumpWidget(MaterialApp(home: Image(image: provider!)));
+      await tester.pump();
+      expect(tester.widget<RawImage>(find.byType(RawImage)).image, isNotNull);
+      for (var i = 0; i < 5; i++) {
+        await tester.runAsync(
+            () => Future<void>.delayed(const Duration(milliseconds: 10)));
+        await tester.pump(const Duration(milliseconds: 20));
+      }
+      expect(encoders, 0, reason: 'visible cover preparation owns the lane');
+      firstRelease();
+      firstRelease();
+      await tester.pump();
+      expect(encoders, 0, reason: 'another page still has visible work');
+      lastRelease();
+      var drained = false;
+      unawaited(CoverThumbnailCache.waitForProviderPersistenceForTesting()
+          .then((_) => drained = true));
+      for (var i = 0; i < 300 && !drained; i++) {
+        await tester.runAsync(
+            () => Future<void>.delayed(const Duration(milliseconds: 10)));
+        await tester.pump(const Duration(milliseconds: 20));
+      }
+      expect(drained, isTrue);
+      expect(encoders, 1);
+      await tester.pumpWidget(const SizedBox.shrink());
+    } finally {
+      firstRelease();
+      lastRelease();
+    }
+  });
+
+  testWidgets('cold cover paints before PNG persistence is allowed',
+      (tester) async {
+    Future<List<String>> persistedPaths() async {
+      final root = Directory(
+          p.join(App.dataPath, 'local_library_cache', 'covers', 'thumbs'));
+      if (!await root.exists()) return [];
+      return (await root.list().where((f) => f is File).toList())
+          .map((f) => f.path)
+          .toList()
+        ..sort();
+    }
+
+    final existingPaths = await tester.runAsync(persistedPaths);
+    // Completers awaited from runAsync must use its real async zone. Creating
+    // them in the widget's fake zone strands completion microtasks until pump.
+    final barriers = (await tester
+        .runAsync(() async => (Completer<void>(), Completer<void>())))!;
+    final persistenceEntered = barriers.$1;
+    final releasePersistence = barriers.$2;
+    CoverThumbnailCache.beforeProviderPersistenceForTesting = () async {
+      persistenceEntered.complete();
+      await releasePersistence.future;
+    };
+    try {
+      final path = await tester
+          .runAsync(() => source(4096, 1024, name: 'paint-first.png'));
+      final provider = await tester.runAsync(() =>
+          CoverThumbnailCache.prepareProvider(path!, 384,
+              canContinue: () => true));
+      expect(provider, isNotNull);
+      await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 30)));
+      expect(persistenceEntered.isCompleted, isFalse,
+          reason: 'preparing a provider must not start PNG encoding');
+      await tester.pumpWidget(MaterialApp(
+          home: SizedBox(
+              width: 128,
+              height: 128,
+              child: Image(image: provider!, fit: BoxFit.contain))));
+      await tester.pump();
+      final image = tester.widget<RawImage>(find.byType(RawImage)).image;
+      expect(image, isNotNull);
+      expect((image!.width, image.height), (384, 96));
+      await tester.runAsync(
+          () => persistenceEntered.future.timeout(const Duration(seconds: 5)));
+      final files = await tester.runAsync(persistedPaths);
+      // This test's new key has not been persisted while the real image is painted.
+      expect(files, existingPaths);
+      expect(releasePersistence.isCompleted, isFalse);
+    } finally {
+      releasePersistence.complete();
+      await tester
+          .runAsync(CoverThumbnailCache.waitForProviderPersistenceForTesting);
+      await tester.pumpWidget(const SizedBox.shrink());
+      PaintingBinding.instance.imageCache.clear();
+      PaintingBinding.instance.imageCache.clearLiveImages();
+      final warm = await tester.runAsync(() =>
+          CoverThumbnailCache.prepareProvider(
+              p.join(workspace.path, 'paint-first.png'), 384,
+              canContinue: () => true));
+      await tester.runAsync(() async {
+        final stream = warm!.resolve(ImageConfiguration.empty);
+        final ready = Completer<void>();
+        final listener = ImageStreamListener((_, __) {
+          if (!ready.isCompleted) ready.complete();
+        }, onError: (error, stack) {
+          ready.completeError(error, stack);
+        });
+        stream.addListener(listener);
+        try {
+          await ready.future.timeout(const Duration(seconds: 5));
+        } finally {
+          stream.removeListener(listener);
+        }
+      });
+      await tester.pumpWidget(MaterialApp(home: Image(image: warm!)));
+      await tester.runAsync(() async {
+        await Future<void>.delayed(const Duration(milliseconds: 30));
+      });
+      await tester.pump();
+      final warmImage = tester.widget<RawImage>(find.byType(RawImage)).image;
+      expect(warmImage, isNotNull);
+      expect((warmImage!.width, warmImage.height), (384, 96));
+      expect(tester.takeException(), isNull,
+          reason: 'decoder callback owns its buffer; no double dispose');
+      await tester.pumpWidget(const SizedBox.shrink());
+      PaintingBinding.instance.imageCache.clear();
+      PaintingBinding.instance.imageCache.clearLiveImages();
+    }
+  });
+
+  testWidgets('disk refusal preserves the prepared cover and publishes no PNG',
+      (tester) async {
+    final saved = ImageDiskQuota.overrideForTesting;
+    final denied =
+        (await tester.runAsync(() async => testQuota(available: 0)))!;
+    ImageDiskQuota.overrideForTesting = denied;
+    try {
+      final path = (await tester
+          .runAsync(() => source(1024, 512, name: 'disk-refused.png')))!;
+      final provider = await tester.runAsync(() =>
+          CoverThumbnailCache.prepareProvider(path, 384,
+              canContinue: () => true));
+      expect(provider, isNotNull);
+      await tester.pumpWidget(MaterialApp(home: Image(image: provider!)));
+      await tester.pump();
+      await tester
+          .runAsync(CoverThumbnailCache.waitForProviderPersistenceForTesting);
+      final image = tester.widget<RawImage>(find.byType(RawImage)).image!;
+      expect((image.width, image.height), (384, 192));
+      expect(denied.pendingCount, 0);
+      expect(denied.activeBytes, 0);
+      final display = await tester.runAsync(() =>
+          CoverThumbnailCache.prepareDisplay(path, 768,
+              canContinue: () => true));
+      final legacy = await tester
+          .runAsync(() => CoverThumbnailCache.ensureForCoverPath(path));
+      expect(display, isNull);
+      expect(legacy, isNull);
+      final original = (await tester.runAsync(() => File(path).stat()))!;
+      expect(original.type, FileSystemEntityType.file);
+      expect(original.size, greaterThan(0));
+      expect(tester.takeException(), isNull);
+    } finally {
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester
+          .runAsync(CoverThumbnailCache.waitForProviderPersistenceForTesting);
+      PaintingBinding.instance.imageCache.clear();
+      PaintingBinding.instance.imageCache.clearLiveImages();
+      ImageDiskQuota.overrideForTesting = saved;
+    }
+  });
+
+  test('an unpainted cover abandons its persistence clone', () async {
+    final path = await source(100, 160, name: 'never-painted.png');
+    var encodes = 0;
+    CoverThumbnailCache.beforeProviderPersistenceForTesting = () async {
+      encodes++;
+    };
+    final trace = CoverThumbnailTrace();
+    final provider = await CoverThumbnailCache.prepareProvider(path, 384,
+        canContinue: () => true, trace: trace);
+    expect(provider, isNotNull);
+    await CoverThumbnailCache.waitForProviderPersistenceForTesting()
+        .timeout(const Duration(seconds: 5));
+    expect(encodes, 0);
+    // Consume and cancel the separate provider-expiry timer. The expired
+    // optional persistence is not revived by a later image stream resolution.
+    final stream = provider!.resolve(ImageConfiguration.empty);
+    final ready = Completer<void>();
+    final listener = ImageStreamListener((_, __) => ready.complete());
+    stream.addListener(listener);
+    await ready.future;
+    stream.removeListener(listener);
+    PaintingBinding.instance.imageCache.clear();
+    PaintingBinding.instance.imageCache.clearLiveImages();
+    expect(trace.stages.where((stage) => stage['stage'] == 'persistEncode'),
+        isEmpty);
+  });
+
+  for (final replaceSource in [false, true]) {
+    testWidgets(
+        replaceSource
+            ? 'source replacement before persistence never publishes old pixels'
+            : 'cache invalidation before persistence never publishes old pixels',
+        (tester) async {
+      final barriers = (await tester
+          .runAsync(() async => (Completer<void>(), Completer<void>())))!;
+      final entered = barriers.$1;
+      final release = barriers.$2;
+      CoverThumbnailCache.beforeProviderPersistenceForTesting = () async {
+        entered.complete();
+        await release.future;
+      };
+      final trace = CoverThumbnailTrace();
+      final path = (await tester.runAsync(
+          () => source(110, 170, name: 'not-published-$replaceSource.png')))!;
+      final provider = await tester.runAsync(() =>
+          CoverThumbnailCache.prepareProvider(path, 384,
+              canContinue: () => true, trace: trace));
+      try {
+        await tester.pumpWidget(MaterialApp(home: Image(image: provider!)));
+        final image = tester.widget<RawImage>(find.byType(RawImage)).image;
+        expect((image!.width, image.height), (110, 170));
+        await tester
+            .runAsync(() => entered.future.timeout(const Duration(seconds: 5)));
+        if (replaceSource) {
+          await tester.runAsync(() => File(path)
+              .writeAsBytes(img.encodePng(img.Image(width: 130, height: 180))));
+        } else {
+          CoverThumbnailCache.invalidatePendingPublications();
+        }
+      } finally {
+        release.complete();
+        await tester
+            .runAsync(CoverThumbnailCache.waitForProviderPersistenceForTesting);
+        await tester.pumpWidget(const SizedBox.shrink());
+        PaintingBinding.instance.imageCache.clear();
+        PaintingBinding.instance.imageCache.clearLiveImages();
+      }
+      final nextTrace = CoverThumbnailTrace();
+      final next = await tester.runAsync(() =>
+          CoverThumbnailCache.prepareProvider(path, 384,
+              canContinue: () => true, trace: nextTrace));
+      expect(nextTrace.details['diskHit'], isFalse);
+      await tester.pumpWidget(MaterialApp(home: Image(image: next!)));
+      final nextImage = tester.widget<RawImage>(find.byType(RawImage)).image;
+      expect((nextImage!.width, nextImage.height),
+          replaceSource ? (130, 180) : (110, 170));
+      // This request must not reuse the completed barrier callback.
+      CoverThumbnailCache.beforeProviderPersistenceForTesting = null;
+      await tester
+          .runAsync(CoverThumbnailCache.waitForProviderPersistenceForTesting);
+      await tester.pumpWidget(const SizedBox.shrink());
+      PaintingBinding.instance.imageCache.clear();
+      PaintingBinding.instance.imageCache.clearLiveImages();
+      expect(tester.takeException(), isNull);
+    });
   }
 
   test('real thumbnail uses width buckets and app-internal path; warm reuse',

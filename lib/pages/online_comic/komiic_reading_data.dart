@@ -66,7 +66,26 @@ class KomiicReadingData extends ReadingData {
   /// 缓存键必须含章节维度，否则跨章同页码会串图。
   @override
   String buildImageKey(int ep, int page, String url) =>
-      '${comic.id}_${ep}_$page';
+      originalNetworkCacheIdentity(ep, page, url);
+
+  @override
+  Future<ReaderPageSource> resolvePageSource(
+      int ep, int page, String url) async {
+    if (downloaded && checkEpDownloaded(ep)) {
+      return super.resolvePageSource(ep, page, url);
+    }
+    final index = ep - 1;
+    if (index < 0 || index >= _chapters.length) {
+      throw StateError('Komiic chapter is unavailable');
+    }
+    final token = KomiicNetwork().token;
+    return networkPageSource(ep, page, url, headers: {
+      'Referer':
+          'https://komiic.com/comic/${comic.id}/chapter/${_chapters[index].id}/images/all',
+      'User-Agent': KomiicNetwork.komiicUA,
+      if (token.isNotEmpty) 'Authorization': 'Bearer $token',
+    });
+  }
 
   /// url 是 [loadEpNetwork] 返回的 CDN 直链，带章节图片页 Referer（防盗链）。
   ///
@@ -89,6 +108,7 @@ class KomiicReadingData extends ReadingData {
     };
     final result = await OnlineImageManager.instance.getImage(
       url,
+      cacheIdentity: originalNetworkCacheIdentity(ep, page, url),
       headers: headers,
     );
     yield* result.stream;

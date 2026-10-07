@@ -1,0 +1,40 @@
+--- a/packages/picakeep_image_engine/native/src/image_core.cpp
++++ b/packages/picakeep_image_engine/native/src/image_core.cpp
+@@ -839,15 +839,15 @@
+ }
+ class AreaRescaler {
+  public:
+-  AreaRescaler(const pki_request &request, pki_result &result, Budget &budget)
+-    : request(request), result(result), budget(budget), work(uint64_t(request.output_width) * 4 * 2 * sizeof(rescaler_t)) {
++  AreaRescaler(const pki_request &request, pki_result &result, Budget &budget, bool opaque = false)
++    : request(request), result(result), budget(budget), opaque(opaque), work(uint64_t(request.output_width) * 4 * 2 * sizeof(rescaler_t)) {
+     allocate_pixels(request, result, budget);
+     if (!WebPRescalerInit(&scaler, int(request.width), int(request.height), result.pixels,
+       int(request.output_width), int(request.output_height), int(result.stride), 4,
+       reinterpret_cast<rescaler_t *>(work.data))) throw Failure(1, "Cannot initialize bounded area rescaler");
+   }
+   void row(uint8_t *pixels) {
+-    for (uint32_t x = 0; x < request.width; ++x) {
++    if (!opaque) for (uint32_t x = 0; x < request.width; ++x) {
+       auto *p = pixels + uint64_t(x) * 4; uint32_t alpha = p[3];
+       if (alpha != 255) for (int c = 0; c < 3; ++c) p[c] = uint8_t((p[c] * alpha + 127) / 255);
+     }
+@@ -865,7 +865,7 @@
+     }
+   }
+  private:
+-  const pki_request &request; pki_result &result; Budget &budget; Bytes work; WebPRescaler scaler{};
++  const pki_request &request; pki_result &result; Budget &budget; const bool opaque; Bytes work; WebPRescaler scaler{};
+ };
+ void quick_png_fit(const std::string &path, const Info &info,
+   const pki_request &request, pki_result &result, Budget &budget) {
+@@ -886,7 +886,8 @@
+     if (type == PNG_COLOR_TYPE_GRAY || type == PNG_COLOR_TYPE_GRAY_ALPHA) png_set_gray_to_rgb(png);
+     if (!(type & PNG_COLOR_MASK_ALPHA) && !transparency) png_set_add_alpha(png, 255, PNG_FILLER_AFTER);
+     png_read_update_info(png, metadata);
+-    Bytes row(png_get_rowbytes(png, metadata)); AreaRescaler rescaler(request, result, budget);
++    Bytes row(png_get_rowbytes(png, metadata));
++    AreaRescaler rescaler(request, result, budget, !(type & PNG_COLOR_MASK_ALPHA) && !transparency);
+     for (uint32_t y = 0; y < info.metadata.encoded_height; ++y) {
+       budget.check(); png_read_row(png, row.data, nullptr); rescaler.row(row.data);
+     }

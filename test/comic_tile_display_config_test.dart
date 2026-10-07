@@ -210,6 +210,21 @@ void main() {
   });
 
   group('X04 老配置补齐', () {
+    test('旧短内存 settings 在组件直接保存时也补齐阅读策略', () async {
+      final data = Appdata();
+      data.settings = data.settings.take(151).toList();
+      data.settings[148] = 'preserved-custom-value';
+      await data.updateSettings();
+      expect(data.settings.length, greaterThan(165));
+      expect(data.settings[148], 'preserved-custom-value');
+      final policy = jsonDecode(data.settings[165]) as Map<String, dynamic>;
+      expect(policy['schema'], 2);
+      expect(policy['comic']['displayMode'], 'sharpFirst');
+      expect(policy['illust']['displayMode'], 'sharpFirst');
+      expect(policy['legacyQuality']['comic'], '<missing>');
+      expect(policy['legacyQuality']['illust'], '<missing>');
+    });
+
     test('旧 settings 列表补齐后新索引有默认值且不抛异常', () async {
       // readSettings 优先读 `${App.dataPath}/settings` 文件；先清掉它，否则会读到
       // 同一测试文件里前序用例 updateSettings 写下的真实配置，而不是下面构造的旧列表。

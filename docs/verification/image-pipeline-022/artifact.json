@@ -1,0 +1,44 @@
+{
+  "apk": "D:\\picakeep-image-pipeline-022-work\\picakeep-large-open-first-normal-profile1007.apk",
+  "bytes": 61906601,
+  "sha256": "C1BB13A72E01937BAB239AFA31722A0D79687EA44D7AF927CFF90793BAA1F895",
+  "entrypoint": "lib/main.dart",
+  "buildMode": "profile",
+  "dartDefines": [],
+  "package": "lingxue.picakeep",
+  "versionCode": 9,
+  "versionName": "1.9.92",
+  "signerSha256": "31b4434516ccc1f58add7cc5cd4b6786e995c957d5891d3685e4c75a7a58d7c7",
+  "apkSignatureVerified": true,
+  "zipCrcVerified": true,
+  "manifest": "D:\\picakeep-image-pipeline-022-work\\large-open-first-normal-inputs1007.json",
+  "snapshotInputs": 872,
+  "snapshotHashDifferences": [],
+  "sourceHashDifferences": [],
+  "sourceDifferenceScope": "None",
+  "compilerHashAlgorithm": "Flutter 3.38.5 build_system/hash.dart Md5Hash",
+  "compilerProductHashesVerified": 451,
+  "compilerProductHashDifferences": [],
+  "nativeLibraries": {
+    "lib/arm64-v8a/libpicakeep_image_engine.so": {
+      "sha256": "1b1ee627837a5899d7e0783498ca121f27c82fd9b9cce7f10e943bf8ba1b2998",
+      "previousSha256": "3fa3001ff3ff2007db63ccb7c3e07c1b3ee4345b6d7599376f26c2d7231744a6",
+      "changed": true
+    },
+    "lib/armeabi-v7a/libpicakeep_image_engine.so": {
+      "sha256": "ee55eb8c767be9d64d85ba509fba828340c1a630322ad8ca4412517e1a6238c5",
+      "previousSha256": "049134835891a74d9ef8fe821142209c3813daa3f254bb70d7cb8f625a4eadd4",
+      "changed": true
+    },
+    "lib/x86_64/libpicakeep_image_engine.so": {
+      "sha256": "aa8cb1b551dc4c0a6f25c1ebe083e5ca09d3b59f0b367727bf05093d638b9796",
+      "previousSha256": "e282ae148b26c84e19a9356e71cf1e3c45d72e2494a113a045806db2fa3a0de2",
+      "changed": true
+    }
+  },
+  "buildCommand": "flutter build apk --profile --target-platform android-arm64",
+  "buildLog": "D:\\picakeep-image-pipeline-022-work\\large-open-1007\\first-normal-build1007.log",
+  "repositorySourceManifest": "source-manifest.json",
+  "recordScope": "Already installed normal profile 1.9.92+9; preparing commit 1.9.93+10 does not produce a newly tested APK",
+  "nativeComparisonNote": "previousSha256 fields retain the original identity report's earlier comparison; equality with the final harness and adaptive normal APK is recorded separately in large-image-first-raster1007.md"
+}

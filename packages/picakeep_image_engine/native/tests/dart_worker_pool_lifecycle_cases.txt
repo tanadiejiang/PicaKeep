@@ -1,0 +1,298 @@
+// These declarations are appended only to the generated test library.
+final _testMode = File(Platform.environment['PICAKEEP_LIFECYCLE_MODE_FILE']!);
+const _testTimeout = Duration(seconds: 20);
+
+void _require(bool condition, String message) {
+  if (!condition) throw StateError(message);
+}
+
+Object _executeTestCall(_WorkerCall call) {
+  final args = call.arguments;
+  return switch (call.operation) {
+    _WorkerOperation.probe => _probe(args[0] as String),
+    _WorkerOperation.estimate => _estimate(
+      args[0] as String, args[1] as String, args[2] as int, args[3] as int,
+    ),
+    _WorkerOperation.decode => _decode(
+      args[0] as String, args[1] as NativeImageRect, args[2] as String,
+      args[3] as int, args[4] as int, args[5] as int, args[6] as int,
+      args[7] as int, args[8] as bool,
+    ),
+    _WorkerOperation.decodePrepared => _decode(
+      args[0] as String, args[1] as NativeImageRect, args[2] as String,
+      args[3] as int, args[4] as int, args[5] as int, args[6] as int,
+      args[7] as int, args[8] as bool, preparedOnly: true,
+    ),
+  };
+}
+
+void _faultControlledWorker(SendPort replies) {
+  final mode = _testMode.readAsStringSync();
+  if (mode == 'startupFailure') throw StateError('Injected startup failure');
+  if (mode == 'startupExit') Isolate.exit();
+  if (mode == 'startupMixed' &&
+      Isolate.current.debugName!.endsWith('-2')) {
+    // The functioning first worker must initialize before its sibling fails.
+    sleep(const Duration(milliseconds: 20));
+    throw StateError('Injected late sibling startup failure');
+  }
+  final init = Stopwatch()..start();
+  _Bindings.instance;
+  final requests = ReceivePort();
+  replies.send(_WorkerStarted(requests.sendPort, init.elapsedMicroseconds));
+  requests.listen((message) async {
+    if (message == null) {
+      requests.close();
+      return;
+    }
+    final call = message as _WorkerCall;
+    final args = call.arguments;
+    final clock = Stopwatch()..start();
+    final controlled = call.operation == _WorkerOperation.probe &&
+        args.length > 1 && args[1] is SendPort;
+    if (controlled) {
+      final gate = ReceivePort();
+      (args[1] as SendPort).send(gate.sendPort);
+      await gate.first;
+      gate.close();
+      if (args[2] == 'exitBeforeFFI') {
+        requests.close();
+        return;
+      }
+    }
+    try {
+      final value = _executeTestCall(call);
+      // _decode has returned: native buffer/token borrow cleanup has run. A
+      // normal isolate exit now tests a lost reply without killing active FFI.
+      if (call.operation == _WorkerOperation.decode && args.length > 9 &&
+          args[9] == 'exitAfterCleanup') {
+        requests.close();
+        return;
+      }
+      replies.send(_WorkerReply(call.id, value, clock.elapsedMicroseconds));
+    } catch (error, stack) {
+      replies.send(_WorkerReply(call.id, null, clock.elapsedMicroseconds,
+        error: error is ImageEngineException
+            ? error : RemoteError(error.toString(), stack.toString()),
+        stack: stack.toString()));
+    }
+  });
+}
+
+List<Object> _decodeArguments(String path, String backing, int token) => [
+  path, const NativeImageRect(0, 0, 256, 256), backing, 256, 256,
+  64 << 20, 64 << 20, token, false,
+];
+
+Future<void> _assertPixels(Future<_WorkerResult> pending, Uint8List reference) async {
+  final result = await pending.timeout(_testTimeout);
+  final pixels = result.value as _WorkerPixels;
+  final bytes = pixels.pixels.materialize().asUint8List();
+  _require(pixels.width == 256 && pixels.height == 256 &&
+      pixels.stride == 1024 && bytes.length == reference.length,
+      'Recovered decode dimensions/stride changed');
+  for (var i = 0; i < bytes.length; i++) {
+    _require(bytes[i] == reference[i], 'Recovered original pixel differs at $i');
+  }
+}
+
+Future<Object> _failure(Future<_WorkerResult> pending) async {
+  try {
+    await pending.timeout(_testTimeout);
+    throw StateError('Expected worker failure but received a result');
+  } catch (error) {
+    if (error is TimeoutException) rethrow;
+    if (error is StateError && error.message ==
+        'Expected worker failure but received a result') rethrow;
+    return error;
+  }
+}
+
+void _assertEmpty(_ImageWorkerPool pool, String label) {
+  final diagnostics = pool.diagnostics;
+  _require(diagnostics['workersAlive'] == 0 &&
+      diagnostics['activeJobs'] == 0 && diagnostics['queuedJobs'] == 0,
+      '$label did not release workers, active jobs and queue: $diagnostics');
+}
+
+Future<Map<String, Object>> _startupCase(
+    String path, String backing, Uint8List reference, String mode) async {
+  _testMode.writeAsStringSync(mode);
+  final pool = _ImageWorkerPool(workerEntrypoint: _faultControlledWorker);
+  final failures = await Future.wait([
+    for (var i = 0; i < 12; i++)
+      _failure(pool.run(_WorkerOperation.probe, [path])),
+  ]).timeout(_testTimeout);
+  await pool.shutdownIdle().timeout(_testTimeout);
+  _assertEmpty(pool, mode);
+  final initial = Map<String, int>.from(pool.diagnostics);
+  _require(initial['workersCreated'] == 2 &&
+      initial['workerStartupFailures'] == 2 && initial['jobsFailed'] == 12 &&
+      initial['jobsFailedNonNative'] == 12 &&
+      !initial.keys.any((key) => key.startsWith('jobsFailedCode')),
+      '$mode was not bounded to two startup attempts: $initial');
+  _testMode.writeAsStringSync('native');
+  await _assertPixels(pool.run(_WorkerOperation.decode,
+      _decodeArguments(path, backing, 0)), reference);
+  await pool.shutdownIdle().timeout(_testTimeout);
+  _assertEmpty(pool, '$mode recovery');
+  return {'failedCalls': failures.length, 'failureDiagnostics': initial,
+    'recoveredOriginalPixels': true, 'finalDiagnostics': pool.diagnostics};
+}
+
+Future<Map<String, Object>> _queuedCancellation(
+    String path, String backing, Uint8List reference) async {
+  _testMode.writeAsStringSync('native');
+  final pool = _ImageWorkerPool(workerEntrypoint: _faultControlledWorker);
+  final observed = ReceivePort();
+  final gates = <SendPort>[];
+  final allOccupied = Completer<void>();
+  observed.listen((message) {
+    gates.add(message as SendPort);
+    if (gates.length == 2) allOccupied.complete();
+  });
+  final blockers = [for (var i = 0; i < 2; i++)
+    pool.run(_WorkerOperation.probe, [path, observed.sendPort, 'normal'])];
+  await allOccupied.future.timeout(_testTimeout);
+  _require(pool.diagnostics['activeJobs'] == 2, 'Workers were not occupied');
+  final token = NativeCancellationToken();
+  final cancelled = <Future<Object>>[];
+  for (var i = 0; i < 120; i++) {
+    token._retain();
+    cancelled.add(_failure(pool.run(_WorkerOperation.decode,
+        _decodeArguments(path, backing, token._address),
+        tokenAddress: token._address)).whenComplete(token._release));
+  }
+  final survivors = [for (var i = 0; i < 8; i++)
+    _assertPixels(pool.run(_WorkerOperation.decode,
+        _decodeArguments(path, backing, 0)), reference)];
+  _require(pool.diagnostics['queuedJobs'] == 128, 'Queue not fully occupied');
+  final rejection = await _failure(pool.run(_WorkerOperation.probe, [path]));
+  _require(rejection is ImageEngineQueueExceeded && rejection.limit == 128 &&
+      rejection.code == 3 && rejection.isResourceLimited,
+      'The 129th queued operation was not rejected');
+  token.cancel();
+  // The injected test pool is not the global product singleton: invoke the
+  // same cancellation operation explicitly, with the same retained token.
+  pool.cancelQueued(token._address);
+  token.dispose();
+  _require(token._disposed && token._active == 120,
+      'Token disposal failed to defer native destruction until callers return');
+  final errors = await Future.wait(cancelled).timeout(_testTimeout);
+  _require(errors.every((error) => error is ImageEngineException &&
+      error.isCancelled), 'Queued cancellation returned the wrong error');
+  _require(token._active == 0, 'Queued cancellation retained token borrowers');
+  _require(pool.diagnostics['queuedJobs'] == 8 &&
+      pool.diagnostics['jobsCancelledBeforeExecution'] == 120,
+      'Cancelled queued jobs reached native execution');
+  for (final gate in gates) { gate.send(true); }
+  await Future.wait([...blockers, ...survivors]).timeout(_testTimeout);
+  observed.close();
+  await pool.shutdownIdle().timeout(_testTimeout);
+  _assertEmpty(pool, 'Queued cancellation');
+  return {'occupiedWorkers': 2, 'cancelledQueuedCalls': 120,
+    'survivingExactPixelCalls': 8, 'queueCapacityRejected': true,
+    'queueCapacityRejectedWithTypedLimit': true,
+    'disposedTokenBorrowersFinal': token._active,
+    'productSingletonInjection': false, 'finalDiagnostics': pool.diagnostics};
+}
+
+Future<Map<String, Object>> _mixedStartup(String path) async {
+  _testMode.writeAsStringSync('startupMixed');
+  final pool = _ImageWorkerPool(workerEntrypoint: _faultControlledWorker);
+  final observed = ReceivePort();
+  final blocker = pool.run(_WorkerOperation.probe,
+    [path, observed.sendPort, 'normal']);
+  final callers = [for (var i = 0; i < 12; i++)
+    pool.run(_WorkerOperation.probe, [path]).then((_) => true,
+      onError: (Object error) {
+        _require(error is RemoteError, 'Mixed startup returned unexpected error');
+        return false;
+      })];
+  final gate = await observed.first.timeout(_testTimeout) as SendPort;
+  observed.close();
+  final deadline = Stopwatch()..start();
+  while (pool.diagnostics['workerStartupFailures'] == 0 &&
+      deadline.elapsed < const Duration(seconds: 2)) {
+    await Future<void>.delayed(const Duration(milliseconds: 1));
+  }
+  _require(pool.diagnostics['workerStartupFailures'] == 1 &&
+      pool.diagnostics['workersAlive'] == 1,
+      'Sibling failure did not follow initialization of the functioning worker');
+  gate.send(true);
+  await blocker.timeout(_testTimeout);
+  final outcomes = await Future.wait(callers).timeout(_testTimeout);
+  _require(outcomes.where((value) => !value).length == 1,
+      'A single sibling startup failure lost unrelated callers');
+  _require(pool.diagnostics['workersCreated'] == 3,
+      'Successful sibling reply did not restore replacement capacity');
+  await pool.shutdownIdle().timeout(_testTimeout);
+  _assertEmpty(pool, 'Mixed startup recovery');
+  return {'failedCalls': 1, 'successfulCallsIncludingBlocker': 12,
+    'replacementCapacityRestored': true, 'finalDiagnostics': pool.diagnostics};
+}
+
+Future<Map<String, Object>> _exitCase(
+    String path, String backing, Uint8List reference, String phase) async {
+  _testMode.writeAsStringSync('native');
+  final pool = _ImageWorkerPool(workerEntrypoint: _faultControlledWorker);
+  final token = NativeCancellationToken();
+  late Future<Object> failure;
+  ReceivePort? observed;
+  if (phase == 'exitBeforeFFI') {
+    observed = ReceivePort();
+    failure = _failure(pool.run(_WorkerOperation.probe,
+      [path, observed.sendPort, phase]));
+    final gate = await observed.first.timeout(_testTimeout) as SendPort;
+    gate.send(true);
+    observed.close();
+  } else {
+    token._retain();
+    failure = _failure(pool.run(_WorkerOperation.decode,
+        [..._decodeArguments(path, backing, token._address), phase],
+        tokenAddress: token._address)).whenComplete(token._release);
+  }
+  await failure.timeout(_testTimeout);
+  _require(token._active == 0, '$phase retained cancellation handle');
+  token.dispose();
+  await _assertPixels(pool.run(_WorkerOperation.decode,
+      _decodeArguments(path, backing, 0)), reference);
+  await pool.shutdownIdle().timeout(_testTimeout);
+  _assertEmpty(pool, phase);
+  _require(pool.diagnostics['jobsFailed'] == 1 &&
+      pool.diagnostics['jobsCompleted'] == 1 &&
+      pool.diagnostics['jobsFailedNonNative'] == 1 &&
+      !pool.diagnostics.keys.any((key) => key.startsWith('jobsFailedCode')),
+      '$phase failed or lost an unrelated caller: ${pool.diagnostics}');
+  return {'exitPhase': phase, 'activeFFIWasKilled': false,
+    'disposedTokenBorrowersFinal': token._active,
+    'recoveredOriginalPixels': true, 'finalDiagnostics': pool.diagnostics};
+}
+
+Future<void> main(List<String> arguments) async {
+  const engine = PicakeepImageEngine();
+  _require(PicakeepImageEngine.isAvailable, 'Native image engine unavailable');
+  final path = arguments[0], backing = arguments[1];
+  final initial = await engine.decodeRegion(path,
+    const NativeImageRect(0, 0, 256, 256), backingPath: backing,
+    memoryBudgetBytes: 64 << 20, diskBudgetBytes: 64 << 20);
+  final reference = Uint8List.fromList(initial.bytes);
+  initial.dispose();
+  await PicakeepImageEngine.shutdownIdleWorkers().timeout(_testTimeout);
+  final results = <String, Object>{};
+  results['startupFailure'] = await _startupCase(path, backing, reference,
+    'startupFailure');
+  results['startupExit'] = await _startupCase(path, backing, reference,
+    'startupExit');
+  results['queuedCancellation'] = await _queuedCancellation(path, backing,
+    reference);
+  results['mixedStartup'] = await _mixedStartup(path);
+  results['exitBeforeFFI'] = await _exitCase(path, backing, reference,
+    'exitBeforeFFI');
+  results['exitAfterCleanup'] = await _exitCase(path, backing, reference,
+    'exitAfterCleanup');
+  stdout.writeln(jsonEncode({'status': 'passed', 'scope':
+    'Standalone Windows real native FFI with private pool lifecycle fault injection; '
+    'not Android performance, source/budget lease admission or active-FFI crash proof',
+    'cases': results}));
+}

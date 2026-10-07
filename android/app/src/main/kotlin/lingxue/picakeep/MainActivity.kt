@@ -6,6 +6,7 @@ import android.content.ClipDescription
 import android.content.ClipboardManager
 import android.content.ComponentName
 import android.content.Context
+import android.content.ContentValues
 import android.content.Intent
 import android.content.ServiceConnection
 import android.content.pm.PackageManager
@@ -24,6 +25,7 @@ import org.json.JSONArray
 import java.io.File
 import android.os.SystemClock
 import android.provider.Settings
+import android.provider.MediaStore
 import android.util.Log
 import android.view.WindowManager
 import androidx.core.app.ActivityCompat
@@ -38,6 +40,11 @@ import io.flutter.plugin.common.MethodChannel
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
+import java.util.concurrent.ArrayBlockingQueue
+import java.util.concurrent.ThreadPoolExecutor
+import java.util.concurrent.ConcurrentHashMap
+import java.security.MessageDigest
+import java.util.UUID
 import lingxue.picakeep.shizuku.IPicaKeepShizukuFileService
 import lingxue.picakeep.shizuku.PicaKeepShizukuFileService
 import rikka.shizuku.Shizuku
@@ -51,6 +58,30 @@ class MainActivity : FlutterActivity() {
     private var cachedShizukuPermissionAt: Long = 0L
     private val mainHandler = Handler(Looper.getMainLooper())
     private val storageExecutor = Executors.newCachedThreadPool()
+    private val originalCopyExecutor = ThreadPoolExecutor(
+        2, 2, 30L, TimeUnit.SECONDS, ArrayBlockingQueue<Runnable>(8),
+        ThreadPoolExecutor.AbortPolicy(),
+    )
+    private class OriginalCopyState {
+        @Volatile var cancelled = false
+        @Volatile private var process: Process? = null
+
+        fun cancel() {
+            cancelled = true
+            process?.destroyForcibly()
+        }
+
+        fun attach(value: Process) {
+            process = value
+            if (cancelled) value.destroyForcibly()
+        }
+
+        fun detach(value: Process) {
+            if (process === value) process = null
+        }
+    }
+
+    private val originalCopyStates = ConcurrentHashMap<String, OriginalCopyState>()
     private val launchStartElapsedMs = SystemClock.elapsedRealtime()
     private var firstWindowFocusLogged = false
     private val shizukuUserServiceLock = java.lang.Object()
@@ -232,6 +263,8 @@ class MainActivity : FlutterActivity() {
     }
 
     override fun onDestroy() {
+        originalCopyStates.values.forEach { it.cancel() }
+        originalCopyExecutor.shutdownNow()
         DownloadRuntime.disconnect(flutterEngine?.dartExecutor?.binaryMessenger)
         pendingNotificationPermissionResult = null
         pendingShizukuPermissionResult = null
@@ -418,6 +451,24 @@ class MainActivity : FlutterActivity() {
         ).setMethodCallHandler { call, result ->
             when (call.method) {
                 "hasManageAllFilesAccess" -> result.success(hasManageAllFilesAccess())
+                "saveOriginalToGallery" -> {
+                    val localFile = call.argument<String>("localFile")
+                    if (localFile.isNullOrBlank()) {
+                        result.error("invalid_path", "localFile is required", null)
+                        return@setMethodCallHandler
+                    }
+                    try {
+                        originalCopyExecutor.execute {
+                            runCatching { saveOriginalToGallery(localFile) }
+                                .onSuccess { saved -> mainHandler.post { result.success(saved) } }
+                                .onFailure { error -> mainHandler.post {
+                                    result.error("original_gallery_failed", error.message ?: "Original gallery export failed", null)
+                                } }
+                        }
+                    } catch (_: java.util.concurrent.RejectedExecutionException) {
+                        result.error("original_gallery_busy", "Original export queue is full", null)
+                    }
+                }
                 "openManageAllFilesAccessSettings" -> {
                     openManageAllFilesAccessSettings()
                     result.success(null)
@@ -478,6 +529,55 @@ class MainActivity : FlutterActivity() {
                         "Root 模式目录读取失败",
                     ) {
                         listDirectoryEntriesWithRoot(targetPath)
+                    }
+                }
+                "statFileWithRoot", "statFileWithShizuku" -> {
+                    val path = call.argument<String>("path")
+                    if (path.isNullOrBlank()) {
+                        result.error("invalid_path", "path is required", null)
+                        return@setMethodCallHandler
+                    }
+                    val useRoot = call.method.endsWith("Root")
+                    runStorageTask(result, "original_stat_failed", "Original file stat failed") {
+                        statOriginalFile(path.trim(), useRoot)
+                    }
+                }
+                "cancelCopyToManaged" -> {
+                    val requestId = call.argument<String>("requestId")
+                    if (requestId != null) originalCopyStates[requestId]?.cancel()
+                    result.success(null)
+                }
+                "copyFileToManagedWithRoot", "copyFileToManagedWithShizuku" -> {
+                    val path = call.argument<String>("path")
+                    val destination = call.argument<String>("destination")
+                    val requestId = call.argument<String>("requestId")
+                    val maxBytes = call.argument<Number>("maxBytes")?.toLong() ?: 0L
+                    if (path.isNullOrBlank() || destination.isNullOrBlank() || requestId.isNullOrBlank() || maxBytes <= 0L) {
+                        result.error("invalid_path", "source, managed destination, request and bound are required", null)
+                        return@setMethodCallHandler
+                    }
+                    val useRoot = call.method.endsWith("Root")
+                    val copyState = OriginalCopyState()
+                    if (originalCopyStates.putIfAbsent(requestId, copyState) != null) {
+                        result.error("original_copy_duplicate", "Original copy request already exists", null)
+                        return@setMethodCallHandler
+                    }
+                    try {
+                        originalCopyExecutor.execute {
+                            try {
+                                runCatching {
+                                    copyOriginalToManaged(path, destination, maxBytes, useRoot, copyState)
+                                }.onSuccess { size -> mainHandler.post { result.success(size) } }
+                                 .onFailure { error -> mainHandler.post {
+                                     result.error("original_copy_failed", error.message, null)
+                                 } }
+                            } finally {
+                                originalCopyStates.remove(requestId, copyState)
+                            }
+                        }
+                    } catch (_: java.util.concurrent.RejectedExecutionException) {
+                        originalCopyStates.remove(requestId, copyState)
+                        result.error("original_copy_busy", "Original file copy queue is full", null)
                     }
                 }
                 "readFileWithRoot" -> {
@@ -976,6 +1076,92 @@ class MainActivity : FlutterActivity() {
         return powerManager.isIgnoringBatteryOptimizations(packageName)
     }
 
+    private fun saveOriginalToGallery(localFile: String): Map<String, Any> {
+        val original = File(localFile).canonicalFile
+        require(original.isFile && original.canRead()) { "Readable local original file is required" }
+        val sourceBytes = original.length()
+        val sourceModified = original.lastModified()
+        require(sourceBytes > 0 && sourceBytes <= 2L * 1024 * 1024 * 1024) { "Original exceeds export size bound" }
+        val header = ByteArray(32)
+        val headerSize = original.inputStream().use { it.read(header) }
+        val type = when {
+            headerSize >= 8 && header[0] == 0x89.toByte() &&
+                header.copyOfRange(1, 8).contentEquals(byteArrayOf(0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a)) -> "png" to "image/png"
+            headerSize >= 3 && header[0] == 0xff.toByte() && header[1] == 0xd8.toByte() && header[2] == 0xff.toByte() -> "jpg" to "image/jpeg"
+            headerSize >= 12 && String(header, 0, 4, Charsets.US_ASCII) == "RIFF" &&
+                String(header, 8, 4, Charsets.US_ASCII) == "WEBP" -> "webp" to "image/webp"
+            headerSize >= 6 && String(header, 0, 6, Charsets.US_ASCII) in listOf("GIF87a", "GIF89a") -> "gif" to "image/gif"
+            headerSize >= 2 && header[0] == 0x42.toByte() && header[1] == 0x4d.toByte() -> "bmp" to "image/bmp"
+            else -> throw IllegalArgumentException("Unsupported original image signature")
+        }
+        val stem = original.nameWithoutExtension.replace(Regex("[^A-Za-z0-9_-]"), "_").take(64).ifBlank { "image" }
+        val displayName = "$stem-${System.currentTimeMillis()}-${UUID.randomUUID()}.${type.first}"
+        val pending = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q
+        val values = ContentValues().apply {
+            put(MediaStore.MediaColumns.DISPLAY_NAME, displayName)
+            put(MediaStore.MediaColumns.MIME_TYPE, type.second)
+            if (pending) {
+                put(MediaStore.MediaColumns.RELATIVE_PATH, "${Environment.DIRECTORY_PICTURES}/PicaKeep")
+                put(MediaStore.MediaColumns.IS_PENDING, 1)
+            }
+        }
+        val uri = contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+            ?: throw IllegalStateException("Unable to create gallery item")
+        try {
+            val digest = MessageDigest.getInstance("SHA-256")
+            var copiedBytes = 0L
+            val buffer = ByteArray(64 * 1024)
+            original.inputStream().use { input ->
+                (contentResolver.openOutputStream(uri, "w")
+                    ?: throw IllegalStateException("Unable to open new gallery item")).use { output ->
+                    while (true) {
+                        check(!Thread.currentThread().isInterrupted) { "Original export interrupted" }
+                        val count = input.read(buffer)
+                        if (count < 0) break
+                        copiedBytes += count
+                        check(copiedBytes <= sourceBytes) { "Original changed during export" }
+                        digest.update(buffer, 0, count)
+                        output.write(buffer, 0, count)
+                    }
+                    output.flush()
+                }
+            }
+            check(copiedBytes == sourceBytes && original.length() == sourceBytes &&
+                original.lastModified() == sourceModified) { "Original changed during export" }
+            val sourceSha = digest.digest().joinToString("") { "%02x".format(it.toInt() and 0xff) }
+            val savedDigest = MessageDigest.getInstance("SHA-256")
+            var savedBytes = 0L
+            (contentResolver.openInputStream(uri)
+                ?: throw IllegalStateException("Unable to verify this gallery item")).use { input ->
+                while (true) {
+                    check(!Thread.currentThread().isInterrupted) { "Original export verification interrupted" }
+                    val count = input.read(buffer)
+                    if (count < 0) break
+                    savedBytes += count
+                    check(savedBytes <= sourceBytes) { "Gallery item size differs from original" }
+                    savedDigest.update(buffer, 0, count)
+                }
+            }
+            val savedSha = savedDigest.digest().joinToString("") { "%02x".format(it.toInt() and 0xff) }
+            check(savedBytes == sourceBytes && savedSha == sourceSha) { "Gallery original failed integrity verification" }
+            if (pending) {
+                check(contentResolver.update(uri, ContentValues().apply {
+                    put(MediaStore.MediaColumns.IS_PENDING, 0)
+                }, null, null) == 1) { "Unable to publish verified gallery item" }
+            }
+            return mapOf("uri" to uri.toString(), "displayName" to displayName,
+                "mimeType" to type.second, "sourceBytes" to sourceBytes, "savedBytes" to savedBytes,
+                "sourceSha256" to sourceSha, "savedSha256" to savedSha,
+                "bytesEqual" to true, "atomicPending" to pending)
+        } catch (error: Throwable) {
+            val cleaned = runCatching { contentResolver.delete(uri, null, null) }
+            if (cleaned.getOrNull() != 1) {
+                throw IllegalStateException("Original export failed; cleanup of its new gallery URI $uri could not be confirmed", error)
+            }
+            throw error
+        }
+    }
+
     private fun hasManageAllFilesAccess(): Boolean {
         return Build.VERSION.SDK_INT < Build.VERSION_CODES.R || Environment.isExternalStorageManager()
     }
@@ -1063,6 +1249,102 @@ class MainActivity : FlutterActivity() {
         }
         return readFileWithCandidates(path, ::rootCandidatePaths) { command ->
             Runtime.getRuntime().exec(arrayOf("su", "-c", command))
+        }
+    }
+
+    private fun startOriginalProcess(command: String, useRoot: Boolean): Process {
+        if (useRoot) {
+            return Runtime.getRuntime().exec(arrayOf("su", "-c", command))
+        }
+        if (!hasShizukuPermission()) throw IllegalStateException("Shizuku 未授权")
+        return newShizukuProcess(arrayOf("sh", "-c", command), null, null)
+    }
+
+    private fun statOriginalFile(path: String, useRoot: Boolean): Map<String, Long>? {
+        val candidates = if (useRoot) rootCandidatePaths(path) else candidatePaths(path)
+        for (candidate in candidates) {
+            val completed = executeTextProcess(startOriginalProcess(
+                "[ -f ${shellEscape(candidate)} ] && stat -c '%s %Y' ${shellEscape(candidate)}", useRoot),
+                PRIVILEGED_PROCESS_TIMEOUT_MS, "original stat")
+            if (completed.exitCode != 0) continue
+            val fields = completed.stdout.trim().split(Regex("\\s+"))
+            val size = fields.getOrNull(0)?.toLongOrNull() ?: continue
+            val modified = fields.getOrNull(1)?.toLongOrNull() ?: continue
+            return mapOf("size" to size, "modifiedMillis" to modified * 1000L)
+        }
+        return null
+    }
+
+    private fun copyOriginalToManaged(
+        path: String, destination: String, maxBytes: Long, useRoot: Boolean,
+        copyState: OriginalCopyState,
+    ): Long {
+        val target = File(destination).canonicalFile
+        val managedRoots = listOf(cacheDir.canonicalFile, filesDir.canonicalFile)
+        require(managedRoots.any { target.path.startsWith(it.path + File.separator) }) {
+            "Original materialisation destination must be inside app-owned storage"
+        }
+        val candidates = if (useRoot) rootCandidatePaths(path) else candidatePaths(path)
+        var lastError: Throwable? = null
+        try {
+            for (candidate in candidates) {
+                if (copyState.cancelled) throw IllegalStateException("Original copy cancelled")
+                val process = startOriginalProcess("cat ${shellEscape(candidate)}", useRoot)
+                copyState.attach(process)
+                // Timeout/cancellation destroy the process, unblocking a read;
+                // they never require buffering its complete stdout.
+                val timeoutTask = Runnable { process.destroyForcibly() }
+                mainHandler.postDelayed(timeoutTask, PRIVILEGED_READ_TIMEOUT_MS)
+                val errors = storageExecutor.submit<String> {
+                    // Keep draining stderr to avoid blocking the child, while
+                    // retaining at most 8 KiB instead of readText then truncation.
+                    process.errorStream.use { input ->
+                        val retained = java.io.ByteArrayOutputStream(8192)
+                        val buffer = ByteArray(8192)
+                        while (true) {
+                            val read = input.read(buffer)
+                            if (read < 0) break
+                            val keep = minOf(read, 8192 - retained.size())
+                            if (keep > 0) retained.write(buffer, 0, keep)
+                        }
+                        retained.toString(Charsets.UTF_8.name())
+                    }
+                }
+                try {
+                    target.parentFile?.mkdirs()
+                    var count = 0L
+                    process.inputStream.use { input ->
+                        target.outputStream().use { output ->
+                            val buffer = ByteArray(64 * 1024)
+                            while (true) {
+                                if (copyState.cancelled || Thread.currentThread().isInterrupted) throw IllegalStateException("Original copy cancelled")
+                                val read = input.read(buffer)
+                                if (read < 0) break
+                                count += read
+                                if (count > maxBytes) throw IllegalStateException("Original input exceeds reserved disk bytes")
+                                output.write(buffer, 0, read)
+                            }
+                            output.flush()
+                        }
+                    }
+                    val code = process.waitFor()
+                    val error = errors.get(1000L, TimeUnit.MILLISECONDS)
+                    if (copyState.cancelled || Thread.currentThread().isInterrupted) throw IllegalStateException("Original copy cancelled")
+                    if (code != 0 || count == 0L) throw IllegalStateException(error.ifBlank { "Original file is unavailable" })
+                    return count
+                } catch (error: Throwable) {
+                    lastError = error
+                    target.delete()
+                    process.destroyForcibly()
+                } finally {
+                    mainHandler.removeCallbacks(timeoutTask)
+                    copyState.detach(process)
+                    errors.cancel(true)
+                }
+            }
+            throw lastError ?: IllegalStateException("Original file is unavailable")
+        } finally {
+            copyState.cancel()
         }
     }
 

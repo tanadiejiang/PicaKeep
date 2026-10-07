@@ -136,20 +136,27 @@ class App {
 
   static Future<void> init({
     String? dataPathOverride,
+    String? cachePathOverride,
     bool migrateExistingData = false,
   }) async {
-    cachePath = (await getApplicationCacheDirectory()).path;
-    final supportDirectory = await getApplicationSupportDirectory();
+    final resolvedCachePath = cachePathOverride?.trim();
+    cachePath = resolvedCachePath != null && resolvedCachePath.isNotEmpty
+        ? Directory(resolvedCachePath).absolute.path
+        : (await getApplicationCacheDirectory()).path;
+    if (resolvedCachePath != null && resolvedCachePath.isNotEmpty) {
+      await Directory(cachePath).create(recursive: true);
+    }
     final resolvedDataPath = dataPathOverride?.trim();
     if (resolvedDataPath != null && resolvedDataPath.isNotEmpty) {
       dataPath = Directory(resolvedDataPath).absolute.path;
       await Directory(dataPath).create(recursive: true);
       if (migrateExistingData) {
+        final supportDirectory = await getApplicationSupportDirectory();
         await _migrateAppDataIfNeeded(supportDirectory.path, dataPath);
       }
       return;
     }
-    dataPath = supportDirectory.path;
+    dataPath = (await getApplicationSupportDirectory()).path;
   }
 
   static back(BuildContext context) {

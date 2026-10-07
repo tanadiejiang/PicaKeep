@@ -201,6 +201,7 @@ class Appdata {
     'ask', //162 pixivFolderDeletePolicy
     '0', //163 illustSearchMatchTags 插画搜索关键词是否同时匹配作品标签：0=只匹配标题/作者（默认，与 56 号搜索面板行为一致）；1=标题/作者/标签任一命中。见 foundation/local_library_illust_view.dart
     '{}', //164 exploreSelectionState Pixiv 探索页分区/入口/榜单范围选择状态 JSON
+    '', //165 readerImagePipelineSettings: versioned original-file reader policy
   ];
 
   List<String> implicitData = [
@@ -250,6 +251,7 @@ class Appdata {
   }
 
   Future<void> readSettings(SharedPreferences s) async {
+    _ensureCurrentSettingsLength();
     var settingsFile = File("${App.dataPath}/settings");
     List<String> st;
     if (settingsFile.existsSync()) {
@@ -267,6 +269,18 @@ class Appdata {
       settings[i] = st[i].toString();
     }
     final loadedSettings = List<String>.from(settings);
+    settings[readerImagePipelineSettingIndex] =
+        normalizeReaderImagePipelineSettings(
+      st.length > readerImagePipelineSettingIndex
+          ? st[readerImagePipelineSettingIndex]
+          : null,
+      legacyComic: st.length > readerHighQualityComicSettingIndex
+          ? st[readerHighQualityComicSettingIndex]
+          : null,
+      legacyIllust: st.length > readerHighQualityIllustSettingIndex
+          ? st[readerHighQualityIllustSettingIndex]
+          : null,
+    );
     if (settings[26].length < 2) {
       settings[26] += "0";
     }
@@ -403,6 +417,22 @@ class Appdata {
   }
 
   Future<void> updateSettings([bool syncData = true]) async {
+    // Settings may still be an old, short array when a component writes before
+    // normal startup/import. Capture missing legacy facts before appending the
+    // new defaults, and preserve every value already present.
+    final readerPolicy =
+        settings.elementAtOrNull(readerImagePipelineSettingIndex);
+    final legacyComic =
+        settings.elementAtOrNull(readerHighQualityComicSettingIndex);
+    final legacyIllust =
+        settings.elementAtOrNull(readerHighQualityIllustSettingIndex);
+    _ensureCurrentSettingsLength();
+    settings[readerImagePipelineSettingIndex] =
+        normalizeReaderImagePipelineSettings(
+      readerPolicy,
+      legacyComic: legacyComic,
+      legacyIllust: legacyIllust,
+    );
     settings[serviceScanCustomPortsSettingIndex] = encodeServiceScanCustomPorts(
       decodeServiceScanCustomPorts(
           settings[serviceScanCustomPortsSettingIndex]),
@@ -417,6 +447,15 @@ class Appdata {
     if (syncData) {}
     final prefs = await SharedPreferences.getInstance();
     await prefs.setStringList("settings", settings);
+  }
+
+  void _ensureCurrentSettingsLength() {
+    if (settings.length > readerImagePipelineSettingIndex) return;
+    final defaults = Appdata().settings;
+    settings = [
+      ...settings,
+      ...defaults.skip(settings.length),
+    ];
   }
 
   void writeFirstUse() async {
@@ -491,11 +530,26 @@ class Appdata {
         return false;
       }
       final newSettings = rawSettings.map((value) => value.toString()).toList();
+      final existingReaderPolicy =
+          settings.elementAtOrNull(readerImagePipelineSettingIndex);
+      _ensureCurrentSettingsLength();
       var downloadPath = settings[22];
       var authRequired = settings[13];
       for (var i = 0; i < settings.length && i < newSettings.length; i++) {
         settings[i] = newSettings[i];
       }
+      settings[readerImagePipelineSettingIndex] =
+          normalizeReaderImagePipelineSettings(
+        newSettings.length > readerImagePipelineSettingIndex
+            ? newSettings[readerImagePipelineSettingIndex]
+            : existingReaderPolicy,
+        legacyComic: newSettings.length > readerHighQualityComicSettingIndex
+            ? newSettings[readerHighQualityComicSettingIndex]
+            : null,
+        legacyIllust: newSettings.length > readerHighQualityIllustSettingIndex
+            ? newSettings[readerHighQualityIllustSettingIndex]
+            : null,
+      );
       settings[managedDataSourceModeSettingIndex] =
           normalizeManagedDataSourceMode(
               settings[managedDataSourceModeSettingIndex]);

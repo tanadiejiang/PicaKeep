@@ -173,15 +173,31 @@ class JmRecombine {
   /// 主 isolate：用 ui 引擎解码 WebP → RGBA 字节 + 尺寸
   static Future<({Uint8List rgba, int width, int height})> _decodeToRgba(
       Uint8List webpBytes) async {
-    final codec = await ui.instantiateImageCodec(webpBytes);
-    final frame = await codec.getNextFrame();
-    final byteData = await frame.image.toByteData(format: ui.ImageByteFormat.rawRgba);
-    final rgba = byteData!.buffer.asUint8List();
-    final w = frame.image.width;
-    final h = frame.image.height;
-    frame.image.dispose();
-    codec.dispose();
-    return (rgba: rgba, width: w, height: h);
+    // Recombination has the source raster, readback, destination, isolate copy
+    // and encoder workspace alive together. Probe before allocating the codec;
+    // a small compressed JPEG/WebP is not evidence of a small working set.
+    final buffer = await ui.ImmutableBuffer.fromUint8List(webpBytes);
+    ui.ImageDescriptor? descriptor;
+    ui.Codec? codec;
+    ui.Image? image;
+    try {
+      descriptor = await ui.ImageDescriptor.encoded(buffer);
+      final estimatedWorking = descriptor.width * descriptor.height * 4 * 6 + webpBytes.length;
+      if (estimatedWorking > 128 * 1024 * 1024) {
+        throw StateError('JM页面重组超出安全内存预算，当前平台无法处理此原文件');
+      }
+      codec = await descriptor.instantiateCodec();
+      final frame = await codec.getNextFrame();
+      image = frame.image;
+      final byteData = await image.toByteData(format: ui.ImageByteFormat.rawRgba);
+      if (byteData == null) throw StateError('JM pixel readback failed');
+      return (rgba: byteData.buffer.asUint8List(), width: image.width, height: image.height);
+    } finally {
+      image?.dispose();
+      codec?.dispose();
+      descriptor?.dispose();
+      buffer.dispose();
+    }
   }
 
   static void _push() {

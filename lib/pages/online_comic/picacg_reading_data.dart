@@ -45,7 +45,17 @@ class PicacgReadingData extends ReadingData {
 
   @override
   Stream<List<int>> loadImageNetwork(int ep, int page, String url) async* {
-    final result = await OnlineImageManager.instance.getImage(url);
+    final result = await OnlineImageManager.instance.getImage(url,
+      cacheIdentity: originalNetworkCacheIdentity(ep, page, url));
     yield* result.stream;
+  }
+
+  @override
+  String buildImageKey(int ep, int page, String url) => originalNetworkCacheIdentity(ep, page, url);
+
+  @override
+  Future<ReaderPageSource> resolvePageSource(int ep, int page, String url) async {
+    if (downloaded && checkEpDownloaded(ep)) return super.resolvePageSource(ep, page, url);
+    return networkPageSource(ep, page, url);
   }
 }

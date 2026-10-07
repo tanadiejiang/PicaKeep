@@ -30,6 +30,7 @@ import 'package:picakeep/tools/translations.dart';
 /// 卡片自身还有 [illustCardGap] 的外边距，两者相加才是视觉上的块间距。
 /// 取 0 让"接近无边框"由卡片外边距单独控制，避免两套间距叠加后互相打架。
 const double illustWaterfallSpacing = 0;
+const EdgeInsets illustWaterfallPadding = EdgeInsets.fromLTRB(2, 0, 2, 96);
 
 /// 插画视图内容区的四种状态（互斥）。
 enum IllustContentState {
@@ -163,7 +164,7 @@ class LocalLibraryIllustSlivers extends StatelessWidget {
               ),
             ),
           IllustContentState.content => SliverPadding(
-              padding: const EdgeInsets.fromLTRB(2, 0, 2, 96),
+              padding: illustWaterfallPadding,
               // Masonry caches column positions / heights by child index.
               // Remapping keyed children after filtering does not invalidate
               // that cache: surviving cards can leave holes or truncate the
