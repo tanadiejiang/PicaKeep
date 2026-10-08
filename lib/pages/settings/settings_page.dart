@@ -37,6 +37,7 @@ import 'package:picakeep/foundation/local_library_settings.dart';
 import 'package:picakeep/foundation/log.dart';
 import 'package:picakeep/foundation/log_file_service.dart';
 import 'package:picakeep/foundation/pixiv_download_naming.dart';
+import 'package:picakeep/foundation/pixiv_bookmark_feedback_settings.dart';
 import 'package:picakeep/foundation/pixiv_download_migration.dart';
 import 'package:picakeep/foundation/pixiv_download_root.dart';
 import 'package:picakeep/foundation/reader_image_quality.dart';

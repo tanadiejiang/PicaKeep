@@ -1,7 +1,13 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:picakeep/components/pixiv_bookmark_button.dart';
+import 'package:picakeep/components/pixiv_bookmark_feedback.dart';
 import 'package:picakeep/comic_source/comic_source.dart';
 import 'package:picakeep/foundation/app_page_route.dart';
 import 'package:picakeep/foundation/pixiv_detail_session.dart';
+import 'package:picakeep/foundation/pixiv_bookmark_state.dart';
 import 'package:picakeep/foundation/comic_tile_display_config.dart';
 import 'package:picakeep/foundation/download_author_resolver.dart';
 import 'package:picakeep/network/base_comic.dart';
@@ -28,12 +34,25 @@ class _BookmarkState {
   bool confirmed = false;
   bool busy = false;
   int revision = 0;
+  int sharedRevision = -1;
 }
 
 /// A feed owns this controller so the same work in different sections shares
-/// confirmed bookmark state and a single write lock. No request happens here
-/// until a user taps the heart.
+/// confirmed bookmark state and a single write lock. Production controllers
+/// also retain account confirmations across feeds and resolve visible unknowns.
 class RecommendationBookmarkController extends ChangeNotifier {
+  RecommendationBookmarkController({
+    PixivBookmarkStateStore? store,
+    this.resolveUnknownStates = false,
+  }) : _store = store {
+    _store?.addListener(_onSharedChanged);
+  }
+
+  RecommendationBookmarkController.shared()
+      : this(store: PixivBookmarkStateStore.shared, resolveUnknownStates: true);
+
+  final PixivBookmarkStateStore? _store;
+  final bool resolveUnknownStates;
   final Map<String, _BookmarkState> _states = {};
   bool _disposed = false;
   int _generation = 0;
@@ -48,6 +67,7 @@ class RecommendationBookmarkController extends ChangeNotifier {
       final isNewInput = value.observedInputs[comic] != true;
       value.observedInputs[comic] = true;
       final incomingConflicts = isNewInput &&
+          _store?.stateFor(account, comic.id) == null &&
           comic.bookmarkStateKnown &&
           (!value.stateKnown ||
               comic.isBookmarked != value.value ||
@@ -71,7 +91,50 @@ class RecommendationBookmarkController extends ChangeNotifier {
         value.canAdd = comic.isBookmarkable;
       }
     }
+    _applySharedState(account, comic.id, value);
     return value;
+  }
+
+  void _applySharedState(String account, String id, _BookmarkState value) {
+    final shared = _store?.stateFor(account, id);
+    final revision = _store?.revisionFor(account, id) ?? -1;
+    if (shared == null || value.busy || revision == value.sharedRevision) {
+      return;
+    }
+    value.sharedRevision = revision;
+    value.value = shared.isBookmarked;
+    value.canAdd = shared.isBookmarkable;
+    value.stateKnown = true;
+    value.confirmed = true;
+    value.revision++;
+  }
+
+  void _onSharedChanged() {
+    if (_disposed) return;
+    for (final entry in _states.entries) {
+      final separator = entry.key.indexOf('\u0000');
+      _applySharedState(entry.key.substring(0, separator),
+          entry.key.substring(separator + 1), entry.value);
+    }
+    notifyListeners();
+  }
+
+  Future<void> ensureConfirmedState({
+    required String account,
+    required PixivComicBrief comic,
+    required Future<Res<PixivBookmarkState>> Function(String id) readState,
+    required bool Function() isCurrentAccount,
+  }) async {
+    if (_disposed || !resolveUnknownStates || account.isEmpty) return;
+    final unknown = !comic.bookmarkStateKnown && comic.canLoadBookmarkState;
+    final stale = _store?.stateFor(account, comic.id) != null &&
+        !(_store?.isFresh(account, comic.id) ?? false);
+    if (!unknown && !stale) return;
+    await _store?.resolve(
+        account: account,
+        id: comic.id,
+        readState: readState,
+        isCurrentAccount: () => !_disposed && isCurrentAccount());
   }
 
   bool isBookmarked(String account, PixivComicBrief comic) =>
@@ -102,7 +165,40 @@ class RecommendationBookmarkController extends ChangeNotifier {
     value.stateKnown = true;
     value.confirmed = true;
     value.revision++;
+    _store?.confirm(account, comic.id, state);
     notifyListeners();
+  }
+
+  /// Read the detail authority without allowing a late response to overwrite a
+  /// newer toggle, feed reset, account, or card identity.
+  Future<void> refreshConfirmedState({
+    required String account,
+    required PixivComicBrief comic,
+    required Future<Res<PixivBookmarkState>> Function(String id) readState,
+    required bool Function() isCurrentAccount,
+  }) async {
+    if (_disposed || !isCurrentAccount()) return;
+    final value = _state(account, comic);
+    if (value.busy) return;
+    final generation = _generation;
+    final revision = value.revision;
+    final sharedRevision = _store?.revisionFor(account, comic.id);
+    try {
+      final state = await readState(comic.id);
+      if (_disposed ||
+          generation != _generation ||
+          revision != value.revision ||
+          sharedRevision != _store?.revisionFor(account, comic.id) ||
+          value.busy ||
+          !isCurrentAccount() ||
+          state.error) {
+        return;
+      }
+      synchronizeConfirmedState(
+          account: account, comic: comic, state: state.data);
+    } catch (_) {
+      // Keep the previously confirmed state when the read is unavailable.
+    }
   }
 
   Future<Res<bool>?> toggle({
@@ -118,7 +214,7 @@ class RecommendationBookmarkController extends ChangeNotifier {
       return null;
     }
     final generation = _generation;
-    final revision = value.revision;
+    final revision = ++value.revision;
     bool isCurrent() =>
         !_disposed &&
         generation == _generation &&
@@ -130,9 +226,24 @@ class RecommendationBookmarkController extends ChangeNotifier {
     bool? target;
     try {
       if (!value.stateKnown) {
-        final state = readState == null
-            ? const Res<PixivBookmarkState>.error('无法读取收藏状态')
-            : await readState(comic.id);
+        Res<PixivBookmarkState> state;
+        if (readState == null) {
+          state = const Res.error('无法读取收藏状态');
+        } else if (_store != null) {
+          // Reuse the visible-card lookup instead of starting a duplicate GET
+          // when the user taps before background confirmation has arrived.
+          await _store.resolve(
+              account: account,
+              id: comic.id,
+              readState: readState,
+              isCurrentAccount: isCurrent);
+          final confirmed = _store.stateFor(account, comic.id);
+          state = confirmed == null
+              ? const Res.error('无法读取收藏状态，请稍后重试')
+              : Res(confirmed);
+        } else {
+          state = await readState(comic.id);
+        }
         if (isCurrent()) {
           if (state.error) {
             result = Res.fromErrorRes(state);
@@ -163,6 +274,8 @@ class RecommendationBookmarkController extends ChangeNotifier {
       value.stateKnown = value.input.bookmarkStateKnown;
       value.canAdd = value.input.isBookmarkable;
       value.confirmed = false;
+      value.sharedRevision = -1;
+      _applySharedState(account, comic.id, value);
       notifyListeners();
       return null;
     }
@@ -170,7 +283,17 @@ class RecommendationBookmarkController extends ChangeNotifier {
       value.value = target;
       value.stateKnown = true;
       value.confirmed = true;
+      // Real network writes already publish the latest capability/privacy.
+      // Preserve that authority; injected writers still publish here.
+      if (_store?.stateFor(account, comic.id)?.isBookmarked != target) {
+        _store?.confirm(
+            account,
+            comic.id,
+            PixivBookmarkState(
+                isBookmarked: target, isBookmarkable: value.canAdd));
+      }
     }
+    _applySharedState(account, comic.id, value);
     notifyListeners();
     return result == null || result.error ? result : Res(target!);
   }
@@ -194,6 +317,7 @@ class RecommendationBookmarkController extends ChangeNotifier {
   void dispose() {
     _disposed = true;
     _generation++;
+    _store?.removeListener(_onSharedChanged);
     super.dispose();
   }
 }
@@ -208,6 +332,7 @@ class OnlineRecommendationCard extends StatefulWidget {
     required this.onAccountsChanged,
     this.onDataRefresh,
     this.actionsEnabled = true,
+    this.feedbackCurrent = true,
     this.blockedBy,
     this.accountIdentity,
     this.isLoggedIn,
@@ -226,6 +351,7 @@ class OnlineRecommendationCard extends StatefulWidget {
   final VoidCallback onAccountsChanged;
   final Future<void> Function()? onDataRefresh;
   final bool actionsEnabled;
+  final bool feedbackCurrent;
   final String? blockedBy;
   final String Function()? accountIdentity;
   final bool Function()? isLoggedIn;
@@ -246,10 +372,16 @@ class OnlineRecommendationCard extends StatefulWidget {
 class _OnlineRecommendationCardState extends State<OnlineRecommendationCard> {
   bool _openingAccounts = false;
   int _generation = 0;
+  int _detailGeneration = 0;
+  bool _resolutionScheduled = false;
+  int _eventSequence = 0;
+  int _operationSequence = 0;
+  PixivBookmarkEvent? _bookmarkEvent;
+  PixivBookmarkFeedbackTicket? _eventTicket;
 
   String get _account =>
       widget.accountIdentity?.call() ??
-      '${widget.source.data['userId'] ?? ''}|${widget.source.data['token'] ?? ''}';
+      pixivBookmarkAccountIdentity(widget.source);
   bool get _loggedIn => widget.isLoggedIn?.call() ?? widget.source.isLoggedIn;
   PixivComicBrief? get _pixiv {
     if (widget.source.key.toLowerCase() != 'pixiv') return null;
@@ -271,11 +403,13 @@ class _OnlineRecommendationCardState extends State<OnlineRecommendationCard> {
       oldWidget.bookmarks.removeListener(_onBookmarkChanged);
       widget.bookmarks.addListener(_onBookmarkChanged);
       _generation++;
+      _detailGeneration++;
       _openingAccounts = false;
     }
     if (oldWidget.comic.id != widget.comic.id ||
         oldWidget.source != widget.source) {
       _generation++;
+      _detailGeneration++;
       _openingAccounts = false;
     }
     if (oldWidget.actionsEnabled && !widget.actionsEnabled) {
@@ -287,6 +421,7 @@ class _OnlineRecommendationCardState extends State<OnlineRecommendationCard> {
   @override
   void dispose() {
     _generation++;
+    _detailGeneration++;
     widget.bookmarks.removeListener(_onBookmarkChanged);
     super.dispose();
   }
@@ -327,14 +462,51 @@ class _OnlineRecommendationCardState extends State<OnlineRecommendationCard> {
       widget.onAccountsChanged();
       return;
     }
+    final host = PixivBookmarkFeedbackHost.maybeOf(context);
+    final ticket = host?.capture(account: account, workId: comic.id);
+    final operationId = ++_operationSequence;
+    final reducedMotion = MediaQuery.disableAnimationsOf(context);
+    bool feedbackCurrent() =>
+        mounted && widget.feedbackCurrent && (ticket?.isCurrent ?? true);
+    PixivBookmarkEvent? beginEvent;
+    void emit(PixivBookmarkPhase phase, {bool? target, bool success = true}) {
+      if (!feedbackCurrent()) return;
+      setState(() {
+        _eventTicket = ticket;
+        _bookmarkEvent = PixivBookmarkEvent(
+          sequence: ++_eventSequence,
+          operationId: operationId,
+          phase: phase,
+          target: target,
+          success: success,
+          begin: phase == PixivBookmarkPhase.settle ? beginEvent : null,
+        );
+        if (phase == PixivBookmarkPhase.begin) beginEvent = _bookmarkEvent;
+      });
+    }
+
+    emit(PixivBookmarkPhase.accepted);
+    ticket?.startWaiting(
+      target: widget.bookmarks.isStateKnown(account, comic)
+          ? !widget.bookmarks.isBookmarked(account, comic)
+          : null,
+    );
+    if (feedbackCurrent() && !reducedMotion) {
+      unawaited(HapticFeedback.selectionClick());
+    }
+    final writer = widget.writeBookmark ??
+        (String id, {required bool isAdding}) =>
+            PixivNetwork().setBookmark(id, isAdding: isAdding);
     final result = await widget.bookmarks.toggle(
       account: account,
       comic: comic,
       readState: widget.loadBookmarkState ??
           (id) => PixivNetwork().getBookmarkState(id),
-      write: widget.writeBookmark ??
-          (id, {required isAdding}) =>
-              PixivNetwork().setBookmark(id, isAdding: isAdding),
+      write: (id, {required isAdding}) {
+        emit(PixivBookmarkPhase.begin, target: isAdding);
+        ticket?.updateWaitingTarget(isAdding);
+        return writer(id, isAdding: isAdding);
+      },
       isCurrentAccount: () =>
           mounted &&
           generation == _generation &&
@@ -348,13 +520,15 @@ class _OnlineRecommendationCardState extends State<OnlineRecommendationCard> {
         _account != account ||
         !identical(_pixiv, comic) ||
         result == null) {
+      ticket?.cancelWaiting();
       return;
     }
-    if (result.error) {
-      _message('操作失败：${result.errorMessageWithoutNull}');
-    } else {
-      _message(result.data ? '已收藏' : '已取消收藏');
-    }
+    emit(PixivBookmarkPhase.settle, success: result.success);
+    ticket?.finish(result.error
+        ? PixivBookmarkFeedbackMessage.failed(result.errorMessageWithoutNull)
+        : result.data
+            ? const PixivBookmarkFeedbackMessage.added()
+            : const PixivBookmarkFeedbackMessage.removed());
   }
 
   void _openAuthor(String id) {
@@ -373,46 +547,36 @@ class _OnlineRecommendationCardState extends State<OnlineRecommendationCard> {
       open();
       return;
     }
-    final generation = _generation;
+    final generation = ++_detailGeneration;
     final account = _account;
     final comic = _pixiv;
+    bool isCurrent() =>
+        mounted && generation == _detailGeneration && _account == account;
     await openOnlineComic(context, widget.source, widget.comic,
         detailSession: widget.detailSessionBuilder?.call());
-    if (!mounted || generation != _generation || _account != account) return;
+    if (!isCurrent()) return;
     await widget.onDataRefresh?.call();
-    if (!mounted ||
-        generation != _generation ||
-        _account != account ||
-        comic == null ||
-        _pixiv?.id != comic.id ||
-        !_loggedIn) {
+    if (!isCurrent() || comic == null || _pixiv?.id != comic.id || !_loggedIn) {
       return;
     }
-    try {
-      final state = await (widget.loadBookmarkState ??
-          (id) => PixivNetwork().getBookmarkState(id))(comic.id);
-      if (!mounted ||
-          generation != _generation ||
-          _account != account ||
-          _pixiv?.id != comic.id ||
-          !_loggedIn ||
-          state.error) {
-        return;
-      }
-      widget.bookmarks.synchronizeConfirmedState(
-        account: account,
-        comic: comic,
-        state: state.data,
-      );
-    } catch (_) {
-      // The detail page remains usable when its return-state refresh fails.
-    }
+    // A parent refresh temporarily disables actions, invalidating write UI
+    // feedback. It must not invalidate this detail-return read for the same
+    // account and work. The controller separately guards newer state changes.
+    await widget.bookmarks.refreshConfirmedState(
+      account: account,
+      comic: comic,
+      readState: widget.loadBookmarkState ??
+          (id) => PixivNetwork().getBookmarkState(id),
+      isCurrentAccount: () =>
+          isCurrent() && _pixiv?.id == comic.id && _loggedIn,
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     final comic = widget.comic;
     final pixiv = _pixiv;
+    _scheduleBookmarkResolution();
     final author = resolveSourceAuthors(
       source: widget.source.key,
       flatTags: comic.tags,
@@ -451,10 +615,16 @@ class _OnlineRecommendationCardState extends State<OnlineRecommendationCard> {
           : widget.bookmarks.isBookmarked(_account, pixiv),
       favoriteStateKnown:
           pixiv == null || widget.bookmarks.isStateKnown(_account, pixiv),
-      favoriteBusy: !widget.actionsEnabled ||
-          _openingAccounts ||
-          (pixiv != null && widget.bookmarks.isBusy(_account, pixiv)),
+      favoriteEnabled: widget.actionsEnabled && !_openingAccounts,
+      favoriteBusy: pixiv != null && widget.bookmarks.isBusy(_account, pixiv),
       favoriteStyle: settings.favoriteStyle,
+      pixivBookmarkAnimations: pixiv != null,
+      favoriteIdentity: (_account, comic.id),
+      favoriteVisualEpoch:
+          PixivBookmarkFeedbackHost.maybeOf(context)?.visualEpoch,
+      favoriteFeedbackCurrent: widget.feedbackCurrent &&
+          (PixivBookmarkFeedbackHost.maybeOf(context)?.isCurrent ?? true),
+      favoriteEvent: (_eventTicket?.isCurrent ?? true) ? _bookmarkEvent : null,
     );
     if (widget.blockedBy == null) return card;
     return Opacity(
@@ -468,5 +638,49 @@ class _OnlineRecommendationCardState extends State<OnlineRecommendationCard> {
         ),
       ]),
     );
+  }
+
+  void _scheduleBookmarkResolution() {
+    if (_resolutionScheduled ||
+        !widget.bookmarks.resolveUnknownStates ||
+        !widget.actionsEnabled ||
+        !_loggedIn ||
+        _pixiv == null) {
+      return;
+    }
+    _resolutionScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted || !widget.actionsEnabled || !_loggedIn) {
+        _resolutionScheduled = false;
+        return;
+      }
+      final comic = _pixiv;
+      if (comic == null) {
+        _resolutionScheduled = false;
+        return;
+      }
+      final account = _account;
+      final controller = widget.bookmarks;
+      await controller.ensureConfirmedState(
+        account: account,
+        comic: comic,
+        readState: widget.loadBookmarkState ??
+            (id) => PixivNetwork().getBookmarkState(id),
+        isCurrentAccount: () =>
+            mounted &&
+            _account == account &&
+            _loggedIn &&
+            widget.actionsEnabled &&
+            identical(controller, widget.bookmarks) &&
+            _pixiv?.id == comic.id,
+      );
+      _resolutionScheduled = false;
+      if (mounted &&
+          (_account != account ||
+              _pixiv?.id != comic.id ||
+              !identical(controller, widget.bookmarks))) {
+        _scheduleBookmarkResolution();
+      }
+    });
   }
 }

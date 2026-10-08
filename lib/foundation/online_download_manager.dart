@@ -365,10 +365,12 @@ class OnlineDownloadManager {
             Map<String, String> headers)?
         chapterFileWriter,
     void Function(String directory, int chapterIndex)? chapterScanObserver,
+    void Function(DownloadNoticeSnapshot snapshot)? noticeObserver,
   })  : _testDownloadRoot = downloadRoot,
         _chapterLoader = chapterLoader,
         _chapterFileWriter = chapterFileWriter,
-        _chapterScanObserver = chapterScanObserver;
+        _chapterScanObserver = chapterScanObserver,
+        _noticeObserver = noticeObserver;
 
   String? _testDownloadRoot;
   Future<Res<List<String>>> Function(String, String, int, String)?
@@ -376,6 +378,7 @@ class OnlineDownloadManager {
   Future<void> Function(String, String, File, Map<String, String>)?
       _chapterFileWriter;
   void Function(String, int)? _chapterScanObserver;
+  void Function(DownloadNoticeSnapshot)? _noticeObserver;
   Future<void> _chapterEnqueueTail = Future<void>.value();
   Future<void>? _chapterQueueLoading;
 
@@ -588,6 +591,12 @@ class OnlineDownloadManager {
     Iterable<DownloadedItem> items, {
     required String context,
   }) async {
+    final supported = items
+        .where((item) =>
+            item.type == DownloadType.ehentai ||
+            item.type == DownloadType.nhentai)
+        .toList(growable: false);
+    if (supported.isEmpty) return;
     try {
       if (!tagTranslationsReady) {
         try {
@@ -600,7 +609,7 @@ class OnlineDownloadManager {
         await UntranslatedTagCoordinator.instance.flushPending();
       }
       final operationId = '$context-${const Uuid().v4()}';
-      for (final item in items) {
+      for (final item in supported) {
         final source = switch (item.type) {
           DownloadType.ehentai => 'ehentai',
           DownloadType.nhentai => 'nhentai',
@@ -1384,6 +1393,13 @@ class OnlineDownloadManager {
 
   Future<void> _commitChapter(
       OnlineDownloadTask task, Directory root, int index, int bytes) async {
+    final elapsed = Stopwatch()..start();
+    void trace(String phase) => LogManager.addLog(
+        LogLevel.info,
+        'OnlineDownloadCompletion',
+        'task=${task.id} chapter=${index + 1} phase=$phase bytes=$bytes '
+            'elapsedMs=${elapsed.elapsedMilliseconds}');
+    trace('files_verified');
     final committed = Completer<void>();
     task._chapterCommitDone = committed;
     final oldCursor = task._chapterResumeIndex;
@@ -1397,6 +1413,7 @@ class OnlineDownloadManager {
     task._chapterBytes[index] = bytes;
     try {
       await _persistChapter(task, root);
+      trace('record_committed');
       // Other lifecycle saves may run while the DB write awaits. They can
       // serialize only the old verified set until this chapter's DB succeeds.
       task._chapterVerified.add(index);
@@ -1407,9 +1424,11 @@ class OnlineDownloadManager {
           .toList();
       task._chapterResumeIndex = pending.isEmpty ? null : pending.first;
       await _saveQueue(requireSuccess: true);
+      trace('queue_committed');
       ImageBackgroundNotifications.committed(p.join(root.path, '${index + 1}'));
       App.notifyLocalDataChanged();
     } catch (_) {
+      trace('commit_failed');
       if (!wasVerified) {
         task._chapterVerified.remove(index);
         task.completedChapters.remove(index);
@@ -1616,6 +1635,11 @@ class OnlineDownloadManager {
         _notify();
       }
       task.completed = true;
+      LogManager.addLog(
+          LogLevel.info,
+          'OnlineDownloadCompletion',
+          'task=${task.id} phase=completed chapters='
+              '${task.completedChapters.length}/${task.requestedChapters.length}');
     } on _OnlineDownloadCancelled {
       if (runGeneration == task.chapterCancellationGeneration &&
           !task.paused &&
@@ -1807,7 +1831,8 @@ class OnlineDownloadManager {
           directory: safeDirectory,
         );
         task.completed = true;
-        ImageBackgroundNotifications.committed(p.join(downloadRoot, safeDirectory));
+        ImageBackgroundNotifications.committed(
+            p.join(downloadRoot, safeDirectory));
         App.notifyLocalDataChanged();
       } else {
         // ── 归档模式（type 1=Original / 2=Resample）───────────────────────
@@ -1925,7 +1950,8 @@ class OnlineDownloadManager {
         );
         task.currentPage = 100;
         task.completed = true;
-        ImageBackgroundNotifications.committed(p.join(downloadRoot, safeDirectory));
+        ImageBackgroundNotifications.committed(
+            p.join(downloadRoot, safeDirectory));
         App.notifyLocalDataChanged();
       }
     } on _OnlineDownloadCancelled catch (_) {
@@ -2043,7 +2069,8 @@ class OnlineDownloadManager {
         directory: safeDirectory,
       );
       task.completed = true;
-      ImageBackgroundNotifications.committed(p.join(downloadRoot, safeDirectory));
+      ImageBackgroundNotifications.committed(
+          p.join(downloadRoot, safeDirectory));
       App.notifyLocalDataChanged();
     } on _OnlineDownloadCancelled catch (_) {
       if (!task.paused && !task.waitingForNetwork) task.cancelled = true;
@@ -2244,7 +2271,8 @@ class OnlineDownloadManager {
       );
       await _deletePixivSourceDir(root);
       task.completed = true;
-      ImageBackgroundNotifications.committed(p.join(downloadRoot, artifactDirectory));
+      ImageBackgroundNotifications.committed(
+          p.join(downloadRoot, artifactDirectory));
       App.notifyLocalDataChanged();
     } on _OnlineDownloadCancelled catch (_) {
       if (!task.paused && !task.waitingForNetwork) task.cancelled = true;
@@ -3043,23 +3071,23 @@ class OnlineDownloadManager {
 
   void _notify() {
     version.value++;
-    if (_testDownloadRoot != null) return;
-    DownloadNotificationController.instance.update(
-      DownloadNoticeSnapshot.fromTasks(
-        _tasks.values.map((task) => DownloadNoticeTask(
-              id: task.id,
-              title: task.taskTitle,
-              progress: task.progress,
-              bytesPerSecond: task.currentSpeed,
-              completed: task.completed,
-              cancelled: task.cancelled,
-              paused: task.paused,
-              error: task.error,
-            )),
-        activeId: _running ? _activeTask?.id : null,
-        networkAvailable: _networkAvailable,
-      ),
+    final snapshot = DownloadNoticeSnapshot.fromTasks(
+      _tasks.values.map((task) => DownloadNoticeTask(
+            id: task.id,
+            title: task.taskTitle,
+            progress: task.progress,
+            bytesPerSecond: task.currentSpeed,
+            completed: task.completed,
+            cancelled: task.cancelled,
+            paused: task.paused,
+            error: task.error,
+          )),
+      activeId: _running ? _activeTask?.id : null,
+      networkAvailable: _networkAvailable,
     );
+    _noticeObserver?.call(snapshot);
+    if (_testDownloadRoot != null) return;
+    DownloadNotificationController.instance.update(snapshot);
   }
 
   /// 解析在线下载根。
@@ -3196,10 +3224,14 @@ class OnlineDownloadManager {
           '$rootPath${Platform.pathSeparator}download.db',
         );
       }
-      await _observeUntranslatedTags([item], context: 'download');
     } finally {
       db.dispose();
     }
+    // Tag collection is derived work, not part of the durable download record.
+    // Start on the next event turn so completion/queue notifications can run
+    // first, and never hold this DB open while a translation asset is loading.
+    unawaited(Future<void>(
+        () => _observeUntranslatedTags([item], context: 'download')));
   }
 
   Database _openDownloadDb(String rootPath) =>

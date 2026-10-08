@@ -30,6 +30,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_staggered_grid_view/flutter_staggered_grid_view.dart';
 
 import 'package:picakeep/base.dart';
+import 'package:picakeep/components/pixiv_bookmark_feedback.dart';
 import 'package:picakeep/comic_source/comic_source.dart';
 import 'package:picakeep/foundation/app.dart';
 import 'package:picakeep/foundation/pixiv_detail_session.dart';
@@ -127,7 +128,7 @@ class _PixivAuthorPageV2State extends State<PixivAuthorPageV2> {
   @override
   void initState() {
     super.initState();
-    _bookmarks = widget.bookmarks ?? RecommendationBookmarkController();
+    _bookmarks = widget.bookmarks ?? RecommendationBookmarkController.shared();
     _scrollController.addListener(_onScroll);
     App.displaySettingsVersion.addListener(_onDisplaySettingsChanged);
     _loadAuthor();
@@ -246,7 +247,8 @@ class _PixivAuthorPageV2State extends State<PixivAuthorPageV2> {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.bookmarks != widget.bookmarks) {
       if (oldWidget.bookmarks == null) _bookmarks.dispose();
-      _bookmarks = widget.bookmarks ?? RecommendationBookmarkController();
+      _bookmarks =
+          widget.bookmarks ?? RecommendationBookmarkController.shared();
     }
     if (oldWidget.uid != widget.uid) {
       _author = null;
@@ -396,31 +398,40 @@ class _PixivAuthorPageV2State extends State<PixivAuthorPageV2> {
           ),
         ],
       ),
-      body: RefreshIndicator(
-        onRefresh: _refresh,
-        child: CustomScrollView(
-          controller: _scrollController,
-          // 内容不足一屏时也要能下拉刷新。
-          physics: const AlwaysScrollableScrollPhysics(),
-          slivers: <Widget>[
-            // 头部（作者资料 + 区块标题）与尾部（加载中/错误/到底）都是 sliver，
-            // 中间的作品墙才是瀑布流本身。
-            SliverToBoxAdapter(child: _buildHeader(context)),
-            SliverPadding(
-              // 与图集页插画瀑布流同样的左右各 2dp：卡片自带 3dp 外边距，
-              // 两者相加才是视觉上的块间距。
-              padding: const EdgeInsets.fromLTRB(2, 0, 2, 24),
-              sliver: SliverMasonryGrid.count(
-                crossAxisCount: _columns,
-                mainAxisSpacing: 0,
-                crossAxisSpacing: 0,
-                childCount: _items.length,
-                itemBuilder: (context, index) =>
-                    _buildWorkCard(context, _items[index]),
+      body: PixivBookmarkFeedbackHost(
+        identity: (
+          widget.uid,
+          widget.accountIdentity?.call() ??
+              (_source == null ? '' : pixivDetailAccountIdentity(_source!)),
+          _generation
+        ),
+        avoidViewInsets: true,
+        child: RefreshIndicator(
+          onRefresh: _refresh,
+          child: CustomScrollView(
+            controller: _scrollController,
+            // 内容不足一屏时也要能下拉刷新。
+            physics: const AlwaysScrollableScrollPhysics(),
+            slivers: <Widget>[
+              // 头部（作者资料 + 区块标题）与尾部（加载中/错误/到底）都是 sliver，
+              // 中间的作品墙才是瀑布流本身。
+              SliverToBoxAdapter(child: _buildHeader(context)),
+              SliverPadding(
+                // 与图集页插画瀑布流同样的左右各 2dp：卡片自带 3dp 外边距，
+                // 两者相加才是视觉上的块间距。
+                padding: const EdgeInsets.fromLTRB(2, 0, 2, 24),
+                sliver: SliverMasonryGrid.count(
+                  crossAxisCount: _columns,
+                  mainAxisSpacing: 0,
+                  crossAxisSpacing: 0,
+                  childCount: _items.length,
+                  itemBuilder: (context, index) =>
+                      _buildWorkCard(context, _items[index]),
+                ),
               ),
-            ),
-            SliverToBoxAdapter(child: _buildFooter(context)),
-          ],
+              SliverToBoxAdapter(child: _buildFooter(context)),
+            ],
+          ),
         ),
       ),
     );

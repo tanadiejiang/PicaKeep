@@ -52,10 +52,17 @@ object DownloadRuntime {
                 when (call.method) {
                     "update", "finish", "cancel" -> {
                         val args = call.arguments as? Map<*, *> ?: emptyMap<Any, Any>()
+                        val previousState = latest["state"]
                         latest = args.entries.associate { it.key.toString() to it.value }
                         if (call.method == "cancel") latest = mapOf("state" to "empty")
                         lastHeartbeat = SystemClock.elapsedRealtime()
                         val state = latest["state"] as? String ?: "empty"
+                        if (call.method != "update" || state != previousState) {
+                            Log.i(
+                                "PicaKeepDownload",
+                                "notification ${call.method}: state=$state completed=${latest["completed"]}/${latest["total"]}",
+                            )
+                        }
                         if (state == "running" || state == "waiting") {
                             dismissed = false
                             if (service != null) {
@@ -364,8 +371,14 @@ class PicaKeepDownloadService : Service() {
     }
 
     private fun stopWithReason(message: String) {
-        DownloadRuntime.fail(message)
-        DownloadRuntime.latest = DownloadRuntime.latest + ("state" to "paused")
+        if (DownloadRuntime.service !== this) return
+        val state = DownloadRuntime.latest["state"]
+        // A late timeout/task-removal callback from a stopping service must
+        // not replace a completion already acknowledged by the Dart queue.
+        if (state == "running" || state == "waiting") {
+            DownloadRuntime.fail(message)
+            DownloadRuntime.latest = DownloadRuntime.latest + ("state" to "paused")
+        }
         releaseCpu()
         if (promoted) stopForeground(STOP_FOREGROUND_DETACH)
         promoted = false

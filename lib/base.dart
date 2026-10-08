@@ -16,6 +16,7 @@ import 'foundation/local_library_settings.dart';
 import 'foundation/log.dart';
 import 'foundation/explore/explore_selection_state.dart';
 import 'foundation/pixiv_download_naming.dart';
+import 'foundation/pixiv_bookmark_feedback_settings.dart';
 import 'foundation/reader_image_quality.dart';
 import 'foundation/history.dart';
 import 'foundation/local_favorites.dart';
@@ -202,6 +203,7 @@ class Appdata {
     '0', //163 illustSearchMatchTags 插画搜索关键词是否同时匹配作品标签：0=只匹配标题/作者（默认，与 56 号搜索面板行为一致）；1=标题/作者/标签任一命中。见 foundation/local_library_illust_view.dart
     '{}', //164 exploreSelectionState Pixiv 探索页分区/入口/榜单范围选择状态 JSON
     '', //165 readerImagePipelineSettings: versioned original-file reader policy
+    '0', //166 pixivBookmarkQueueCounts: 显示收藏队列数量（默认关闭）
   ];
 
   List<String> implicitData = [
@@ -385,6 +387,9 @@ class Appdata {
             settings[illustSearchMatchTagsSettingIndex]);
     settings[exploreSelectionSettingIndex] =
         normalizeExploreSelectionJson(settings[exploreSelectionSettingIndex]);
+    settings[pixivBookmarkQueueCountsSettingIndex] =
+        normalizePixivBookmarkQueueCounts(
+            st.elementAtOrNull(pixivBookmarkQueueCountsSettingIndex));
     setManagedDataSourceMode(settings[managedDataSourceModeSettingIndex]);
     _syncArchiveRuntimeSettings();
     var settingsChanged = hadMissingSettings;
@@ -427,6 +432,9 @@ class Appdata {
     final legacyIllust =
         settings.elementAtOrNull(readerHighQualityIllustSettingIndex);
     _ensureCurrentSettingsLength();
+    settings[pixivBookmarkQueueCountsSettingIndex] =
+        normalizePixivBookmarkQueueCounts(
+            settings[pixivBookmarkQueueCountsSettingIndex]);
     settings[readerImagePipelineSettingIndex] =
         normalizeReaderImagePipelineSettings(
       readerPolicy,
@@ -450,8 +458,8 @@ class Appdata {
   }
 
   void _ensureCurrentSettingsLength() {
-    if (settings.length > readerImagePipelineSettingIndex) return;
     final defaults = Appdata().settings;
+    if (settings.length >= defaults.length) return;
     settings = [
       ...settings,
       ...defaults.skip(settings.length),
@@ -639,6 +647,9 @@ class Appdata {
               settings[illustSearchMatchTagsSettingIndex]);
       settings[exploreSelectionSettingIndex] =
           normalizeExploreSelectionJson(settings[exploreSelectionSettingIndex]);
+      settings[pixivBookmarkQueueCountsSettingIndex] =
+          normalizePixivBookmarkQueueCounts(newSettings
+              .elementAtOrNull(pixivBookmarkQueueCountsSettingIndex));
       setManagedDataSourceMode(settings[managedDataSourceModeSettingIndex]);
       settings[22] = downloadPath;
       settings[13] = authRequired;

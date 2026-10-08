@@ -802,6 +802,7 @@ class _LocalLibraryPageState extends State<LocalLibraryPage>
   Map<String, IllustLibraryEntry> _illustById = {};
   List<IllustLibraryEntry>? _filteredIllustCache;
   String? _filteredIllustCacheKey;
+  List<IllustLibraryEntry>? _illustLayoutEntries;
   int _illustGeneration = 0;
   bool _illustRouteActive = true, _illustAppActive = true;
   int _illustThumbWidth = 0;
@@ -931,7 +932,6 @@ class _LocalLibraryPageState extends State<LocalLibraryPage>
   void _onIllustLayout(int first, int last) {
     if (!mounted || !_isIllustView) return;
     final entries = _filteredIllustEntries;
-    if (entries.isEmpty) return;
     _illustLaidOut = entries
         .skip(first.clamp(0, entries.length))
         .take((last - first + 1).clamp(0, entries.length))
@@ -2979,6 +2979,14 @@ class _LocalLibraryPageState extends State<LocalLibraryPage>
   /// 插画视图的内容 sliver（标签筛选条 + 瀑布流 + 三种状态）。
   Widget _buildIllustContent() {
     final entries = _filteredIllustEntries;
+    if (!identical(entries, _illustLayoutEntries)) {
+      // A zero-result filter removes the masonry, so no new layout callback
+      // follows. Drop its old admission immediately; the new masonry will
+      // report its own range. Keep completed source-bound covers for reuse.
+      _illustLayoutEntries = entries;
+      _illustLaidOut = [];
+      _illustWork.setVisible(const []);
+    }
     final columns = _illustViewWaterfallColumns;
     final ratio = MediaQuery.devicePixelRatioOf(context);
     // Scroll offsets change SliverConstraints every frame. Keep the child

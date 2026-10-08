@@ -97,6 +97,13 @@ Widget buildExploreSettings(double width, BuildContext context) {
       onTap: () => showWaterfallTagSettings(context),
     ),
     SettingsTitle('在线浏览'.tl),
+    SwitchSetting(
+      key: const ValueKey('pixiv-bookmark-queue-counts-setting'),
+      title: '显示 Pixiv 收藏队列数量'.tl,
+      subTitle: '在收藏悬浮提示中显示等待、完成和失败数量'.tl,
+      settingsIndex: pixivBookmarkQueueCountsSettingIndex,
+      onChanged: (_) => App.notifyDisplaySettingsChanged(),
+    ),
     SelectSetting(
       title: "浏览时远程图片并发".tl,
       settingsIndex: remoteBrowseImageConcurrencySettingIndex,

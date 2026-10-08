@@ -1985,6 +1985,17 @@ class _DownloadedComicInfoViewState extends State<DownloadedComicInfoView> {
     return false;
   }
 
+  String get _chapterCountText {
+    if (_isArchive) {
+      return '${eps.length} ${eps.length == 1 ? '章' : '章节'}';
+    }
+    final completed = downloadedEps
+        .where((index) => index >= 0 && index < eps.length)
+        .toSet()
+        .length;
+    return '已下载 $completed / 共 ${eps.length} 章节';
+  }
+
   bool get _canToggleChapterNumber {
     final comic = _comic;
     if (comic is LocalLibraryComicItem) {
@@ -2251,7 +2262,7 @@ class _DownloadedComicInfoViewState extends State<DownloadedComicInfoView> {
                 ],
                 const SizedBox(height: 8),
                 Text(
-                  '${eps.length} ${eps.length == 1 ? '章' : '章节'}',
+                  _chapterCountText,
                   style: theme.textTheme.bodySmall?.copyWith(
                     color: theme.colorScheme.outline,
                   ),

@@ -5,7 +5,10 @@ import 'dart:typed_data';
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:picakeep/foundation/app.dart';
+import 'package:picakeep/foundation/image_pipeline/image_disk_quota.dart';
 import 'package:picakeep/network/online_image/online_image_manager.dart';
+
+import 'support/image_disk_quota_fixture.dart';
 
 class _Adapter implements HttpClientAdapter {
   _Adapter(this.handle);
@@ -22,13 +25,25 @@ class _Adapter implements HttpClientAdapter {
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+  final savedQuota = ImageDiskQuota.overrideForTesting;
   late Directory cache;
+  late ImageDiskQuota quota;
 
   setUpAll(() async {
     cache = await Directory.systemTemp.createTemp('online_cover_errors_');
+    // App.cachePath is late final and initialized once in this suite's isolate.
+    // Only the mutable quota override can be restored after draining its work.
     App.cachePath = cache.path;
+    quota = installTaskDiskQuota(() => [cache.path]);
   });
-  tearDownAll(() async => cache.delete(recursive: true));
+  tearDownAll(() async {
+    try {
+      await quota.drain();
+    } finally {
+      ImageDiskQuota.overrideForTesting = savedQuota;
+      await cache.delete(recursive: true);
+    }
+  });
 
   OnlineImageManager manager(
       Future<ResponseBody> Function(RequestOptions) get) {

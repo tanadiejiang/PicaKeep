@@ -87,11 +87,11 @@ void main() {
     ], activeId: '2');
     expect(snapshot.completed, 1);
     expect(snapshot.percent, 0);
-    expect(
-        DownloadNoticeSnapshot.fromTasks(
-                const [DownloadNoticeTask(id: '1', title: '', completed: true)])
-            .state,
-        DownloadNoticeState.finished);
+    final finished = DownloadNoticeSnapshot.fromTasks(
+        const [DownloadNoticeTask(id: '1', title: '', completed: true)]);
+    expect(finished.state, DownloadNoticeState.finished);
+    expect(finished.percent, 100);
+    expect(finished.toMap()['percent'], 100);
     expect(DownloadNoticeSnapshot.fromTasks(const []).state,
         DownloadNoticeState.empty);
   });
@@ -148,6 +148,77 @@ void main() {
     started.complete();
     await tester.pump();
     expect(sent, ['update', 'finish']);
+  });
+
+  testWidgets('queue handoff stops pending progress and stale heartbeat replay',
+      (tester) async {
+    final sent = <(String, Map<String, Object?>?)>[];
+    final controller = DownloadNotificationController(
+        enabled: true,
+        transport: (method, args) async {
+          sent.add((method, args));
+          return null;
+        });
+    addTearDown(controller.dispose);
+    controller.update(running(percent: 99));
+    await tester.pump();
+    controller.update(running(percent: 100));
+    controller.update(const DownloadNoticeSnapshot(
+        state: DownloadNoticeState.queued, total: 3, completed: 1));
+    await tester.pump(const Duration(seconds: 60));
+    await controller.foregrounded();
+    await tester.pump();
+    expect(sent.where((call) => call.$1 == 'update').length, 1);
+    expect(sent.where((call) => call.$1 == 'finish'), isEmpty);
+
+    controller.update(running(id: 'next', completed: 1));
+    await tester.pump();
+    expect(sent.last.$1, 'update');
+    expect(sent.last.$2!['currentId'], 'next');
+    expect(sent.last.$2!['percent'], 0);
+    controller.update(const DownloadNoticeSnapshot(
+        state: DownloadNoticeState.empty, total: 0, completed: 0));
+    await tester.pump();
+  });
+
+  testWidgets('foreground reconciliation retries a failed terminal delivery',
+      (tester) async {
+    final sent = <(String, Map<String, Object?>?)>[];
+    var failedFinish = false;
+    final controller = DownloadNotificationController(
+        enabled: true,
+        transport: (method, args) async {
+          sent.add((method, args));
+          if (method == 'finish' && !failedFinish) {
+            failedFinish = true;
+            throw StateError('temporary bridge failure');
+          }
+          return null;
+        });
+    addTearDown(controller.dispose);
+    controller.update(running(percent: 99));
+    await tester.pump();
+    controller.update(DownloadNoticeSnapshot.fromTasks(const [
+      DownloadNoticeTask(id: 'first', title: '', completed: true),
+    ]));
+    await tester.pump();
+    expect(controller.warning.value, isNotNull);
+    await tester.pump(const Duration(seconds: 60));
+    expect(sent.where((call) => call.$1 == 'update').length, 1);
+
+    await controller.foregrounded();
+    await tester.pump();
+    expect(sent.last.$1, 'finish');
+    expect(sent.last.$2!['state'], 'finished');
+    expect(sent.last.$2!['completed'], 1);
+    expect(controller.warning.value, isNull);
+    expect(tester.takeException(), isNull);
+
+    controller.markDismissed();
+    final finishCount = sent.where((call) => call.$1 == 'finish').length;
+    await controller.foregrounded();
+    await tester.pump();
+    expect(sent.where((call) => call.$1 == 'finish').length, finishCount);
   });
 
   testWidgets(

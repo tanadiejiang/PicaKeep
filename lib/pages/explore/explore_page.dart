@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_staggered_grid_view/flutter_staggered_grid_view.dart';
 import 'package:picakeep/base.dart';
 import 'package:picakeep/comic_source/comic_source.dart';
+import 'package:picakeep/components/pixiv_bookmark_feedback.dart';
 import 'package:picakeep/foundation/app.dart';
 import 'package:picakeep/foundation/app_page_route.dart';
 import 'package:picakeep/foundation/pixiv_detail_session.dart';
@@ -975,7 +976,9 @@ class _FloatingCapsule extends StatelessWidget {
             : pressed
                 ? colors.primary.withValues(alpha: 0.10)
                 : Colors.transparent)
-        : (selected || pressed ? colors.secondaryContainer : colors.surfaceContainer);
+        : (selected || pressed
+            ? colors.secondaryContainer
+            : colors.surfaceContainer);
     final foreground = floating
         ? (selected ? colors.onSecondaryContainer : colors.onSurfaceVariant)
         : (selected ? colors.onSecondaryContainer : colors.onSurface);
@@ -1043,7 +1046,7 @@ class _ExploreFeed extends StatefulWidget {
 
 class _ExploreFeedState extends State<_ExploreFeed> {
   final _scroll = ScrollController();
-  final _bookmarks = RecommendationBookmarkController();
+  final _bookmarks = RecommendationBookmarkController.shared();
   ExploreOverview? _overview;
   // Virtualize individual comics, not entire recommendation sections. A single
   // section can contain dozens of cards whose metadata is expensive to build.
@@ -1197,7 +1200,7 @@ class _ExploreFeedState extends State<_ExploreFeed> {
           _showRefreshError(result.errorOrNull!);
           return;
         }
-        _bookmarks.reset();
+        _bookmarks.reset(preserveConfirmed: retainContent);
         setState(() {
           _overview = result.dataOrNull;
           _overviewRows = [
@@ -1256,7 +1259,7 @@ class _ExploreFeedState extends State<_ExploreFeed> {
       _showRefreshError(refreshError);
       return;
     }
-    _bookmarks.reset();
+    _bookmarks.reset(preserveConfirmed: retainContent);
     setState(() {
       _overview = null;
       _overviewRows = [];
@@ -1337,12 +1340,22 @@ class _ExploreFeedState extends State<_ExploreFeed> {
                       ? _footer(state)
                       : _comic(source, items[i].comic));
     }
-    return Column(children: [
-      if (widget.entry.kind == ExploreSectionKind.ranking &&
-          widget.descriptor.sourceKey == 'ehentai')
-        exploreHintBar(context, widget.entry.description),
-      Expanded(child: RefreshIndicator(onRefresh: _load, child: body)),
-    ]);
+    return PixivBookmarkFeedbackHost(
+      active: widget.active && _contextMatches,
+      identity: (
+        widget.descriptor.sourceKey,
+        widget.entry.id,
+        widget.options,
+        _generation,
+        source == null ? '' : pixivDetailAccountIdentity(source)
+      ),
+      child: Column(children: [
+        if (widget.entry.kind == ExploreSectionKind.ranking &&
+            widget.descriptor.sourceKey == 'ehentai')
+          exploreHintBar(context, widget.entry.description),
+        Expanded(child: RefreshIndicator(onRefresh: _load, child: body)),
+      ]),
+    );
   }
 
   List<({BaseComic comic, String? blockedBy})> _recommendItems(
@@ -1376,6 +1389,7 @@ class _ExploreFeedState extends State<_ExploreFeed> {
             blockedBy: item.blockedBy,
             bookmarks: _bookmarks,
             actionsEnabled: !_loading,
+            feedbackCurrent: widget.active && _contextMatches,
             onAccountsChanged: () {
               widget.onContextChanged();
               if (_contextMatches) {

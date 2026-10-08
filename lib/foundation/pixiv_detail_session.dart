@@ -151,11 +151,24 @@ class PixivDetailSessionScope extends InheritedNotifier<PixivDetailSession> {
 }
 
 class PixivDetailEntryScope extends InheritedWidget {
-  const PixivDetailEntryScope(
-      {super.key, required this.entry, required super.child});
+  const PixivDetailEntryScope({
+    super.key,
+    required this.entry,
+    required super.child,
+    this.isActive = true,
+  });
   final PixivDetailEntry entry;
+
+  /// Gates visual feedback only; pending writes still settle normally.
+  final bool isActive;
+
+  static bool isActiveOf(BuildContext context) =>
+      context
+          .dependOnInheritedWidgetOfExactType<PixivDetailEntryScope>()
+          ?.isActive ??
+      true;
 
   @override
   bool updateShouldNotify(PixivDetailEntryScope oldWidget) =>
-      oldWidget.entry != entry;
+      oldWidget.entry != entry || oldWidget.isActive != isActive;
 }

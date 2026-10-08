@@ -2,7 +2,9 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:picakeep/components/pixiv_bookmark_feedback.dart';
 import 'package:picakeep/comic_source/comic_source.dart';
+import 'package:picakeep/foundation/pixiv_bookmark_state.dart';
 import 'package:picakeep/network/jm_network/jm_models.dart';
 import 'package:picakeep/network/pixiv_network/pixiv_parsing.dart';
 import 'package:picakeep/network/res.dart';
@@ -68,25 +70,84 @@ void main() {
   }) =>
       tester.pumpWidget(MaterialApp(
           home: Scaffold(
-              body: SizedBox(
-        width: 180,
-        child: OnlineRecommendationCard(
-          source: source,
-          comic: comic ?? _comic(),
-          bookmarks: bookmarks,
-          onAccountsChanged: accountsChanged ?? () {},
-          writeBookmark: write,
-          loadBookmarkState: loadBookmarkState,
-          isLoggedIn: loggedIn,
-          accountIdentity: account,
-          manageAccounts: manage,
-          onOpenDetail: detail,
-          onOpenAuthor: author,
-          onDataRefresh: refresh,
-          actionsEnabled: actionsEnabled,
-          isAuthorPage: isAuthorPage,
-        ),
-      ))));
+              body: PixivBookmarkFeedbackHost(
+                  child: Align(
+                      alignment: Alignment.topLeft,
+                      child: SizedBox(
+                        width: 180,
+                        child: OnlineRecommendationCard(
+                          source: source,
+                          comic: comic ?? _comic(),
+                          bookmarks: bookmarks,
+                          onAccountsChanged: accountsChanged ?? () {},
+                          writeBookmark: write,
+                          loadBookmarkState: loadBookmarkState,
+                          isLoggedIn: loggedIn,
+                          accountIdentity: account,
+                          manageAccounts: manage,
+                          onOpenDetail: detail,
+                          onOpenAuthor: author,
+                          onDataRefresh: refresh,
+                          actionsEnabled: actionsEnabled,
+                          isAuthorPage: isAuthorPage,
+                        ),
+                      ))))));
+
+  testWidgets(
+      'visible unknown state resolves without write UI and survives a new adapter',
+      (tester) async {
+    final store = PixivBookmarkStateStore();
+    addTearDown(store.dispose);
+    bookmarks.dispose();
+    bookmarks = RecommendationBookmarkController(
+        store: store, resolveUnknownStates: true);
+    final pending = Completer<Res<PixivBookmarkState>>();
+    var reads = 0, writes = 0;
+    Future<Res<PixivBookmarkState>> read(String _) {
+      reads++;
+      return pending.future;
+    }
+
+    Future<Res<bool>> write(String _, {required bool isAdding}) async {
+      writes++;
+      return Res(isAdding);
+    }
+
+    await pump(tester,
+        comic: _comic(stateKnown: false),
+        loadBookmarkState: read,
+        write: write,
+        loggedIn: () => true);
+    await tester.pumpAndSettle();
+    var card =
+        tester.widget<OnlineWaterfallCard>(find.byType(OnlineWaterfallCard));
+    expect(reads, 1);
+    expect(card.favoriteBusy, isFalse);
+    expect(card.favoriteStateKnown, isFalse);
+    expect(find.byKey(const Key('waterfall-favorite-progress')), findsNothing);
+    pending.complete(Res(_info(marked: true)));
+    await tester.pumpAndSettle();
+    card = tester.widget<OnlineWaterfallCard>(find.byType(OnlineWaterfallCard));
+    expect(card.isFavorited, isTrue);
+    expect(card.favoriteStateKnown, isTrue);
+    expect(writes, 0);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    bookmarks.dispose();
+    bookmarks = RecommendationBookmarkController(
+        store: store, resolveUnknownStates: true);
+    await pump(tester,
+        comic: _comic(stateKnown: false),
+        loadBookmarkState: read,
+        write: write,
+        loggedIn: () => true);
+    await tester.pumpAndSettle();
+    card = tester.widget<OnlineWaterfallCard>(find.byType(OnlineWaterfallCard));
+    expect(card.isFavorited, isTrue);
+    expect(card.favoriteBusy, isFalse);
+    expect(reads, 1, reason: '重新进入页面复用已确认状态');
+    expect(writes, 0);
+  });
 
   testWidgets('duplicate cards share confirmed state and a single write lock',
       (tester) async {
@@ -204,6 +265,40 @@ void main() {
     expect(bookmarks.isStateKnown(account, unknown), isTrue);
     expect(bookmarks.canToggle(account, unknown), isTrue);
   });
+
+  for (final invalidation in ['toggle', 'reset', 'account', 'confirmation']) {
+    test('late detail read cannot overwrite newer $invalidation', () async {
+      const account = 'account-99';
+      final comic = _comic(marked: true);
+      bookmarks.synchronizeConfirmedState(
+          account: account, comic: comic, state: _info(marked: true));
+      final pendingRead = Completer<Res<PixivBookmarkState>>();
+      var current = true;
+      final refresh = bookmarks.refreshConfirmedState(
+          account: account,
+          comic: comic,
+          readState: (_) => pendingRead.future,
+          isCurrentAccount: () => current);
+      if (invalidation == 'toggle') {
+        await bookmarks.toggle(
+            account: account,
+            comic: comic,
+            write: (_, {required isAdding}) async => Res(isAdding),
+            isCurrentAccount: () => true);
+      } else if (invalidation == 'reset') {
+        bookmarks.reset();
+        expect(bookmarks.isBookmarked(account, _comic()), isFalse);
+      } else {
+        if (invalidation == 'account') current = false;
+        bookmarks.synchronizeConfirmedState(
+            account: account, comic: comic, state: _info(marked: false));
+      }
+      pendingRead.complete(Res(_info(marked: true)));
+      await refresh;
+      expect(bookmarks.isBookmarked(account, _comic()), isFalse);
+      expect(bookmarks.isBusy(account, comic), isFalse);
+    });
+  }
 
   test('conflicting known update rejects a late write result', () async {
     final pendingWrite = Completer<Res<bool>>();
@@ -450,7 +545,7 @@ void main() {
     await tester.tap(find.byKey(const Key('waterfall-favorite')));
     await tester.pumpAndSettle();
     expect(writes, 0);
-    expect(find.text('操作失败：offline'), findsOneWidget);
+    expect(find.text('收藏失败：offline'), findsOneWidget);
   });
 
   testWidgets('ranking bookmark read from a previous account cannot write',
@@ -708,8 +803,9 @@ void main() {
 
     await tester.tap(find.byKey(const Key('waterfall-favorite')));
     await tester.pump();
-    expect(
-        find.byKey(const Key('waterfall-favorite-progress')), findsOneWidget);
+    expect(find.text('正在读取收藏状态…'), findsOneWidget);
+    await tester.pump(const Duration(milliseconds: 180));
+    expect(find.text('正在读取收藏状态…'), findsOneWidget);
     await tester.tap(find.byKey(const Key('waterfall-favorite')));
     expect(writes, isEmpty, reason: '收藏态读取期间不提前提交或重复提交');
 
@@ -717,8 +813,7 @@ void main() {
     await tester.pump();
     await tester.pump();
     expect(writes, [true], reason: '同一次点击完成状态读取与添加');
-    expect(
-        find.byKey(const Key('waterfall-favorite-progress')), findsOneWidget);
+    expect(find.text('正在提交收藏…'), findsOneWidget);
 
     pendingWrite.complete(const Res(true));
     await tester.pumpAndSettle();
@@ -752,7 +847,7 @@ void main() {
             .widget<OnlineWaterfallCard>(find.byType(OnlineWaterfallCard))
             .isFavorited,
         isTrue);
-    expect(find.text('操作失败：写入失败'), findsOneWidget);
+    expect(find.textContaining('收藏失败：写入失败'), findsOneWidget);
   });
 
   testWidgets('login returns to refreshed data without automatically writing',
@@ -885,7 +980,8 @@ void main() {
     var card =
         tester.widget<OnlineWaterfallCard>(find.byType(OnlineWaterfallCard));
     expect(card.isFavorited, isTrue);
-    expect(card.favoriteBusy, isTrue);
+    expect(card.favoriteBusy, isFalse);
+    expect(card.favoriteEnabled, isFalse);
     card.onToggleFavorite!();
     expect(writes, 1);
     bookmarks.reset();
@@ -924,6 +1020,122 @@ void main() {
     expect(card.width, isNull);
     expect(card.aspectRatio, 3 / 4);
   });
+
+  for (final returned in [true, false, null]) {
+    testWidgets(
+        'detail return reads authority after a cross-frame feed refresh: $returned',
+        (tester) async {
+      source = ComicSource.named(
+          key: 'pixiv',
+          name: 'Pixiv',
+          comicPageBuilder: (_) =>
+              Scaffold(appBar: AppBar(), body: const Text('实际详情')));
+      const account = 'account-99';
+      var comic = _comic(stateKnown: false);
+      bookmarks.synchronizeConfirmedState(
+          account: account, comic: comic, state: _info(marked: true));
+      final refreshDone = Completer<void>();
+      var enabled = true;
+      var reads = 0;
+      late StateSetter rebuild;
+      await tester.pumpWidget(MaterialApp(
+          home: Scaffold(body: StatefulBuilder(builder: (context, setState) {
+        rebuild = setState;
+        return SizedBox(
+            width: 180,
+            child: OnlineRecommendationCard(
+              source: source,
+              comic: comic,
+              bookmarks: bookmarks,
+              accountIdentity: () => account,
+              isLoggedIn: () => true,
+              onAccountsChanged: () {},
+              actionsEnabled: enabled,
+              onDataRefresh: () {
+                bookmarks.reset(preserveConfirmed: true);
+                rebuild(() => enabled = false);
+                return refreshDone.future;
+              },
+              loadBookmarkState: (_) async {
+                reads++;
+                return returned == null
+                    ? const Res.error('offline')
+                    : Res(_info(marked: returned));
+              },
+            ));
+      }))));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('作品1'));
+      await tester.pumpAndSettle();
+      await tester.pageBack();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 500));
+      var card =
+          tester.widget<OnlineWaterfallCard>(find.byType(OnlineWaterfallCard));
+      expect(card.favoriteBusy, isFalse);
+      expect(card.favoriteEnabled, isFalse);
+      expect(card.isFavorited, isTrue);
+      expect(reads, 0);
+
+      bookmarks.reset(preserveConfirmed: true);
+      rebuild(() {
+        comic = _comic(stateKnown: false);
+        enabled = true;
+      });
+      refreshDone.complete();
+      await tester.pumpAndSettle();
+      card =
+          tester.widget<OnlineWaterfallCard>(find.byType(OnlineWaterfallCard));
+      expect(reads, 1, reason: '刷新暂时禁用动作不能取消详情返回的权威读态');
+      expect(card.isFavorited, returned ?? true,
+          reason: '明确取消必须更新；读取失败保留此前确认状态');
+      expect(card.favoriteStateKnown, isTrue);
+      expect(card.favoriteBusy, isFalse);
+      expect(tester.takeException(), isNull);
+    });
+  }
+
+  for (final invalidation in ['account', 'comic', 'dispose']) {
+    testWidgets('late detail response ignores changed $invalidation',
+        (tester) async {
+      source = ComicSource.named(
+          key: 'pixiv',
+          name: 'Pixiv',
+          comicPageBuilder: (_) =>
+              Scaffold(appBar: AppBar(), body: const Text('实际详情')));
+      var account = 'account-99';
+      final pendingRead = Completer<Res<PixivBookmarkState>>();
+      var reads = 0;
+      await pump(tester,
+          account: () => account,
+          loggedIn: () => true,
+          loadBookmarkState: (_) {
+            reads++;
+            return pendingRead.future;
+          });
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('作品1'));
+      await tester.pumpAndSettle();
+      await tester.pageBack();
+      await tester.pumpAndSettle();
+      expect(reads, 1);
+      if (invalidation == 'account') {
+        account = 'account-100';
+      } else if (invalidation == 'comic') {
+        await pump(tester,
+            comic: _comic(id: '2'),
+            account: () => account,
+            loggedIn: () => true);
+      } else {
+        await tester.pumpWidget(const SizedBox());
+      }
+      pendingRead.complete(Res(_info(marked: true)));
+      await tester.pumpAndSettle();
+      expect(bookmarks.isBookmarked('account-99', _comic()), isFalse);
+      expect(bookmarks.isBookmarked(account, _comic(id: '2')), isFalse);
+      expect(tester.takeException(), isNull);
+    });
+  }
 
   testWidgets('registered detail routing refreshes after returning',
       (tester) async {

@@ -12,6 +12,7 @@ import 'package:picakeep/components/components.dart';
 import 'package:picakeep/foundation/app.dart';
 import 'package:picakeep/foundation/history.dart';
 import 'package:picakeep/foundation/local_favorites.dart';
+import 'package:picakeep/foundation/pixiv_bookmark_state.dart';
 import 'package:picakeep/foundation/comic_tile_display_config.dart';
 import 'package:picakeep/foundation/explore/explore_bindings.dart';
 import 'package:picakeep/foundation/explore/explore_models.dart';
@@ -237,6 +238,7 @@ void main() {
     await temp.delete(recursive: true);
   });
   setUp(() {
+    PixivBookmarkStateStore.shared.clear();
     sources = List.of(ComicSource.sources);
     settings = List.of(appdata.settings);
     keywords = List.of(appdata.blockingKeyword);
@@ -674,6 +676,84 @@ void main() {
   });
 
   for (final paged in [false, true]) {
+    testWidgets(
+        '${paged ? 'ranking' : 'overview'} refresh preserves confirmed hearts when new briefs omit bookmark data',
+        (tester) async {
+      PixivComicBrief unknown(String id) =>
+          (_comic(id) as PixivComicBrief).copyWith(bookmarkStateKnown: false);
+      provider.first = [unknown('first'), unknown('second')];
+      provider.sections = [
+        ExploreSection(
+            id: 's', title: '推荐区', entryId: 'pixiv.home', items: provider.first)
+      ];
+      ComicSource.sources[0] = ComicSource.named(
+          key: 'pixiv',
+          name: '测试Pixiv',
+          data: {'token': 'fixture'},
+          comicPageBuilder: (_) =>
+              Scaffold(appBar: AppBar(), body: const Text('实际详情')));
+      await pump(tester);
+      if (paged) await selectTab(tester, '榜单');
+      var cards = tester
+          .widgetList<OnlineRecommendationCard>(
+              find.byType(OnlineRecommendationCard))
+          .toList();
+      for (final card in cards) {
+        card.bookmarks.synchronizeConfirmedState(
+            account: 'fixture',
+            comic: card.comic as PixivComicBrief,
+            state: const PixivBookmarkState(
+                isBookmarked: true, isBookmarkable: true));
+      }
+      await tester.pumpAndSettle();
+      expect(
+          tester
+              .widgetList<OnlineWaterfallCard>(find.byType(OnlineWaterfallCard))
+              .every((card) => card.isFavorited),
+          isTrue);
+      await tester.tap(find.text('作品first'));
+      await tester.pumpAndSettle();
+      provider.pendingOverview = Completer<ExploreResult<ExploreOverview>>();
+      provider.pendingComics = Completer<ExploreResult<ExploreComicPage>>();
+      await tester.pageBack();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 500));
+      expect(
+          tester
+              .widgetList<OnlineWaterfallCard>(find.byType(OnlineWaterfallCard))
+              .every((card) =>
+                  card.isFavorited &&
+                  !card.favoriteBusy &&
+                  !card.favoriteEnabled),
+          isTrue);
+      final refreshed = [unknown('first'), unknown('second')];
+      if (paged) {
+        provider.pendingComics!.complete(ExploreSuccess(ExploreComicPage(
+            sourceKey: 'pixiv',
+            entryId: provider.rankingId,
+            items: refreshed)));
+      } else {
+        provider.pendingOverview!.complete(ExploreSuccess(ExploreOverview(
+            sourceKey: 'pixiv',
+            entryId: provider.recommendId,
+            sections: [
+              ExploreSection(
+                  id: 's',
+                  title: '推荐区',
+                  entryId: provider.recommendId,
+                  items: refreshed)
+            ])));
+      }
+      await tester.pumpAndSettle();
+      expect(
+          tester
+              .widgetList<OnlineWaterfallCard>(find.byType(OnlineWaterfallCard))
+              .every((card) => card.isFavorited && !card.favoriteBusy),
+          isTrue,
+          reason: '选中作品读态失败和未点开的邻作都必须保留确认态');
+      expect(tester.takeException(), isNull);
+    });
+
     testWidgets(
         '${paged ? 'paged' : 'overview'} detail return refresh keeps deep scroll with the real route observer',
         (tester) async {

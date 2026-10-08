@@ -4,10 +4,13 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_staggered_grid_view/flutter_staggered_grid_view.dart';
 import 'package:picakeep/comic_source/comic_source.dart';
+import 'package:picakeep/components/pixiv_bookmark_button.dart';
+import 'package:picakeep/components/pixiv_bookmark_feedback.dart';
 import 'package:picakeep/foundation/app.dart';
 import 'package:picakeep/foundation/app_page_route.dart';
 import 'package:picakeep/foundation/online_download_manager.dart';
 import 'package:picakeep/foundation/pixiv_detail_session.dart';
+import 'package:picakeep/foundation/pixiv_bookmark_state.dart';
 import 'package:picakeep/network/pixiv_network/pixiv_network.dart';
 import 'package:picakeep/network/pixiv_network/pixiv_parsing.dart';
 import 'package:picakeep/network/res.dart';
@@ -33,6 +36,9 @@ class PixivOnlineDetailView extends StatefulWidget {
     required this.onDownloadLongPress,
     required this.onTagTap,
     this.loadAuthor,
+    this.bookmarkStore,
+    this.accountIdentity,
+    this.isLoggedIn,
   });
 
   final String comicId;
@@ -44,6 +50,9 @@ class PixivOnlineDetailView extends StatefulWidget {
   final void Function(BuildContext, PixivComicInfo) onDownloadLongPress;
   final void Function(BuildContext, String, String) onTagTap;
   final Future<Res<PixivAuthor>> Function(String)? loadAuthor;
+  final PixivBookmarkStateStore? bookmarkStore;
+  final String Function()? accountIdentity;
+  final bool Function()? isLoggedIn;
 
   @override
   State<PixivOnlineDetailView> createState() => _PixivOnlineDetailViewState();
@@ -54,7 +63,8 @@ class _PixivOnlineDetailViewState extends State<PixivOnlineDetailView> {
     'Referer': 'https://www.pixiv.net/',
     'User-Agent': PixivNetwork.pixivWebUA,
   };
-  final _bookmarks = RecommendationBookmarkController();
+  late final PixivBookmarkStateStore _bookmarkStore;
+  late final RecommendationBookmarkController _bookmarks;
   PixivComicInfo? _data;
   List<PixivPage> _pages = const [];
   List<PixivDetailImage> _images = const [];
@@ -70,20 +80,21 @@ class _PixivOnlineDetailViewState extends State<PixivOnlineDetailView> {
   String? _authorError;
   int _generation = 0;
   String _loadedAccount = '';
+  int _bookmarkSequence = 0;
+  int _bookmarkOperationGeneration = 0;
+  PixivBookmarkEvent? _bookmarkEvent;
+  bool _entryActive = true;
 
-  String get _account {
-    // Widget tests and offline previews may not initialize App.dataPath. An
-    // unavailable local cookie store is equivalent to a logged-out account.
-    try {
-      return PixivNetwork().storedPhpSessId ?? '';
-    } catch (_) {
-      return '';
-    }
-  }
+  String get _account =>
+      widget.accountIdentity?.call() ?? pixivBookmarkAccountIdentity();
 
   @override
   void initState() {
     super.initState();
+    _bookmarkStore = widget.bookmarkStore ?? PixivBookmarkStateStore.shared;
+    _bookmarks = RecommendationBookmarkController(
+        store: _bookmarkStore, resolveUnknownStates: true);
+    _bookmarkStore.addListener(_onBookmarkChanged);
     App.localDataVersion.addListener(_onLocalChanged);
     _load();
   }
@@ -92,11 +103,33 @@ class _PixivOnlineDetailViewState extends State<PixivOnlineDetailView> {
     if (mounted) setState(() {});
   }
 
+  void _onBookmarkChanged() {
+    if (!mounted ||
+        _favoriteBusy ||
+        _data == null ||
+        _loadedAccount != _account) {
+      return;
+    }
+    final state = _bookmarkStore.stateFor(_account, _data!.id);
+    if (state != null && _favorite != state.isBookmarked) {
+      setState(() => _favorite = state.isBookmarked);
+    }
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final active = PixivDetailEntryScope.isActiveOf(context);
+    if (_entryActive != active) _bookmarkEvent = null;
+    _entryActive = active;
+  }
+
   @override
   void dispose() {
     _generation++;
     App.localDataVersion.removeListener(_onLocalChanged);
     _bookmarks.dispose();
+    _bookmarkStore.removeListener(_onBookmarkChanged);
     super.dispose();
   }
 
@@ -105,6 +138,7 @@ class _PixivOnlineDetailViewState extends State<PixivOnlineDetailView> {
     final account = _account;
     setState(() {
       _loading = true;
+      _bookmarkEvent = null;
       _error = null;
       _author = null;
       _authorLoading = false;
@@ -120,7 +154,9 @@ class _PixivOnlineDetailViewState extends State<PixivOnlineDetailView> {
       if (result.error) throw StateError(result.errorMessageWithoutNull);
       setState(() {
         _data = result.data;
-        _favorite = result.data.isBookmarked;
+        _favorite =
+            _bookmarkStore.stateFor(account, result.data.id)?.isBookmarked ??
+                result.data.isBookmarked;
         _loadedAccount = account;
         _loading = false;
       });
@@ -199,47 +235,132 @@ class _PixivOnlineDetailViewState extends State<PixivOnlineDetailView> {
     }, growable: false);
   }
 
-  Future<void> _favoriteAction({bool isPrivate = false}) async {
+  Future<void> _favoriteAction(BuildContext feedbackContext,
+      {bool isPrivate = false}) async {
     if (_favoriteBusy || _data == null) return;
-    if (!PixivNetwork().isLoggedIn) {
+    final feedback = PixivBookmarkFeedbackHost.maybeOf(feedbackContext);
+    final ticket = feedback?.capture(account: _account, workId: _data!.id);
+    if (!(widget.isLoggedIn?.call() ?? PixivNetwork().isLoggedIn)) {
       await showAccountsPage(context);
       if (mounted) await _load();
       return;
     }
     if (_loadedAccount != _account) {
-      _message('账号已变化，请刷新后重新操作');
-      await _load();
+      final wasCurrent = ticket?.isCurrent ?? false;
+      final account = _account;
+      final reload = _load();
+      final generation = _generation;
+      // This is an immediate rejected click, not a late write result. Capture
+      // its refreshed identity after the host has rebuilt for the new account.
+      await WidgetsBinding.instance.endOfFrame;
+      if (mounted &&
+          feedbackContext.mounted &&
+          wasCurrent &&
+          _entryActive &&
+          generation == _generation &&
+          account == _account) {
+        PixivBookmarkFeedbackHost.maybeOf(feedbackContext)
+            ?.capture(account: account, workId: widget.comicId)
+            .show(PixivBookmarkFeedbackMessage.failed('账号已变化，请刷新后重新操作'));
+      }
+      await reload;
       return;
     }
     final data = _data!;
     if (!_favorite && data.isBookmarkable != true) {
-      _message('暂时无法确认此作品可收藏，请刷新');
+      ticket?.show(PixivBookmarkFeedbackMessage.failed('暂时无法确认此作品可收藏，请刷新'));
       return;
     }
     final generation = _generation;
     final account = _account;
     final target = !_favorite;
-    setState(() => _favoriteBusy = true);
+    final operationId = ++_bookmarkOperationGeneration;
+    PixivBookmarkEvent? begin;
+    setState(() {
+      _favoriteBusy = true;
+      if (_entryActive && (ticket?.isCurrent ?? false)) {
+        _bookmarkEvent = begin = PixivBookmarkEvent(
+          sequence: ++_bookmarkSequence,
+          operationId: operationId,
+          phase: PixivBookmarkPhase.begin,
+          target: target,
+        );
+      }
+    });
     try {
+      ticket?.startWaiting(target: target);
+      if (_entryActive &&
+          (ticket?.isCurrent ?? false) &&
+          !MediaQuery.disableAnimationsOf(feedbackContext)) {
+        unawaited(HapticFeedback.selectionClick());
+      }
       final result = await widget.writeBookmark(data.id,
           isAdding: target, isPrivate: isPrivate);
       if (!mounted || generation != _generation || account != _account) return;
       if (result.error) {
-        _message('操作失败：${result.errorMessageWithoutNull}');
+        _restoreBookmarkAuthority(account, data.id);
+        _bookmarkResult(ticket, operationId, false,
+            PixivBookmarkFeedbackMessage.failed(result.errorMessageWithoutNull),
+            begin: begin);
       } else {
         setState(() => _favorite = target);
+        if (_bookmarkStore.stateFor(account, data.id)?.isBookmarked != target) {
+          _bookmarkStore.confirm(
+              account,
+              data.id,
+              PixivBookmarkState(
+                  isBookmarked: target,
+                  isBookmarkable: data.isBookmarkable == true,
+                  bookmarkPrivate: target ? isPrivate : null));
+        }
         PixivDetailSessionScope.maybeOf(context)?.invalidatePagination();
-        _message(!target
-            ? '已取消收藏'
-            : isPrivate
-                ? '已加入私密收藏，可在Pixiv私密收藏查看'
-                : '已加入公开收藏');
+        _bookmarkResult(
+          ticket,
+          operationId,
+          true,
+          !target
+              ? const PixivBookmarkFeedbackMessage.removed()
+              : isPrivate
+                  ? const PixivBookmarkFeedbackMessage.privateAdded()
+                  : const PixivBookmarkFeedbackMessage.added(),
+          begin: begin,
+        );
       }
+    } catch (error) {
+      if (!mounted || generation != _generation || account != _account) return;
+      _restoreBookmarkAuthority(account, data.id);
+      _bookmarkResult(ticket, operationId, false,
+          PixivBookmarkFeedbackMessage.failed(error.toString()),
+          begin: begin);
     } finally {
+      ticket?.cancelWaiting();
       if (mounted) {
         setState(() => _favoriteBusy = false);
       }
     }
+  }
+
+  void _restoreBookmarkAuthority(String account, String workId) {
+    final authority = _bookmarkStore.stateFor(account, workId);
+    if (authority != null) {
+      setState(() => _favorite = authority.isBookmarked);
+    }
+  }
+
+  void _bookmarkResult(PixivBookmarkFeedbackTicket? ticket, int operationId,
+      bool success, PixivBookmarkFeedbackMessage message,
+      {PixivBookmarkEvent? begin}) {
+    if (!_entryActive || !(ticket?.isCurrent ?? false)) {
+      setState(() => _bookmarkEvent = null);
+      return;
+    }
+    setState(() => _bookmarkEvent = PixivBookmarkEvent(
+        sequence: ++_bookmarkSequence,
+        operationId: operationId,
+        phase: PixivBookmarkPhase.settle,
+        success: success,
+        begin: begin));
+    ticket!.finish(message);
   }
 
   void _message(String text) => ScaffoldMessenger.of(context)
@@ -408,6 +529,24 @@ class _PixivOnlineDetailViewState extends State<PixivOnlineDetailView> {
 
   @override
   Widget build(BuildContext context) {
+    final active = _entryActive && TickerMode.valuesOf(context).enabled;
+    final media = MediaQuery.of(context);
+    return LayoutBuilder(builder: (context, constraints) {
+      final contentHeight = constraints.maxHeight - media.padding.vertical;
+      final favoriteBottom = (contentHeight * .15).clamp(0.0, 80.0);
+      return PixivBookmarkFeedbackHost(
+        active: active,
+        identity: (_account, widget.comicId, _generation),
+        bottomOffset: favoriteBottom + 56 + 16,
+        avoidViewInsets: true,
+        child: Builder(builder: (context) => _buildContent(context, active)),
+      );
+    });
+  }
+
+  Widget _buildContent(BuildContext context, bool active) {
+    final feedback = PixivBookmarkFeedbackHost.maybeOf(context);
+    final feedbackCurrent = active && (feedback?.isCurrent ?? false);
     if (_loading || _data == null) {
       return Scaffold(
           appBar: AppBar(),
@@ -439,9 +578,14 @@ class _PixivOnlineDetailViewState extends State<PixivOnlineDetailView> {
       onActionLongPress: () => widget.onDownloadLongPress(context, data),
       isFavorited: _favorite,
       favoriteBusy: _favoriteBusy,
+      onlineBookmarkAnimations: true,
+      favoriteActive: feedbackCurrent,
+      favoriteIdentity: (_account, data.id, _generation),
+      favoriteVisualEpoch: feedback?.visualEpoch,
+      favoriteEvent: _bookmarkEvent,
       favoriteLabel: _favorite ? '取消Pixiv收藏' : '加入Pixiv收藏',
-      onFavorite: () => _favoriteAction(),
-      onFavoriteLongPress: () => _favoriteAction(isPrivate: true),
+      onFavorite: () => _favoriteAction(context),
+      onFavoriteLongPress: () => _favoriteAction(context, isPrivate: true),
       onShare: () async {
         await Clipboard.setData(
             ClipboardData(text: 'https://www.pixiv.net/artworks/${data.id}'));
@@ -514,6 +658,7 @@ class _PixivOnlineDetailViewState extends State<PixivOnlineDetailView> {
               source: source,
               comic: data.relatedWorks[index],
               bookmarks: _bookmarks,
+              feedbackCurrent: feedbackCurrent,
               onAccountsChanged: _load,
               onOpenDetail: () => _openWork(data.relatedWorks[index]),
             ),

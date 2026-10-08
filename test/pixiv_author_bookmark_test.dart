@@ -10,6 +10,7 @@ import 'package:picakeep/network/pixiv_network/pixiv_network.dart';
 import 'package:picakeep/network/res.dart';
 import 'package:picakeep/pages/online_comic/pixiv_author_page_v2.dart';
 import 'package:picakeep/pages/online_common/online_recommendation_card.dart';
+import 'package:picakeep/foundation/pixiv_bookmark_state.dart';
 import 'package:picakeep/pages/online_common/online_waterfall_card.dart';
 
 const _work = PixivComicBrief(
@@ -41,6 +42,7 @@ void main() {
   late String previousSettings;
   late ComicSource source;
   setUp(() {
+    PixivBookmarkStateStore.shared.clear();
     previousSources = List.of(ComicSource.sources);
     previousSettings = appdata.settings[comicTileDisplayConfigSettingIndex];
     source = ComicSource.named(
@@ -158,10 +160,10 @@ void main() {
     card(tester).onTap();
     await tester.pumpAndSettle();
     expect(find.text('详情'), findsOneWidget);
-    expect(reads, 0);
+    expect(reads, 1, reason: '可见的未知作品先读取收藏态');
     await tester.pageBack();
     await tester.pumpAndSettle();
-    expect(reads, 1);
+    expect(reads, 2, reason: '详情返回仍读取最新权威状态');
     expect(card(tester).isFavorited, isTrue);
   });
 

@@ -1,6 +1,8 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:picakeep/components/pixiv_bookmark_feedback.dart';
 
 import 'package:picakeep/comic_source/comic_source.dart';
 import 'package:picakeep/comic_source/favorite_data.dart';
@@ -43,6 +45,7 @@ class _NetworkFavoriteWidgetState extends State<NetworkFavoriteWidget> {
   String? _error;
   int _generation = 0;
   int? _totalCount;
+  PixivBookmarkFeedbackController? _feedback;
 
   FavoriteData get _favoriteData => widget.source.favoriteData!;
 
@@ -316,10 +319,36 @@ class _NetworkFavoriteWidgetState extends State<NetworkFavoriteWidget> {
       ),
     );
     if (confirmed != true || !mounted) return;
+    final source = widget.source;
+    final pixiv = source.key == 'pixiv';
+    final account = pixivDetailAccountIdentity(source);
+    final generation = _generation;
+    final ticket =
+        pixiv ? _feedback?.capture(account: account, workId: comic.id) : null;
+    if (pixiv &&
+        (ticket?.isCurrent ?? false) &&
+        !MediaQuery.disableAnimationsOf(context)) {
+      HapticFeedback.selectionClick();
+    }
+    ticket?.startWaiting(target: false);
     final res = await del(comic, false);
-    if (!mounted) return;
+    if (!mounted) {
+      ticket?.cancelWaiting();
+      return;
+    }
+    if (pixiv &&
+        (source != widget.source ||
+            generation != _generation ||
+            account != pixivDetailAccountIdentity(source))) {
+      ticket?.cancelWaiting();
+      return;
+    }
     if (res.success) {
       setState(() => _items.remove(comic));
+      if (pixiv) ticket?.finish(const PixivBookmarkFeedbackMessage.removed());
+    } else if (pixiv) {
+      ticket?.finish(
+          PixivBookmarkFeedbackMessage.failed(res.errorMessageWithoutNull));
     } else {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('操作失败：${res.errorMessageWithoutNull}')),
@@ -331,10 +360,25 @@ class _NetworkFavoriteWidgetState extends State<NetworkFavoriteWidget> {
 
   @override
   Widget build(BuildContext context) {
-    if (_multiFolder && _currentFolderId == null) {
-      return _buildFolderList();
+    if (widget.source.key != 'pixiv') {
+      return _multiFolder && _currentFolderId == null
+          ? _buildFolderList()
+          : _buildComicList();
     }
-    return _buildComicList();
+    return PixivBookmarkFeedbackHost(
+      identity: (
+        widget.source.key,
+        pixivDetailAccountIdentity(widget.source),
+        _currentFolderId,
+        _generation
+      ),
+      child: Builder(builder: (context) {
+        _feedback = PixivBookmarkFeedbackHost.maybeOf(context);
+        return _multiFolder && _currentFolderId == null
+            ? _buildFolderList()
+            : _buildComicList();
+      }),
+    );
   }
 
   Widget _buildFolderList() {

@@ -247,7 +247,7 @@ PixivDetailEntry onlinePixivDetailEntry(ComicSource source, BaseComic comic) =>
     );
 
 String pixivDetailAccountIdentity(ComicSource source) =>
-    '${source.data['userId'] ?? ''}|${source.data['token'] ?? ''}';
+    source.data['token']?.toString() ?? '';
 
 /// 关键词屏蔽匹配（探索列表展示层用）。
 ///

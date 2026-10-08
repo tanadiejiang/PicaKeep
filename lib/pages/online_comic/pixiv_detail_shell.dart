@@ -1,6 +1,7 @@
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:picakeep/components/pixiv_bookmark_button.dart';
 
 class PixivDetailImage {
   const PixivDetailImage({
@@ -97,6 +98,11 @@ class PixivDetailShell extends StatefulWidget {
     this.actionBusy = false,
     this.isFavorited = false,
     this.favoriteBusy = false,
+    this.onlineBookmarkAnimations = false,
+    this.favoriteActive = true,
+    this.favoriteIdentity,
+    this.favoriteVisualEpoch,
+    this.favoriteEvent,
     this.favoriteLabel = '收藏',
     this.onFavorite,
     this.onFavoriteLongPress,
@@ -118,6 +124,11 @@ class PixivDetailShell extends StatefulWidget {
   final bool actionBusy;
   final bool isFavorited;
   final bool favoriteBusy;
+  final bool onlineBookmarkAnimations;
+  final bool favoriteActive;
+  final Object? favoriteIdentity;
+  final Object? favoriteVisualEpoch;
+  final PixivBookmarkEvent? favoriteEvent;
   final String favoriteLabel;
   final VoidCallback? onFavorite;
   final VoidCallback? onFavoriteLongPress;
@@ -142,6 +153,7 @@ class _PixivDetailShellState extends State<PixivDetailShell> {
   final Map<String, double> _ratios = {};
   bool _boundaryReached = false;
   bool _counterSyncPending = false;
+  bool _favoriteSyncPending = false;
 
   @override
   void initState() {
@@ -177,6 +189,7 @@ class _PixivDetailShellState extends State<PixivDetailShell> {
   }
 
   void _scrollChanged() {
+    _scheduleFavoriteVisibilitySync();
     if (!_scrollController.hasClients || _pageEnds.isEmpty) return;
     final focus = _scrollController.position.pixels + 48;
     var low = 0;
@@ -208,9 +221,25 @@ class _PixivDetailShellState extends State<PixivDetailShell> {
   void _reportFavoriteBoundary(bool reached) {
     if (_boundaryReached == reached) return;
     _boundaryReached = reached;
+    _scheduleFavoriteVisibilitySync();
+  }
+
+  void _scheduleFavoriteVisibilitySync() {
+    if (_favoriteSyncPending) return;
+    _favoriteSyncPending = true;
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) _favoriteVisible.value = !reached;
+      _favoriteSyncPending = false;
+      if (!mounted) return;
+      // A short work can put its author in the button's band on the first
+      // screen. Keep the action reachable at the top, including overscroll.
+      // Read the latest position/boundary so layout and scroll reports in one
+      // frame cannot restore an obsolete visibility value.
+      final atTop = !_scrollController.hasClients ||
+          _scrollController.position.pixels <=
+              _scrollController.position.minScrollExtent;
+      _favoriteVisible.value = atTop || !_boundaryReached;
     });
+    WidgetsBinding.instance.ensureVisualUpdate();
   }
 
   @override
@@ -359,51 +388,57 @@ class _PixivDetailShellState extends State<PixivDetailShell> {
                                     child: ExcludeSemantics(
                                         excluding:
                                             !(visible || widget.favoriteBusy),
-                                        child: Semantics(
-                                          button: true,
-                                          toggled: widget.isFavorited,
-                                          label: widget.favoriteLabel,
-                                          enabled: !widget.favoriteBusy &&
-                                              widget.onFavorite != null,
-                                          child: Tooltip(
-                                            message: widget.favoriteLabel,
-                                            child: Material(
-                                              color: Colors.white,
-                                              elevation: 4,
-                                              shape: const CircleBorder(),
-                                              child: InkWell(
-                                                key: const ValueKey(
-                                                    'pixiv-detail-favorite'),
-                                                customBorder:
-                                                    const CircleBorder(),
-                                                onTap: widget.favoriteBusy
-                                                    ? null
-                                                    : widget.onFavorite,
-                                                onLongPress: widget.favoriteBusy
-                                                    ? null
-                                                    : widget
-                                                        .onFavoriteLongPress,
-                                                child: SizedBox.square(
-                                                  dimension: 56,
-                                                  child: Icon(
-                                                    widget.favoriteBusy ||
-                                                            widget.isFavorited
-                                                        ? Icons.favorite
-                                                        : Icons.favorite_border,
-                                                    size: 28,
-                                                    color: widget.favoriteBusy
-                                                        ? const Color(
-                                                                0xFFE0245E)
-                                                            .withValues(
-                                                                alpha: .5)
-                                                        : const Color(
-                                                            0xE6E0245E),
+                                        child: widget.onlineBookmarkAnimations
+                                            ? _onlineFavorite(visible)
+                                            : Semantics(
+                                                button: true,
+                                                toggled: widget.isFavorited,
+                                                label: widget.favoriteLabel,
+                                                enabled: !widget.favoriteBusy &&
+                                                    widget.onFavorite != null,
+                                                child: Tooltip(
+                                                  message: widget.favoriteLabel,
+                                                  child: Material(
+                                                    color: Colors.white,
+                                                    elevation: 4,
+                                                    shape: const CircleBorder(),
+                                                    child: InkWell(
+                                                      key: const ValueKey(
+                                                          'pixiv-detail-favorite'),
+                                                      customBorder:
+                                                          const CircleBorder(),
+                                                      onTap: widget.favoriteBusy
+                                                          ? null
+                                                          : widget.onFavorite,
+                                                      onLongPress: widget
+                                                              .favoriteBusy
+                                                          ? null
+                                                          : widget
+                                                              .onFavoriteLongPress,
+                                                      child: SizedBox.square(
+                                                        dimension: 56,
+                                                        child: Icon(
+                                                          widget.favoriteBusy ||
+                                                                  widget
+                                                                      .isFavorited
+                                                              ? Icons.favorite
+                                                              : Icons
+                                                                  .favorite_border,
+                                                          size: 28,
+                                                          color: widget
+                                                                  .favoriteBusy
+                                                              ? const Color(
+                                                                      0xFFE0245E)
+                                                                  .withValues(
+                                                                      alpha: .5)
+                                                              : const Color(
+                                                                  0xE6E0245E),
+                                                        ),
+                                                      ),
+                                                    ),
                                                   ),
                                                 ),
-                                              ),
-                                            ),
-                                          ),
-                                        )),
+                                              )),
                                   ),
                                 )),
                           )),
@@ -413,6 +448,29 @@ class _PixivDetailShellState extends State<PixivDetailShell> {
       ),
     );
   }
+
+  Widget _onlineFavorite(bool visible) => Material(
+        color: Colors.white,
+        elevation: 4,
+        shape: const CircleBorder(),
+        child: PixivBookmarkButton(
+          key: const ValueKey('pixiv-detail-favorite'),
+          isBookmarked: widget.isFavorited,
+          busy: widget.favoriteBusy,
+          enabled: widget.onFavorite != null,
+          active: widget.favoriteActive && (visible || widget.favoriteBusy),
+          identity: widget.favoriteIdentity,
+          visualEpoch: widget.favoriteVisualEpoch,
+          event: widget.favoriteEvent,
+          onPressed: widget.onFavorite,
+          onLongPress: widget.onFavoriteLongPress,
+          size: 56,
+          iconSize: 28,
+          activeColor: const Color(0xE6E0245E),
+          inactiveColor: const Color(0xE6E0245E),
+          circularBackground: true,
+        ),
+      );
 
   Widget _toolbarButton(IconData icon, String label, VoidCallback action) =>
       IconButton(

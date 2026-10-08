@@ -134,8 +134,14 @@ class _PixivDetailPagerState extends State<PixivDetailPager> {
             final entry = entries[index];
             return KeyedSubtree(
               key: ValueKey(entry.key),
-              child: PixivDetailEntryScope(
-                  entry: entry, child: Builder(builder: entry.builder)),
+              child: TickerMode(
+                enabled: index == _current,
+                child: PixivDetailEntryScope(
+                  entry: entry,
+                  isActive: index == _current,
+                  child: Builder(builder: entry.builder),
+                ),
+              ),
             );
           },
         ),

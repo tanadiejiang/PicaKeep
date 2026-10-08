@@ -201,6 +201,41 @@ void main() {
     expect(find.byIcon(Icons.image_not_supported), findsNothing);
     expect(tester.takeException(), isNull);
 
+    // The downloaded page's toolbar search filters these same managed tiles.
+    // Verify actual pixels/provider identity, including the zero-result state,
+    // rather than treating a matching title as proof of a working cover.
+    await tester.tap(find.byIcon(Icons.search));
+    await tester.pump();
+    await tester.enterText(find.byType(TextField), 'Recoverable');
+    await tester.pump(const Duration(milliseconds: 300));
+    await waitFor(
+        tester,
+        () =>
+            coverPixels().evaluate().length == 1 &&
+            tester.renderObject<RenderImage>(coverPixels()).image != null);
+    expect(tester.widget<DownloadedComicTile>(tiles()).imageProvider,
+        same(provider));
+    expect(logic.comics.single.id, item.id);
+    await tester.enterText(find.byType(TextField), 'no matching download');
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(tiles(), findsNothing);
+    expect(logic.baseComics.single.id, item.id);
+    await tester.enterText(find.byType(TextField), '');
+    await tester.pump(const Duration(milliseconds: 300));
+    await waitFor(
+        tester,
+        () =>
+            coverPixels().evaluate().length == 1 &&
+            tester.renderObject<RenderImage>(coverPixels()).image != null);
+    expect(tester.widget<DownloadedComicTile>(tiles()).imageProvider,
+        same(provider));
+    final restoredPixels =
+        tester.renderObject<RenderImage>(coverPixels()).image!;
+    final restoredBytes = (await tester.runAsync(
+        () => restoredPixels.toByteData(format: ui.ImageByteFormat.rawRgba)))!;
+    expect(restoredBytes.buffer.asUint8List().take(4), [31, 157, 83, 255]);
+    expect(find.byIcon(Icons.image_not_supported), findsNothing);
+
     // Clearing caches while this page survives must also recover on reload.
     // A new managed source generation replaces its old resolver closure/key.
     await tester.runAsync(() => File(derivedPath).delete());

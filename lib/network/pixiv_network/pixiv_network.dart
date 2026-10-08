@@ -19,6 +19,7 @@ import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:picakeep/comic_source/comic_source.dart';
 import 'package:picakeep/foundation/app.dart';
 import 'package:picakeep/foundation/log.dart';
+import 'package:picakeep/foundation/pixiv_bookmark_state.dart';
 import 'package:picakeep/network/app_dio.dart';
 import 'package:picakeep/network/cookie_jar.dart';
 import 'package:picakeep/network/res.dart';
@@ -35,7 +36,9 @@ class PixivNetwork {
           '${App.dataPath}${Platform.pathSeparator}comic_source'
           '${Platform.pathSeparator}pixiv_cookies.db',
         ),
-        _dioFactory = logDio {
+        _dioFactory = logDio,
+        _bookmarkStore = PixivBookmarkStateStore.shared,
+        _usesSourceAccount = true {
     _loadSessionFromJar();
   }
 
@@ -44,11 +47,22 @@ class PixivNetwork {
   PixivNetwork.forTesting({
     required this.cookieJar,
     required Dio Function() dioFactory,
-  }) : _dioFactory = dioFactory {
+    PixivBookmarkStateStore? bookmarkStore,
+  })  : _dioFactory = dioFactory,
+        _bookmarkStore = bookmarkStore ?? PixivBookmarkStateStore(),
+        _usesSourceAccount = false {
     _loadSessionFromJar();
   }
 
   final Dio Function() _dioFactory;
+  final PixivBookmarkStateStore _bookmarkStore;
+  final bool _usesSourceAccount;
+
+  String get _bookmarkAccount =>
+      _usesSourceAccount ? pixivBookmarkAccountIdentity() : _session ?? '';
+
+  bool _bookmarkAccountIsCurrent(String account, String? session) =>
+      account.isNotEmpty && _bookmarkAccount == account && _session == session;
 
   static PixivNetwork? _cache;
 
@@ -905,6 +919,9 @@ class PixivNetwork {
       return const Res.error('作品 id 为空',
           errorCode: ResErrorCode.invalidArgument);
     }
+    final account = _bookmarkAccount;
+    final requestSession = _session;
+    final revision = _bookmarkStore.revisionFor(account, id);
     final res = await _getJson('$pixivWebBase/ajax/illust/$id?lang=zh');
     if (res.error) return Res.fromErrorRes(res);
     final body = res.data['body'];
@@ -913,9 +930,19 @@ class PixivNetwork {
           errorCode: ResErrorCode.parse);
     }
     try {
-      return Res<PixivComicInfo>(
-        parsePixivComicInfo(body.map((k, v) => MapEntry(k.toString(), v))),
-      );
+      final normalized = body.map((k, v) => MapEntry(k.toString(), v));
+      final info = parsePixivComicInfo(normalized);
+      if (_bookmarkAccountIsCurrent(account, requestSession)) {
+        try {
+          _bookmarkStore.confirm(
+              account, id, parsePixivBookmarkState(normalized),
+              expectedRevision: revision);
+        } on FormatException {
+          // Incomplete detail metadata may still be displayed, but must not
+          // turn an unknown bookmark field into a confirmed false state.
+        }
+      }
+      return Res<PixivComicInfo>(info);
     } catch (e) {
       return Res.error('详情解析失败：$e', errorCode: ResErrorCode.parse);
     }
@@ -929,6 +956,8 @@ class PixivNetwork {
           errorCode: ResErrorCode.invalidArgument);
     }
     final requestSession = _session;
+    final account = _bookmarkAccount;
+    final revision = _bookmarkStore.revisionFor(account, id.toString());
     final res = await _getJson('$pixivWebBase/ajax/illust/$id?lang=zh',
         requireAuth: true);
     if (_session != requestSession) {
@@ -942,8 +971,13 @@ class PixivNetwork {
           errorCode: ResErrorCode.parse);
     }
     try {
-      return Res(parsePixivBookmarkState(
-          body.map((key, value) => MapEntry(key.toString(), value))));
+      final state = parsePixivBookmarkState(
+          body.map((key, value) => MapEntry(key.toString(), value)));
+      if (_bookmarkAccountIsCurrent(account, requestSession)) {
+        _bookmarkStore.confirm(account, id.toString(), state,
+            expectedRevision: revision);
+      }
+      return Res(state);
     } catch (e) {
       return Res.error('收藏状态解析失败：$e', errorCode: ResErrorCode.parse);
     }
@@ -1431,6 +1465,24 @@ class PixivNetwork {
     }
 
     final actionSession = _session;
+    final account = _bookmarkAccount;
+    void confirmTarget({bool? isBookmarkable}) {
+      if (!_bookmarkAccountIsCurrent(account, actionSession)) return;
+      final previous = _bookmarkStore.stateFor(account, id.toString());
+      _bookmarkStore.confirm(
+          account,
+          id.toString(),
+          PixivBookmarkState(
+            isBookmarked: isAdding,
+            // A successful add itself proves capability. On removal retain
+            // the latest capability until an authoritative detail read.
+            isBookmarkable: isAdding ||
+                (isBookmarkable ?? previous?.isBookmarkable ?? false),
+            bookmarkPrivate:
+                isAdding ? visibility == PixivBookmarkVisibility.private : null,
+          ));
+    }
+
     if (!isAdding) {
       // 不使用页面加载时的旧 ID：取消后再添加会产生另一条书签。
       final latest = await _getJson(
@@ -1451,7 +1503,12 @@ class PixivNetwork {
             errorCode: ResErrorCode.parse);
       }
       final bookmarkData = body['bookmarkData'];
-      if (bookmarkData == null) return const Res<bool>(true);
+      final capability = body['isBookmarkable'];
+      final canAdd = capability == true || capability == 1 || capability == '1';
+      if (bookmarkData == null) {
+        confirmTarget(isBookmarkable: canAdd);
+        return const Res<bool>(true);
+      }
       final bookmarkId = bookmarkData is Map
           ? _positiveId(bookmarkData['id']?.toString() ?? '')
           : null;
@@ -1459,7 +1516,7 @@ class PixivNetwork {
         return const Res.error('Pixiv 收藏响应缺少有效书签 ID',
             errorCode: ResErrorCode.parse);
       }
-      return _postForm(
+      final result = await _postForm(
         '$pixivWebBase/ajax/illusts/bookmarks/delete',
         <String, String>{
           'bookmark_id': bookmarkId.toString(),
@@ -1467,6 +1524,8 @@ class PixivNetwork {
         referer: '$pixivWebBase/artworks/$id',
         isSuccess: (body) => body is Map && body['error'] == false,
       );
+      if (result.success) confirmTarget(isBookmarkable: canAdd);
+      return result;
     }
 
     final res = await _postJson(
@@ -1498,6 +1557,7 @@ class PixivNetwork {
       );
       return Res.fromErrorRes(res);
     }
+    confirmTarget();
     return const Res<bool>(true);
   }
 

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'package:picakeep/foundation/online_download_manager.dart';
+import 'package:picakeep/foundation/download_chapter_display.dart';
 import 'package:picakeep/foundation/app.dart';
 import 'package:picakeep/tools/download_notification_controller.dart';
 import 'download_background_support.dart';
@@ -8,14 +9,16 @@ import 'download_background_support.dart';
 import 'downloading_logic.dart';
 
 class DownloadingPage extends StatefulWidget {
-  const DownloadingPage({super.key});
+  const DownloadingPage({super.key, this.manager});
+
+  final OnlineDownloadManager? manager;
 
   @override
   State<DownloadingPage> createState() => _DownloadingPageState();
 }
 
 class _DownloadingPageState extends State<DownloadingPage> {
-  final _logic = DownloadingLogic();
+  late final DownloadingLogic _logic;
   final _selected = <String>{};
   bool _selectMode = false;
 
@@ -24,6 +27,7 @@ class _DownloadingPageState extends State<DownloadingPage> {
   @override
   void initState() {
     super.initState();
+    _logic = DownloadingLogic(manager: widget.manager);
     _manager.version.addListener(_handleChanged);
   }
 
@@ -127,7 +131,7 @@ class _DownloadingPageState extends State<DownloadingPage> {
       },
       child: Scaffold(
         appBar: _selectMode
-            ? _buildSelectAppBar(tasks)
+            ? _buildSelectAppBar()
             : _buildNormalAppBar(downloading),
         body: tasks.isEmpty
             ? const Center(child: Text('暂无下载任务'))
@@ -138,9 +142,9 @@ class _DownloadingPageState extends State<DownloadingPage> {
                   final task = tasks[index];
                   final isSelected = _selected.contains(task.id);
                   return GestureDetector(
-                    onLongPress: () => _selectMode
-                        ? null
-                        : _enterSelectMode(task.id),
+                    behavior: HitTestBehavior.opaque,
+                    onLongPress: () =>
+                        _selectMode ? null : _enterSelectMode(task.id),
                     onTap: _selectMode ? () => _toggleSelect(task.id) : null,
                     child: _DownloadingTile(
                       task: task,
@@ -168,7 +172,9 @@ class _DownloadingPageState extends State<DownloadingPage> {
             valueListenable: DownloadNotificationController.instance.warning,
             builder: (_, warning, __) => IconButton(
               tooltip: warning ?? '后台下载与通知',
-              icon: Icon(warning == null ? Icons.notifications_outlined : Icons.notification_important_outlined),
+              icon: Icon(warning == null
+                  ? Icons.notifications_outlined
+                  : Icons.notification_important_outlined),
               onPressed: () => showDownloadBackgroundSupport(context),
             ),
           ),
@@ -182,8 +188,7 @@ class _DownloadingPageState extends State<DownloadingPage> {
             ),
             onPressed: _toggleGlobalPause,
           ),
-        if (_hasTasks &&
-            _logic.tasks.any((t) => t.completed || t.cancelled))
+        if (_hasTasks && _logic.tasks.any((t) => t.completed || t.cancelled))
           IconButton(
             tooltip: '清除已完成/已取消',
             icon: const Icon(Icons.cleaning_services_outlined),
@@ -193,29 +198,28 @@ class _DownloadingPageState extends State<DownloadingPage> {
     );
   }
 
-  AppBar _buildSelectAppBar(List<OnlineDownloadTask> tasks) {
+  AppBar _buildSelectAppBar() {
     final count = _selected.length;
-    final hasActive = _selectedTasks
-        .any((t) => !t.completed && !t.cancelled && !t.paused && t.error == null);
+    final hasActive = _selectedTasks.any(
+        (t) => !t.completed && !t.cancelled && !t.paused && t.error == null);
     final hasPaused = _selectedTasks.any((t) => t.paused);
-    final hasStoppable = _selectedTasks
-        .any((t) => !t.completed && !t.cancelled);
+    final hasStoppable =
+        _selectedTasks.any((t) => !t.completed && !t.cancelled);
 
     return AppBar(
+      backgroundColor: Theme.of(context).colorScheme.primaryContainer,
       leading: IconButton(
         icon: const Icon(Icons.close),
         onPressed: _exitSelectMode,
       ),
-      title: Text('已选 $count'),
+      title: Text('已选择 $count 个项目'),
       actions: [
-        IconButton(
-          tooltip: '全选',
-          icon: const Icon(Icons.select_all),
-          onPressed: _selectAll,
-        ),
         PopupMenuButton<String>(
+          icon: const Icon(Icons.more_horiz),
           onSelected: (v) {
             switch (v) {
+              case 'selectAll':
+                _selectAll();
               case 'pause':
                 _multiPause();
               case 'resume':
@@ -227,6 +231,7 @@ class _DownloadingPageState extends State<DownloadingPage> {
             }
           },
           itemBuilder: (_) => [
+            const PopupMenuItem(value: 'selectAll', child: Text('全选')),
             if (hasActive)
               const PopupMenuItem(value: 'pause', child: Text('暂停所选')),
             if (hasPaused)
@@ -272,139 +277,172 @@ class _DownloadingTile extends StatelessWidget {
     final colorScheme = Theme.of(context).colorScheme;
     final finished = task.completed || task.cancelled;
     final progressText = _progressText();
+    final chapter = downloadChapterPosition(
+      currentEp: task.currentEp,
+      totalEps: task.totalEps,
+      chapterIndexes: task.chapterIndexes,
+    );
 
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
       child: SizedBox(
         height: 114,
-        child: Row(
-          children: [
-            // ── 封面 / 多选 checkbox ──
-            if (selectMode)
-              Padding(
-                padding: const EdgeInsets.only(right: 8),
-                child: Checkbox(
-                  value: isSelected,
-                  onChanged: (_) {},
-                ),
-              ),
-            Container(
-              width: 84,
-              height: 114,
-              decoration: BoxDecoration(
-                color: colorScheme.secondaryContainer,
-                borderRadius: BorderRadius.circular(8),
-                border: isSelected
-                    ? Border.all(color: colorScheme.primary, width: 2)
-                    : null,
-              ),
-              clipBehavior: Clip.antiAlias,
-              child: Image.network(
-                task.taskCover,
-                fit: BoxFit.cover,
-                // 这里展示的是**在线封面 URL**，必须带该源的请求头：
-                // Pixiv 的 i.pximg.net 与 Komiic 的 /api/image/ 都校验 Referer，
-                // 裸加载会 403，界面上只剩破图图标。
-                headers: task.taskCoverHeaders,
-                errorBuilder: (_, __, ___) =>
-                    const Center(child: Icon(Icons.broken_image_outlined)),
-              ),
-            ),
-            const SizedBox(width: 12),
-            // ── 中间信息区 ──
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(16),
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              Row(
                 children: [
-                  Text(
-                    task.taskTitle,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                        fontSize: 14, fontWeight: FontWeight.w500),
-                  ),
-                  if (task.totalEps > 1 && !finished)
-                    Padding(
-                      padding: const EdgeInsets.only(top: 2),
-                      child: Text(
-                        '第 ${task.currentEp}/${task.totalEps} 章：${task.currentEpName}',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                            fontSize: 11, color: colorScheme.primary),
-                      ),
+                  Container(
+                    width: 84,
+                    height: 114,
+                    decoration: BoxDecoration(
+                      color: colorScheme.secondaryContainer,
+                      borderRadius: BorderRadius.circular(8),
                     ),
-                  const Spacer(),
-                  if (progressText.isNotEmpty)
-                    Text(
-                      progressText,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: task.error != null
-                            ? colorScheme.error
-                            : colorScheme.onSurfaceVariant,
-                      ),
+                    clipBehavior: Clip.antiAlias,
+                    child: Image.network(
+                      task.taskCover,
+                      fit: BoxFit.cover,
+                      // 这里展示的是**在线封面 URL**，必须带该源的请求头：
+                      // Pixiv 的 i.pximg.net 与 Komiic 的 /api/image/ 都校验 Referer，
+                      // 裸加载会 403，界面上只剩破图图标。
+                      headers: task.taskCoverHeaders,
+                      errorBuilder: (_, __, ___) => const Center(
+                          child: Icon(Icons.broken_image_outlined)),
                     ),
-                  const SizedBox(height: 4),
-                  LinearProgressIndicator(
-                    value: task.completed ? 1 : task.progress.clamp(0.0, 1.0),
                   ),
+                  const SizedBox(width: 12),
+                  // ── 中间信息区 ──
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          task.taskTitle,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                              fontSize: 14, fontWeight: FontWeight.w500),
+                        ),
+                        if (task.totalEps > 1 && !finished)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 2),
+                            child: Text(
+                              chapter.position == null
+                                  ? '已选择 ${chapter.total} 章'
+                                  : '第 ${chapter.position}/${chapter.total} 章：${task.currentEpName}',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                  fontSize: 11, color: colorScheme.primary),
+                            ),
+                          ),
+                        const Spacer(),
+                        if (progressText.isNotEmpty)
+                          Text(
+                            progressText,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: task.error != null
+                                  ? colorScheme.error
+                                  : colorScheme.onSurfaceVariant,
+                            ),
+                          ),
+                        const SizedBox(height: 4),
+                        LinearProgressIndicator(
+                          value: task.completed
+                              ? 1
+                              : task.progress.clamp(0.0, 1.0),
+                        ),
+                      ],
+                    ),
+                  ),
+                  // ── 右侧操作区（非多选模式）──
+                  if (!selectMode)
+                    SizedBox(
+                      width: 50,
+                      child: finished
+                          ? Center(
+                              child: Icon(
+                                task.completed
+                                    ? Icons.check_circle_outline
+                                    : Icons.cancel_outlined,
+                                color: task.completed
+                                    ? colorScheme.primary
+                                    : colorScheme.onSurfaceVariant,
+                              ),
+                            )
+                          : task.error != null
+                              ? Center(
+                                  child: IconButton(
+                                    tooltip: '重试',
+                                    icon: const Icon(Icons.refresh),
+                                    onPressed: onRetry,
+                                  ),
+                                )
+                              : Column(
+                                  mainAxisAlignment:
+                                      MainAxisAlignment.spaceBetween,
+                                  children: [
+                                    // 左上：暂停/继续
+                                    IconButton(
+                                      tooltip: task.paused ? '继续' : '暂停',
+                                      padding: EdgeInsets.zero,
+                                      icon: Icon(
+                                        task.paused
+                                            ? Icons.play_circle_outline
+                                            : Icons.pause_circle_outline,
+                                        size: 22,
+                                      ),
+                                      onPressed: onPauseResume,
+                                    ),
+                                    // 右下：置顶
+                                    IconButton(
+                                      tooltip: '置顶',
+                                      padding: EdgeInsets.zero,
+                                      icon: const Icon(Icons.vertical_align_top,
+                                          size: 22),
+                                      onPressed: onMoveToFront,
+                                    ),
+                                  ],
+                                ),
+                    ),
                 ],
               ),
-            ),
-            // ── 右侧操作区（非多选模式）──
-            if (!selectMode)
-              SizedBox(
-                width: 50,
-                child: finished
-                    ? Center(
-                        child: Icon(
-                          task.completed
-                              ? Icons.check_circle_outline
-                              : Icons.cancel_outlined,
-                          color: task.completed
-                              ? colorScheme.primary
-                              : colorScheme.onSurfaceVariant,
+              if (isSelected)
+                Positioned.fill(
+                  child: IgnorePointer(
+                    child: DecoratedBox(
+                      key: ValueKey('download-selection-${task.id}'),
+                      decoration: BoxDecoration(
+                        color: colorScheme.primary.withValues(alpha: 0.22),
+                        border: Border.all(
+                          color: colorScheme.primary,
+                          width: 1.6,
                         ),
-                      )
-                    : task.error != null
-                        ? Center(
-                            child: IconButton(
-                              tooltip: '重试',
-                              icon: const Icon(Icons.refresh),
-                              onPressed: onRetry,
-                            ),
-                          )
-                        : Column(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                            children: [
-                              // 左上：暂停/继续
-                              IconButton(
-                                tooltip: task.paused ? '继续' : '暂停',
-                                padding: EdgeInsets.zero,
-                                icon: Icon(
-                                  task.paused
-                                      ? Icons.play_circle_outline
-                                      : Icons.pause_circle_outline,
-                                  size: 22,
-                                ),
-                                onPressed: onPauseResume,
-                              ),
-                              // 右下：置顶
-                              IconButton(
-                                tooltip: '置顶',
-                                padding: EdgeInsets.zero,
-                                icon: const Icon(
-                                    Icons.vertical_align_top,
-                                    size: 22),
-                                onPressed: onMoveToFront,
-                              ),
+                        borderRadius: BorderRadius.circular(16),
+                      ),
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            begin: Alignment.topCenter,
+                            end: Alignment.bottomCenter,
+                            colors: [
+                              colorScheme.primary.withValues(alpha: 0.14),
+                              colorScheme.primary.withValues(alpha: 0.28),
                             ],
                           ),
-              ),
-          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+            ],
+          ),
         ),
       ),
     );

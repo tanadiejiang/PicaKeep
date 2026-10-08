@@ -1,9 +1,78 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:picakeep/foundation/app.dart';
 import 'package:picakeep/foundation/download_model.dart';
+import 'package:picakeep/foundation/local_library.dart';
 import 'package:picakeep/pages/download_page.dart';
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+  late Directory workspace;
+  setUpAll(() async {
+    workspace = await Directory.systemTemp.createTemp('download-preview-031-');
+    await App.init(
+      dataPathOverride: workspace.path,
+      cachePathOverride: workspace.path,
+    );
+  });
+  tearDownAll(() => workspace.delete(recursive: true));
+
+  testWidgets('partial download header counts only valid completed chapters',
+      (tester) async {
+    final item = DownloadedComic(
+      comicId: 'partial-preview',
+      title: 'Partial preview',
+      author: '',
+      chapters: List.generate(44, (index) => '${index + 1}'),
+      downloadedChapters: [...List.generate(12, (index) => index), 0, -1, 44],
+    );
+    await tester.pumpWidget(_host(item));
+    await tester.pumpAndSettle();
+    expect(find.text('已下载 12 / 共 44 章节'), findsOneWidget);
+
+    // Reopening after a chapter was removed uses the current completed record.
+    await tester.pumpWidget(const SizedBox.shrink());
+    item.downloadedChapters.remove(11);
+    await tester.pumpWidget(_host(item));
+    await tester.pumpAndSettle();
+    expect(find.text('已下载 11 / 共 44 章节'), findsOneWidget);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    item.downloadedChapters = List.generate(44, (index) => index);
+    await tester.pumpWidget(_host(item));
+    await tester.pumpAndSettle();
+    expect(find.text('已下载 44 / 共 44 章节'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('archive header counts contained chapters without download state',
+      (tester) async {
+    final archive = LocalLibraryComicItem(
+      itemId: 'local_archive::count-test',
+      originalId: 'count-test',
+      type: DownloadType.other,
+      name: 'Archive preview',
+      subTitle: '',
+      tags: const [],
+      sourceDisplayName: '压缩包',
+      fileSystemPath: '',
+      episodeFiles: const {},
+      downloadedEps: const [],
+      eps: const ['One', 'Two', 'Three'],
+      localCoverPath: null,
+      localStorageExists: true,
+      canDelete: false,
+      aliases: const [],
+    );
+    await tester.pumpWidget(_host(archive));
+    await tester.pumpAndSettle();
+    expect(find.text('3 章节'), findsOneWidget);
+    expect(find.textContaining('已下载'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets(
       'downloaded preview folds author and tags independently while footer stays fixed',
       (tester) async {

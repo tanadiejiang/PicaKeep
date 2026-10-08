@@ -13,6 +13,7 @@
 library;
 
 import 'package:flutter/material.dart';
+import 'package:picakeep/components/pixiv_bookmark_button.dart';
 import 'package:picakeep/components/comic_tag_wrap.dart';
 import 'package:picakeep/foundation/comic_tile_display_config.dart';
 
@@ -54,8 +55,14 @@ class OnlineWaterfallCard extends StatelessWidget {
     this.isFavorited = false,
     this.favoriteStateKnown = true,
     this.onToggleFavorite,
+    this.favoriteEnabled = true,
     this.favoriteBusy = false,
     this.favoriteStyle = WaterfallFavoriteStyle.defaults,
+    this.pixivBookmarkAnimations = false,
+    this.favoriteIdentity,
+    this.favoriteVisualEpoch,
+    this.favoriteFeedbackCurrent = true,
+    this.favoriteEvent,
   });
 
   final String title;
@@ -87,8 +94,14 @@ class OnlineWaterfallCard extends StatelessWidget {
   final bool isFavorited;
   final bool favoriteStateKnown;
   final VoidCallback? onToggleFavorite;
+  final bool favoriteEnabled;
   final bool favoriteBusy;
   final WaterfallFavoriteStyle favoriteStyle;
+  final bool pixivBookmarkAnimations;
+  final Object? favoriteIdentity;
+  final Object? favoriteVisualEpoch;
+  final bool favoriteFeedbackCurrent;
+  final PixivBookmarkEvent? favoriteEvent;
 
   /// 格子比例（恒为正有限数）。
   double get aspectRatio => illustAspectRatioForSize(width, height);
@@ -106,24 +119,7 @@ class OnlineWaterfallCard extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: <Widget>[
-            ClipRRect(
-              borderRadius: BorderRadius.circular(onlineWaterfallImageRadius),
-              child: AspectRatio(
-                aspectRatio: aspectRatio,
-                child: Stack(
-                  fit: StackFit.expand,
-                  children: [
-                    _buildImage(context),
-                    if (onToggleFavorite != null)
-                      Positioned(
-                        right: 0,
-                        bottom: 0,
-                        child: _favoriteButton(context),
-                      ),
-                  ],
-                ),
-              ),
-            ),
+            _imageArea(context),
             const SizedBox(height: 4),
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 2),
@@ -180,10 +176,56 @@ class OnlineWaterfallCard extends StatelessWidget {
     );
   }
 
-  Widget _favoriteButton(BuildContext context) => Semantics(
+  Widget _imageArea(BuildContext context) {
+    final radius = BorderRadius.circular(onlineWaterfallImageRadius);
+    final stack = Stack(
+      fit: StackFit.expand,
+      clipBehavior: pixivBookmarkAnimations ? Clip.none : Clip.hardEdge,
+      children: [
+        if (pixivBookmarkAnimations)
+          ClipRRect(borderRadius: radius, child: _buildImage(context))
+        else
+          _buildImage(context),
+        if (onToggleFavorite != null)
+          Positioned(right: 0, bottom: 0, child: _favoriteButton(context)),
+      ],
+    );
+    return AspectRatio(
+      aspectRatio: aspectRatio,
+      child: pixivBookmarkAnimations
+          ? stack
+          : ClipRRect(borderRadius: radius, child: stack),
+    );
+  }
+
+  Widget _favoriteButton(BuildContext context) {
+    if (pixivBookmarkAnimations) {
+      return PixivBookmarkButton(
         key: const ValueKey('waterfall-favorite'),
+        isBookmarked: isFavorited,
+        stateKnown: favoriteStateKnown,
+        busy: favoriteBusy,
+        enabled: favoriteEnabled,
+        active: favoriteFeedbackCurrent,
+        identity: favoriteIdentity,
+        visualEpoch: favoriteVisualEpoch,
+        event: favoriteEvent,
+        onPressed: onToggleFavorite,
+        activeColor: favoriteStyle.favoriteColor(context),
+        inactiveColor: favoriteStyle.inactiveColor,
+        shadows: [
+          Shadow(color: Colors.black.withValues(alpha: .6), blurRadius: 2)
+        ],
+      );
+    }
+    return _staticFavoriteButton(context);
+  }
+
+  Widget _staticFavoriteButton(BuildContext context) => Semantics(
+        key: const ValueKey('waterfall-favorite'),
+        container: true,
         button: true,
-        enabled: !favoriteBusy,
+        enabled: favoriteEnabled && !favoriteBusy,
         toggled: favoriteStateKnown ? isFavorited : null,
         label: favoriteBusy
             ? favoriteStateKnown
@@ -194,12 +236,12 @@ class OnlineWaterfallCard extends StatelessWidget {
                 : isFavorited
                     ? '取消平台收藏'
                     : '加入平台收藏',
-        onTap: favoriteBusy ? null : onToggleFavorite,
+        onTap: favoriteBusy || !favoriteEnabled ? null : onToggleFavorite,
         child: ExcludeSemantics(
           child: GestureDetector(
             behavior: HitTestBehavior.opaque,
-            // Busy still consumes the tap so it cannot open the detail page.
-            onTap: favoriteBusy ? () {} : onToggleFavorite,
+            // A disabled heart still consumes taps so they cannot open details.
+            onTap: favoriteBusy || !favoriteEnabled ? () {} : onToggleFavorite,
             child: SizedBox(
               width: 48,
               height: 48,

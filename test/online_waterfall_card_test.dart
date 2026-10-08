@@ -1,3 +1,5 @@
+import 'dart:ui' show SemanticsAction, Tristate;
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:picakeep/pages/online_common/online_comic_list_item.dart';
@@ -7,6 +9,59 @@ import 'package:picakeep/foundation/comic_tile_display_config.dart';
 
 void main() {
   tearDown(clearOnlineCoverProviderCache);
+
+  testWidgets(
+      'parent refresh disables favorite taps without showing request busy',
+      (tester) async {
+    final semantics = tester.ensureSemantics();
+    var favorites = 0;
+    var details = 0;
+    Future<void> show({required bool favorite, required bool enabled}) =>
+        tester.pumpWidget(MaterialApp(
+          home: Scaffold(
+            body: Align(
+              alignment: Alignment.topLeft,
+              child: SizedBox(
+                width: 160,
+                child: OnlineWaterfallCard(
+                  title: '作品',
+                  cover: '',
+                  imageHeaders: const {},
+                  isFavorited: favorite,
+                  favoriteEnabled: enabled,
+                  onToggleFavorite: () => favorites++,
+                  onTap: () => details++,
+                ),
+              ),
+            ),
+          ),
+        ));
+    final heart = find.byKey(const ValueKey('waterfall-favorite'));
+    for (final favorite in [false, true]) {
+      await show(favorite: favorite, enabled: true);
+      final iconData = favorite ? Icons.favorite : Icons.favorite_border;
+      final before = tester.widget<Icon>(find.byIcon(iconData));
+      await show(favorite: favorite, enabled: false);
+      final disabled = tester.widget<Icon>(find.byIcon(iconData));
+      expect(disabled.color, before.color);
+      expect(disabled.shadows, before.shadows);
+      expect(find.byKey(const ValueKey('waterfall-favorite-progress')),
+          findsNothing);
+      expect(find.bySemanticsLabel('正在更新收藏'), findsNothing);
+      final data = tester.getSemantics(heart).getSemanticsData();
+      expect(data.flagsCollection.isEnabled, Tristate.isFalse);
+      expect(data.hasAction(SemanticsAction.tap), isFalse);
+      expect(data.label, favorite ? '取消平台收藏' : '加入平台收藏');
+      await tester.tap(heart);
+      expect(favorites, 0);
+      expect(details, 0);
+    }
+    await show(favorite: true, enabled: true);
+    await tester.tap(heart);
+    expect(favorites, 1);
+    expect(details, 0);
+    semantics.dispose();
+  });
 
   testWidgets('推荐头像兜底，爱心有对比轮廓，独立点击且等待态不进入详情', (tester) async {
     final semantics = tester.ensureSemantics();

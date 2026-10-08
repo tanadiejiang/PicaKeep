@@ -3,9 +3,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:picakeep/components/comic_tile.dart';
 import 'package:picakeep/components/layout.dart';
-import 'package:picakeep/foundation/download.dart';
-import 'package:picakeep/foundation/download_model.dart';
-import 'package:picakeep/foundation/local_library.dart';
+import 'package:picakeep/foundation/local_search_cover.dart';
 import 'package:picakeep/foundation/local_search_data_source.dart';
 import 'package:picakeep/foundation/pixiv_detail_session.dart';
 import 'package:picakeep/foundation/pixiv_local_detail.dart';
@@ -27,12 +25,14 @@ class LocalSearchPage extends StatefulWidget {
     this.searchType = LocalSearchType.all,
     this.initialKeyword = '',
     this.dataSource = const LocalSearchDataSource(),
+    this.coverResolver,
     super.key,
   });
 
   final LocalSearchType searchType;
   final String initialKeyword;
   final LocalSearchDataSource dataSource;
+  final LocalSearchCoverResolver? coverResolver;
 
   @override
   State<LocalSearchPage> createState() => _LocalSearchPageState();
@@ -54,10 +54,15 @@ class _LocalSearchPageState extends State<LocalSearchPage> {
   bool _chipsReady = false;
   List<String> _suggestions = [];
   bool _tagTranslationsReady = false; // 中文标签翻译表是否加载完毕
+  late final LocalSearchCoverResolver _covers;
 
   @override
   void initState() {
     super.initState();
+    _covers = widget.coverResolver ?? LocalSearchCoverResolver();
+    App.localDataVersion.addListener(_onCoverSourcesChanged);
+    App.serviceConfigVersion.addListener(_onCoverSourcesChanged);
+    App.serviceRuntimeVersion.addListener(_onCoverSourcesChanged);
     _scope = widget.searchType;
     _loadChips();
     // 懒加载中文标签翻译表（对齐在线搜索页 _tagsReady 模式）；
@@ -80,8 +85,17 @@ class _LocalSearchPageState extends State<LocalSearchPage> {
 
   @override
   void dispose() {
+    App.localDataVersion.removeListener(_onCoverSourcesChanged);
+    App.serviceConfigVersion.removeListener(_onCoverSourcesChanged);
+    App.serviceRuntimeVersion.removeListener(_onCoverSourcesChanged);
+    _covers.dispose();
     _controller.dispose();
     super.dispose();
+  }
+
+  void _onCoverSourcesChanged() {
+    if (!mounted || _editing || _lastSubmitted.isEmpty) return;
+    _search(_lastSubmitted, aliases: _lastAliases);
   }
 
   Future<void> _loadChips() async {
@@ -109,6 +123,7 @@ class _LocalSearchPageState extends State<LocalSearchPage> {
     final query = _controller.text.trim();
     final aliases = query == _lastSubmitted ? _lastAliases : const <String>[];
     ++_searchRevision;
+    _covers.cancelPending();
     setState(() {
       _scope = scope;
       _results = [];
@@ -127,6 +142,7 @@ class _LocalSearchPageState extends State<LocalSearchPage> {
   void _onSearchTextChanged(String value) {
     // Editing or clearing a query also invalidates any in-flight search.
     ++_searchRevision;
+    _covers.cancelPending();
     setState(() {
       _editing = true;
       _results = [];
@@ -142,6 +158,7 @@ class _LocalSearchPageState extends State<LocalSearchPage> {
       {List<String> aliases = const []}) async {
     final normalizedKeyword = keyword.trim();
     final revision = ++_searchRevision;
+    _covers.cancelPending();
     if (normalizedKeyword.isEmpty) {
       _onSearchTextChanged('');
       return;
@@ -183,29 +200,18 @@ class _LocalSearchPageState extends State<LocalSearchPage> {
     return '${size.toStringAsFixed(1)}MB';
   }
 
-  File _coverForDownloadedItem(DownloadedItem item) {
-    if (item is LocalLibraryComicItem) {
-      final coverPath = item.localCoverPath?.trim();
-      if (coverPath != null && coverPath.isNotEmpty) {
-        final file = File(coverPath);
-        if (file.existsSync()) {
-          return file;
-        }
-      }
-      return File('');
-    }
-    return DownloadManager().getCover(item.id);
-  }
-
   Widget _buildGridTile(LocalSearchResult result) {
     if (result.downloadItem != null) {
       final item = result.downloadItem!;
       return Padding(
+        key: ValueKey(('download', item.id, item.fileSystemPath)),
         padding: const EdgeInsets.all(2),
         child: DownloadedComicTile(
           name: item.name,
           author: localSearchAuthor(item),
-          imagePath: _coverForDownloadedItem(item),
+          imagePath: File(''),
+          imageProvider: _covers.providerFor(result),
+          optimizeCoverDecode: true,
           type: result.sourceLabel,
           tag: item.tags,
           onTap: () {
@@ -222,22 +228,21 @@ class _LocalSearchPageState extends State<LocalSearchPage> {
       final favorite = result.favoriteItem!;
       final comic = favorite.comic;
       final localItem = result.localItem;
-      final coverPath = comic.coverPath.trim();
-      final favoriteCover = coverPath.isNotEmpty ? File(coverPath) : File('');
-      final localCover =
-          localItem != null ? _coverForDownloadedItem(localItem) : null;
-      final imageFile = favoriteCover.existsSync()
-          ? favoriteCover
-          : (localCover?.existsSync() ?? false)
-              ? localCover!
-              : File('');
-
       return Padding(
+        key: ValueKey((
+          'favorite',
+          comic.type.key,
+          comic.target,
+          localItem?.id,
+          localItem?.fileSystemPath
+        )),
         padding: const EdgeInsets.all(2),
         child: DownloadedComicTile(
           name: comic.name,
           author: comic.author,
-          imagePath: imageFile,
+          imagePath: File(''),
+          imageProvider: _covers.providerFor(result),
+          optimizeCoverDecode: true,
           type: result.sourceLabel,
           tag: comic.tags,
           onTap: () {
@@ -314,8 +319,8 @@ class _LocalSearchPageState extends State<LocalSearchPage> {
       entries: _results.map(entryFor).whereType<PixivDetailEntry>(),
     );
     try {
-      await App.pushInner(() => PixivDetailPager(
-            session: session, initialKey: keyFor(result)));
+      await App.pushInner(
+          () => PixivDetailPager(session: session, initialKey: keyFor(result)));
     } finally {
       session.dispose();
     }

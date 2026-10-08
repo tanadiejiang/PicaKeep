@@ -80,9 +80,11 @@ class DownloadNoticeSnapshot {
       completed: completed,
       currentId: active?.id,
       currentTitle: active?.title ?? '',
-      percent: active == null || !active.progress.isFinite
-          ? 0
-          : (active.progress.clamp(0, 1) * 100).floor(),
+      percent: state == DownloadNoticeState.finished
+          ? 100
+          : active == null || !active.progress.isFinite
+              ? 0
+              : (active.progress.clamp(0, 1) * 100).floor(),
       bytesPerSecond: active?.bytesPerSecond ?? 0,
     );
   }
@@ -193,14 +195,21 @@ class DownloadNotificationController {
           _flush();
         }
       });
-    } else if (snapshot.state != DownloadNoticeState.queued) {
+    } else {
       _heartbeat?.cancel();
       _heartbeat = null;
     }
     if (_dismissed && !snapshot.needsService) return;
-    if (snapshot.state == DownloadNoticeState.queued) return;
     final transition = _lastRequested?.transitionKey != snapshot.transitionKey;
     _lastRequested = snapshot;
+    if (snapshot.state == DownloadNoticeState.queued) {
+      // Keep the native service during a short task handoff, but do not keep
+      // sending the completed task's speed/progress if the next task stalls.
+      _timer?.cancel();
+      _timer = null;
+      _pending = null;
+      return;
+    }
     _pending = snapshot;
     if (transition || !snapshot.needsService) {
       _timer?.cancel();
@@ -270,8 +279,13 @@ class DownloadNotificationController {
       warning.value = null;
     } catch (_) {}
     await pullRoute();
-    if (_lastRequested?.needsService == true) {
-      _pending = _lastRequested;
+    final snapshot = _lastRequested;
+    if (snapshot != null &&
+        snapshot.state != DownloadNoticeState.queued &&
+        (snapshot.needsService || (_hasPublished && !_dismissed))) {
+      // Reconcile terminal state too: a transient failed finish IPC must not
+      // leave an orphan foreground notice after the user returns to the app.
+      _pending = snapshot;
       _flush();
     }
   }

@@ -2,8 +2,10 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:ffi';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider_platform_interface/path_provider_platform_interface.dart';
 import 'package:picakeep/base.dart';
@@ -15,6 +17,8 @@ import 'package:picakeep/network/jm_network/jm_network.dart';
 import 'package:picakeep/network/komiic_network/komiic_network.dart';
 import 'package:picakeep/network/picacg_network/picacg_network.dart';
 import 'package:picakeep/network/res.dart';
+import 'package:picakeep/tools/download_notification_controller.dart';
+import 'package:picakeep/tools/tags_translation.dart';
 import 'package:sqlite3/open.dart';
 import 'package:sqlite3/sqlite3.dart';
 
@@ -118,11 +122,13 @@ void main() {
   OnlineDownloadManager makeManager({
     Future<Res<List<String>>> Function(String, String, int, String)? load,
     Future<void> Function(String, String, File, Map<String, String>)? write,
+    void Function(DownloadNoticeSnapshot)? notice,
   }) {
     final value = OnlineDownloadManager.forTesting(
         downloadRoot: root.path,
         chapterLoader: load ?? loader,
-        chapterFileWriter: write ?? writer);
+        chapterFileWriter: write ?? writer,
+        noticeObserver: notice);
     managers.add(value);
     return value;
   }
@@ -254,6 +260,91 @@ void main() {
       expect(statuses[0], isNull);
     });
   }
+
+  test('Komiic完成不等待翻译资产，文件/记录/通知终态一致', () async {
+    resetTagTranslationsForTesting();
+    final assetRelease = Completer<ByteData?>();
+    var translationRequests = 0;
+    final binding = TestDefaultBinaryMessengerBinding.instance;
+    binding.defaultBinaryMessenger.setMockMessageHandler('flutter/assets',
+        (message) async {
+      final key = utf8.decode(message!.buffer
+          .asUint8List(message.offsetInBytes, message.lengthInBytes));
+      if (key == 'assets/tags.json') {
+        translationRequests++;
+        return assetRelease.future;
+      }
+      return null;
+    });
+    final notices = <DownloadNoticeSnapshot>[];
+    try {
+      manager = makeManager(notice: notices.add);
+      await manager.enqueueKomiic(_komiic(), chapterIndexes: [0, 1]);
+      final task = manager.tasks.single;
+      await waitTask(task);
+      await manager.persistQueue();
+      expect(task.completed, isTrue);
+      expect(task.error, isNull);
+      expect((await record('komiic41'))['downloadedEps'], [0, 1]);
+      expect(
+          await File(p.join(root.path, 'Chapter Book', '2', '2.jpg')).exists(),
+          isTrue);
+      expect(translationRequests, 0, reason: 'Komiic无缺失标签收集，不应进入翻译资产队列');
+      expect(notices.last.state, DownloadNoticeState.finished);
+      expect(notices.last.completed, 1);
+      expect(notices.last.total, 1);
+      expect(notices.last.percent, 100);
+      expect(
+          jsonDecode(await File(p.join(root.path, 'download_queue.json'))
+              .readAsString()),
+          isEmpty);
+    } finally {
+      assetRelease.complete(
+          ByteData.sublistView(Uint8List.fromList(utf8.encode('{}'))));
+      await Future<void>.delayed(Duration.zero);
+      binding.defaultBinaryMessenger
+          .setMockMessageHandler('flutter/assets', null);
+      resetTagTranslationsForTesting();
+    }
+  });
+
+  test('最后一章队列提交失败显示错误，修复后复用落盘文件完成通知', () async {
+    final notices = <DownloadNoticeSnapshot>[];
+    final queue = File(p.join(root.path, 'download_queue.json'));
+    var blocked = false;
+    manager = makeManager(
+        notice: notices.add,
+        write: (source, url, target, headers) async {
+          await writer(source, url, target, headers);
+          if (url.endsWith('/2.jpg') && !blocked) {
+            blocked = true;
+            await queue.delete();
+            await Directory(queue.path).create();
+          }
+        });
+    try {
+      await manager.enqueueKomiic(_komiic(), chapterIndexes: [0]);
+      final task = manager.tasks.single;
+      await waitTask(task);
+      expect(task.completed, isFalse);
+      expect(task.error, isNotNull);
+      expect(notices.last.state, DownloadNoticeState.failed);
+      expect((await record('komiic41'))['downloadedEps'], [0]);
+      final written = writes.length;
+      await Directory(queue.path).delete();
+      manager.retry(task.id);
+      await waitTask(task);
+      expect(task.completed, isTrue);
+      expect(task.error, isNull);
+      expect(writes.length, written, reason: '提交失败重试复用已落盘页');
+      expect(notices.last.state, DownloadNoticeState.finished);
+      expect(notices.last.completed, 1);
+    } finally {
+      if (await Directory(queue.path).exists()) {
+        await Directory(queue.path).delete();
+      }
+    }
+  });
 
   test('同目录补章复用旧路径/联合完成集合，不覆盖旧页，完成队列不挡新章', () async {
     expect(
