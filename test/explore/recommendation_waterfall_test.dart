@@ -366,9 +366,9 @@ void main() {
       expect(card.comic, isA<PixivComicBrief>());
     }
     expect(find.text('屏蔽词 作品0'), findsNothing);
-    final masonry =
-        tester.widget<SliverMasonryGrid>(find.byType(SliverMasonryGrid));
-    expect(masonry.delegate.estimatedChildCount, 2);
+    final masonry = tester.widget<StaggeredGrid>(find.byType(StaggeredGrid));
+    expect(masonry.children, hasLength(2));
+    expect(find.byType(SliverMasonryGrid), findsNothing);
     await tester.drag(find.byKey(const Key('explore-recommend-scroll')),
         const Offset(0, -250));
     await tester.pumpAndSettle();
@@ -379,6 +379,68 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('已屏蔽：屏蔽词'), findsOneWidget);
     expect(provider.overviews, 1);
+  });
+
+  testWidgets(
+      'complete overview prefix updates display and preserves cached scroll',
+      (tester) async {
+    provider.sections = [
+      ExploreSection(
+          id: 'recommend',
+          title: '推荐区',
+          entryId: provider.recommendId,
+          items: List.generate(10, (i) => _comic('home-$i'))),
+      ExploreSection(
+          id: 'bookmarks',
+          title: '我的收藏',
+          entryId: provider.recommendId,
+          items: List.generate(48, (i) => _comic('fav-$i'))),
+    ];
+    await pump(tester);
+    expect(tester.widget<StaggeredGrid>(find.byType(StaggeredGrid)).children,
+        hasLength(10));
+    expect(
+        tester
+            .widget<SliverMasonryGrid>(
+                find.byType(SliverMasonryGrid, skipOffstage: false))
+            .delegate
+            .estimatedChildCount,
+        48);
+    final scroll = tester
+        .widget<CustomScrollView>(
+            find.byKey(const Key('explore-recommend-scroll')))
+        .controller!;
+    scroll.jumpTo(500);
+    await tester.pumpAndSettle();
+    final offset = scroll.offset;
+    appdata.settings[illustWaterfallColumnsSettingIndex] = '3';
+    appdata.settings[comicTileDisplayConfigSettingIndex] =
+        '{"waterfall":{"recommend":{"showTags":false,"tagRows":1}}}';
+    App.notifyDisplaySettingsChanged();
+    await tester.pumpAndSettle();
+    final complete = tester.widget<StaggeredGrid>(find.byType(StaggeredGrid));
+    expect(
+        complete.delegate.getCrossAxisCount(
+            tester.getSize(find.byType(StaggeredGrid)).width, 0),
+        3);
+    expect(
+        tester
+            .widget<OnlineWaterfallCard>(find.byType(OnlineWaterfallCard).first)
+            .tagConfig
+            .showTags,
+        isFalse);
+    expect(scroll.offset, closeTo(offset, .01));
+    await selectTab(tester, '榜单');
+    await selectTab(tester, '推荐');
+    expect(
+        tester
+            .widget<CustomScrollView>(
+                find.byKey(const Key('explore-recommend-scroll')))
+            .controller,
+        same(scroll));
+    expect(scroll.offset, closeTo(offset, .01));
+    expect(provider.overviews, 1);
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets(

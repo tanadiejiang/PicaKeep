@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
@@ -13,8 +14,11 @@ import 'package:picakeep/foundation/image_pipeline/image_disk_quota.dart';
 import 'package:picakeep/foundation/image_pipeline/reader_page_source.dart';
 import 'package:picakeep/foundation/image_pipeline/reader_raster_backend.dart';
 import 'package:picakeep/foundation/image_pipeline/reader_viewport.dart';
+import 'package:picakeep/foundation/image_pipeline/reader_failure_diagnostics.dart';
+import 'package:picakeep/foundation/image_pipeline/reader_original_raster_handoff.dart';
 import 'package:picakeep/foundation/reader_image_quality.dart';
 import 'package:picakeep/pages/reader/reader_image_surface.dart';
+import 'package:picakeep_image_engine/picakeep_image_engine.dart';
 
 class _TestPaths extends PathProviderPlatform {
   _TestPaths(this.root);
@@ -351,6 +355,26 @@ class _SingleTileFailureBackend extends _Backend {
   }
 }
 
+class _CancelledEstimateBackend extends _Backend {
+  bool cancelEstimate = true;
+  @override
+  Future<int> estimateWorkingBytes(File file, ReaderTileDemand demand,
+      {required String backingPath}) async {
+    if (cancelEstimate) {
+      throw const ImageEngineException(2, 'Cancelled native estimate');
+    }
+    return 1;
+  }
+}
+
+class _FailedEarlyEstimateBackend extends FlutterReaderRasterBackend {
+  _FailedEarlyEstimateBackend(super.metadata) : super(persistRaster: false);
+  @override
+  Future<int> estimateWorkingBytes(File file, ReaderTileDemand demand,
+          {required String backingPath}) async =>
+      throw const FileSystemException('Early estimate failed', 'private-file');
+}
+
 class _AdmissionRaceFile implements File {
   _AdmissionRaceFile(this.delegate);
   final File delegate;
@@ -546,6 +570,9 @@ Widget _harness(
     bool topLeftProjection = false,
     double rotation = 0,
     ValueNotifier<Offset>? pan,
+    ReaderFailureAttemptDiagnostics? failureDiagnostics,
+    ReaderOriginalRasterHandoff? originalRasterHandoff,
+    bool fullOrdinaryImage = false,
     ValueChanged<ReaderPresentedFrame>? onPresented}) {
   final transformChanges = pan == null ? zoom : Listenable.merge([zoom, pan]);
   Widget surface(ReaderDisplayMode displayMode, int pixels) =>
@@ -562,6 +589,9 @@ Widget _harness(
           nativeLargeFit: nativeLargeFit,
           preparedReadAdmission: preparedReadAdmission,
           textureEdgeLowerBound: textureEdgeLowerBound,
+          failureDiagnostics: failureDiagnostics,
+          originalRasterHandoff: originalRasterHandoff,
+          fullOrdinaryImage: fullOrdinaryImage,
           onPresented: onPresented);
   Widget pixels(double scale) => Transform.scale(
       scale: scale,
@@ -1425,6 +1455,16 @@ void main() {
       final zoom = ValueNotifier(1.0);
       final mode = ValueNotifier(ReaderDisplayMode.sharpFirst);
       final presented = <ReaderPresentedFrame>[];
+      final diagnosticLines = <String>[];
+      final diagnosticSession =
+          ReaderFailureDiagnosticsSession(writer: diagnosticLines.add);
+      final diagnosticAttempt = diagnosticSession
+          .page(
+              logicalIdentity: 'single-tile',
+              chapter: 1,
+              page: 0,
+              readingMode: 'continuous')
+          .beginAttempt(generation: 0, qualityMode: 'sharpFirst');
       try {
         await tester.pumpWidget(_harness(
             source: _Source('failure-$failEstimate'),
@@ -1433,6 +1473,7 @@ void main() {
             mode: mode,
             viewport: GlobalKey(),
             screenshot: GlobalKey(),
+            failureDiagnostics: diagnosticAttempt,
             onPresented: presented.add));
         await _settle(tester, frames: 24);
         final surface = ReaderSurfaceDiagnostics.snapshot().single;
@@ -1451,6 +1492,17 @@ void main() {
         expect(presented, isEmpty);
         expect(backend.failures, 1,
             reason: 'terminal errors do not create an automatic retry loop');
+        final failureEvents = diagnosticLines
+            .map((line) => jsonDecode(line) as Map)
+            .where((event) => event['event'] == 'failure')
+            .toList();
+        expect(failureEvents, hasLength(1));
+        expect(failureEvents.single['stage'],
+            failEstimate ? 'estimate' : 'decode');
+        expect(
+            diagnosticLines.any(
+                (line) => (jsonDecode(line) as Map)['event'] == 'recovered'),
+            isFalse);
         await tester.tap(find.byType(TextButton));
         await _settle(tester, frames: 24);
         expect(presented.last.complete, isTrue);
@@ -1458,11 +1510,19 @@ void main() {
         expect(ReaderSurfaceDiagnostics.snapshot().single['tileFailures'],
             isEmpty);
         expect(backend.failures, 1);
+        final recovered = diagnosticLines
+            .map((line) => jsonDecode(line) as Map)
+            .where((event) => event['event'] == 'recovered')
+            .toList();
+        expect(recovered, hasLength(1));
+        expect(recovered.single['attempt'], 2);
+        expect(recovered.single['snapshot']['missingCount'], 0);
       } finally {
         await tester.pumpWidget(const SizedBox.shrink());
         await _settle(tester);
         zoom.dispose();
         mode.dispose();
+        diagnosticSession.dispose();
       }
       expect(ReaderSurfaceDiagnostics.residentBytes, 0);
       expect(ReaderSurfaceDiagnostics.pendingBytes, 0);
@@ -2473,6 +2533,15 @@ void main() {
           fileSnapshot: original.statSync());
       final zoom = ValueNotifier(1.0);
       final mode = ValueNotifier(ReaderDisplayMode.sharpFirst);
+      final lines = <String>[];
+      final diagnostics = ReaderFailureDiagnosticsSession(writer: lines.add);
+      final attempt = diagnostics
+          .page(
+              logicalIdentity: 'prepared-$scenario',
+              chapter: 1,
+              page: 0,
+              readingMode: 'continuous')
+          .beginAttempt(generation: 0, qualityMode: 'sharpFirst');
       try {
         await tester.pumpWidget(_harness(
             source: source,
@@ -2484,6 +2553,7 @@ void main() {
             sourceSize: const Size(400, 400),
             viewportSize: const Size(400, 400),
             preparedReadAdmission: scenario != 'default',
+            failureDiagnostics: attempt,
             resolvedOriginal: resolved));
         await _settle(tester);
         if (scenario == 'cancel') {
@@ -2494,6 +2564,7 @@ void main() {
           await _settle(tester);
           expect(backend.estimates, 0);
           expect(backend.coldReads, 0);
+          expect(lines, isEmpty);
         } else if (scenario == 'source-change') {
           expect(backend.preparedReads, 1);
           expect(backend.estimates, 0);
@@ -2501,6 +2572,20 @@ void main() {
           expect(ReaderSurfaceDiagnostics.residentBytes, 0);
           expect(ReaderSurfaceDiagnostics.snapshot().single['error'],
               contains('changed after'));
+          final failure = lines
+              .map((line) => jsonDecode(line) as Map)
+              .singleWhere((event) => event['event'] == 'failure');
+          expect(failure['stage'], 'sourceValidation');
+          expect(failure['reason'], 'sourceChanged');
+          expect(failure['errorType'], 'ReaderSourceSnapshotMismatch');
+          expect(failure['snapshot']['fileSizeMatches'], isFalse);
+          expect(failure['snapshot']['sourceIdentityMatches'], isTrue);
+          expect(failure['snapshot']['expectedFileSize'], 3);
+          expect(failure['snapshot']['currentFileSize'], 4);
+          expect(failure['snapshot']['expectedChangedMicros'], isA<int>());
+          expect(failure['snapshot']['currentChangedMicros'], isA<int>());
+          expect(failure['snapshot']['expectedAccessedMicros'], isA<int>());
+          expect(failure['snapshot']['currentAccessedMicros'], isA<int>());
         } else if (scenario == 'warm') {
           expect(backend.preparedReads, 1);
           expect(backend.estimates, 0);
@@ -2518,6 +2603,9 @@ void main() {
           expect(backend.leaseCountsAtEstimate.single, greaterThan(0));
           expect(backend.memoryBudgets,
               scenario == 'miss' ? [32 << 20, 64 << 20] : [64 << 20]);
+          expect(lines, isEmpty,
+              reason:
+                  'warm miss is a normal cold admission, not a failed file');
         }
       } finally {
         if (backend.preparedGate?.isCompleted == false) {
@@ -2527,6 +2615,7 @@ void main() {
         await _settle(tester);
         zoom.dispose();
         mode.dispose();
+        diagnostics.dispose();
       }
       expect(ReaderPageFileLease.activeLeaseCount, 0);
       expect(ImageWorkScheduler.shared.reservedBytes, 0);
@@ -2613,6 +2702,15 @@ void main() {
     final zoom = ValueNotifier(0.05);
     final mode = ValueNotifier(ReaderDisplayMode.sharpFirst);
     final savedOverrides = IOOverrides.current;
+    final lines = <String>[];
+    final diagnostics = ReaderFailureDiagnosticsSession(writer: lines.add);
+    final attempt = diagnostics
+        .page(
+            logicalIdentity: 'backing-touch',
+            chapter: 1,
+            page: 0,
+            readingMode: 'continuous')
+        .beginAttempt(generation: 0, qualityMode: 'sharpFirst');
     IOOverrides.global = overrides;
     try {
       await tester.pumpWidget(_harness(
@@ -2621,6 +2719,7 @@ void main() {
           zoom: zoom,
           mode: mode,
           viewport: GlobalKey(),
+          failureDiagnostics: attempt,
           screenshot: GlobalKey()));
       await _settle(tester, frames: 60);
       expect(backend.requests, hasLength(1),
@@ -2632,15 +2731,241 @@ void main() {
       expect(ReaderSurfaceDiagnostics.residentBytes, 0);
       expect(ReaderSurfaceDiagnostics.snapshot().single['error'],
           contains('Injected backing touch failure'));
+      final failure = jsonDecode(lines.single) as Map;
+      expect(failure['stage'], 'backingMaintenance');
+      expect(failure['reason'], 'fileIO');
     } finally {
       await tester.pumpWidget(const SizedBox.shrink());
       await _settle(tester);
       IOOverrides.global = savedOverrides;
       zoom.dispose();
       mode.dispose();
+      diagnostics.dispose();
     }
     expect(ReaderPageFileLease.activeLeaseCount, 0);
     expect(ImageWorkScheduler.shared.reservedBytes, 0);
+  });
+
+  testWidgets('cancelled native estimate does not become a tile failure',
+      (tester) async {
+    final backend = _CancelledEstimateBackend();
+    final zoom = ValueNotifier(0.05);
+    final mode = ValueNotifier(ReaderDisplayMode.sharpFirst);
+    final lines = <String>[];
+    final diagnostics = ReaderFailureDiagnosticsSession(writer: lines.add);
+    final attempt = diagnostics
+        .page(
+            logicalIdentity: 'estimate-cancel',
+            chapter: 1,
+            page: 0,
+            readingMode: 'continuous')
+        .beginAttempt(generation: 0, qualityMode: 'sharpFirst');
+    try {
+      await tester.pumpWidget(_harness(
+          source: _Source('estimate-cancel'),
+          backend: backend,
+          zoom: zoom,
+          mode: mode,
+          viewport: GlobalKey(),
+          screenshot: GlobalKey(),
+          failureDiagnostics: attempt));
+      await _settle(tester);
+      expect(
+          ReaderSurfaceDiagnostics.snapshot().single['tileFailures'], isEmpty);
+      expect(find.byType(TextButton), findsNothing);
+      expect(lines, isEmpty);
+      backend.cancelEstimate = false;
+      zoom.value = 0.06;
+      await _settle(tester);
+      expect(backend.requests, isNotEmpty);
+      expect(lines, isEmpty);
+    } finally {
+      await tester.pumpWidget(const SizedBox.shrink());
+      await _settle(tester);
+      diagnostics.dispose();
+      zoom.dispose();
+      mode.dispose();
+    }
+    expect(ReaderPageFileLease.activeLeaseCount, 0);
+  });
+
+  testWidgets('early original estimate reports its actual handoff stage',
+      (tester) async {
+    final file = File('${root.path}/early-estimate')
+      ..writeAsBytesSync([1, 2, 3]);
+    final source = _Source('early-estimate');
+    const metadata = ReaderRasterMetadata(
+        size: Size(320, 480), animated: false, format: 'png', workingBytes: 1);
+    final backend = _FailedEarlyEstimateBackend(metadata);
+    final resolved = ReaderResolvedOriginal(
+        source: source,
+        file: file,
+        metadata: metadata,
+        fileSnapshot: file.statSync());
+    final handoff = ReaderOriginalRasterHandoff.start(
+        file: file,
+        metadata: metadata,
+        fileSnapshot: resolved.fileSnapshot,
+        backend: backend,
+        backingPath: '${root.path}/early-estimate.rgba',
+        verifyOriginal: resolved.verifyCurrent);
+    final lines = <String>[];
+    final diagnostics = ReaderFailureDiagnosticsSession(writer: lines.add);
+    final attempt = diagnostics
+        .page(
+            logicalIdentity: 'early-estimate',
+            chapter: 1,
+            page: 0,
+            readingMode: 'continuous')
+        .beginAttempt(generation: 0, qualityMode: 'sharpFirst');
+    final zoom = ValueNotifier(1.0);
+    final mode = ValueNotifier(ReaderDisplayMode.sharpFirst);
+    try {
+      await tester.pumpWidget(_harness(
+          source: source,
+          backend: backend,
+          zoom: zoom,
+          mode: mode,
+          viewport: GlobalKey(),
+          screenshot: GlobalKey(),
+          sourceSize: metadata.size,
+          resolvedOriginal: resolved,
+          originalRasterHandoff: handoff,
+          fullOrdinaryImage: true,
+          failureDiagnostics: attempt));
+      await _settle(tester);
+      final failure = lines
+          .map((line) => jsonDecode(line) as Map)
+          .singleWhere((event) => event['event'] == 'failure');
+      expect(failure['stage'], 'estimate');
+      expect(failure['reason'], 'fileIO');
+      expect(handoff.failureStage, 'estimate');
+      expect(handoff.estimatedWorkingBytes, isNull);
+    } finally {
+      await tester.pumpWidget(const SizedBox.shrink());
+      handoff.cancel();
+      await _settle(tester);
+      await handoff.drained;
+      diagnostics.dispose();
+      zoom.dispose();
+      mode.dispose();
+    }
+    expect(ReaderPageFileLease.activeLeaseCount, 0);
+  });
+
+  testWidgets('an upgrade failure recovers only after all desired pixels paint',
+      (tester) async {
+    final backend = _SingleTileFailureBackend(failEstimate: false);
+    final zoom = ValueNotifier(0.05);
+    final mode = ValueNotifier(ReaderDisplayMode.previewFirst);
+    final lines = <String>[];
+    final diagnostics = ReaderFailureDiagnosticsSession(writer: lines.add);
+    final attempt = diagnostics
+        .page(
+            logicalIdentity: 'upgrade-after-first',
+            chapter: 1,
+            page: 0,
+            readingMode: 'continuous')
+        .beginAttempt(generation: 0, qualityMode: 'previewFirst');
+    try {
+      await tester.pumpWidget(_harness(
+          source: _Source('upgrade-after-first'),
+          backend: backend,
+          zoom: zoom,
+          mode: mode,
+          viewport: GlobalKey(),
+          screenshot: GlobalKey(),
+          failureDiagnostics: attempt));
+      await _settle(tester, frames: 24);
+      expect(lines, isEmpty);
+      mode.value = ReaderDisplayMode.sharpFirst;
+      zoom.value = 1;
+      await _settle(tester, frames: 24);
+      expect(backend.failures, 1);
+      final failed = lines
+          .map((line) => jsonDecode(line) as Map)
+          .singleWhere((event) => event['event'] == 'failure');
+      expect(failed['qualityMode'], 'sharpFirst');
+      expect(
+          lines
+              .any((line) => (jsonDecode(line) as Map)['event'] == 'recovered'),
+          isFalse);
+      await tester.tap(find.byType(TextButton));
+      await _settle(tester, frames: 24);
+      final recovered = lines
+          .map((line) => jsonDecode(line) as Map)
+          .singleWhere((event) => event['event'] == 'recovered');
+      expect(recovered['snapshot']['missingCount'], 0);
+      expect(recovered['snapshot']['desiredCount'], greaterThan(1));
+      expect(recovered['attempt'], 2);
+    } finally {
+      await tester.pumpWidget(const SizedBox.shrink());
+      await _settle(tester);
+      diagnostics.dispose();
+      zoom.dispose();
+      mode.dispose();
+    }
+    expect(ReaderPageFileLease.activeLeaseCount, 0);
+  });
+
+  testWidgets(
+      'resident refusal records actual local usage and remaining capacity',
+      (tester) async {
+    TestWidgetsFlutterBinding.instance.platformDispatcher.views.first
+        .physicalSize = const Size(4096, 4096);
+    final backend = _Backend()..metadataSize = const Size(4096, 4096);
+    final zoom = ValueNotifier(0.9);
+    final mode = ValueNotifier(ReaderDisplayMode.sharpFirst);
+    final tilePixels = ValueNotifier(2048);
+    final lines = <String>[];
+    final diagnostics = ReaderFailureDiagnosticsSession(writer: lines.add);
+    final attempt = diagnostics
+        .page(
+            logicalIdentity: 'local-resident',
+            chapter: 1,
+            page: 0,
+            readingMode: 'continuous')
+        .beginAttempt(generation: 0, qualityMode: 'sharpFirst');
+    try {
+      await tester.pumpWidget(_harness(
+          source: _Source('local-resident'),
+          backend: backend,
+          zoom: zoom,
+          mode: mode,
+          viewport: GlobalKey(),
+          screenshot: GlobalKey(),
+          tilePixels: tilePixels,
+          sourceSize: const Size(4096, 4096),
+          viewportSize: const Size(4096, 4096),
+          failureDiagnostics: attempt));
+      await _settle(tester, frames: 32);
+      final failure = lines
+          .map((line) => jsonDecode(line) as Map)
+          .singleWhere((event) => event['event'] == 'failure');
+      final snapshot = failure['snapshot'] as Map;
+      expect(failure['stage'], 'residentAdmission');
+      expect(failure['reason'], 'residentBudget');
+      expect(snapshot['localExceeded'], isTrue);
+      expect(snapshot['globalExceeded'], isFalse);
+      expect(snapshot['limitBytes'], 64 << 20);
+      expect(snapshot['requestBytes'], greaterThan(snapshot['availableBytes']));
+      expect(snapshot['currentUsage'] + snapshot['availableBytes'], 64 << 20);
+      expect(snapshot['requestBytes'], lessThan(192 << 20));
+      expect(
+          lines
+              .any((line) => (jsonDecode(line) as Map)['event'] == 'recovered'),
+          isFalse);
+    } finally {
+      await tester.pumpWidget(const SizedBox.shrink());
+      await _settle(tester);
+      diagnostics.dispose();
+      zoom.dispose();
+      mode.dispose();
+      tilePixels.dispose();
+    }
+    expect(ReaderSurfaceDiagnostics.residentBytes, 0);
+    expect(ReaderSurfaceDiagnostics.pendingBytes, 0);
+    expect(ReaderPageFileLease.activeLeaseCount, 0);
   });
 
   test('remote raster placeholder cannot be handed off as an original file',

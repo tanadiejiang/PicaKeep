@@ -46,10 +46,14 @@ class ReaderOriginalRasterHandoff {
   ImageWorkTicket<void>? _ticket;
   ui.Image? _ownedImage;
   bool _cancelled = false, _transferred = false, _runStarted = false;
+  String _failureStage = 'sourceValidation';
+  int? _estimatedWorkingBytes;
 
   Future<void> get ready => _ready.future;
   Future<void> get drained => _drained.future;
   int get outputBytes => demand.outputWidth * demand.outputHeight * 4;
+  String get failureStage => _failureStage;
+  int? get estimatedWorkingBytes => _estimatedWorkingBytes;
 
   static bool isEligible(ReaderRasterMetadata metadata, FileStat snapshot,
           ReaderRasterBackend backend) =>
@@ -75,16 +79,19 @@ class ReaderOriginalRasterHandoff {
         throw ArgumentError('Original is not eligible for an early PNG raster');
       }
       final estimateClock = Stopwatch()..start();
+      _failureStage = 'estimate';
       final working = math.max(
           2 << 20,
           await backend.estimateWorkingBytes(file, demand,
               backingPath: backingPath));
       _throwIfCancelled();
+      _estimatedWorkingBytes = working + outputBytes * 3;
       ReaderRasterDiagnostics.record({
         'earlyOriginalRasterSubmittedUs': developer.Timeline.now,
         'earlyOriginalRasterEstimateUs': estimateClock.elapsedMicroseconds,
         'earlyOriginalRasterWorkingBytes': working + outputBytes * 3,
       });
+      _failureStage = 'schedulerAdmission';
       _ticket = _scheduler.submit<void>(
           key: 'reader-first-original:${identityHashCode(this)}',
           priority: ImageWorkPriority.visible,
@@ -99,10 +106,12 @@ class ReaderOriginalRasterHandoff {
             try {
               _throwIfCancelled();
               cancel.throwIfCancelled();
+              _failureStage = 'sourceValidation';
               await _verifyOriginal();
               await _verifySrgbPng();
               _throwIfCancelled();
               cancel.throwIfCancelled();
+              _failureStage = 'decode';
               _ownedImage = await backend.decode(file, demand,
                   backingPath: backingPath,
                   memoryBudgetBytes: working,
@@ -110,8 +119,10 @@ class ReaderOriginalRasterHandoff {
                   isCancelled: () => _cancelled || cancel.isCancelled);
               _throwIfCancelled();
               cancel.throwIfCancelled();
+              _failureStage = 'sourceValidation';
               await _verifyOriginal();
               _throwIfCancelled();
+              _failureStage = 'decodeValidation';
               if (_ownedImage!.width != demand.outputWidth ||
                   _ownedImage!.height != demand.outputHeight ||
                   _ownedImage!.colorSpace != ui.ColorSpace.sRGB) {
@@ -150,6 +161,7 @@ class ReaderOriginalRasterHandoff {
   Future<void> verifyForTransfer() async {
     _throwIfCancelled();
     try {
+      _failureStage = 'sourceValidation';
       await _verifyOriginal();
       _throwIfCancelled();
     } catch (_) {

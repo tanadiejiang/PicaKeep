@@ -97,6 +97,18 @@ Widget buildExploreSettings(double width, BuildContext context) {
       onTap: () => showWaterfallTagSettings(context),
     ),
     SettingsTitle('在线浏览'.tl),
+    const _PixivDetailFeedCountTile(
+      key: ValueKey('pixiv-author-preview-count-setting'),
+      title: '作者作品预览数量',
+      description: '详情作者横排，默认5个',
+      authorPreview: true,
+    ),
+    const _PixivDetailFeedCountTile(
+      key: ValueKey('pixiv-related-batch-size-setting'),
+      title: '相关推荐每轮数量',
+      description: '每轮数量由Pixiv返回，读完后上拉继续推荐',
+      authorPreview: false,
+    ),
     SwitchSetting(
       key: const ValueKey('pixiv-bookmark-queue-counts-setting'),
       title: '显示 Pixiv 收藏队列数量'.tl,
@@ -161,6 +173,252 @@ Widget buildExploreSettings(double width, BuildContext context) {
       settingsIndex: 61,
     ),
   ]);
+}
+
+class _PixivDetailFeedCountTile extends StatefulWidget {
+  const _PixivDetailFeedCountTile({
+    super.key,
+    required this.title,
+    required this.description,
+    required this.authorPreview,
+  });
+
+  final String title;
+  final String description;
+  final bool authorPreview;
+
+  @override
+  State<_PixivDetailFeedCountTile> createState() =>
+      _PixivDetailFeedCountTileState();
+}
+
+class _PixivDetailFeedCountTileState extends State<_PixivDetailFeedCountTile> {
+  bool _saving = false;
+
+  int get _count => widget.authorPreview
+      ? readPixivAuthorPreviewCount()
+      : readPixivRelatedBatchSize();
+
+  int get _index => widget.authorPreview
+      ? pixivAuthorPreviewCountSettingIndex
+      : pixivRelatedBatchSizeSettingIndex;
+
+  Future<void> _changeCount() async {
+    if (!widget.authorPreview) {
+      await _changeRelatedCount();
+      return;
+    }
+    final maximum = widget.authorPreview
+        ? pixivAuthorPreviewMaximumCount
+        : pixivRelatedMaximumBatchSize;
+    final formKey = GlobalKey<FormState>();
+    var raw = _count.toString();
+    final count = await showDialog<int>(
+      context: context,
+      builder: (dialogContext) {
+        void save() {
+          if (formKey.currentState!.validate()) {
+            Navigator.of(dialogContext).pop(int.parse(raw.trim()));
+          }
+        }
+
+        return AlertDialog(
+          title: Text(widget.title.tl),
+          content: Form(
+            key: formKey,
+            child: TextFormField(
+              key: const ValueKey('pixiv-detail-feed-count-input'),
+              initialValue: raw,
+              autofocus: true,
+              keyboardType: TextInputType.number,
+              textInputAction: TextInputAction.done,
+              decoration: InputDecoration(
+                labelText: '数量'.tl,
+                helperText: '1–$maximum 个，默认5个'.tl,
+              ),
+              onChanged: (value) => raw = value,
+              onFieldSubmitted: (_) => save(),
+              validator: (value) {
+                final text = value?.trim() ?? '';
+                final number = RegExp(r'^[0-9]+$').hasMatch(text)
+                    ? int.tryParse(text)
+                    : null;
+                return number != null && number >= 1 && number <= maximum
+                    ? null
+                    : '请输入1到$maximum的整数'.tl;
+              },
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: Text('取消'.tl),
+            ),
+            FilledButton(onPressed: save, child: Text('保存'.tl)),
+          ],
+        );
+      },
+    );
+    if (!mounted || count == null || count == _count) return;
+    setState(() => _saving = true);
+    try {
+      final defaults = Appdata().settings;
+      if (appdata.settings.length < defaults.length) {
+        appdata.settings = [
+          ...appdata.settings,
+          ...defaults.skip(appdata.settings.length),
+        ];
+      }
+      appdata.settings[_index] = count.toString();
+      await appdata.updateSettings();
+      App.notifyDisplaySettingsChanged();
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  Future<void> _changeRelatedCount() async {
+    final formKey = GlobalKey<FormState>();
+    var mode = readPixivRelatedMode();
+    var raw = _count.toString();
+    int? validCount() {
+      final text = raw.trim();
+      final number =
+          RegExp(r'^[0-9]+$').hasMatch(text) ? int.tryParse(text) : null;
+      return number != null &&
+              number >= 1 &&
+              number <= pixivRelatedMaximumBatchSize
+          ? number
+          : null;
+    }
+
+    final choice = await showDialog<({String mode, int? count})>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          final custom = mode == pixivRelatedModeCustom;
+          void save() {
+            if (!custom) {
+              Navigator.of(dialogContext)
+                  .pop((mode: pixivRelatedModePixiv, count: null));
+            } else if (formKey.currentState!.validate() &&
+                validCount() != null) {
+              Navigator.of(dialogContext)
+                  .pop((mode: pixivRelatedModeCustom, count: validCount()));
+            }
+          }
+
+          return AlertDialog(
+            title: Text(widget.title.tl),
+            content: SingleChildScrollView(
+              child: RadioGroup<String>(
+                key: const ValueKey('pixiv-related-mode-group'),
+                groupValue: mode,
+                onChanged: (value) => setDialogState(() => mode = value!),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    RadioListTile<String>(
+                      key: const ValueKey('pixiv-related-mode-pixiv'),
+                      title: Text('由Pixiv返回'.tl),
+                      value: pixivRelatedModePixiv,
+                      contentPadding: EdgeInsets.zero,
+                    ),
+                    RadioListTile<String>(
+                      key: const ValueKey('pixiv-related-mode-custom'),
+                      title: Text('自定义数量'.tl),
+                      value: pixivRelatedModeCustom,
+                      contentPadding: EdgeInsets.zero,
+                    ),
+                    if (custom)
+                      Form(
+                        key: formKey,
+                        child: TextFormField(
+                          key: const ValueKey('pixiv-detail-feed-count-input'),
+                          initialValue: raw,
+                          autofocus: true,
+                          keyboardType: TextInputType.number,
+                          textInputAction: TextInputAction.done,
+                          autovalidateMode: AutovalidateMode.onUserInteraction,
+                          decoration: InputDecoration(
+                            labelText: '数量'.tl,
+                            helperText: '1–18 个，默认5个'.tl,
+                          ),
+                          onChanged: (value) =>
+                              setDialogState(() => raw = value),
+                          onFieldSubmitted: (_) => save(),
+                          validator: (_) =>
+                              validCount() != null ? null : '请输入1到18的整数'.tl,
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(dialogContext).pop(),
+                child: Text('取消'.tl),
+              ),
+              FilledButton(
+                onPressed: !custom || validCount() != null ? save : null,
+                child: Text('保存'.tl),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+    if (!mounted || choice == null) return;
+    if (choice.mode == readPixivRelatedMode() &&
+        (choice.count == null || choice.count == _count)) {
+      return;
+    }
+    setState(() => _saving = true);
+    try {
+      final defaults = Appdata().settings;
+      if (appdata.settings.length < defaults.length) {
+        appdata.settings = [
+          ...appdata.settings,
+          ...defaults.skip(appdata.settings.length),
+        ];
+      }
+      appdata.settings[pixivRelatedModeSettingIndex] = choice.mode;
+      if (choice.count != null) {
+        appdata.settings[pixivRelatedBatchSizeSettingIndex] =
+            choice.count.toString();
+      }
+      await appdata.updateSettings();
+      App.notifyDisplaySettingsChanged();
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => ListTile(
+        title: Text(widget.title.tl),
+        subtitle: Text((widget.authorPreview
+                ? widget.description
+                : readPixivRelatedMode() == pixivRelatedModePixiv
+                    ? widget.description
+                    : '每轮最多$_count个，读完后上拉继续推荐')
+            .tl),
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text((!widget.authorPreview &&
+                        readPixivRelatedMode() == pixivRelatedModePixiv
+                    ? '由Pixiv返回'
+                    : '$_count 个')
+                .tl),
+            const SizedBox(width: 8),
+            const Icon(Icons.chevron_right),
+          ],
+        ),
+        enabled: !_saving,
+        onTap: _saving ? null : _changeCount,
+      );
 }
 
 /// Slider whose thumb tracks the finger in real time. The plain inline Slider

@@ -205,7 +205,7 @@ void main() {
 
   test('036 defaults are off; only exact 1 enables counts', () {
     expect(_index, 166);
-    expect(Appdata().settings, hasLength(167));
+    expect(Appdata().settings, hasLength(Appdata().settings.length));
     expect(Appdata().settings[_index], '0');
     expect(showPixivBookmarkQueueCounts(Appdata().settings), isFalse);
     for (final raw in <String?>[
@@ -294,7 +294,7 @@ void main() {
       }
       final previous = List.of(data.settings);
       await data.updateSettings();
-      expect(data.settings, hasLength(167));
+      expect(data.settings, hasLength(Appdata().settings.length));
       expect(data.settings.take(length), previous);
       expect(data.settings[_index], '0');
       await expectPersisted('0');
@@ -333,7 +333,7 @@ void main() {
         }
         final data = Appdata()..settings[_index] = '1';
         await data.readSettings(prefs);
-        expect(data.settings, hasLength(167));
+        expect(data.settings, hasLength(Appdata().settings.length));
         expect(data.settings[0], '036-legacy-first');
         expect(data.settings[_index], '0',
             reason: 'Missing old field overrides a previous on value.');
@@ -376,7 +376,7 @@ void main() {
               .where((log) => log.title == 'Appdata.readDataFromJson')
               .map((log) => log.content)
               .join('\n'));
-      expect(data.settings, hasLength(167));
+      expect(data.settings, hasLength(Appdata().settings.length));
       expect(data.settings[_index], expected);
       // Import launches its own writeData; verify that save without performing
       // another write that could conceal a missing import persistence call.

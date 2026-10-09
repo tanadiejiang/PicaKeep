@@ -85,6 +85,41 @@ void main() {
     session.dispose();
   });
 
+  test('related empty batches retain continuation only with new queue progress',
+      () async {
+    var position = 18;
+    final session = PixivDetailSession(
+      scope: PixivDetailScope.related,
+      entries: [entry('1')],
+      hasMore: true,
+      continuationPosition: 0,
+      loadMore: () async => PixivDetailBatch(const [],
+          hasMore: true, continuationPosition: position),
+    );
+    addTearDown(session.dispose);
+    await session.requestMore();
+    expect(session.hasMore, isTrue);
+    expect(session.error, isNull);
+    position = 18;
+    await session.requestMore();
+    expect(session.hasMore, isFalse);
+    expect(session.error, contains('没有收到新的作品'));
+  });
+
+  test('search empty batches cannot bypass stop with a continuation number',
+      () async {
+    final session = PixivDetailSession(
+      scope: PixivDetailScope.search,
+      entries: [entry('1')],
+      hasMore: true,
+      loadMore: () async =>
+          const PixivDetailBatch([], hasMore: true, continuationPosition: 18),
+    );
+    addTearDown(session.dispose);
+    await session.requestMore();
+    expect(session.hasMore, isFalse);
+  });
+
   test('platform favorite mutation stops stale offset continuation', () async {
     final session = PixivDetailSession(
       scope: PixivDetailScope.platformFavorites,

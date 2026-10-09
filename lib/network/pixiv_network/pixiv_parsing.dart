@@ -293,6 +293,181 @@ List<PixivComicBrief> parsePixivRelatedWorks(
   return List<PixivComicBrief>.unmodifiable(result);
 }
 
+/// Parse the work recommendation init body; author-page order is unrelated.
+PixivRecommendationsPage parsePixivWorkRecommendations(
+  dynamic body, {
+  required String sourceId,
+}) {
+  if (body is! Map || body['illusts'] is! List || body['nextIds'] is! List) {
+    throw const FormatException('Pixiv 推荐响应缺少有效 illusts/nextIds 数组');
+  }
+  final rows = body['illusts'] as List;
+  final processed = <String>{sourceId};
+  final items = <PixivComicBrief>[];
+  for (final raw in rows) {
+    if (raw is! Map) continue;
+    final item = _map(raw);
+    final id = _positiveIdString(item['id'] ?? item['illustId']);
+    // Consume even unavailable init IDs so nextIds never hydrates them again.
+    if (id == null || !processed.add(id)) continue;
+    final brief = _parseAvailableRecommendationWork(item);
+    if (brief != null) items.add(brief);
+  }
+  final nextIds = <String>[];
+  for (final raw in body['nextIds'] as List) {
+    final id = _positiveIdString(raw);
+    if (id != null && processed.add(id)) nextIds.add(id);
+  }
+  return PixivRecommendationsPage(
+    items: List<PixivComicBrief>.unmodifiable(items),
+    nextIds: List<String>.unmodifiable(nextIds),
+  );
+}
+
+PixivComicBrief? _parseAvailableRecommendationWork(Map<String, dynamic> item) {
+  if (item.containsKey('isAdContainer') &&
+      _nullableBool(item['isAdContainer']) != false) {
+    return null;
+  }
+  if (!_isAvailableEmbeddedWork(item) ||
+      _positiveIdString(item['id'] ?? item['illustId']) == null) {
+    return null;
+  }
+  return _parseBriefItem(item);
+}
+
+/// Hydration follows the init ID queue, even when the response reorders rows.
+List<PixivComicBrief> parsePixivRecommendationWorks(
+  dynamic body, {
+  required List<String> requestedIds,
+}) {
+  if (body is! Map || body['illusts'] is! List) {
+    throw const FormatException('Pixiv 推荐批次响应缺少有效 illusts 数组');
+  }
+  return _parseRequestedAvailableWorks(body['illusts'] as List, requestedIds);
+}
+
+/// The author preview has its own bounded batch and does not change the legacy
+/// author page parser's numeric ordering or empty-response error contract.
+List<PixivComicBrief> parsePixivAuthorPreviewWorks(
+  dynamic body, {
+  required String uid,
+  required List<String> requestedIds,
+}) {
+  if (body is! Map || (body['works'] is! Map && body['works'] is! List)) {
+    throw const FormatException('Pixiv 作者预览响应缺少有效 works 对象/数组');
+  }
+  final works = body['works'];
+  final rows = works is Map ? works.values : works as List;
+  return _parseRequestedAvailableWorks(rows, requestedIds, authorId: uid);
+}
+
+List<PixivComicBrief> _parseRequestedAvailableWorks(
+  Iterable<dynamic> rows,
+  List<String> requestedIds, {
+  String? authorId,
+}) {
+  final requested = requestedIds.toSet();
+  final found = <String, PixivComicBrief>{};
+  for (final raw in rows) {
+    if (raw is! Map) continue;
+    final item = _map(raw);
+    final id = _positiveIdString(item['id'] ?? item['illustId']);
+    if (id == null || !requested.contains(id) || found.containsKey(id)) {
+      continue;
+    }
+    final brief = _parseAvailableRecommendationWork(item);
+    if (brief == null ||
+        (authorId != null &&
+            brief.authorId.isNotEmpty &&
+            brief.authorId != authorId)) {
+      continue;
+    }
+    found[id] = brief;
+  }
+  return List<PixivComicBrief>.unmodifiable([
+    for (final id in requestedIds.toSet())
+      if (found[id] != null) found[id]!,
+  ]);
+}
+
+/// Parse only /ajax/user/{uid}/recommends, not discovery/users or follow POST.
+/// Evidence: ppixiv commit 200f4ffcec8f8c2ac160c5bc8109297bd8ca2f44,
+/// web/vview/sites/pixiv/data-sources/discover-users.js reads recommendUsers,
+/// users, and thumbnails.illust from this endpoint. Author/thumbnail fields
+/// also appear in pixiv-ajax-api-docs commit
+/// f695f712a98cf2b7f23f8184ef86aa51acb03ac3's discovery/users_limit_3.json.
+/// Both are unofficial public sources; this is not an account-captured fixture.
+List<PixivRecommendedAuthor> parsePixivRecommendedAuthors(
+  dynamic body, {
+  String seedAuthorId = '',
+  int limit = 5,
+  int workLimit = 3,
+}) {
+  if (limit < 1 || limit > 5 || workLimit < 1 || workLimit > 3) {
+    throw const FormatException('Pixiv 推荐作者数量超出客户端范围');
+  }
+  if (body is! Map ||
+      body['recommendUsers'] is! List ||
+      body['users'] is! List ||
+      body['thumbnails'] is! Map ||
+      body['thumbnails']['illust'] is! List) {
+    throw const FormatException(
+        'Pixiv 推荐作者响应缺少有效 recommendUsers/users/thumbnails.illust 数组');
+  }
+  final recommendations = body['recommendUsers'] as List;
+  // Require the known link shape even when metadata is filtered or absent.
+  for (final raw in recommendations) {
+    if (raw is Map && raw['illustIds'] is! List) {
+      throw const FormatException('Pixiv 推荐作者条目缺少有效 illustIds 数组');
+    }
+  }
+  final users = <String, PixivAuthor>{};
+  for (final raw in body['users'] as List) {
+    if (raw is! Map) continue;
+    final item = _map(raw);
+    final uid = _positiveIdString(item['userId']);
+    if (uid == null || users.containsKey(uid)) continue;
+    // Normalize numeric JSON UIDs for the existing author info parser.
+    users[uid] = parsePixivAuthorInfo({...item, 'userId': uid});
+  }
+  final thumbnails = <String, PixivComicBrief>{};
+  final seenWorks = <String>{};
+  // Novel thumbnails and novelIds never enter this illustration-only join.
+  for (final raw in body['thumbnails']['illust'] as List) {
+    if (raw is! Map) continue;
+    final item = _map(raw);
+    final id = _positiveIdString(item['id'] ?? item['illustId']);
+    if (id == null || !seenWorks.add(id)) continue;
+    final work = _parseAvailableRecommendationWork(item);
+    if (work != null) thumbnails[id] = work;
+  }
+  final authors = <PixivRecommendedAuthor>[];
+  final seenAuthors = <String>{seedAuthorId.trim()};
+  for (final raw in recommendations) {
+    if (raw is! Map) continue;
+    final uid = _positiveIdString(raw['userId']);
+    if (uid == null || !seenAuthors.add(uid)) continue;
+    final author = users[uid];
+    if (author == null) continue;
+    final works = <PixivComicBrief>[];
+    final seen = <String>{};
+    for (final rawId in raw['illustIds'] as List) {
+      final id = _positiveIdString(rawId);
+      if (id == null || !seen.add(id)) continue;
+      final work = thumbnails[id];
+      // Never attach another user's illustration to this author's card.
+      if (work == null || work.authorId != uid) continue;
+      works.add(work);
+      if (works.length == workLimit) break;
+    }
+    authors.add(PixivRecommendedAuthor(
+        author: author, works: List<PixivComicBrief>.unmodifiable(works)));
+    if (authors.length == limit) break;
+  }
+  return List<PixivRecommendedAuthor>.unmodifiable(authors);
+}
+
 PixivCommentPage parsePixivComments(dynamic body) {
   if (body is! Map || body['comments'] is! List) {
     throw const FormatException('Pixiv comments 响应缺少评论数组');

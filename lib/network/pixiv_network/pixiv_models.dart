@@ -139,6 +139,29 @@ class PixivComicBrief extends BaseComic {
   String get description => '';
 }
 
+/// One work's recommendation seed response, separate from embedded author works.
+class PixivRecommendationsPage {
+  const PixivRecommendationsPage({
+    required this.items,
+    required this.nextIds,
+  });
+
+  final List<PixivComicBrief> items;
+  final List<String> nextIds;
+}
+
+/// One recommended author and the bounded illustrations embedded in the feed.
+/// This read response is independent of the follow write's success body.
+class PixivRecommendedAuthor {
+  const PixivRecommendedAuthor({
+    required this.author,
+    required this.works,
+  });
+
+  final PixivAuthor author;
+  final List<PixivComicBrief> works;
+}
+
 /// 点按榜单心形时读取的当前账号书签状态与添加能力。
 class PixivBookmarkState {
   const PixivBookmarkState({

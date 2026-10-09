@@ -2,6 +2,7 @@ import 'dart:io';
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
+import 'package:archive/archive.dart' show getCrc32;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:picakeep/foundation/app.dart';
 import 'package:picakeep/foundation/image_pipeline/image_work_scheduler.dart';
@@ -103,6 +104,90 @@ Future<Directory> _testDirectory() async {
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+
+  test(
+      'Flutter backend distinguishes descriptor mismatch from a budget failure',
+      () async {
+    final directory = await _testDirectory();
+    addTearDown(() => directory.delete(recursive: true));
+    final file = await _makeOddPng(directory);
+    final original = await file.readAsBytes();
+    final created = <ui.Image>[];
+    final savedOnCreate = ui.Image.onCreate;
+    ui.Image.onCreate = created.add;
+    try {
+      for (final expected in [const ui.Size(8, 5), const ui.Size(7, 6)]) {
+        final backend = FlutterReaderRasterBackend(
+            ReaderRasterMetadata(
+                size: expected,
+                animated: false,
+                format: 'png',
+                workingBytes: 140),
+            persistRaster: false);
+        await expectLater(
+            backend.decode(file,
+                const ReaderTileDemand(ui.Rect.fromLTWH(0, 0, 7, 5), 1, -1, -1),
+                backingPath: 'unused',
+                memoryBudgetBytes: 64 << 20,
+                isCancelled: () => false),
+            throwsA(isA<ReaderRasterDimensionMismatch>()
+                .having((error) => error.expectedSize, 'expectedSize', expected)
+                .having((error) => error.actualSize, 'actualSize',
+                    const ui.Size(7, 5))));
+      }
+      expect(created, isEmpty,
+          reason: 'mismatched metadata must not decode pixels');
+      expect(await file.readAsBytes(), original);
+    } finally {
+      ui.Image.onCreate = savedOnCreate;
+    }
+  });
+
+  test('Flutter backend retains the decoded limit before pixel allocation',
+      () async {
+    final directory = await _testDirectory();
+    addTearDown(() => directory.delete(recursive: true));
+    final file = await _makeOddPng(directory);
+    final bytes = await file.readAsBytes();
+    final header = ByteData.sublistView(bytes);
+    const width = 4097, height = 4096;
+    // Only the header is enlarged: the guard must reject before the small
+    // original IDAT payload is decoded or a large image can be allocated.
+    header
+      ..setUint32(16, width)
+      ..setUint32(20, height)
+      ..setUint32(29, getCrc32(bytes.sublist(12, 29)));
+    await file.writeAsBytes(bytes, flush: true);
+    const backend = FlutterReaderRasterBackend(
+        ReaderRasterMetadata(
+            size: ui.Size(width * 1.0, height * 1.0),
+            animated: false,
+            format: 'png',
+            workingBytes: width * height * 4),
+        persistRaster: false);
+    final created = <ui.Image>[];
+    final savedOnCreate = ui.Image.onCreate;
+    ui.Image.onCreate = created.add;
+    try {
+      await expectLater(
+          backend.decode(
+              file,
+              const ReaderTileDemand(
+                  ui.Rect.fromLTWH(0, 0, width * 1.0, height * 1.0), 1, -1, -1),
+              backingPath: 'unused',
+              memoryBudgetBytes: 128 << 20,
+              isCancelled: () => false),
+          throwsA(isA<ImageWorkBudgetExceeded>()
+              .having((error) => error.requestedBytes, 'requestedBytes',
+                  width * height * 4)
+              .having((error) => error.budgetBytes, 'budgetBytes', 64 << 20)));
+      expect(created, isEmpty,
+          reason: 'decoded limit must precede pixel allocation');
+      expect(await file.readAsBytes(), bytes);
+    } finally {
+      ui.Image.onCreate = savedOnCreate;
+    }
+  });
 
   test('Flutter backend disposes its raster when persistence setup throws',
       () async {

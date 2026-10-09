@@ -6,11 +6,18 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter_staggered_grid_view/flutter_staggered_grid_view.dart';
 import 'package:path_provider_platform_interface/path_provider_platform_interface.dart';
 import 'package:picakeep/comic_source/comic_source.dart';
+import 'package:picakeep/base.dart';
+import 'package:picakeep/foundation/pixiv_detail_feed_settings.dart';
+import 'package:picakeep/pages/online_comic/pixiv_follow_recommendations_sheet.dart';
 import 'package:picakeep/components/pixiv_bookmark_button.dart';
 import 'package:picakeep/foundation/app.dart';
 import 'package:picakeep/foundation/pixiv_bookmark_state.dart';
+import 'package:picakeep/foundation/pixiv_detail_feeds.dart';
+import 'package:picakeep/foundation/pixiv_detail_session.dart';
+import 'package:picakeep/pages/online_common/online_recommendation_card.dart';
 import 'package:picakeep/network/pixiv_network/pixiv_network.dart';
 import 'package:picakeep/network/res.dart';
 import 'package:picakeep/pages/accounts/accounts_page.dart';
@@ -142,6 +149,7 @@ PixivComicInfo _info({
   int width = 400,
   int height = 600,
   bool? isBookmarkable = true,
+  List<PixivComicBrief> relatedWorks = const [],
 }) =>
     PixivComicInfo(
       id: '123',
@@ -164,6 +172,7 @@ PixivComicInfo _info({
       userId: '42',
       isBookmarked: isBookmarked,
       isBookmarkable: isBookmarkable,
+      relatedWorks: relatedWorks,
     );
 
 PixivPage _imagePage({int width = 400, int height = 600}) => PixivPage(
@@ -175,19 +184,50 @@ PixivPage _imagePage({int width = 400, int height = 600}) => PixivPage(
       height: height,
     );
 
+class _BouncingBehavior extends MaterialScrollBehavior {
+  const _BouncingBehavior();
+  @override
+  ScrollPhysics getScrollPhysics(BuildContext context) =>
+      const BouncingScrollPhysics(parent: AlwaysScrollableScrollPhysics());
+}
+
 Widget _page({
+  ScrollBehavior? scrollBehavior,
   Future<Res<PixivComicInfo>> Function()? loadDetail,
   Future<Res<List<PixivPage>>> Function(String)? loadPages,
   Future<Res<PixivAuthor>> Function(String)? loadAuthor,
+  PixivWorkIdsLoader? loadAuthorWorkIds,
+  PixivAuthorPreviewLoader? loadAuthorPreviewWorks,
+  PixivRecommendationsLoader? loadRecommendations,
+  PixivRecommendationWorksLoader? loadRecommendationWorks,
+  Future<void> Function(PixivComicBrief, PixivDetailSession)? onOpenWork,
+  Future<Res<bool>> Function(String, {required bool isFollowing})? writeFollow,
+  Future<Res<List<PixivRecommendedAuthor>>> Function(String)?
+      loadRecommendedAuthors,
+  bool Function()? isLoggedIn,
   PixivDetailBookmarkWriter? writeBookmark,
   void Function(BuildContext, PixivComicInfo, int)? onRead,
 }) =>
     MaterialApp(
+      scrollBehavior: scrollBehavior,
       home: PixivOnlineDetailView(
         comicId: '123',
         loadDetail: loadDetail ?? () async => Res(_info()),
         loadPages: loadPages ?? (_) async => Res([_imagePage()]),
         loadAuthor: loadAuthor ?? (_) async => const Res(_author),
+        loadAuthorWorkIds: loadAuthorWorkIds ?? (_) async => const Res([]),
+        loadAuthorPreviewWorks:
+            loadAuthorPreviewWorks ?? (_, __) async => const Res([]),
+        loadRecommendations: loadRecommendations ??
+            (_) async =>
+                const Res(PixivRecommendationsPage(items: [], nextIds: [])),
+        loadRecommendationWorks:
+            loadRecommendationWorks ?? (_) async => const Res([]),
+        onOpenWork: onOpenWork,
+        writeFollow: writeFollow,
+        loadRecommendedAuthors:
+            loadRecommendedAuthors ?? (_) async => const Res([]),
+        isLoggedIn: isLoggedIn,
         writeBookmark: writeBookmark ??
             (_, {required isAdding, required isPrivate}) async => Res(isAdding),
         onRead: onRead ?? (_, __, ___) {},
@@ -210,7 +250,8 @@ PixivDetailShell _shell(WidgetTester tester) =>
 ScrollPosition _position(WidgetTester tester) => tester
     .state<ScrollableState>(find.descendant(
       of: find.byKey(const ValueKey('pixiv-detail-page-scroll')),
-      matching: find.byType(Scrollable),
+      matching: find.byWidgetPredicate((widget) =>
+          widget is Scrollable && widget.axisDirection == AxisDirection.down),
     ))
     .position;
 
@@ -267,6 +308,7 @@ void main() {
   );
   late Directory workspace;
   late List<ComicSource> previousSources;
+  late List<String> previousSettings;
   final originalPaths = PathProviderPlatform.instance;
   final originalHttpOverrides = HttpOverrides.current;
 
@@ -285,6 +327,10 @@ void main() {
   setUp(() {
     PixivBookmarkStateStore.shared.clear();
     previousSources = List.of(ComicSource.sources);
+    previousSettings = List.of(appdata.settings);
+    appdata.settings[pixivAuthorPreviewCountSettingIndex] = '5';
+    appdata.settings[pixivRelatedBatchSizeSettingIndex] = '5';
+    appdata.settings[pixivRelatedModeSettingIndex] = pixivRelatedModeCustom;
     ComicSource.sources
       ..clear()
       ..add(ComicSource.named(
@@ -294,6 +340,7 @@ void main() {
       ));
   });
   tearDown(() {
+    appdata.settings = previousSettings;
     ComicSource.sources
       ..clear()
       ..addAll(previousSources);
@@ -650,6 +697,562 @@ void main() {
     expect(writes, 0);
     expect(haptics, isEmpty);
     expect(find.text('已添加公开收藏'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+      'author strip fills five, scrolls horizontally and opens author snapshot',
+      (tester) async {
+    _mobileView(tester);
+    final batches = <List<String>>[];
+    List<String>? opened;
+    PixivDetailScope? scope;
+    PixivComicBrief work(String id) => PixivComicBrief(
+          id: id,
+          title: '作者作品$id',
+          author: 'Fixture author',
+          authorId: '42',
+          cover: '',
+          tags: const [],
+          illustType: 0,
+          pageCount: 1,
+        );
+    await tester.pumpWidget(_page(
+      loadDetail: () async => Res(_info(
+          description: '',
+          width: 800,
+          height: 400,
+          relatedWorks: [work('201'), work('202')])),
+      loadAuthorWorkIds: (_) async =>
+          const Res(['123', '205', '204', '203', '202', '201']),
+      loadAuthorPreviewWorks: (_, ids) async {
+        batches.add(ids);
+        return Res(ids.reversed.map(work).toList());
+      },
+      onOpenWork: (comic, session) async {
+        opened = session.entries.map((e) => e.comicId).toList();
+        scope = session.scope;
+        expect(comic.id, '203');
+        expect(session.hasMore, isFalse);
+      },
+    ));
+    await tester.pumpAndSettle();
+    for (var i = 0; i < 8 && batches.isEmpty; i++) {
+      _position(tester).jumpTo((_position(tester).pixels + 150)
+          .clamp(0, _position(tester).maxScrollExtent));
+      await tester.pumpAndSettle();
+    }
+    expect(batches, [
+      ['205', '204', '203']
+    ]);
+    final strip = find.byKey(const ValueKey('pixiv-author-preview-123'));
+    expect(tester.widget<ListView>(strip).semanticChildCount, 5);
+    await tester.ensureVisible(strip);
+    await tester.pumpAndSettle();
+    final verticalBefore = _position(tester).pixels;
+    await tester.drag(strip, const Offset(-300, 0));
+    await tester.pumpAndSettle();
+    expect(_position(tester).pixels, closeTo(verticalBefore, .01));
+    final fifth = find.byKey(const ValueKey('pixiv-author-preview-203'));
+    await tester.tap(fifth);
+    await tester.pumpAndSettle();
+    expect(opened, ['201', '202', '205', '204', '203']);
+    expect(scope, PixivDetailScope.author);
+    expect(find.byType(PixivCommentsSection), findsOneWidget);
+    expect(
+        tester
+            .widget<PixivCommentsSection>(find.byType(PixivCommentsSection))
+            .previewLimit,
+        4);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+      'bottom cards use cross-author feed and related session continues independently',
+      (tester) async {
+    _mobileView(tester);
+    final calls = <List<String>>[];
+    var opens = 0;
+    PixivComicBrief work(String id, String author) => PixivComicBrief(
+          id: id,
+          title: '推荐作品$id',
+          author: '作者$author',
+          authorId: author,
+          cover: '',
+          tags: const [],
+          illustType: 0,
+          pageCount: 1,
+          width: 1000,
+          height: 5000,
+        );
+    await tester.pumpWidget(_page(
+      loadDetail: () async => Res(_info(
+          description: '',
+          width: 800,
+          height: 400,
+          relatedWorks: [work('201', '42'), work('202', '42')])),
+      loadAuthorWorkIds: (_) async => const Res([]),
+      loadRecommendations: (_) async => Res(PixivRecommendationsPage(
+          items: [work('301', '7'), work('302', '8')],
+          nextIds: const ['303', '304'])),
+      loadRecommendationWorks: (ids) async {
+        calls.add(ids);
+        return Res([work('304', '9'), work('303', '10')]);
+      },
+      onOpenWork: (comic, session) async {
+        opens++;
+        expect(comic.id, '301');
+        expect(session.scope, PixivDetailScope.related);
+        expect(session.entries.map((e) => e.comicId), ['301', '302']);
+        expect(session.hasMore, isTrue);
+        await session.requestMore();
+        expectSync(session.entries.map((e) => e.comicId),
+            ['301', '302', '303', '304']);
+        expectSync(session.hasMore, isFalse);
+      },
+    ));
+    await tester.pumpAndSettle();
+    final card = find.byKey(const ValueKey('pixiv-related-301'));
+    for (var i = 0; i < 12 && card.evaluate().isEmpty; i++) {
+      _position(tester).jumpTo((_position(tester).pixels + 120)
+          .clamp(0, _position(tester).maxScrollExtent));
+      await tester.pumpAndSettle();
+    }
+    expect(card, findsOneWidget);
+    expect(calls, isEmpty, reason: 'tail is not yet visible');
+    expect(find.text('作者的其他作品'), findsNothing);
+    expect(find.text('相关推荐'), findsOneWidget);
+    final firstCard = tester.widget<OnlineRecommendationCard>(card);
+    expect((firstCard.comic as PixivComicBrief).authorId, '7');
+    firstCard.onOpenDetail!();
+    await tester.pumpAndSettle();
+    expect(opens, 1);
+    expect(calls, [
+      ['303', '304']
+    ]);
+    final strip = find.byKey(const ValueKey('pixiv-author-preview-123'));
+    expect(tester.widget<ListView>(strip).semanticChildCount, 2);
+    expect(_position(tester).pixels, greaterThan(0));
+    expect(tester.takeException(), isNull);
+  });
+
+  for (final bouncing in [false, true]) {
+    testWidgets(
+        'related lazy loading and one batch per drag, bouncing=$bouncing',
+        (tester) async {
+      _mobileView(tester);
+      var initialReads = 0;
+      final batches = <List<String>>[];
+      PixivComicBrief work(String id) => PixivComicBrief(
+          id: id,
+          title: '推荐$id',
+          cover: '',
+          author: '作者7',
+          authorId: '7',
+          tags: const [],
+          illustType: 0,
+          pageCount: 1,
+          width: 1000,
+          height: 1000);
+      await tester.pumpWidget(_page(
+        scrollBehavior: bouncing ? const _BouncingBehavior() : null,
+        loadRecommendations: (_) async {
+          initialReads++;
+          return Res(PixivRecommendationsPage(
+              items: [work('301'), work('302')],
+              nextIds: List.generate(12, (i) => '${i + 400}')));
+        },
+        loadRecommendationWorks: (ids) async {
+          batches.add(ids);
+          return Res(ids.map(work).toList());
+        },
+      ));
+      await tester.pumpAndSettle();
+      expect(initialReads, 0,
+          reason: 'description keeps recommendation outside paint area');
+      for (var i = 0; i < 80 && initialReads == 0; i++) {
+        _position(tester).jumpTo((_position(tester).pixels + 180)
+            .clamp(0, _position(tester).maxScrollExtent));
+        await tester.pumpAndSettle();
+      }
+      expect(initialReads, 1);
+      expect(batches, isEmpty,
+          reason: 'reaching first batch must not eagerly read tail');
+      _position(tester).jumpTo(_position(tester).maxScrollExtent);
+      await tester.pumpAndSettle();
+      final gesture = await tester.startGesture(const Offset(200, 500));
+      await gesture.moveBy(const Offset(0, -80));
+      await tester.pump();
+      expect(batches, isEmpty);
+      await gesture.moveBy(const Offset(0, -240));
+      await tester.pumpAndSettle();
+      expect(batches, [
+        ['400', '401', '402', '403', '404']
+      ]);
+      await gesture.moveBy(const Offset(0, -180));
+      await tester.pumpAndSettle();
+      expect(batches, hasLength(1), reason: 'one continuation per drag');
+      await gesture.up();
+      await tester.pumpAndSettle();
+      expect(_position(tester).pixels, greaterThan(0));
+      expect(tester.takeException(), isNull);
+    });
+  }
+
+  testWidgets(
+      'two count preferences update feeds without replacing detail or comments',
+      (tester) async {
+    _mobileView(tester);
+    var detailReads = 0;
+    var recommendationReads = 0;
+    PixivComicBrief work(String id) => PixivComicBrief(
+        id: id,
+        title: '作品$id',
+        author: '作者42',
+        authorId: '42',
+        cover: '',
+        tags: const [],
+        illustType: 0,
+        pageCount: 1);
+    await tester.pumpWidget(_page(
+      loadDetail: () async {
+        detailReads++;
+        return Res(_info(
+            description: '',
+            width: 800,
+            height: 400,
+            relatedWorks: List.generate(10, (i) => work('${i + 200}'))));
+      },
+      loadRecommendations: (_) async {
+        recommendationReads++;
+        return Res(PixivRecommendationsPage(
+            items: List.generate(10, (i) => work('${i + 300}')),
+            nextIds: const []));
+      },
+    ));
+    await tester.pumpAndSettle();
+    final position = _position(tester);
+    expect(
+        tester
+            .widget<ListView>(
+                find.byKey(const ValueKey('pixiv-author-preview-123')))
+            .semanticChildCount,
+        5);
+    appdata.settings[pixivAuthorPreviewCountSettingIndex] = '8';
+    appdata.settings[pixivRelatedBatchSizeSettingIndex] = '3';
+    App.notifyDisplaySettingsChanged();
+    await tester.pumpAndSettle();
+    expect(detailReads, 1);
+    expect(identical(position, _position(tester)), isTrue);
+    expect(
+        tester
+            .widget<ListView>(
+                find.byKey(const ValueKey('pixiv-author-preview-123')))
+            .semanticChildCount,
+        8);
+    for (var i = 0;
+        i < 10 &&
+            find
+                .byKey(const ValueKey('pixiv-related-grid-123'))
+                .evaluate()
+                .isEmpty;
+        i++) {
+      position
+          .jumpTo((position.pixels + 150).clamp(0, position.maxScrollExtent));
+      await tester.pumpAndSettle();
+    }
+    final grid = tester.widget<SliverMasonryGrid>(
+        find.byKey(const ValueKey('pixiv-related-grid-123')));
+    expect(grid.delegate.estimatedChildCount, 3);
+    expect(recommendationReads, inInclusiveRange(1, 2));
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+      'confirmed follow opens independent discovery and closing keeps followed state',
+      (tester) async {
+    _mobileView(tester);
+    final writes = <(String, bool)>[];
+    var recommendedReads = 0;
+    await tester.pumpWidget(_page(
+      loadDetail: () async => Res(_shortInfo()),
+      isLoggedIn: () => true,
+      writeFollow: (id, {required isFollowing}) async {
+        writes.add((id, isFollowing));
+        return const Res(true);
+      },
+      loadRecommendedAuthors: (id) async {
+        recommendedReads++;
+        expectSync(id, '42');
+        return const Res([]);
+      },
+    ));
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.text('加关注'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('加关注'));
+    await tester.pumpAndSettle();
+    expect(writes, [('42', true)]);
+    expect(recommendedReads, 1);
+    expect(find.byType(PixivFollowRecommendationsSheet), findsOneWidget);
+    expect(find.text('发现更多作者'), findsOneWidget);
+    await tester.tap(find.byTooltip('关闭作者推荐'));
+    await tester.pumpAndSettle();
+    expect(find.byType(PixivFollowRecommendationsSheet), findsNothing);
+    expect(find.text('已关注'), findsOneWidget);
+    await tester.tap(find.text('已关注'));
+    await tester.pumpAndSettle();
+    expect(writes, [('42', true), ('42', false)]);
+    expect(recommendedReads, 1);
+    expect(find.byType(PixivFollowRecommendationsSheet), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+      'refresh rejects stale follow discovery and releases its busy lock',
+      (tester) async {
+    _mobileView(tester);
+    final pending = Completer<Res<bool>>();
+    var recommendedReads = 0;
+    await tester.pumpWidget(_page(
+      loadDetail: () async => Res(_shortInfo()),
+      isLoggedIn: () => true,
+      writeFollow: (_, {required isFollowing}) => pending.future,
+      loadRecommendedAuthors: (_) async {
+        recommendedReads++;
+        return const Res([]);
+      },
+    ));
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.text('加关注'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('加关注'));
+    await tester.pump();
+    _shell(tester).onMenu!('refresh');
+    await tester.pumpAndSettle();
+    pending.complete(const Res(true));
+    await tester.pumpAndSettle();
+    expect(recommendedReads, 0);
+    expect(find.byType(PixivFollowRecommendationsSheet), findsNothing);
+    final button =
+        tester.widget<FilledButton>(find.widgetWithText(FilledButton, '加关注'));
+    expect(button.onPressed, isNotNull);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+      'Pixiv default shows full round then a gesture requests another round',
+      (tester) async {
+    _mobileView(tester);
+    appdata.settings[pixivRelatedModeSettingIndex] = pixivRelatedModePixiv;
+    var initialReads = 0;
+    var detailReads = 0;
+    PixivComicBrief work(String id) => PixivComicBrief(
+        id: id,
+        title: '推荐$id',
+        cover: '',
+        author: '作者7',
+        authorId: '7',
+        tags: const [],
+        illustType: 0,
+        pageCount: 1,
+        width: 1000,
+        height: 1000);
+    await tester.pumpWidget(_page(
+      loadRecommendations: (_) async {
+        initialReads++;
+        return Res(PixivRecommendationsPage(
+            items: initialReads == 1
+                ? List.generate(7, (i) => work('${i + 300}'))
+                : [work('300'), work('400'), work('401')],
+            nextIds: const []));
+      },
+      loadRecommendationWorks: (_) async {
+        detailReads++;
+        return const Res([]);
+      },
+    ));
+    await tester.pumpAndSettle();
+    expect(initialReads, 0);
+    for (var i = 0; i < 80 && initialReads == 0; i++) {
+      _position(tester).jumpTo((_position(tester).pixels + 180)
+          .clamp(0, _position(tester).maxScrollExtent));
+      await tester.pumpAndSettle();
+    }
+    expect(initialReads, 1);
+    var grid = tester.widget<SliverMasonryGrid>(
+        find.byKey(const ValueKey('pixiv-related-grid-123')));
+    expect(grid.delegate.estimatedChildCount, 7);
+    expect(detailReads, 0);
+    final position = _position(tester);
+    position.jumpTo(position.maxScrollExtent);
+    await tester.pumpAndSettle();
+    expect(initialReads, 1,
+        reason: 'seeing the end does not automatically recommend again');
+    await tester.drag(find.byKey(const ValueKey('pixiv-detail-page-scroll')),
+        const Offset(0, -360));
+    await tester.pumpAndSettle();
+    expect(initialReads, 2);
+    grid = tester.widget<SliverMasonryGrid>(
+        find.byKey(const ValueKey('pixiv-related-grid-123')));
+    expect(grid.delegate.estimatedChildCount, 9);
+    expect(detailReads, 0);
+    position.jumpTo(position.maxScrollExtent);
+    await tester.pumpAndSettle();
+    await tester.drag(find.byKey(const ValueKey('pixiv-detail-page-scroll')),
+        const Offset(0, -360));
+    await tester.pumpAndSettle();
+    expect(initialReads, 3);
+    expect(find.text('本轮没有新的可显示作品，再推荐一轮'), findsOneWidget);
+    expect(grid.delegate.estimatedChildCount, 9);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+      'failed fresh recommendation round retries from the detail status button',
+      (tester) async {
+    _mobileView(tester);
+    appdata.settings[pixivRelatedModeSettingIndex] = pixivRelatedModePixiv;
+    var reads = 0;
+    PixivComicBrief work(String id) => PixivComicBrief(
+        id: id,
+        title: '推荐$id',
+        cover: '',
+        author: '作者7',
+        authorId: '7',
+        tags: const [],
+        illustType: 0,
+        pageCount: 1,
+        width: 1000,
+        height: 1000);
+    await tester.pumpWidget(_page(loadRecommendations: (_) async {
+      reads++;
+      if (reads == 2) return const Res.error('下一轮网络失败');
+      return Res(PixivRecommendationsPage(
+          items: [work(reads == 1 ? '300' : '400')], nextIds: const []));
+    }));
+    await tester.pumpAndSettle();
+    for (var i = 0; i < 80 && reads == 0; i++) {
+      _position(tester).jumpTo((_position(tester).pixels + 180)
+          .clamp(0, _position(tester).maxScrollExtent));
+      await tester.pumpAndSettle();
+    }
+    _position(tester).jumpTo(_position(tester).maxScrollExtent);
+    await tester.pumpAndSettle();
+    await tester.drag(find.byKey(const ValueKey('pixiv-detail-page-scroll')),
+        const Offset(0, -360));
+    await tester.pumpAndSettle();
+    expect(reads, 2);
+    expect(find.text('相关推荐加载失败：下一轮网络失败'), findsOneWidget);
+    await tester.ensureVisible(find.text('重试相关推荐'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('重试相关推荐'));
+    await tester.pumpAndSettle();
+    expect(reads, 3);
+    expect(find.text('相关推荐加载失败：下一轮网络失败'), findsNothing);
+    final grid = tester.widget<SliverMasonryGrid>(
+        find.byKey(const ValueKey('pixiv-related-grid-123')));
+    expect(grid.delegate.estimatedChildCount, 2);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+      'switching recommendation mode preserves detail and the outer position',
+      (tester) async {
+    _mobileView(tester);
+    var detailReads = 0;
+    var recommendationReads = 0;
+    PixivComicBrief work(String id) => PixivComicBrief(
+        id: id,
+        title: '推荐$id',
+        cover: '',
+        author: '作者7',
+        authorId: '7',
+        tags: const [],
+        illustType: 0,
+        pageCount: 1,
+        width: 1000,
+        height: 1000);
+    await tester.pumpWidget(_page(
+      loadDetail: () async {
+        detailReads++;
+        return Res(_info());
+      },
+      loadRecommendations: (_) async {
+        recommendationReads++;
+        return Res(PixivRecommendationsPage(
+            items: List.generate(9, (i) => work('${i + 300}')),
+            nextIds: const []));
+      },
+    ));
+    await tester.pumpAndSettle();
+    for (var i = 0; i < 80 && recommendationReads == 0; i++) {
+      _position(tester).jumpTo((_position(tester).pixels + 180)
+          .clamp(0, _position(tester).maxScrollExtent));
+      await tester.pumpAndSettle();
+    }
+    final position = _position(tester);
+    SliverMasonryGrid grid() => tester.widget<SliverMasonryGrid>(
+        find.byKey(const ValueKey('pixiv-related-grid-123')));
+    expect(grid().delegate.estimatedChildCount, 5);
+    appdata.settings[pixivRelatedModeSettingIndex] = pixivRelatedModePixiv;
+    App.notifyDisplaySettingsChanged();
+    await tester.pumpAndSettle();
+    expect(grid().delegate.estimatedChildCount, 9);
+    expect(identical(position, _position(tester)), isTrue);
+    expect(detailReads, 1);
+    expect(recommendationReads, 2);
+    appdata.settings[pixivRelatedModeSettingIndex] = pixivRelatedModeCustom;
+    appdata.settings[pixivRelatedBatchSizeSettingIndex] = '3';
+    App.notifyDisplaySettingsChanged();
+    await tester.pumpAndSettle();
+    expect(grid().delegate.estimatedChildCount, 3);
+    expect(identical(position, _position(tester)), isTrue);
+    expect(detailReads, 1);
+    expect(recommendationReads, 3);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+      'multipage starts with pictures and only the panel omits recommendations',
+      (tester) async {
+    _mobileView(tester);
+    var recommendations = 0;
+    var readerOpens = 0;
+    await tester.pumpWidget(_page(
+      loadDetail: () async => Res(_info(
+          pageCount: 2,
+          description: List.filled(20, 'Fixture description.').join('\n'),
+          width: 800,
+          height: 1200)),
+      loadPages: (_) async => Res([_imagePage(), _imagePage()]),
+      onRead: (_, __, ___) => readerOpens++,
+      loadRecommendations: (_) async {
+        recommendations++;
+        return const Res(PixivRecommendationsPage(items: [], nextIds: []));
+      },
+    ));
+    await tester.pumpAndSettle();
+    expect(recommendations, 0);
+    expect(find.byType(PixivCommentsSection), findsNothing);
+    final position = _position(tester);
+    await tester.tap(find.byTooltip('展开详情'));
+    await tester.pumpAndSettle();
+    expect(find.byTooltip('收起详情'), findsOneWidget);
+    expect(recommendations, 0);
+    expect(find.text('相关推荐'), findsNothing);
+    await tester.tap(find.byTooltip('收起详情'));
+    await tester.pumpAndSettle();
+    expect(identical(position, _position(tester)), isTrue);
+    expect(readerOpens, 0);
+    expect(recommendations, 0);
+    for (var i = 0; i < 30 && recommendations == 0; i++) {
+      await tester.drag(find.byKey(const ValueKey('pixiv-detail-page-scroll')),
+          const Offset(0, -420));
+      await tester.pumpAndSettle();
+    }
+    expect(recommendations, 1);
+    expect(identical(position, _position(tester)), isTrue);
     expect(tester.takeException(), isNull);
   });
 }

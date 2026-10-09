@@ -16,6 +16,7 @@ import 'package:picakeep/foundation/image_pipeline/reader_session_raster_cache.d
 import 'package:picakeep/foundation/image_pipeline/reader_original_raster_handoff.dart';
 import 'package:picakeep/foundation/image_pipeline/reader_raster_backend.dart';
 import 'package:picakeep/foundation/image_pipeline/reader_viewport.dart';
+import 'package:picakeep/foundation/image_pipeline/reader_failure_diagnostics.dart';
 import 'package:picakeep/foundation/reader_image_quality.dart';
 
 class _ReaderLayer {
@@ -82,8 +83,10 @@ class ReaderResolvedOriginal {
         current.modified != fileSnapshot.modified ||
         current.changed != fileSnapshot.changed ||
         source.identity.stableKey != sourceIdentity) {
-      throw StateError(
-          'Original source changed after its metadata was resolved');
+      throw ReaderSourceSnapshotMismatch(
+          expected: fileSnapshot,
+          current: current,
+          sourceIdentityMatches: source.identity.stableKey == sourceIdentity);
     }
   }
 }
@@ -117,6 +120,7 @@ class ReaderImageSurface extends StatefulWidget {
     this.preparedReadAdmission = false,
     this.textureEdgeLowerBound = 0,
     this.sessionRasterCache,
+    this.failureDiagnostics,
   })  : assert(tilePixels >= 128 && tilePixels <= 2048),
         assert(nativeTilePixels == null ||
             nativeTilePixels >= 128 && nativeTilePixels <= 2048);
@@ -147,6 +151,7 @@ class ReaderImageSurface extends StatefulWidget {
   final bool preparedReadAdmission;
   final int textureEdgeLowerBound;
   final ReaderSessionRasterCache? sessionRasterCache;
+  final ReaderFailureAttemptDiagnostics? failureDiagnostics;
   @override
   State<ReaderImageSurface> createState() => _ReaderImageSurfaceState();
 }
@@ -193,19 +198,90 @@ class _ReaderImageSurfaceState extends State<ReaderImageSurface>
   Timer? _idleTimer;
   Timer? _loadingTimer;
   bool _showLoading = false;
+  bool _recoveryFrameScheduled = false;
+  ReaderFailureAttemptDiagnostics? _localFailureAttempt;
   ImageWorkTicket<void>? _idleBacking;
   bool _backingPrepared = false;
   int _idleEpoch = 0;
   static const _residentLimit = 64 * 1024 * 1024;
+
+  ReaderFailureAttemptDiagnostics? get _failureAttempt =>
+      _localFailureAttempt ?? widget.failureDiagnostics;
 
   Object? get _visibleTileFailure => _desired
       .map((variant) => _tileFailures[variant])
       .whereType<Object>()
       .firstOrNull;
 
+  Map<String, Object?> _failureSnapshot(
+      {ReaderTileDemand? tile, int? working}) {
+    final queue = ImageWorkScheduler.shared;
+    return {
+      'sourceType': widget.source.runtimeType.toString(),
+      'backendType': widget.backend.runtimeType.toString(),
+      'surfaceGeneration': _generation,
+      'width': _metadata?.size.width,
+      'height': _metadata?.size.height,
+      'format': _metadata?.format,
+      'fileLength': widget.resolvedOriginal?.fileSnapshot.size ??
+          widget.source.byteLength,
+      'fileModifiedMillis':
+          widget.resolvedOriginal?.fileSnapshot.modified.millisecondsSinceEpoch,
+      'active': queue.activeCount,
+      'pending': queue.pendingCount,
+      'reservedBytes': queue.reservedBytes,
+      'workingBytes': working,
+      'localResidentBytes': _bytes,
+      'localPendingBytes': _pendingBytes,
+      'globalResidentBytes': _residentBytes,
+      'globalPendingBytes': _pendingResidentBytes,
+      'retainedBytes': ReaderSessionRasterCache.totalRetainedBytes,
+      'localLimitBytes': _residentLimit,
+      'globalLimitBytes': _globalResidentLimit,
+      'desiredCount': _desired.length,
+      'missingCount': _desired.where((key) => !_layers.containsKey(key)).length,
+      if (tile != null) 'tileWidth': tile.outputWidth,
+      if (tile != null) 'tileHeight': tile.outputHeight,
+      if (tile != null) 'density': tile.density,
+      if (tile != null)
+        'preview': tile.variant == _initialPreviewVariant &&
+            !_desired.contains(tile.variant),
+    };
+  }
+
+  void _recordSurfaceFailure(String stage, Object error, StackTrace stack) {
+    _failureAttempt?.failure(
+        stage: stage,
+        error: error,
+        stackTrace: stack,
+        snapshot: _failureSnapshot());
+  }
+
+  ReaderResidentBudgetExceeded _residentFailure(int requestBytes,
+      {bool alreadyPending = false}) {
+    final localUsage = _bytes + _pendingBytes;
+    final globalUsage = _residentBytes +
+        _pendingResidentBytes +
+        ReaderSessionRasterCache.totalRetainedBytes;
+    // No additional trim/eviction is performed while recording this verdict.
+    return ReaderResidentBudgetExceeded.fromUsage(
+        requestBytes: requestBytes,
+        localUsage: localUsage,
+        globalUsage: globalUsage,
+        localLimit: _residentLimit,
+        globalLimit: _globalResidentLimit,
+        alreadyPending: alreadyPending,
+        snapshot: _failureSnapshot());
+  }
+
   @override
   void initState() {
     super.initState();
+    _failureAttempt?.rendererPath('surface');
+    _failureAttempt?.updateSource(
+        sourceVersion: widget.source.identity.sourceVersion,
+        sourceType: widget.source.runtimeType.toString(),
+        backendType: widget.backend.runtimeType.toString());
     _surfaces.add(this);
     ReaderSurfaceDiagnostics._resident =
         () => _residentBytes + ReaderSessionRasterCache.totalRetainedBytes;
@@ -255,9 +331,15 @@ class _ReaderImageSurfaceState extends State<ReaderImageSurface>
   @override
   void didUpdateWidget(ReaderImageSurface oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (oldWidget.failureDiagnostics != widget.failureDiagnostics) {
+      _localFailureAttempt = null;
+    }
     if (oldWidget.transformChanges != widget.transformChanges) {
       oldWidget.transformChanges.removeListener(_scheduleViewport);
       widget.transformChanges.addListener(_scheduleViewport);
+    }
+    if (oldWidget.mode != widget.mode) {
+      _failureAttempt?.updateQualityMode(widget.mode.name);
     }
     if (oldWidget.source != widget.source ||
         oldWidget.resolvedOriginal != widget.resolvedOriginal ||
@@ -310,6 +392,7 @@ class _ReaderImageSurfaceState extends State<ReaderImageSurface>
       widget.originalRasterHandoff?.cancel();
       _error =
           StateError('Resolved original no longer matches the selected page');
+      _recordSurfaceFailure('sourceValidation', _error!, StackTrace.current);
       _scheduleViewport();
       return;
     }
@@ -332,6 +415,7 @@ class _ReaderImageSurfaceState extends State<ReaderImageSurface>
         handoff.cancel();
         _error =
             StateError('Early original raster does not match this surface');
+        _recordSurfaceFailure('sourceValidation', _error!, StackTrace.current);
       } else {
         _pendingOriginalRaster = handoff;
         unawaited(_consumeOriginalRaster(
@@ -396,13 +480,17 @@ class _ReaderImageSurfaceState extends State<ReaderImageSurface>
   Future<void> _consumeOriginalRaster(ReaderOriginalRasterHandoff handoff,
       int generation, ReaderSessionRasterKey? sessionKey) async {
     final reservation = Object();
+    var failureStage = 'decode';
+    var handoffReady = false;
     try {
       await handoff.ready;
+      handoffReady = true;
       if (!mounted || generation != _generation) {
         handoff.cancel();
         return;
       }
       final bytes = handoff.outputBytes;
+      failureStage = 'residentAdmission';
       if (!_hasImageSpace(bytes)) {
         for (final surface in _surfaces.toList()) {
           surface._evictUnneeded();
@@ -415,12 +503,12 @@ class _ReaderImageSurfaceState extends State<ReaderImageSurface>
         }
       }
       if (!_hasImageSpace(bytes)) {
-        throw const ImageWorkBudgetExceeded(
-            _globalResidentLimit + 1, _globalResidentLimit);
+        throw _residentFailure(bytes);
       }
       _pendingHandoffs[reservation] = bytes;
       _pendingBytes += bytes;
       _pendingResidentBytes += bytes;
+      failureStage = 'sourceValidation';
       await handoff.verifyForTransfer();
       if (!mounted || generation != _generation) {
         handoff.cancel();
@@ -429,8 +517,8 @@ class _ReaderImageSurfaceState extends State<ReaderImageSurface>
       // No await between the final resident check, ownership transfer and
       // resident charge: another surface cannot consume that space meanwhile.
       if (!_hasImageSpace(0)) {
-        throw const ImageWorkBudgetExceeded(
-            _globalResidentLimit + 1, _globalResidentLimit);
+        failureStage = 'residentAdmission';
+        throw _residentFailure(bytes, alreadyPending: true);
       }
       final image = handoff.take();
       _releasePendingHandoff(reservation);
@@ -448,11 +536,17 @@ class _ReaderImageSurfaceState extends State<ReaderImageSurface>
       _trim();
       _updateLoadingFeedback();
       _scheduleIdleBacking();
-    } catch (error) {
+    } catch (error, stack) {
       handoff.cancel();
       if (mounted &&
           generation == _generation &&
-          error is! ImageWorkCancelled) {
+          !readerFailureIsCancellation(error)) {
+        _failureAttempt?.failure(
+            stage: handoffReady ? failureStage : handoff.failureStage,
+            error: error,
+            stackTrace: stack,
+            snapshot: _failureSnapshot(
+                tile: handoff.demand, working: handoff.estimatedWorkingBytes));
         setState(() {
           _pendingOriginalRaster = null;
           _error = error;
@@ -467,6 +561,7 @@ class _ReaderImageSurfaceState extends State<ReaderImageSurface>
   Future<void> _open() async {
     final ownGeneration = _generation;
     void Function()? releaseMetadata;
+    var failureStage = 'openOriginal';
     try {
       final source = widget.source;
       final file = source is RasterReaderPageSource
@@ -474,6 +569,7 @@ class _ReaderImageSurfaceState extends State<ReaderImageSurface>
           : await source.openOriginalFile(cancellation: _sourceCancellation);
       if (!mounted || ownGeneration != _generation) return;
       releaseMetadata = ReaderPageFileLease.acquire(file);
+      failureStage = 'probe';
       final metadata = widget.metadata ??
           (source is RasterReaderPageSource
               ? await source.openRasterMetadata()
@@ -488,8 +584,11 @@ class _ReaderImageSurfaceState extends State<ReaderImageSurface>
       _file = file;
       _metadata = metadata;
       _scheduleViewport();
-    } catch (error) {
-      if (mounted && ownGeneration == _generation) {
+    } catch (error, stack) {
+      if (mounted &&
+          ownGeneration == _generation &&
+          !readerFailureIsCancellation(error)) {
+        _recordSurfaceFailure(failureStage, error, stack);
         setState(() => _error = error);
       }
     } finally {
@@ -780,12 +879,14 @@ class _ReaderImageSurfaceState extends State<ReaderImageSurface>
     _estimating.add(tile.variant);
     unawaited(() async {
       final releaseEstimate = ReaderPageFileLease.acquire(file);
+      var failureStage = 'estimate';
       try {
         int? preparedWorking;
         final resolved = widget.resolvedOriginal;
         if (resolved != null && sessionKey != null) {
           // A new page widget must still open and verify the authoritative
           // original. Only its already decoded pixels cross widget lifetimes.
+          failureStage = 'sourceValidation';
           await resolved.verifyCurrent();
           if (!mounted ||
               ownGeneration != _generation ||
@@ -816,12 +917,14 @@ class _ReaderImageSurfaceState extends State<ReaderImageSurface>
         }
         if (resolved != null &&
             (widget.preparedReadAdmission || forceFullAdmission)) {
+          failureStage = 'sourceValidation';
           await resolved.verifyCurrent();
           if (!forceFullAdmission) {
             preparedWorking =
                 backend.preparedWorkingBytes(resolved.metadata, tile);
           }
         }
+        failureStage = 'estimate';
         final working = math.max(
             2 << 20,
             preparedWorking ??
@@ -842,11 +945,13 @@ class _ReaderImageSurfaceState extends State<ReaderImageSurface>
         _submit(tile, priority, sourceKey, backing, file, backend, working,
             ownGeneration,
             preparedAdmission: preparedWorking != null, sessionKey: sessionKey);
-      } catch (error) {
+      } catch (error, stack) {
         if (mounted &&
             ownGeneration == _generation &&
-            _desired.contains(tile.variant)) {
-          _recordTileFailure(tile, priority, error);
+            _desired.contains(tile.variant) &&
+            !readerFailureIsCancellation(error)) {
+          _recordTileFailure(tile, priority, error,
+              stage: failureStage, stack: stack);
         }
       } finally {
         releaseEstimate();
@@ -904,6 +1009,7 @@ class _ReaderImageSurfaceState extends State<ReaderImageSurface>
       ReaderSessionRasterKey? sessionKey}) {
     final bytes = tile.outputWidth * tile.outputHeight * 4;
     final resolved = widget.resolvedOriginal;
+    var failureStage = 'schedulerAdmission';
     final ticket = ImageWorkScheduler.shared.submit<ui.Image>(
         lane: backend.executionLane,
         // Images are not shared between surfaces because each surface owns disposal.
@@ -919,12 +1025,16 @@ class _ReaderImageSurfaceState extends State<ReaderImageSurface>
             if (backend.executionLane == ImageWorkLane.execution &&
                 (backend.requiresFileBacking ||
                     backend.supportsIdlePreparation)) {
+              failureStage = 'backingAdmission';
               await _holdBacking(backing);
             }
+            failureStage = 'backingIO';
             await Directory(File(backing).parent.path).create(recursive: true);
+            failureStage = 'sourceValidation';
             if (resolved != null) await resolved.verifyCurrent();
             final decode =
                 preparedAdmission ? backend.decodePrepared : backend.decode;
+            failureStage = 'decode';
             final image = await decode(file, tile,
                 backingPath: backing,
                 memoryBudgetBytes: working,
@@ -934,6 +1044,7 @@ class _ReaderImageSurfaceState extends State<ReaderImageSurface>
                     !mounted ||
                     ownGeneration != _generation);
             ownedImage = image;
+            failureStage = 'backingMaintenance';
             if (backend.requiresFileBacking) {
               DerivedImageStore.scheduleMaintenance(backing);
             }
@@ -951,8 +1062,9 @@ class _ReaderImageSurfaceState extends State<ReaderImageSurface>
                 _backingTouches.remove(_backingTouches.keys.first);
               }
             }
+            failureStage = 'residentAdmission';
             await _reservePendingImage(image, tile, cancel, ownGeneration,
-                resolved: resolved);
+                resolved: resolved, onStage: (stage) => failureStage = stage);
             ownedImage = null;
             return image;
           } catch (_) {
@@ -1007,7 +1119,8 @@ class _ReaderImageSurfaceState extends State<ReaderImageSurface>
         if (error is! ImageWorkCancelled &&
             mounted &&
             _desired.contains(tile.variant)) {
-          _recordTileFailure(tile, priority, error);
+          _recordTileFailure(tile, priority, error,
+              stage: failureStage, stack: stack, working: working + bytes * 3);
         }
       }
       if (!mounted ||
@@ -1021,12 +1134,25 @@ class _ReaderImageSurfaceState extends State<ReaderImageSurface>
   }
 
   void _recordTileFailure(
-      ReaderTileDemand tile, ImageWorkPriority priority, Object error) {
+      ReaderTileDemand tile, ImageWorkPriority priority, Object error,
+      {required String stage, StackTrace? stack, int? working}) {
+    if (readerFailureIsCancellation(error)) return;
     final attempts = _queueRetryCounts[tile.variant] ?? 0;
+    final retryable = error is ImageWorkQueueExceeded && attempts < 2;
+    _failureAttempt?.failure(
+        stage: stage,
+        error: error,
+        stackTrace: stack,
+        snapshot: _failureSnapshot(tile: tile, working: working),
+        terminal: !retryable);
     // A full shared queue is not a broken original. Give this still-visible
     // request two delayed admission attempts, without looping on decode,
     // source identity, or memory-budget failures.
-    if (error is ImageWorkQueueExceeded && attempts < 2) {
+    if (retryable) {
+      _failureAttempt?.retry(
+          stage: stage,
+          retry: attempts + 1,
+          snapshot: _failureSnapshot(tile: tile, working: working));
       final generation = _generation;
       setState(() {
         _queueRetryCounts[tile.variant] = attempts + 1;
@@ -1062,20 +1188,26 @@ class _ReaderImageSurfaceState extends State<ReaderImageSurface>
 
   Future<void> _reservePendingImage(ui.Image image, ReaderTileDemand tile,
       ImageWorkCancellation cancel, int generation,
-      {ReaderResolvedOriginal? resolved}) async {
+      {ReaderResolvedOriginal? resolved, ValueChanged<String>? onStage}) async {
+    onStage?.call('decodeValidation');
     if (image.width != tile.outputWidth || image.height != tile.outputHeight) {
-      throw StateError('解码未达到请求的原像素尺寸');
+      throw ReaderRasterDimensionMismatch(
+          expectedSize:
+              Size(tile.outputWidth.toDouble(), tile.outputHeight.toDouble()),
+          actualSize: Size(image.width.toDouble(), image.height.toDouble()));
     }
     final bytes = image.width * image.height * 4;
     cancel.throwIfCancelled();
     if (!mounted || generation != _generation) {
       throw const ImageWorkCancelled();
     }
+    onStage?.call('sourceValidation');
     if (resolved != null) await resolved.verifyCurrent();
     cancel.throwIfCancelled();
     if (!mounted || generation != _generation) {
       throw const ImageWorkCancelled();
     }
+    onStage?.call('residentAdmission');
     for (var attempt = 0; attempt < 2 && !_hasImageSpace(bytes); attempt++) {
       for (final surface in _surfaces.toList()) {
         surface._evictUnneeded();
@@ -1087,15 +1219,16 @@ class _ReaderImageSurfaceState extends State<ReaderImageSurface>
       if (!mounted || generation != _generation) {
         throw const ImageWorkCancelled();
       }
+      onStage?.call('sourceValidation');
       if (resolved != null) await resolved.verifyCurrent();
       cancel.throwIfCancelled();
       if (!mounted || generation != _generation) {
         throw const ImageWorkCancelled();
       }
+      onStage?.call('residentAdmission');
     }
     if (!_hasImageSpace(bytes)) {
-      throw const ImageWorkBudgetExceeded(
-          _globalResidentLimit + 1, _globalResidentLimit);
+      throw _residentFailure(bytes);
     }
     _pendingImages[image] = bytes;
     _pendingBytes += bytes;
@@ -1191,6 +1324,7 @@ class _ReaderImageSurfaceState extends State<ReaderImageSurface>
     _loadingTimer?.cancel();
     _loadingTimer = null;
     _showLoading = false;
+    _recoveryFrameScheduled = false;
     _pendingOriginalRaster?.cancel();
     _pendingOriginalRaster = null;
     _cancelIdleBacking();
@@ -1343,6 +1477,7 @@ class _ReaderImageSurfaceState extends State<ReaderImageSurface>
       image.dispose();
     }
     _retired.clear();
+    _localFailureAttempt?.close();
     super.dispose();
   }
 
@@ -1366,6 +1501,30 @@ class _ReaderImageSurfaceState extends State<ReaderImageSurface>
       });
     }
     final visibleError = _error ?? _visibleTileFailure;
+    final diagnosticAttempt = _failureAttempt;
+    if (complete &&
+        visibleError == null &&
+        diagnosticAttempt?.awaitingRecovery == true &&
+        !_recoveryFrameScheduled) {
+      _recoveryFrameScheduled = true;
+      final generation = _generation;
+      final desired = Set<String>.of(_desired);
+      final visible = _demand?.visibleSourceRect;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || generation != _generation) return;
+        _recoveryFrameScheduled = false;
+        if (!identical(_failureAttempt, diagnosticAttempt) ||
+            _error != null ||
+            _visibleTileFailure != null ||
+            _demand?.visibleSourceRect != visible ||
+            _desired.length != desired.length ||
+            !_desired.every(desired.contains) ||
+            !_desired.every(_layers.containsKey)) {
+          return;
+        }
+        diagnosticAttempt!.recovered(snapshot: _failureSnapshot());
+      });
+    }
     final rect = _demand?.visibleSourceRect;
     // Geometry.toString is diagnostic-only in dart:ui: profile builds return
     // "Instance of 'Rect'". Numeric coordinates keep different pans distinct.
@@ -1434,6 +1593,9 @@ class _ReaderImageSurfaceState extends State<ReaderImageSurface>
                                             widget.reloadSource!();
                                             return;
                                           }
+                                          _localFailureAttempt =
+                                              _failureAttempt?.explicitRetry(
+                                                  generation: _generation);
                                           setState(() {
                                             _error = null;
                                             for (final variant in _desired) {

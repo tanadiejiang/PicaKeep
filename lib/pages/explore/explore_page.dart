@@ -1372,38 +1372,65 @@ class _ExploreFeedState extends State<_ExploreFeed> {
     return result;
   }
 
+  Widget _recommendCard(ComicSource source,
+      List<({BaseComic comic, String? blockedBy})> items, int index) {
+    final item = items[index];
+    return OnlineRecommendationCard(
+      key: ValueKey((source.key, item.comic.id)),
+      source: source,
+      comic: item.comic,
+      blockedBy: item.blockedBy,
+      bookmarks: _bookmarks,
+      actionsEnabled: !_loading,
+      feedbackCurrent: widget.active && _contextMatches,
+      onAccountsChanged: () {
+        widget.onContextChanged();
+        if (_contextMatches) {
+          unawaited(_load(preserveContent: true));
+        }
+      },
+      onDataRefresh: () => _load(preserveContent: true),
+      detailSessionBuilder: () => _detailSession(
+        source,
+        items.map((item) => item.comic).toList(),
+        paginated: _overview == null,
+      ),
+    );
+  }
+
   Widget _recommendGrid(
-      ComicSource source, List<({BaseComic comic, String? blockedBy})> items) {
+      ComicSource source, List<({BaseComic comic, String? blockedBy})> items,
+      {bool completeSection = false}) {
+    final columns = normalizeIllustWaterfallColumns(
+        appdata.settings[illustWaterfallColumnsSettingIndex]);
+    if (completeSection) {
+      // Overview prefixes can scroll completely out of the leading cache while
+      // later sections remain visible. Masonry 0.7.0 then loses column anchors
+      // and corrects the whole viewport backwards. Lay out the finite prefix as
+      // one box instead; production only pays for the ten recommendation cards.
+      // The final (48-item bookmarks) section and paged feeds stay lazy below.
+      return SliverToBoxAdapter(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 2),
+          child: StaggeredGrid.count(
+            crossAxisCount: columns,
+            children: [
+              for (var index = 0; index < items.length; index++)
+                StaggeredGridTile.fit(
+                  crossAxisCellCount: 1,
+                  child: _recommendCard(source, items, index),
+                ),
+            ],
+          ),
+        ),
+      );
+    }
     return SliverPadding(
       padding: const EdgeInsets.symmetric(horizontal: 2),
       sliver: SliverMasonryGrid.count(
-        crossAxisCount: normalizeIllustWaterfallColumns(
-            appdata.settings[illustWaterfallColumnsSettingIndex]),
+        crossAxisCount: columns,
         childCount: items.length,
-        itemBuilder: (context, index) {
-          final item = items[index];
-          return OnlineRecommendationCard(
-            key: ValueKey((source.key, item.comic.id)),
-            source: source,
-            comic: item.comic,
-            blockedBy: item.blockedBy,
-            bookmarks: _bookmarks,
-            actionsEnabled: !_loading,
-            feedbackCurrent: widget.active && _contextMatches,
-            onAccountsChanged: () {
-              widget.onContextChanged();
-              if (_contextMatches) {
-                unawaited(_load(preserveContent: true));
-              }
-            },
-            onDataRefresh: () => _load(preserveContent: true),
-            detailSessionBuilder: () => _detailSession(
-              source,
-              items.map((item) => item.comic).toList(),
-              paginated: _overview == null,
-            ),
-          );
-        },
+        itemBuilder: (_, index) => _recommendCard(source, items, index),
       ),
     );
   }
@@ -1447,12 +1474,13 @@ class _ExploreFeedState extends State<_ExploreFeed> {
       physics: const AlwaysScrollableScrollPhysics(),
       slivers: [
         const SliverToBoxAdapter(child: SizedBox(height: 4)),
-        for (final section in sections) ...[
-          SliverToBoxAdapter(child: _sectionHeader(section)),
-          if (section.error != null || section.items.isEmpty)
-            SliverToBoxAdapter(child: _sectionMessage(section))
+        for (var index = 0; index < sections.length; index++) ...[
+          SliverToBoxAdapter(child: _sectionHeader(sections[index])),
+          if (sections[index].error != null || sections[index].items.isEmpty)
+            SliverToBoxAdapter(child: _sectionMessage(sections[index]))
           else
-            _recommendGrid(source, _recommendItems(section.items)),
+            _recommendGrid(source, _recommendItems(sections[index].items),
+                completeSection: index < sections.length - 1),
           const SliverToBoxAdapter(child: SizedBox(height: 8)),
         ],
         const SliverToBoxAdapter(child: SizedBox(height: 12)),

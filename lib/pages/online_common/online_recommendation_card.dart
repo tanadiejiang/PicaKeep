@@ -332,6 +332,7 @@ class OnlineRecommendationCard extends StatefulWidget {
     required this.onAccountsChanged,
     this.onDataRefresh,
     this.actionsEnabled = true,
+    this.ownerIsCurrent,
     this.feedbackCurrent = true,
     this.blockedBy,
     this.accountIdentity,
@@ -343,6 +344,7 @@ class OnlineRecommendationCard extends StatefulWidget {
     this.onOpenAuthor,
     this.detailSessionBuilder,
     this.isAuthorPage = false,
+    this.compactPreview = false,
   });
 
   final ComicSource source;
@@ -351,6 +353,9 @@ class OnlineRecommendationCard extends StatefulWidget {
   final VoidCallback onAccountsChanged;
   final Future<void> Function()? onDataRefresh;
   final bool actionsEnabled;
+
+  /// Rechecked at action time and after awaits, even before this card rebuilds.
+  final bool Function()? ownerIsCurrent;
   final bool feedbackCurrent;
   final String? blockedBy;
   final String Function()? accountIdentity;
@@ -363,6 +368,10 @@ class OnlineRecommendationCard extends StatefulWidget {
   final ValueChanged<String>? onOpenAuthor;
   final PixivDetailSession Function()? detailSessionBuilder;
   final bool isAuthorPage;
+
+  /// Image-only author-strip tile; the parent supplies its width and height.
+  /// Unknown bookmark state resolves on tap, avoiding per-preview startup GETs.
+  final bool compactPreview;
 
   @override
   State<OnlineRecommendationCard> createState() =>
@@ -379,6 +388,8 @@ class _OnlineRecommendationCardState extends State<OnlineRecommendationCard> {
   PixivBookmarkEvent? _bookmarkEvent;
   PixivBookmarkFeedbackTicket? _eventTicket;
 
+  bool get _ownerCurrent => widget.ownerIsCurrent?.call() ?? true;
+  bool get _actionsCurrent => widget.actionsEnabled && _ownerCurrent;
   String get _account =>
       widget.accountIdentity?.call() ??
       pixivBookmarkAccountIdentity(widget.source);
@@ -412,7 +423,7 @@ class _OnlineRecommendationCardState extends State<OnlineRecommendationCard> {
       _detailGeneration++;
       _openingAccounts = false;
     }
-    if (oldWidget.actionsEnabled && !widget.actionsEnabled) {
+    if (oldWidget.actionsEnabled && !_actionsCurrent) {
       _generation++;
       _openingAccounts = false;
     }
@@ -438,7 +449,7 @@ class _OnlineRecommendationCardState extends State<OnlineRecommendationCard> {
 
   Future<void> _toggleBookmark() async {
     final comic = _pixiv;
-    if (!widget.actionsEnabled ||
+    if (!_actionsCurrent ||
         comic == null ||
         !widget.bookmarks.canToggle(_account, comic) ||
         _openingAccounts) {
@@ -453,12 +464,13 @@ class _OnlineRecommendationCardState extends State<OnlineRecommendationCard> {
         await (widget.manageAccounts?.call(context) ??
             showAccountsPage(context));
       } catch (_) {
-        if (mounted && generation == _generation) {
+        if (mounted && _ownerCurrent && generation == _generation) {
           _message('暂时无法打开账号管理，请重试');
         }
       }
       if (!mounted || generation != _generation) return;
       setState(() => _openingAccounts = false);
+      if (!_actionsCurrent) return;
       widget.onAccountsChanged();
       return;
     }
@@ -467,7 +479,10 @@ class _OnlineRecommendationCardState extends State<OnlineRecommendationCard> {
     final operationId = ++_operationSequence;
     final reducedMotion = MediaQuery.disableAnimationsOf(context);
     bool feedbackCurrent() =>
-        mounted && widget.feedbackCurrent && (ticket?.isCurrent ?? true);
+        mounted &&
+        _actionsCurrent &&
+        widget.feedbackCurrent &&
+        (ticket?.isCurrent ?? true);
     PixivBookmarkEvent? beginEvent;
     void emit(PixivBookmarkPhase phase, {bool? target, bool success = true}) {
       if (!feedbackCurrent()) return;
@@ -511,11 +526,12 @@ class _OnlineRecommendationCardState extends State<OnlineRecommendationCard> {
           mounted &&
           generation == _generation &&
           identical(_pixiv, comic) &&
-          widget.actionsEnabled &&
+          _actionsCurrent &&
           _account == account &&
           _loggedIn,
     );
     if (!mounted ||
+        !_actionsCurrent ||
         generation != _generation ||
         _account != account ||
         !identical(_pixiv, comic) ||
@@ -532,6 +548,7 @@ class _OnlineRecommendationCardState extends State<OnlineRecommendationCard> {
   }
 
   void _openAuthor(String id) {
+    if (!_actionsCurrent) return;
     final open = widget.onOpenAuthor;
     if (open != null) {
       open(id);
@@ -542,6 +559,7 @@ class _OnlineRecommendationCardState extends State<OnlineRecommendationCard> {
   }
 
   Future<void> _openDetail() async {
+    if (!_actionsCurrent) return;
     final open = widget.onOpenDetail;
     if (open != null) {
       open();
@@ -551,7 +569,10 @@ class _OnlineRecommendationCardState extends State<OnlineRecommendationCard> {
     final account = _account;
     final comic = _pixiv;
     bool isCurrent() =>
-        mounted && generation == _detailGeneration && _account == account;
+        mounted &&
+        _ownerCurrent &&
+        generation == _detailGeneration &&
+        _account == account;
     await openOnlineComic(context, widget.source, widget.comic,
         detailSession: widget.detailSessionBuilder?.call());
     if (!isCurrent()) return;
@@ -576,6 +597,9 @@ class _OnlineRecommendationCardState extends State<OnlineRecommendationCard> {
   Widget build(BuildContext context) {
     final comic = widget.comic;
     final pixiv = _pixiv;
+    if (widget.compactPreview) {
+      return _compactPreview(context, pixiv);
+    }
     _scheduleBookmarkResolution();
     final author = resolveSourceAuthors(
       source: widget.source.key,
@@ -615,7 +639,7 @@ class _OnlineRecommendationCardState extends State<OnlineRecommendationCard> {
           : widget.bookmarks.isBookmarked(_account, pixiv),
       favoriteStateKnown:
           pixiv == null || widget.bookmarks.isStateKnown(_account, pixiv),
-      favoriteEnabled: widget.actionsEnabled && !_openingAccounts,
+      favoriteEnabled: _actionsCurrent && !_openingAccounts,
       favoriteBusy: pixiv != null && widget.bookmarks.isBusy(_account, pixiv),
       favoriteStyle: settings.favoriteStyle,
       pixivBookmarkAnimations: pixiv != null,
@@ -640,17 +664,132 @@ class _OnlineRecommendationCardState extends State<OnlineRecommendationCard> {
     );
   }
 
+  Widget _compactPreview(BuildContext context, PixivComicBrief? pixiv) {
+    final comic = widget.comic;
+    final style = readComicTileDisplaySettings().favoriteStyle;
+    final host = PixivBookmarkFeedbackHost.maybeOf(context);
+    final headers = widget.source.imageHeadersBuilder?.call(comic) ??
+        const <String, String>{};
+    final canToggle =
+        pixiv != null && widget.bookmarks.canToggle(_account, pixiv);
+    final tile = ClipRRect(
+      borderRadius: BorderRadius.circular(8),
+      child: Stack(fit: StackFit.expand, children: [
+        Positioned.fill(
+          child: Material(
+            color: Theme.of(context).colorScheme.secondaryContainer,
+            child: InkWell(
+              key: const ValueKey('compact-preview-detail'),
+              onTap: _actionsCurrent ? _openDetail : null,
+              child: _compactImage(context, pixiv, headers),
+            ),
+          ),
+        ),
+        if ((pixiv?.pageCount ?? 0) > 1)
+          Positioned(
+            right: 5,
+            top: 5,
+            child: IgnorePointer(
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                    color: Colors.black54,
+                    borderRadius: BorderRadius.circular(4)),
+                child: Padding(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                  child: Text('${pixiv!.pageCount}',
+                      style:
+                          const TextStyle(color: Colors.white, fontSize: 11)),
+                ),
+              ),
+            ),
+          ),
+        if (pixiv != null && canToggle)
+          Positioned(
+            right: 0,
+            bottom: 0,
+            child: PixivBookmarkButton(
+              key: const ValueKey('compact-preview-bookmark'),
+              isBookmarked: widget.bookmarks.isBookmarked(_account, pixiv),
+              stateKnown: widget.bookmarks.isStateKnown(_account, pixiv),
+              busy: widget.bookmarks.isBusy(_account, pixiv),
+              enabled: _actionsCurrent && !_openingAccounts,
+              active: widget.feedbackCurrent && (host?.isCurrent ?? true),
+              identity: (_account, comic.id),
+              visualEpoch: host?.visualEpoch,
+              event: (_eventTicket?.isCurrent ?? true) ? _bookmarkEvent : null,
+              onPressed: _toggleBookmark,
+              size: 48,
+              iconSize: 22,
+              activeColor: style.favoriteColor(context),
+              inactiveColor: style.inactiveColor,
+              shadows: const [Shadow(color: Colors.black54, blurRadius: 4)],
+            ),
+          ),
+      ]),
+    );
+    return widget.blockedBy == null ? tile : Opacity(opacity: .45, child: tile);
+  }
+
+  Widget _compactImage(BuildContext context, PixivComicBrief? pixiv,
+      Map<String, String> headers) {
+    final original = widget.comic.cover.trim();
+    Widget placeholder({bool loading = false}) => Semantics(
+          label: loading ? '正在加载封面' : '封面加载失败',
+          child: ColoredBox(
+            color: Theme.of(context).colorScheme.secondaryContainer,
+            child: Center(
+                child: Icon(
+              loading
+                  ? Icons.image_outlined
+                  : Icons.image_not_supported_outlined,
+              size: 22,
+              color: Theme.of(context).colorScheme.onSecondaryContainer,
+            )),
+          ),
+        );
+    if (original.isEmpty) return placeholder();
+    final primary =
+        pixiv == null ? original : pixivProportionalThumbUrl(original);
+    return LayoutBuilder(builder: (context, constraints) {
+      final ratio = MediaQuery.devicePixelRatioOf(context).clamp(1.0, 3.0);
+      final cacheWidth =
+          constraints.maxWidth.isFinite && constraints.maxWidth > 0
+              ? (constraints.maxWidth * ratio * 1.35).round()
+              : null;
+      Widget imageFor(String url, {bool allowFallback = false}) {
+        final provider = onlineCoverProvider(url: url, headers: headers);
+        return Image(
+          key: ValueKey(('compact-preview-cover', url)),
+          image: ResizeImage.resizeIfNeeded(cacheWidth, null, provider),
+          fit: BoxFit.cover,
+          gaplessPlayback: true,
+          filterQuality: FilterQuality.medium,
+          frameBuilder: (context, child, frame, synchronous) =>
+              frame != null || synchronous ? child : placeholder(loading: true),
+          errorBuilder: (context, error, stackTrace) =>
+              allowFallback && original != url
+                  ? imageFor(original)
+                  : placeholder(),
+        );
+      }
+
+      return imageFor(primary, allowFallback: true);
+    });
+  }
+
   void _scheduleBookmarkResolution() {
-    if (_resolutionScheduled ||
+    if (widget.compactPreview ||
+        _resolutionScheduled ||
         !widget.bookmarks.resolveUnknownStates ||
-        !widget.actionsEnabled ||
+        !_actionsCurrent ||
         !_loggedIn ||
         _pixiv == null) {
       return;
     }
     _resolutionScheduled = true;
     WidgetsBinding.instance.addPostFrameCallback((_) async {
-      if (!mounted || !widget.actionsEnabled || !_loggedIn) {
+      if (!mounted || widget.compactPreview || !_actionsCurrent || !_loggedIn) {
         _resolutionScheduled = false;
         return;
       }
@@ -670,7 +809,7 @@ class _OnlineRecommendationCardState extends State<OnlineRecommendationCard> {
             mounted &&
             _account == account &&
             _loggedIn &&
-            widget.actionsEnabled &&
+            _actionsCurrent &&
             identical(controller, widget.bookmarks) &&
             _pixiv?.id == comic.id,
       );

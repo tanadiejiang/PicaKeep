@@ -17,6 +17,7 @@ import 'foundation/log.dart';
 import 'foundation/explore/explore_selection_state.dart';
 import 'foundation/pixiv_download_naming.dart';
 import 'foundation/pixiv_bookmark_feedback_settings.dart';
+import 'foundation/pixiv_detail_feed_settings.dart';
 import 'foundation/reader_image_quality.dart';
 import 'foundation/history.dart';
 import 'foundation/local_favorites.dart';
@@ -204,6 +205,10 @@ class Appdata {
     '{}', //164 exploreSelectionState Pixiv 探索页分区/入口/榜单范围选择状态 JSON
     '', //165 readerImagePipelineSettings: versioned original-file reader policy
     '0', //166 pixivBookmarkQueueCounts: 显示收藏队列数量（默认关闭）
+    '', //167 保留，不改变后续设置的固定索引
+    '5', //168 pixivAuthorPreviewCount: 详情作者横排作品数（1..30）
+    '5', //169 pixivRelatedBatchSize: 相关推荐自定义每轮数量（1..18），Pixiv 模式保留此值
+    pixivRelatedModePixiv, //170 pixivRelatedMode: 默认由 Pixiv 返回，custom 使用 169
   ];
 
   List<String> implicitData = [
@@ -390,6 +395,18 @@ class Appdata {
     settings[pixivBookmarkQueueCountsSettingIndex] =
         normalizePixivBookmarkQueueCounts(
             st.elementAtOrNull(pixivBookmarkQueueCountsSettingIndex));
+    settings[pixivAuthorPreviewCountSettingIndex] =
+        normalizePixivAuthorPreviewCount(
+                st.elementAtOrNull(pixivAuthorPreviewCountSettingIndex))
+            .toString();
+    settings[pixivRelatedBatchSizeSettingIndex] =
+        normalizePixivRelatedBatchSize(
+                st.elementAtOrNull(pixivRelatedBatchSizeSettingIndex))
+            .toString();
+    // Missing modes come from the incoming array, never a stale live value.
+    // Legacy numeric values cannot reveal whether the old default was chosen.
+    settings[pixivRelatedModeSettingIndex] = normalizePixivRelatedMode(
+        st.elementAtOrNull(pixivRelatedModeSettingIndex));
     setManagedDataSourceMode(settings[managedDataSourceModeSettingIndex]);
     _syncArchiveRuntimeSettings();
     var settingsChanged = hadMissingSettings;
@@ -435,6 +452,16 @@ class Appdata {
     settings[pixivBookmarkQueueCountsSettingIndex] =
         normalizePixivBookmarkQueueCounts(
             settings[pixivBookmarkQueueCountsSettingIndex]);
+    settings[pixivAuthorPreviewCountSettingIndex] =
+        normalizePixivAuthorPreviewCount(
+                settings[pixivAuthorPreviewCountSettingIndex])
+            .toString();
+    settings[pixivRelatedBatchSizeSettingIndex] =
+        normalizePixivRelatedBatchSize(
+                settings[pixivRelatedBatchSizeSettingIndex])
+            .toString();
+    settings[pixivRelatedModeSettingIndex] =
+        normalizePixivRelatedMode(settings[pixivRelatedModeSettingIndex]);
     settings[readerImagePipelineSettingIndex] =
         normalizeReaderImagePipelineSettings(
       readerPolicy,
@@ -650,6 +677,16 @@ class Appdata {
       settings[pixivBookmarkQueueCountsSettingIndex] =
           normalizePixivBookmarkQueueCounts(newSettings
               .elementAtOrNull(pixivBookmarkQueueCountsSettingIndex));
+      settings[pixivAuthorPreviewCountSettingIndex] =
+          normalizePixivAuthorPreviewCount(newSettings
+                  .elementAtOrNull(pixivAuthorPreviewCountSettingIndex))
+              .toString();
+      settings[pixivRelatedBatchSizeSettingIndex] =
+          normalizePixivRelatedBatchSize(newSettings
+                  .elementAtOrNull(pixivRelatedBatchSizeSettingIndex))
+              .toString();
+      settings[pixivRelatedModeSettingIndex] = normalizePixivRelatedMode(
+          newSettings.elementAtOrNull(pixivRelatedModeSettingIndex));
       setManagedDataSourceMode(settings[managedDataSourceModeSettingIndex]);
       settings[22] = downloadPath;
       settings[13] = authRequired;

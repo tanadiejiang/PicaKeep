@@ -27,11 +27,16 @@ class PixivDetailEntry {
 }
 
 class PixivDetailBatch {
-  const PixivDetailBatch(this.entries, {required this.hasMore, this.total});
+  const PixivDetailBatch(this.entries,
+      {required this.hasMore, this.total, this.continuationPosition});
 
   final Iterable<PixivDetailEntry> entries;
   final bool hasMore;
   final int? total;
+
+  /// Related-work ID queues may consume a batch with no visible new entries.
+  /// Other scopes retain the existing stop-on-empty contract.
+  final int? continuationPosition;
 }
 
 /// A route owns a stable snapshot; continuation remains owned by its source.
@@ -44,7 +49,9 @@ class PixivDetailSession extends ChangeNotifier {
     this.total,
     this.loadMore,
     this.ownerIsCurrent,
-  }) : _hasMore = hasMore && loadMore != null {
+    int? continuationPosition,
+  })  : _hasMore = hasMore && loadMore != null,
+        _continuationPosition = continuationPosition {
     _append(entries);
   }
 
@@ -58,6 +65,7 @@ class PixivDetailSession extends ChangeNotifier {
   bool _busy = false;
   bool _disposed = false;
   int _generation = 0;
+  int? _continuationPosition;
   String? _error;
   int? total;
 
@@ -94,7 +102,12 @@ class PixivDetailSession extends ChangeNotifier {
       _append(batch.entries);
       total = batch.total ?? total;
       _hasMore = batch.hasMore;
-      if (_entries.length == oldCount && batch.hasMore) {
+      final position = batch.continuationPosition;
+      final queueAdvanced = scope == PixivDetailScope.related &&
+          position != null &&
+          position > (_continuationPosition ?? 0);
+      if (queueAdvanced) _continuationPosition = position;
+      if (_entries.length == oldCount && batch.hasMore && !queueAdvanced) {
         _hasMore = false;
         _error = '没有收到新的作品，请返回刷新';
       }

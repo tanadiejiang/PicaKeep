@@ -1,10 +1,12 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:picakeep/foundation/image_pipeline/image_work_scheduler.dart';
+import 'package:picakeep/foundation/image_pipeline/reader_failure_diagnostics.dart';
 import 'package:picakeep/foundation/image_pipeline/reader_page_source.dart';
 import 'package:picakeep/foundation/image_pipeline/reader_raster_backend.dart';
 import 'package:picakeep/foundation/image_pipeline/reader_viewport.dart';
@@ -44,7 +46,10 @@ class _Backend extends ReaderRasterBackend {
 
 class _Source extends FileReaderPageSource implements RasterReaderPageSource {
   _Source(String name,
-      {this.metadataError, this.metadataGate, this.disposalGate})
+      {this.metadataError,
+      this.metadataGate,
+      this.disposalGate,
+      String sourceVersion = '1'})
       : super(
             identity: ReaderPageIdentity(
                 sourceKey: 'fixture',
@@ -52,7 +57,7 @@ class _Source extends FileReaderPageSource implements RasterReaderPageSource {
                 downloadId: name,
                 episode: 1,
                 page: 0,
-                sourceVersion: '1'),
+                sourceVersion: sourceVersion),
             file: File('unused-$name'));
   final Object? metadataError;
   final Completer<void>? metadataGate;
@@ -78,13 +83,16 @@ class _Source extends FileReaderPageSource implements RasterReaderPageSource {
 }
 
 class _Harness {
+  _Harness({this.failureDiagnostics});
+  final ReaderFailurePageDiagnostics? failureDiagnostics;
   final changes = ChangeNotifier();
   // An unattached viewport keeps these source-resolution tests independent of
   // native raster/cache IO. The Surface still opens the fake raster metadata.
   final viewport = GlobalKey();
   Future<void> mount(
           WidgetTester tester, Future<ReaderPageSource> Function() load,
-          {String resource = 'first'}) =>
+          {String resource = 'first',
+          ReaderDisplayMode mode = ReaderDisplayMode.sharpFirst}) =>
       tester.pumpWidget(MaterialApp(
           home: SizedBox(
               width: 400,
@@ -94,8 +102,9 @@ class _Harness {
                   loadSource: load,
                   resourceKey: resource,
                   viewportKey: viewport,
+                  failureDiagnostics: failureDiagnostics,
                   transformChanges: changes,
-                  mode: ReaderDisplayMode.sharpFirst))));
+                  mode: mode))));
 }
 
 Future<void> _flush(WidgetTester tester) async {
@@ -110,6 +119,160 @@ Future<void> _advance(WidgetTester tester, int milliseconds) async {
 }
 
 void main() {
+  testWidgets('quality changes update a source failure without restarting it',
+      (tester) async {
+    final events = <Map<String, dynamic>>[];
+    final session = ReaderFailureDiagnosticsSession(
+        writer: (line) => events.add(jsonDecode(line) as Map<String, dynamic>));
+    addTearDown(session.dispose);
+    final harness = _Harness(
+        failureDiagnostics: session.page(
+            logicalIdentity: 'fixture:mode:1:0',
+            chapter: 1,
+            page: 1,
+            readingMode: 'topToBottomContinuously'));
+    addTearDown(harness.changes.dispose);
+    var loads = 0;
+    Future<ReaderPageSource> load() async {
+      loads++;
+      throw const FileSystemException('fixture');
+    }
+
+    await harness.mount(tester, load);
+    await _flush(tester);
+    await harness.mount(tester, load, mode: ReaderDisplayMode.previewFirst);
+    await _flush(tester);
+    expect(loads, 1);
+    await tester.tap(find.byType(TextButton));
+    await _flush(tester);
+    expect(loads, 2);
+    expect(
+        events
+            .where((event) => event['event'] == 'explicitRetry')
+            .single['qualityMode'],
+        'previewFirst');
+    await tester.pumpWidget(const SizedBox());
+    await _flush(tester);
+  });
+
+  testWidgets('source and metadata failures correlate before a source exists',
+      (tester) async {
+    final events = <Map<String, dynamic>>[];
+    final session = ReaderFailureDiagnosticsSession(
+        writer: (line) => events.add(jsonDecode(line) as Map<String, dynamic>));
+    addTearDown(session.dispose);
+    final harness = _Harness(
+        failureDiagnostics: session.page(
+            logicalIdentity: 'fixture:work:1:0',
+            chapter: 1,
+            page: 1,
+            readingMode: 'topToBottomContinuously'));
+    addTearDown(harness.changes.dispose);
+    var loads = 0;
+    final failed = _Source('same-page',
+        sourceVersion: 'https://private.invalid/?token=secret-version',
+        metadataError: StateError('secret-codec-text'));
+    await harness.mount(tester, () async {
+      if (++loads == 1) {
+        throw const FileSystemException(
+            'Authorization: secret', 'D:/private/secret-page.png');
+      }
+      return failed;
+    });
+    await _flush(tester);
+    await tester.tap(find.byType(TextButton));
+    await _flush(tester);
+    final failures =
+        events.where((event) => event['event'] == 'failure').toList();
+    expect(failures.map((event) => event['stage']), ['loadSource', 'probe']);
+    expect(failures.map((event) => event['attempt']), [1, 2]);
+    expect(failures.map((event) => event['pageKey']).toSet(), hasLength(1));
+    expect(failures.first['reason'], 'fileIO');
+    expect(events.where((event) => event['event'] == 'explicitRetry'),
+        hasLength(1));
+    expect(events.where((event) => event['event'] == 'recovered'), isEmpty,
+        reason: 'source selection or metadata failure is not pixel recovery');
+    expect(jsonEncode(events), isNot(contains('secret')));
+    expect(jsonEncode(events), isNot(contains('private.invalid')));
+    expect(jsonEncode(events), isNot(contains('D:/private')));
+    await tester.pumpWidget(const SizedBox());
+    await _flush(tester);
+  });
+
+  testWidgets(
+      'manual retry preserves the logical key when source version changes',
+      (tester) async {
+    final events = <Map<String, dynamic>>[];
+    final session = ReaderFailureDiagnosticsSession(
+        writer: (line) => events.add(jsonDecode(line) as Map<String, dynamic>));
+    addTearDown(session.dispose);
+    final harness = _Harness(
+        failureDiagnostics: session.page(
+            logicalIdentity: 'fixture:unchanged-work:1:0',
+            chapter: 1,
+            page: 1,
+            readingMode: 'leftToRight'));
+    addTearDown(harness.changes.dispose);
+    var loads = 0;
+    await harness.mount(
+        tester,
+        () async => _Source('same-page',
+            sourceVersion: 'version-${++loads}',
+            metadataError:
+                const ImageEngineException(7, 'private decoder message')));
+    await _flush(tester);
+    await tester.tap(find.byType(TextButton));
+    await _flush(tester);
+    final failures =
+        events.where((event) => event['event'] == 'failure').toList();
+    expect(failures, hasLength(2));
+    expect(failures.map((event) => event['pageKey']).toSet(), hasLength(1));
+    expect(failures.map((event) => event['attempt']), [1, 2]);
+    expect(
+        failures.map((event) => event['snapshot']['sourceVersionHash']).toSet(),
+        hasLength(2));
+    expect(failures.every((event) => event['nativeCode'] == 7), isTrue);
+    await tester.pumpWidget(const SizedBox());
+    await _flush(tester);
+  });
+
+  testWidgets('source queue diagnostics keep the existing bounded retry budget',
+      (tester) async {
+    final events = <Map<String, dynamic>>[];
+    final session = ReaderFailureDiagnosticsSession(
+        writer: (line) => events.add(jsonDecode(line) as Map<String, dynamic>));
+    addTearDown(session.dispose);
+    final harness = _Harness(
+        failureDiagnostics: session.page(
+            logicalIdentity: 'fixture:queue:1:0',
+            chapter: 1,
+            page: 1,
+            readingMode: 'leftToRight'));
+    addTearDown(harness.changes.dispose);
+    var loads = 0;
+    await harness.mount(tester, () async {
+      loads++;
+      throw const ImageEngineQueueExceeded(128);
+    });
+    await _flush(tester);
+    await _advance(tester, 120);
+    await _advance(tester, 240);
+    await _advance(tester, 3000);
+    expect(loads, 3);
+    expect(
+        events
+            .where((event) => event['event'] == 'retryScheduled')
+            .map((event) => event['retry']),
+        [1, 2]);
+    expect(
+        events.where((event) =>
+            event['event'] == 'failure' && event['terminal'] == true),
+        hasLength(1));
+    expect(events.map((event) => event['attempt']).toSet(), {1});
+    await tester.pumpWidget(const SizedBox());
+    await _flush(tester);
+  });
+
   for (final error in <Object>[
     const ImageEngineQueueExceeded(128),
     const ImageWorkQueueExceeded(ImageWorkLane.execution, 128),

@@ -13,6 +13,19 @@ import 'derived_image_store.dart';
 import 'reader_raw_image_decoder.dart';
 export 'reader_raster_diagnostics.dart';
 
+class ReaderRasterDimensionMismatch implements Exception {
+  const ReaderRasterDimensionMismatch(
+      {required this.expectedSize, required this.actualSize});
+
+  final ui.Size expectedSize;
+  final ui.Size actualSize;
+
+  @override
+  String toString() =>
+      'Reader raster dimensions differ: expected ${expectedSize.width}x${expectedSize.height}, '
+      'actual ${actualSize.width}x${actualSize.height}';
+}
+
 /// Small static files use Flutter's codec at the demanded sample density.
 /// A crop always comes from that same original; zoom requests a denser decode.
 class FlutterReaderRasterBackend extends ReaderRasterBackend {
@@ -124,8 +137,13 @@ class FlutterReaderRasterBackend extends ReaderRasterBackend {
     try {
       descriptor = await ui.ImageDescriptor.encoded(buffer);
       if (descriptor.width != metadata.size.width ||
-          descriptor.height != metadata.size.height ||
-          descriptor.width * descriptor.height * 4 > _maximumDecodedBytes) {
+          descriptor.height != metadata.size.height) {
+        throw ReaderRasterDimensionMismatch(
+            expectedSize: metadata.size,
+            actualSize: ui.Size(
+                descriptor.width.toDouble(), descriptor.height.toDouble()));
+      }
+      if (descriptor.width * descriptor.height * 4 > _maximumDecodedBytes) {
         throw ImageWorkBudgetExceeded(
             descriptor.width * descriptor.height * 4, _maximumDecodedBytes);
       }

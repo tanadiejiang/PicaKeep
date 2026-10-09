@@ -1,7 +1,11 @@
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
+import 'package:picakeep/foundation/pixiv_detail_session.dart';
 import 'package:picakeep/components/pixiv_bookmark_button.dart';
+import 'package:picakeep/network/pixiv_network/pixiv_network.dart';
+import 'package:picakeep/pages/online_common/online_comic_list_item.dart';
 
 class PixivDetailImage {
   const PixivDetailImage({
@@ -112,6 +116,9 @@ class PixivDetailShell extends StatefulWidget {
     this.imageError,
     this.onRetryImages,
     this.imagesLoading = false,
+    this.galleryCollapsible = false,
+    this.authorAvatarUrl = '',
+    this.onGalleryExpansionChanged,
   });
 
   final String title;
@@ -140,12 +147,38 @@ class PixivDetailShell extends StatefulWidget {
   final VoidCallback? onRetryImages;
   final bool imagesLoading;
 
+  /// Online multipage works defer details until the user reaches the gallery
+  /// end, and expose an optional detail panel. The gallery is never collapsed.
+  /// Local and single-image details keep their original inline layout.
+  final bool galleryCollapsible;
+  final String authorAvatarUrl;
+
+  /// Compatibility with the online entry: false while the detail panel is
+  /// open, true in image/inline browsing. The entry omits recommendations from
+  /// [sliversBuilder] while this panel is open. No initial callback is emitted.
+  final ValueChanged<bool>? onGalleryExpansionChanged;
+
   @override
   State<PixivDetailShell> createState() => _PixivDetailShellState();
 }
 
 class _PixivDetailShellState extends State<PixivDetailShell> {
   final _scrollController = ScrollController();
+  final _galleryHeaderKey = GlobalKey(debugLabel: 'pixiv-gallery-header');
+  final _detailsKey = GlobalKey(debugLabel: 'pixiv-single-details-group');
+  final _panelScrollController = ScrollController();
+  bool _panelOpen = false;
+  bool _detailsCreated = false;
+  bool _detailsHandedOff = false;
+  bool _userScroll = false;
+  bool _handoffQueued = false;
+  bool _handoffAlignPending = false;
+  double _detailsExtent = 0;
+  bool _panelOpenedFromHandoff = false;
+  bool _handoffCurrentPageLocked = false;
+  double _galleryRestorePadding = 0;
+  int _galleryEpoch = 0;
+  String? _galleryIdentity;
   final ValueNotifier<bool> _favoriteVisible = ValueNotifier(true);
   double _width = 0;
   int _imageIndex = 0;
@@ -159,16 +192,256 @@ class _PixivDetailShellState extends State<PixivDetailShell> {
   void initState() {
     super.initState();
     _scrollController.addListener(_scrollChanged);
+    if (widget.images.isNotEmpty) _galleryIdentity = widget.images.first.key;
   }
+
+  bool get _entryActive =>
+      PixivDetailEntryScope.isActiveOf(context) &&
+      TickerMode.valuesOf(context).enabled;
 
   @override
   void didUpdateWidget(covariant PixivDetailShell oldWidget) {
     super.didUpdateWidget(oldWidget);
+    final identity = widget.images.isEmpty ? null : widget.images.first.key;
+    final replaced = _galleryIdentity != null &&
+        identity != null &&
+        identity != _galleryIdentity;
+    if (replaced ||
+        (oldWidget.galleryCollapsible && !widget.galleryCollapsible)) {
+      final notify = _panelOpen;
+      _panelOpen = false;
+      _detailsCreated = false;
+      _detailsHandedOff = false;
+      _userScroll = false;
+      _handoffQueued = false;
+      _handoffAlignPending = false;
+      _panelOpenedFromHandoff = false;
+      _handoffCurrentPageLocked = false;
+      _galleryRestorePadding = 0;
+      _detailsExtent = 0;
+      _galleryEpoch++;
+      _imageIndex = 0;
+      if (replaced) _ratios.clear();
+      if (notify) {
+        final epoch = _galleryEpoch;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted && epoch == _galleryEpoch) {
+            widget.onGalleryExpansionChanged?.call(true);
+          }
+        });
+      }
+    }
+    if (identity != null) _galleryIdentity = identity;
     if (!identical(oldWidget.images, widget.images)) {
       _measureImages();
       _imageIndex =
           math.min(_imageIndex, math.max(0, widget.images.length - 1));
     }
+  }
+
+  double _galleryRestorePaddingFor(ScrollPosition position) {
+    if (_pageEnds.isEmpty || widget.images.isEmpty) return 0;
+    final index = _imageIndex.clamp(0, _pageEnds.length - 1);
+    final start = index == 0 ? 0.0 : _pageEnds[index - 1];
+    final pageHeight = math.max(0.0, _pageEnds[index] - start);
+    return math.max(0.0, position.viewportDimension - pageHeight - 88.0);
+  }
+
+  void _setDetailsPanel(bool open) {
+    if (!widget.galleryCollapsible ||
+        open == _panelOpen ||
+        (open && !_entryActive)) {
+      return;
+    }
+    final openedFromHandoff = _detailsHandedOff;
+    final render = _detailsKey.currentContext?.findRenderObject();
+    if (render is RenderSliver) {
+      _detailsExtent = render.geometry?.scrollExtent ?? _detailsExtent;
+    }
+    final restorePadding =
+        !open && _panelOpenedFromHandoff && _scrollController.hasClients
+            ? _galleryRestorePaddingFor(_scrollController.position)
+            : 0.0;
+    setState(() {
+      _panelOpen = open;
+      _detailsCreated = true;
+      _panelOpenedFromHandoff = openedFromHandoff;
+      _handoffCurrentPageLocked = false;
+      _galleryRestorePadding = open ? 0 : restorePadding;
+      _userScroll = false;
+      _handoffQueued = false;
+      _handoffAlignPending = false;
+      if (!open) {
+        _detailsHandedOff = false;
+        _detailsExtent = 0;
+        _boundaryReached = false;
+      }
+      _galleryEpoch++;
+    });
+    widget.onGalleryExpansionChanged?.call(!open);
+    _scheduleFavoriteVisibilitySync();
+    if (!open && restorePadding > 0) {
+      final epoch = _galleryEpoch;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted ||
+            epoch != _galleryEpoch ||
+            !_scrollController.hasClients ||
+            !_entryActive ||
+            _panelOpen ||
+            !_panelOpenedFromHandoff) {
+          return;
+        }
+        final position = _scrollController.position;
+        final index = _imageIndex.clamp(0, _pageEnds.length - 1);
+        final target = index == 0 ? 0.0 : _pageEnds[index - 1];
+        final bounded =
+            target.clamp(position.minScrollExtent, position.maxScrollExtent);
+        if (position.pixels >= bounded - 1) return;
+        if (MediaQuery.disableAnimationsOf(context)) {
+          _scrollController.jumpTo(bounded);
+        } else {
+          _scrollController.animateTo(bounded,
+              duration: const Duration(milliseconds: 180),
+              curve: Curves.easeOutCubic);
+        }
+      });
+    }
+  }
+
+  bool _galleryScroll(ScrollNotification notification) {
+    if (!widget.galleryCollapsible ||
+        notification.depth != 0 ||
+        notification.metrics.axis != Axis.vertical) {
+      return false;
+    }
+    if (notification is ScrollStartNotification) {
+      _userScroll = notification.dragDetails != null && _entryActive;
+    }
+    if (!_entryActive || _panelOpen) {
+      _userScroll = false;
+      return false;
+    }
+    final down = notification is ScrollUpdateNotification &&
+            (notification.scrollDelta ?? 0) > 0 ||
+        notification is OverscrollNotification && notification.overscroll > 0;
+    final up = notification is ScrollUpdateNotification &&
+            (notification.scrollDelta ?? 0) < 0 ||
+        notification is OverscrollNotification && notification.overscroll < 0;
+    if (_userScroll &&
+        _detailsHandedOff &&
+        up &&
+        !_handoffQueued &&
+        _pageEnds.isNotEmpty &&
+        _scrollController.hasClients &&
+        notification.metrics.pixels + notification.metrics.viewportDimension <=
+            _pageEnds.last - 24) {
+      _handoffQueued = true;
+      final epoch = _galleryEpoch;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || epoch != _galleryEpoch) return;
+        _handoffQueued = false;
+        if (!_entryActive || _panelOpen || !_detailsHandedOff) return;
+        final restorePadding =
+            _galleryRestorePaddingFor(_scrollController.position);
+        setState(() {
+          _detailsHandedOff = false;
+          _detailsExtent = 0;
+          _galleryRestorePadding = restorePadding;
+          _boundaryReached = false;
+          _handoffAlignPending = false;
+          _handoffCurrentPageLocked = false;
+          _galleryEpoch++;
+        });
+        widget.onGalleryExpansionChanged?.call(false);
+        _scheduleFavoriteVisibilitySync();
+      });
+    }
+    if (_userScroll &&
+        down &&
+        !_detailsHandedOff &&
+        !_handoffQueued &&
+        _pageEnds.isNotEmpty &&
+        _scrollController.hasClients &&
+        notification.metrics.pixels + notification.metrics.viewportDimension >=
+            _pageEnds.last + 24) {
+      _handoffQueued = true;
+      final epoch = _galleryEpoch;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || epoch != _galleryEpoch) return;
+        _handoffQueued = false;
+        if (!_entryActive || _panelOpen || _detailsHandedOff) return;
+        setState(() {
+          _detailsCreated = true;
+          _detailsHandedOff = true;
+          _galleryRestorePadding = 0;
+          _imageIndex = math.max(0, widget.images.length - 1);
+          _handoffCurrentPageLocked = true;
+          _handoffAlignPending = true;
+        });
+        widget.onGalleryExpansionChanged?.call(true);
+        if (!_scrollController.position.isScrollingNotifier.value) {
+          _alignGalleryHandoff();
+        }
+      });
+    }
+    if (notification is ScrollEndNotification) {
+      _userScroll = false;
+      if (_handoffAlignPending) _alignGalleryHandoff();
+    }
+    return false;
+  }
+
+  void _alignGalleryHandoff() {
+    final epoch = _galleryEpoch;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted ||
+          epoch != _galleryEpoch ||
+          !_handoffAlignPending ||
+          !_entryActive ||
+          _panelOpen ||
+          !_scrollController.hasClients) {
+        return;
+      }
+      void unlockCurrentPage() {
+        if (mounted && epoch == _galleryEpoch) {
+          _handoffCurrentPageLocked = false;
+        }
+      }
+
+      _handoffAlignPending = false;
+      final box = _galleryHeaderKey.currentContext?.findRenderObject();
+      if (box is! RenderBox || !box.hasSize) {
+        unlockCurrentPage();
+        return;
+      }
+      final position = _scrollController.position;
+      if (position.isScrollingNotifier.value) {
+        _handoffAlignPending = true;
+        return;
+      }
+      final top =
+          box.localToGlobal(Offset.zero).dy - MediaQuery.paddingOf(context).top;
+      final delta = top - position.viewportDimension * .45;
+      // One small handoff after the user's first gallery-end gesture. Further
+      // scrolling/idle/layout never snaps; a continued drag can pass it freely.
+      if (delta <= 8 ||
+          delta > math.min(720, position.viewportDimension * .65)) {
+        unlockCurrentPage();
+        return;
+      }
+      final target = (position.pixels + delta)
+          .clamp(position.minScrollExtent, position.maxScrollExtent);
+      if (MediaQuery.disableAnimationsOf(context)) {
+        _scrollController.jumpTo(target);
+        unlockCurrentPage();
+      } else {
+        _scrollController
+            .animateTo(target,
+                duration: const Duration(milliseconds: 180),
+                curve: Curves.easeOutCubic)
+            .whenComplete(unlockCurrentPage);
+      }
+    });
   }
 
   void _measureImages() {
@@ -190,6 +463,7 @@ class _PixivDetailShellState extends State<PixivDetailShell> {
 
   void _scrollChanged() {
     _scheduleFavoriteVisibilitySync();
+    if (_handoffCurrentPageLocked) return;
     if (!_scrollController.hasClients || _pageEnds.isEmpty) return;
     final focus = _scrollController.position.pixels + 48;
     var low = 0;
@@ -237,7 +511,7 @@ class _PixivDetailShellState extends State<PixivDetailShell> {
       final atTop = !_scrollController.hasClients ||
           _scrollController.position.pixels <=
               _scrollController.position.minScrollExtent;
-      _favoriteVisible.value = atTop || !_boundaryReached;
+      _favoriteVisible.value = atTop || !_boundaryReached || _panelOpen;
     });
     WidgetsBinding.instance.ensureVisualUpdate();
   }
@@ -245,6 +519,7 @@ class _PixivDetailShellState extends State<PixivDetailShell> {
   @override
   void dispose() {
     _scrollController.dispose();
+    _panelScrollController.dispose();
     _favoriteVisible.dispose();
     super.dispose();
   }
@@ -252,7 +527,7 @@ class _PixivDetailShellState extends State<PixivDetailShell> {
   @override
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
-    return Scaffold(
+    final scaffold = Scaffold(
       backgroundColor: colors.surface,
       body: SafeArea(
         child: LayoutBuilder(builder: (context, constraints) {
@@ -260,42 +535,60 @@ class _PixivDetailShellState extends State<PixivDetailShell> {
             _width = constraints.maxWidth;
             _measureImages();
           }
-          final favoriteBottom = math.min(80.0, constraints.maxHeight * .15);
+          final baseFavoriteBottom =
+              math.min(80.0, constraints.maxHeight * .15);
+          final favoriteBottom = widget.galleryCollapsible && !_detailsHandedOff
+              ? math.max(baseFavoriteBottom, 88.0)
+              : baseFavoriteBottom;
+          final details = widget.galleryCollapsible && _detailsCreated
+              ? SliverMainAxisGroup(
+                  key: _detailsKey, slivers: widget.sliversBuilder(context))
+              : null;
           return _FavoriteBoundaryScope(
               report: _reportFavoriteBoundary,
               bottomExclusion: favoriteBottom + 56 + 12,
               child: Stack(children: [
                 Positioned.fill(
-                  child: CustomScrollView(
-                    key: const ValueKey('pixiv-detail-page-scroll'),
-                    controller: _scrollController,
-                    slivers: [
-                      if (widget.images.isNotEmpty)
-                        SliverList(
-                          key: const ValueKey('pixiv-detail-images'),
-                          delegate: SliverChildBuilderDelegate(
-                            (context, index) =>
-                                _image(context, widget.images[index], index),
-                            childCount: widget.images.length,
-                          ),
-                        )
-                      else
-                        SliverToBoxAdapter(
-                          child: SizedBox(
-                            height: constraints.maxWidth,
-                            child: Center(
-                              child: widget.imagesLoading
-                                  ? const CircularProgressIndicator()
-                                  : const Icon(
-                                      Icons.image_not_supported_outlined,
-                                      size: 48),
-                            ),
-                          ),
-                        ),
-                      SliverToBoxAdapter(child: _header(context)),
-                      ...widget.sliversBuilder(context),
-                      const SliverToBoxAdapter(child: SizedBox(height: 88)),
-                    ],
+                  child: NotificationListener<ScrollNotification>(
+                    onNotification: _galleryScroll,
+                    child: CustomScrollView(
+                      key: const ValueKey('pixiv-detail-page-scroll'),
+                      controller: _scrollController,
+                      slivers: [
+                        if (widget.images.isNotEmpty)
+                          _gallerySliver(context)
+                        else
+                          SliverToBoxAdapter(
+                              child: SizedBox(
+                                  height: constraints.maxWidth,
+                                  child: Center(
+                                      child: widget.imagesLoading
+                                          ? const CircularProgressIndicator()
+                                          : const Icon(
+                                              Icons
+                                                  .image_not_supported_outlined,
+                                              size: 48)))),
+                        if (!widget.galleryCollapsible || _detailsHandedOff)
+                          SliverToBoxAdapter(
+                              child: KeyedSubtree(
+                                  key: _galleryHeaderKey,
+                                  child: _header(context))),
+                        if (widget.galleryCollapsible &&
+                            !_detailsHandedOff &&
+                            _galleryRestorePadding > 0)
+                          SliverToBoxAdapter(
+                              child: SizedBox(height: _galleryRestorePadding)),
+                        if (!widget.galleryCollapsible)
+                          ...widget.sliversBuilder(context)
+                        else if (_detailsHandedOff)
+                          if (_panelOpen)
+                            SliverToBoxAdapter(
+                                child: SizedBox(height: _detailsExtent))
+                          else if (details != null)
+                            details,
+                        const SliverToBoxAdapter(child: SizedBox(height: 88)),
+                      ],
+                    ),
                   ),
                 ),
                 Positioned(
@@ -354,6 +647,31 @@ class _PixivDetailShellState extends State<PixivDetailShell> {
                       ),
                   ]),
                 ),
+                if (widget.galleryCollapsible &&
+                    !_detailsHandedOff &&
+                    !_panelOpen)
+                  Positioned(
+                      left: 0,
+                      right: 0,
+                      bottom: 0,
+                      child: _galleryHeader(context, compact: true)),
+                if (details != null && !_detailsHandedOff && !_panelOpen)
+                  Positioned(
+                      left: 0,
+                      right: 0,
+                      bottom: 0,
+                      height: 0,
+                      child: TickerMode(
+                          enabled: false,
+                          child: IgnorePointer(
+                              child: CustomScrollView(
+                                  key: const ValueKey(
+                                      'pixiv-detail-parked-scroll'),
+                                  controller: _panelScrollController,
+                                  cacheExtent: 0,
+                                  slivers: [details])))),
+                if (_panelOpen && details != null)
+                  _detailsPanel(context, constraints, details),
                 Positioned(
                   right: 16,
                   bottom: favoriteBottom,
@@ -447,6 +765,14 @@ class _PixivDetailShellState extends State<PixivDetailShell> {
         }),
       ),
     );
+    if (!widget.galleryCollapsible) return scaffold;
+    return PopScope(
+      canPop: !_panelOpen,
+      onPopInvokedWithResult: (didPop, result) {
+        if (!didPop && _panelOpen) _setDetailsPanel(false);
+      },
+      child: scaffold,
+    );
   }
 
   Widget _onlineFavorite(bool visible) => Material(
@@ -480,6 +806,72 @@ class _PixivDetailShellState extends State<PixivDetailShell> {
             color: Colors.white,
             shadows: const [Shadow(color: Colors.black, blurRadius: 3)]),
       );
+
+  Widget _gallerySliver(BuildContext context) => SliverList(
+        key: const ValueKey('pixiv-detail-images'),
+        delegate: SliverChildBuilderDelegate(
+          (context, index) => _image(context, widget.images[index], index),
+          childCount: widget.images.length,
+        ),
+      );
+
+  Widget _detailsPanel(
+      BuildContext context, BoxConstraints constraints, Widget details) {
+    final colors = Theme.of(context).colorScheme;
+    return Positioned.fill(
+        child: Stack(children: [
+      Positioned.fill(
+          child: Semantics(
+        button: true,
+        label: '点图片返回看图',
+        child: GestureDetector(
+          key: const ValueKey('pixiv-detail-panel-background'),
+          behavior: HitTestBehavior.opaque,
+          onTap: () => _setDetailsPanel(false),
+          child: ColoredBox(color: Colors.black.withValues(alpha: .24)),
+        ),
+      )),
+      Align(
+        alignment: Alignment.bottomCenter,
+        child: SizedBox(
+          key: const ValueKey('pixiv-detail-panel'),
+          height: constraints.maxHeight * .75,
+          child: Semantics(
+            scopesRoute: true,
+            explicitChildNodes: true,
+            namesRoute: true,
+            label: '作品详情',
+            child: Material(
+              color: colors.surface,
+              elevation: 8,
+              borderRadius:
+                  const BorderRadius.vertical(top: Radius.circular(24)),
+              clipBehavior: Clip.antiAlias,
+              child: Column(children: [
+                const SizedBox(height: 8),
+                Container(
+                    width: 32,
+                    height: 4,
+                    decoration: BoxDecoration(
+                        color: colors.onSurfaceVariant.withValues(alpha: .45),
+                        borderRadius: BorderRadius.circular(4))),
+                _galleryHeader(context, panel: true),
+                Expanded(
+                    child: CustomScrollView(
+                  key: const ValueKey('pixiv-detail-panel-scroll'),
+                  controller: _panelScrollController,
+                  slivers: [
+                    details,
+                    const SliverToBoxAdapter(child: SizedBox(height: 24))
+                  ],
+                )),
+              ]),
+            ),
+          ),
+        ),
+      ),
+    ]));
+  }
 
   Widget _image(BuildContext context, PixivDetailImage image, int index) {
     final value = _ratios[image.key] ?? image.aspectRatio;
@@ -530,63 +922,184 @@ class _PixivDetailShellState extends State<PixivDetailShell> {
     );
   }
 
-  Widget _header(BuildContext context) => Container(
+  Widget _galleryHeader(BuildContext context,
+          {bool compact = false, bool panel = false}) =>
+      Container(
+        key: ValueKey(panel
+            ? 'pixiv-details-panel-header'
+            : compact
+                ? 'pixiv-detail-entry-bar'
+                : 'pixiv-gallery-header'),
         color: Theme.of(context).colorScheme.surface,
         padding: const EdgeInsets.fromLTRB(16, 12, 12, 12),
-        child: Row(children: [
-          Expanded(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
+        child: LayoutBuilder(builder: (context, constraints) {
+          final separateAction = constraints.maxWidth < 320 ||
+              MediaQuery.textScalerOf(context).scale(12) > 18;
+          return Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(widget.title,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                        fontSize: 14, fontWeight: FontWeight.w600)),
-                Text(widget.author,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontSize: 12)),
-              ],
+                if (!compact) ...[
+                  Text(widget.title,
+                      style: const TextStyle(
+                          fontSize: 14, fontWeight: FontWeight.w600)),
+                  const SizedBox(height: 8),
+                ],
+                Row(children: [
+                  _authorAvatar(context),
+                  const SizedBox(width: 4),
+                  Semantics(
+                    button: true,
+                    expanded: _panelOpen,
+                    child: IconButton(
+                      key: ValueKey(panel
+                          ? 'pixiv-detail-panel-toggle'
+                          : 'pixiv-gallery-expansion-toggle'),
+                      tooltip: panel ? '收起详情' : '展开详情',
+                      constraints:
+                          const BoxConstraints(minWidth: 48, minHeight: 48),
+                      onPressed:
+                          _entryActive ? () => _setDetailsPanel(!panel) : null,
+                      icon: Icon(panel ? Icons.expand_more : Icons.expand_less),
+                    ),
+                  ),
+                  const SizedBox(width: 4),
+                  Expanded(
+                    child: Text(widget.author,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontSize: 12)),
+                  ),
+                  if (!separateAction) ...[
+                    const SizedBox(width: 8),
+                    _galleryAction(context),
+                  ],
+                ]),
+                if (separateAction)
+                  Align(
+                      alignment: Alignment.centerRight,
+                      child: _galleryAction(context)),
+              ]);
+        }),
+      );
+
+  Widget _authorAvatar(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    Widget fallback() => CircleAvatar(
+        key: const ValueKey('pixiv-gallery-author-avatar'),
+        radius: 16,
+        backgroundColor: colors.secondaryContainer,
+        child: const Icon(Icons.person_outline, size: 20));
+    if (widget.authorAvatarUrl.isEmpty) return fallback();
+    return ClipOval(
+      key: const ValueKey('pixiv-gallery-author-avatar'),
+      child: Image(
+        image: onlineCoverProvider(url: widget.authorAvatarUrl, headers: const {
+          'Referer': 'https://www.pixiv.net/',
+          'User-Agent': PixivNetwork.pixivWebUA,
+        }),
+        width: 32,
+        height: 32,
+        fit: BoxFit.cover,
+        errorBuilder: (_, __, ___) => fallback(),
+      ),
+    );
+  }
+
+  Widget _galleryAction(BuildContext context) => Tooltip(
+        message: widget.actionLabel,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(8),
+          onTap: widget.actionBusy ? null : widget.onAction,
+          onLongPress: widget.actionBusy ? null : widget.onActionLongPress,
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(minHeight: 48, minWidth: 48),
+            child: Center(
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  color: Theme.of(context).colorScheme.secondaryContainer,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Padding(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+                  child: Row(mainAxisSize: MainAxisSize.min, children: [
+                    Icon(
+                        widget.actionBusy
+                            ? Icons.hourglass_top
+                            : widget.actionIcon,
+                        size: 18),
+                    const SizedBox(width: 4),
+                    Text(widget.actionLabel,
+                        style: const TextStyle(fontSize: 12)),
+                  ]),
+                ),
+              ),
             ),
           ),
-          const SizedBox(width: 8),
-          Tooltip(
-            message: widget.actionLabel,
-            child: InkWell(
-              borderRadius: BorderRadius.circular(8),
-              onTap: widget.actionBusy ? null : widget.onAction,
-              onLongPress: widget.actionBusy ? null : widget.onActionLongPress,
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(minHeight: 48, minWidth: 48),
-                child: Center(
-                  child: DecoratedBox(
-                    decoration: BoxDecoration(
-                      color: Theme.of(context).colorScheme.secondaryContainer,
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 8, vertical: 5),
-                      child: Row(mainAxisSize: MainAxisSize.min, children: [
-                        Icon(
-                            widget.actionBusy
-                                ? Icons.hourglass_top
-                                : widget.actionIcon,
-                            size: 18),
-                        const SizedBox(width: 4),
-                        Text(widget.actionLabel,
-                            style: const TextStyle(fontSize: 12)),
-                      ]),
+        ),
+      );
+
+  Widget _header(BuildContext context) => widget.galleryCollapsible
+      ? _galleryHeader(context)
+      : Container(
+          color: Theme.of(context).colorScheme.surface,
+          padding: const EdgeInsets.fromLTRB(16, 12, 12, 12),
+          child: Row(children: [
+            Expanded(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(widget.title,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                          fontSize: 14, fontWeight: FontWeight.w600)),
+                  Text(widget.author,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontSize: 12)),
+                ],
+              ),
+            ),
+            const SizedBox(width: 8),
+            Tooltip(
+              message: widget.actionLabel,
+              child: InkWell(
+                borderRadius: BorderRadius.circular(8),
+                onTap: widget.actionBusy ? null : widget.onAction,
+                onLongPress:
+                    widget.actionBusy ? null : widget.onActionLongPress,
+                child: ConstrainedBox(
+                  constraints:
+                      const BoxConstraints(minHeight: 48, minWidth: 48),
+                  child: Center(
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        color: Theme.of(context).colorScheme.secondaryContainer,
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 8, vertical: 5),
+                        child: Row(mainAxisSize: MainAxisSize.min, children: [
+                          Icon(
+                              widget.actionBusy
+                                  ? Icons.hourglass_top
+                                  : widget.actionIcon,
+                              size: 18),
+                          const SizedBox(width: 4),
+                          Text(widget.actionLabel,
+                              style: const TextStyle(fontSize: 12)),
+                        ]),
+                      ),
                     ),
                   ),
                 ),
               ),
             ),
-          ),
-        ]),
-      );
+          ]),
+        );
 }
 
 class _MeasuredDetailImage extends StatefulWidget {

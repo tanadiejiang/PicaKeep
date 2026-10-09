@@ -53,9 +53,11 @@ class ComicReadingPageLogic extends StateController {
   var photoViewControllers = <int, PhotoViewController>{};
   final readerViewportKey = GlobalKey();
   final sessionRasterCache = ReaderSessionRasterCache();
+  final failureDiagnosticsSession = ReaderFailureDiagnosticsSession();
   @override
   void dispose() {
     sessionRasterCache.dispose();
+    failureDiagnosticsSession.dispose();
     super.dispose();
   }
 
@@ -154,6 +156,204 @@ class ComicReadingPageLogic extends StateController {
   bool mouseScroll = false;
 
   double currentScale = 1.0;
+
+  final _chapterPointers = <int>{};
+  final _chapterGestureLogs = <String>{};
+  int _chapterGesture = 0;
+  int _chapterGestureOrder = 0;
+  ReadingMethod? _chapterGestureMode;
+  bool _chapterGestureInvalid = true;
+  bool _chapterGestureConsumed = false;
+  double _chapterPullDistance = 0;
+  int _chapterPullDirection = 0;
+
+  bool get hasNextChapter =>
+      data.hasEp && order > 0 && order < (data.eps?.length ?? 0);
+  bool get hasPreviousChapter =>
+      data.hasEp && order > 1 && order <= (data.eps?.length ?? 0);
+
+  void _clearChapterPull() {
+    _chapterPullDistance = 0;
+    _chapterPullDirection = 0;
+    fABValue = 0;
+  }
+
+  void invalidateContinuousChapterGesture() {
+    _chapterGestureInvalid = true;
+    _clearChapterPull();
+  }
+
+  void resetContinuousChapterGesture() {
+    _chapterPointers.clear();
+    _chapterGestureLogs.clear();
+    _chapterGestureConsumed = false;
+    invalidateContinuousChapterGesture();
+  }
+
+  void syncContinuousChapterGesture() {
+    if (_chapterGestureMode != readingMethod || _chapterGestureOrder != order) {
+      invalidateContinuousChapterGesture();
+    }
+  }
+
+  void beginContinuousChapterGesture(PointerDownEvent event) {
+    if (_chapterPointers.isEmpty) {
+      _chapterGesture++;
+      _chapterGestureLogs.clear();
+      _chapterGestureOrder = order;
+      _chapterGestureMode = readingMethod;
+      _chapterGestureConsumed = false;
+      _chapterGestureInvalid =
+          readingMethod != ReadingMethod.topToBottomContinuously ||
+              isLoading ||
+              urls.isEmpty ||
+              !_kTouchLikeDeviceTypes.contains(event.kind) ||
+              (event.kind == PointerDeviceKind.mouse &&
+                  event.buttons != kPrimaryMouseButton);
+      _clearChapterPull();
+    } else {
+      invalidateContinuousChapterGesture();
+    }
+    _chapterPointers.add(event.pointer);
+  }
+
+  void endContinuousChapterGesture(int pointer, {bool cancelled = false}) {
+    if (cancelled) invalidateContinuousChapterGesture();
+    _chapterPointers.remove(pointer);
+    if (_chapterPointers.isEmpty) resetContinuousChapterGesture();
+  }
+
+  String? _chapterGestureRejection() {
+    syncContinuousChapterGesture();
+    if (_chapterPointers.isEmpty) return 'noPointer';
+    if (_chapterGestureConsumed) return 'consumed';
+    if (_chapterGestureInvalid || _chapterPointers.length != 1) {
+      return 'invalidGesture';
+    }
+    if (isLoading || urls.isEmpty) {
+      invalidateContinuousChapterGesture();
+      return 'loading';
+    }
+    if (noScroll ||
+        isCtrlPressed ||
+        mouseScroll ||
+        (photoViewControllers[0]?.scale ?? currentScale) > 1.05) {
+      invalidateContinuousChapterGesture();
+      return 'transformedOrLocked';
+    }
+    return null;
+  }
+
+  bool get canPullContinuousChapter => _chapterGestureRejection() == null;
+
+  void trackContinuousChapterPointer(PointerMoveEvent event) {
+    if (_chapterGestureRejection() != null) return;
+    if ((_chapterPullDirection > 0 && event.delta.dy > 0) ||
+        (_chapterPullDirection < 0 && event.delta.dy < 0) ||
+        (fABValue > 0 && event.delta.dy > 0)) {
+      _clearChapterPull();
+    }
+  }
+
+  bool handleContinuousChapterScroll(
+      ScrollNotification notification, int episode) {
+    if (notification.depth != 0 ||
+        notification.metrics.axis != Axis.vertical ||
+        episode != order ||
+        _chapterGestureRejection() != null) {
+      return false;
+    }
+    final metrics = notification.metrics;
+    if (notification is ScrollUpdateNotification &&
+        notification.dragDetails != null) {
+      final delta = notification.scrollDelta ?? 0;
+      if ((_chapterPullDirection > 0 &&
+              (delta < 0 || metrics.pixels < metrics.maxScrollExtent - 24)) ||
+          (_chapterPullDirection < 0 &&
+              (delta > 0 || metrics.pixels > metrics.minScrollExtent + 24)) ||
+          (fABValue > 0 && delta < 0)) {
+        _clearChapterPull();
+      }
+    } else if (notification is OverscrollNotification &&
+        notification.dragDetails != null) {
+      final direction = notification.overscroll > 0 ? 1 : -1;
+      final atBoundary = direction > 0
+          ? metrics.pixels >= metrics.maxScrollExtent - 24
+          : metrics.pixels <= metrics.minScrollExtent + 24;
+      if (!atBoundary || notification.overscroll == 0) {
+        _clearChapterPull();
+        return false;
+      }
+      if (_chapterPullDirection != direction) _clearChapterPull();
+      _chapterPullDirection = direction;
+      _chapterPullDistance += notification.overscroll.abs();
+      if (_chapterPullDistance >= 88) {
+        requestContinuousChapterChange(direction, trigger: 'overscroll');
+        _clearChapterPull();
+      }
+    }
+    return false;
+  }
+
+  Map<String, Object?> _chapterBoundarySnapshot() {
+    double? finite(double? value) =>
+        value != null && value.isFinite ? value : null;
+    final position =
+        scrollController.hasClients ? scrollController.position : null;
+    final photo = photoViewControllers[0];
+    return <String, Object?>{
+      'chapter': order,
+      'index': index,
+      'pixels': finite(position?.pixels),
+      'min': finite(position?.minScrollExtent),
+      'max': finite(position?.maxScrollExtent),
+      'scale': finite(photo?.scale),
+      'x': finite(photo?.position.dx),
+      'y': finite(photo?.position.dy),
+      'anchors': itemScrollListener.itemPositions.value
+          .take(3)
+          .map((item) => {
+                'index': item.index,
+                'leading': finite(item.itemLeadingEdge),
+                'trailing': finite(item.itemTrailingEdge),
+              })
+          .toList(),
+    };
+  }
+
+  bool requestContinuousChapterChange(int direction,
+      {required String trigger}) {
+    var reason = _chapterGestureRejection();
+    if (reason == null &&
+        !(direction > 0 ? hasNextChapter : hasPreviousChapter)) {
+      reason = 'noAdjacentChapter';
+    }
+    final before = _chapterBoundarySnapshot();
+    final accepted = reason == null;
+    if (accepted) {
+      // Navigation can synchronously rebuild the list and emit more notifications.
+      _chapterGestureConsumed = true;
+      direction > 0 ? jumpToNextChapter() : jumpToLastChapter();
+    }
+    final logKey = '$trigger:$direction:${reason ?? 'accepted'}';
+    if (_chapterGestureLogs.add(logKey)) {
+      try {
+        LogManager.addLog(
+            LogLevel.info,
+            'ReaderBoundary',
+            jsonEncode({
+              'gesture': _chapterGesture,
+              'trigger': trigger,
+              'direction': direction,
+              'accepted': accepted,
+              'reason': reason ?? 'accepted',
+              'before': before,
+              'after': _chapterBoundarySnapshot(),
+            }));
+      } catch (_) {}
+    }
+    return accepted;
+  }
 
   bool get isCtrlPressed => HardwareKeyboard.instance.isControlPressed;
 
@@ -279,6 +479,7 @@ class ComicReadingPageLogic extends StateController {
   var urls = <String>[];
 
   void reload() {
+    invalidateContinuousChapterGesture();
     index = 1;
     pageController = PageController(initialPage: 1);
     isLoading = true;
@@ -314,6 +515,7 @@ class ComicReadingPageLogic extends StateController {
   }
 
   void jumpToPage(int i, [bool updateWidget = false]) {
+    invalidateContinuousChapterGesture();
     i = i.clamp(1, length);
     if (readingMethod == ReadingMethod.topToBottomContinuously) {
       itemScrollController.jumpTo(index: i - 1);
@@ -342,22 +544,20 @@ class ComicReadingPageLogic extends StateController {
   }
 
   void jumpToNextChapter() {
+    if (isLoading || urls.isEmpty) return;
     var eps = data.eps;
-    showFloatingButtonValue = 0;
-    if (!data.hasEp || order == eps?.length) {
+    if (!data.hasEp || order >= (eps?.length ?? 0)) {
       if (readingMethod != ReadingMethod.topToBottomContinuously) {
         if (readingMethod.index < 3) {
           jumpByDeviceType(urls.length);
         } else if (readingMethod == ReadingMethod.twoPage) {
           jumpByDeviceType((urls.length % 2 + urls.length) ~/ 2);
         }
-      } else {
-        jumpToPage(urls.length);
-        index = urls.length;
-        update(["ToolBar"]);
       }
       return;
     }
+    invalidateContinuousChapterGesture();
+    showFloatingButtonValue = 0;
     order += 1;
     urls = [];
     isLoading = true;
@@ -369,6 +569,7 @@ class ComicReadingPageLogic extends StateController {
   }
 
   void jumpToChapter(int index) {
+    invalidateContinuousChapterGesture();
     order = index;
     urls = [];
     isLoading = true;
@@ -380,18 +581,16 @@ class ComicReadingPageLogic extends StateController {
   }
 
   void jumpToLastChapter() {
-    showFloatingButtonValue = 0;
+    if (isLoading || urls.isEmpty) return;
     if (order == 1 || !data.hasEp) {
       if (readingMethod != ReadingMethod.topToBottomContinuously) {
         jumpByDeviceType(1);
-      } else {
-        jumpToPage(1);
-        index = 1;
-        update(["ToolBar"]);
       }
       return;
     }
 
+    invalidateContinuousChapterGesture();
+    showFloatingButtonValue = 0;
     order -= 1;
     urls = [];
     isLoading = true;
@@ -427,6 +626,7 @@ class ComicReadingPageLogic extends StateController {
   }
 
   void refresh_() {
+    invalidateContinuousChapterGesture();
     pageController = PageController(initialPage: 1);
     itemScrollController = ItemScrollController();
     itemScrollListener = ItemPositionsListener.create();

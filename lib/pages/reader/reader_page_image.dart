@@ -9,6 +9,7 @@ import 'package:flutter/material.dart';
 import 'package:photo_view/photo_view.dart';
 import 'package:picakeep/foundation/app.dart';
 import 'package:picakeep/foundation/image_pipeline/image_work_scheduler.dart';
+import 'package:picakeep/foundation/image_pipeline/reader_failure_diagnostics.dart';
 import 'package:picakeep/foundation/image_pipeline/reader_original_raster_handoff.dart';
 import 'package:picakeep/foundation/image_pipeline/reader_page_source.dart';
 import 'package:picakeep/foundation/image_pipeline/reader_raster_backend.dart';
@@ -18,6 +19,30 @@ import 'package:picakeep/tools/translations.dart';
 import 'package:picakeep_image_engine/picakeep_image_engine.dart';
 
 import 'reader_image_surface.dart';
+
+/// Some external filesystems refresh cached ctime on the first actual read.
+/// Establish the baseline before probing; later source checks stay strict.
+Future<FileStat> captureReaderOriginalSnapshot(File file) async {
+  final before = await file.stat();
+  final handle = await file.open(mode: FileMode.read);
+  try {
+    final firstByte = await handle.read(1);
+    if (firstByte.length != 1) {
+      throw const FileSystemException('Original did not yield its first byte');
+    }
+    final opened = await file.stat();
+    if (before.type != FileSystemEntityType.file ||
+        opened.type != FileSystemEntityType.file ||
+        before.size != opened.size ||
+        before.modified != opened.modified) {
+      throw ReaderSourceSnapshotMismatch(
+          expected: before, current: opened, sourceIdentityMatches: true);
+    }
+    return opened;
+  } finally {
+    await handle.close();
+  }
+}
 
 /// A normal local page keeps one original raster while zooming and panning.
 /// Larger pages retain the region renderer instead of allocating an unbounded
@@ -133,6 +158,7 @@ class ReaderPageImage extends StatefulWidget {
     this.preparedReadAdmission = false,
     this.persistRaster = true,
     this.sessionRasterCache,
+    this.failureDiagnostics,
   });
 
   final Future<ReaderPageSource> Function() loadSource;
@@ -164,6 +190,7 @@ class ReaderPageImage extends StatefulWidget {
   final bool preparedReadAdmission;
   final bool persistRaster;
   final ReaderSessionRasterCache? sessionRasterCache;
+  final ReaderFailurePageDiagnostics? failureDiagnostics;
 
   @override
   State<ReaderPageImage> createState() => _ReaderPageImageState();
@@ -189,10 +216,32 @@ class _ReaderPageImageState extends State<ReaderPageImage> {
   Size? _pendingSourceSize;
   int _resolutionRetries = 0;
   static const _maximumResolutionRetries = 2;
+  ReaderFailureDiagnosticsSession? _standaloneDiagnostics;
+  late ReaderFailurePageDiagnostics _failurePage;
+  late ReaderFailureAttemptDiagnostics _failureAttempt;
+  int _standalonePage = 0;
+
+  void _selectFailurePage() {
+    _failurePage = widget.failureDiagnostics ??
+        (_standaloneDiagnostics ??= ReaderFailureDiagnosticsSession()).page(
+            logicalIdentity: 'standalone:${_standalonePage++}',
+            chapter: 0,
+            page: 0,
+            readingMode: 'standalone');
+  }
+
+  void _beginFailureAttempt({bool explicitRetry = false}) {
+    _failureAttempt = _failurePage.beginAttempt(
+        generation: _generation,
+        qualityMode: widget.mode.name,
+        explicitRetry: explicitRetry);
+  }
 
   @override
   void initState() {
     super.initState();
+    _selectFailurePage();
+    _beginFailureAttempt();
     _startSourceLoadingFeedback();
     unawaited(_resolve());
   }
@@ -211,7 +260,9 @@ class _ReaderPageImageState extends State<ReaderPageImage> {
   @override
   void didUpdateWidget(ReaderPageImage oldWidget) {
     super.didUpdateWidget(oldWidget);
+    _failureAttempt.updateQualityMode(widget.mode.name);
     if (widget.resourceKey != oldWidget.resourceKey ||
+        widget.failureDiagnostics != oldWidget.failureDiagnostics ||
         widget.fullOrdinaryImage != oldWidget.fullOrdinaryImage ||
         widget.earlyOriginalRaster != oldWidget.earlyOriginalRaster ||
         widget.nativeLargeFit != oldWidget.nativeLargeFit ||
@@ -221,6 +272,10 @@ class _ReaderPageImageState extends State<ReaderPageImage> {
         widget.preferPreparedRead != oldWidget.preferPreparedRead ||
         widget.preparedReadAdmission != oldWidget.preparedReadAdmission ||
         widget.persistRaster != oldWidget.persistRaster) {
+      if (widget.resourceKey != oldWidget.resourceKey ||
+          widget.failureDiagnostics != oldWidget.failureDiagnostics) {
+        _selectFailurePage();
+      }
       _restartResolution(rebuild: false);
     }
   }
@@ -248,6 +303,7 @@ class _ReaderPageImageState extends State<ReaderPageImage> {
 
   void _restartResolution({bool rebuild = true}) {
     _generation++;
+    _beginFailureAttempt(explicitRetry: rebuild);
     _resolutionRetry?.cancel();
     _resolutionRetry = null;
     _resolutionRetries = 0;
@@ -300,6 +356,8 @@ class _ReaderPageImageState extends State<ReaderPageImage> {
     ReaderPageSource? source;
     void Function()? releaseMetadata;
     var retryQueueFailure = false;
+    var stage = 'loadSource';
+    final failureAttempt = _failureAttempt;
     try {
       source = await widget.loadSource();
       sourceResolveUs = resolveClock.elapsedMicroseconds;
@@ -308,6 +366,9 @@ class _ReaderPageImageState extends State<ReaderPageImage> {
         return;
       }
       _source = source;
+      failureAttempt.updateSource(
+          sourceVersion: source.identity.sourceVersion,
+          sourceType: source.runtimeType.toString());
       if (source is FileReaderPageSource && source is! RasterReaderPageSource) {
         final rememberedSize = widget.sessionRasterCache
             ?.peekSourceMetadata(source.identity.stableKey)
@@ -326,15 +387,22 @@ class _ReaderPageImageState extends State<ReaderPageImage> {
         backend = source.rasterBackend;
         file = source.rasterLocator;
         final metadataClock = Stopwatch()..start();
+        stage = 'probe';
         metadata = await source.openRasterMetadata();
         metadataUs = metadataClock.elapsedMicroseconds;
       } else {
         final sourceFileClock = Stopwatch()..start();
+        stage = 'openOriginal';
         file = await source.openOriginalFile();
-        sourceFileUs = sourceFileClock.elapsedMicroseconds;
         if (!mounted || generation != _generation) return;
         releaseMetadata = ReaderPageFileLease.acquire(file);
-        originalSnapshot = await file.stat();
+        originalSnapshot = await captureReaderOriginalSnapshot(file);
+        sourceFileUs = sourceFileClock.elapsedMicroseconds;
+        if (!mounted || generation != _generation) return;
+        failureAttempt.updateSource(
+            fileLength: originalSnapshot.size,
+            fileModifiedMillis:
+                originalSnapshot.modified.millisecondsSinceEpoch);
         final nativeBackend = NativeReaderRasterBackend(
             preferRawSync: widget.preferRawSync,
             preferPreparedRead: widget.preferPreparedRead,
@@ -353,6 +421,7 @@ class _ReaderPageImageState extends State<ReaderPageImage> {
               sourceIdentity: source.identity.stableKey);
         }
         final metadataClock = Stopwatch()..start();
+        stage = 'probe';
         if (!compatibility) {
           try {
             if (rememberedMetadata != null) {
@@ -388,6 +457,12 @@ class _ReaderPageImageState extends State<ReaderPageImage> {
         }
         metadataUs = metadataClock.elapsedMicroseconds;
       }
+      failureAttempt.updateSource(
+          backendType: backend.runtimeType.toString(),
+          width: metadata.size.width,
+          height: metadata.size.height,
+          format: metadata.format);
+      failureAttempt.rendererPath(compatibility ? 'compatibility' : 'surface');
       // The legacy renderer is restricted to a bounded decoded working set.
       // A huge unsupported file must not trigger a whole-image allocation.
       if (compatibility &&
@@ -482,12 +557,24 @@ class _ReaderPageImageState extends State<ReaderPageImage> {
         _pendingSourceSize = metadata.size;
         _error = null;
       });
-    } catch (error) {
-      if (_isCurrent(generation)) {
+    } catch (error, stack) {
+      if (_isCurrent(generation) && !readerFailureIsCancellation(error)) {
         _disposeSelectedSource();
         retryQueueFailure = (error is ImageEngineQueueExceeded ||
                 error is ImageWorkQueueExceeded) &&
             _resolutionRetries < _maximumResolutionRetries;
+        failureAttempt.failure(
+            stage: stage,
+            error: error,
+            stackTrace: stack,
+            terminal: !retryQueueFailure,
+            snapshot: {
+              'generation': generation,
+              'retry': _resolutionRetries,
+              'active': ImageWorkScheduler.shared.activeCount,
+              'pending': ImageWorkScheduler.shared.pendingCount,
+              'reservedBytes': ImageWorkScheduler.shared.reservedBytes,
+            });
         // Only bounded queue admission failures recover automatically. Native
         // status 3 also covers hard budgets, so its generic form must not retry.
         if (!retryQueueFailure) {
@@ -512,6 +599,7 @@ class _ReaderPageImageState extends State<ReaderPageImage> {
       await _sourceDrain;
       if (!_isCurrent(generation)) return;
       _resolutionRetries++;
+      failureAttempt.retry(stage: stage, retry: _resolutionRetries);
       _resolutionRetry =
           Timer(Duration(milliseconds: 120 * _resolutionRetries), () {
         _resolutionRetry = null;
@@ -549,6 +637,7 @@ class _ReaderPageImageState extends State<ReaderPageImage> {
     }
     return ReaderImageSurface(
         source: _source!,
+        failureDiagnostics: _failureAttempt,
         sourceSize: _metadata!.size,
         viewportKey: widget.viewportKey,
         mode: widget.mode,
@@ -666,6 +755,8 @@ class _ReaderPageImageState extends State<ReaderPageImage> {
     _releaseResolvedHandoff?.call();
     _releaseResolvedHandoff = null;
     _disposeSelectedSource();
+    _failureAttempt.close();
+    _standaloneDiagnostics?.dispose();
     super.dispose();
   }
 }

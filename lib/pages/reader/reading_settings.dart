@@ -68,14 +68,15 @@ class _ReadingSettingsState extends State<ReadingSettings> {
           ListTile(
             leading: const Icon(Icons.image_outlined),
             title: Text('图片显示'.tl),
-            trailing: Select(
+            trailing: reader_select.Select(
               initialValue: readerDisplayMode(
                 sourceKey: logic.data.sourceKey,
                 pipelineSetting:
                     appdata.settings[readerImagePipelineSettingIndex],
-              ).index,
-              values: ['清晰优先'.tl, '预览优先'.tl],
-              onChange: (index) {
+              ).name,
+              values: const ['sharpFirst', 'previewFirst'],
+              titles: ['清晰优先'.tl, '预览优先'.tl],
+              onChanged: (value) {
                 final config = ReaderImagePipelineSettings.tryParse(
                       appdata.settings[readerImagePipelineSettingIndex],
                     ) ??
@@ -83,7 +84,7 @@ class _ReadingSettingsState extends State<ReadingSettings> {
                 appdata.settings[readerImagePipelineSettingIndex] = config
                     .withMode(
                       readerReadingIsComic(logic.data.sourceKey),
-                      ReaderDisplayMode.values[index],
+                      ReaderDisplayMode.fromValue(value),
                     )
                     .encode();
                 appdata.updateSettings();

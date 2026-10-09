@@ -165,15 +165,29 @@ class _ReaderDisplayModeSetting extends StatefulWidget {
   final bool isComic;
 
   @override
-  State<_ReaderDisplayModeSetting> createState() => _ReaderDisplayModeSettingState();
+  State<_ReaderDisplayModeSetting> createState() =>
+      _ReaderDisplayModeSettingState();
 }
 
 class _ReaderDisplayModeSettingState extends State<_ReaderDisplayModeSetting> {
+  void _setMode(String value) {
+    final config = ReaderImagePipelineSettings.tryParse(
+          appdata.settings[readerImagePipelineSettingIndex],
+        ) ??
+        const ReaderImagePipelineSettings();
+    appdata.settings[readerImagePipelineSettingIndex] = config
+        .withMode(widget.isComic, ReaderDisplayMode.fromValue(value))
+        .encode();
+    appdata.updateSettings();
+    setState(() {});
+  }
+
   @override
   Widget build(BuildContext context) {
     final config = ReaderImagePipelineSettings.tryParse(
-      appdata.settings[readerImagePipelineSettingIndex],
-    ) ?? const ReaderImagePipelineSettings();
+          appdata.settings[readerImagePipelineSettingIndex],
+        ) ??
+        const ReaderImagePipelineSettings();
     final mode = widget.isComic ? config.comic : config.illust;
     return ListTile(
       title: Text((widget.isComic ? '漫画图片显示' : '插画 / 图集图片显示').tl),
@@ -181,14 +195,7 @@ class _ReaderDisplayModeSettingState extends State<_ReaderDisplayModeSetting> {
         initialValue: mode.name,
         values: const ['sharpFirst', 'previewFirst'],
         titles: ['清晰优先'.tl, '预览优先'.tl],
-        onChanged: (value) {
-          appdata.settings[readerImagePipelineSettingIndex] = config.withMode(
-            widget.isComic,
-            ReaderDisplayMode.fromValue(value),
-          ).encode();
-          appdata.updateSettings();
-          setState(() {});
-        },
+        onChanged: _setMode,
       ),
     );
   }

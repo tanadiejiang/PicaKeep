@@ -948,6 +948,164 @@ class PixivNetwork {
     }
   }
 
+  /// Client batch choices, not asserted Pixiv platform maxima.
+  static const workRecommendationsBatchSize = 18;
+  static const authorPreviewBatchSize = 5;
+
+  /// New read feeds reject stale account results, including guest-to-login changes.
+  /// They require the standard Ajax envelope without changing older API behavior.
+  Future<Res<Map<String, dynamic>>> _getFeedJson(String url) async {
+    final session = _session;
+    final account = _bookmarkAccount;
+    final res = await _getJson(url);
+    if (session != _session || account != _bookmarkAccount) {
+      return const Res.error('账号已变化，请重新加载',
+          errorCode: ResErrorCode.loginRequired);
+    }
+    if (res.error) return Res.fromErrorRes(res);
+    if (res.data['error'] != false) {
+      return const Res.error('Pixiv 响应缺少有效 error 标志',
+          errorCode: ResErrorCode.parse);
+    }
+    return res;
+  }
+
+  List<String>? _validatedFeedIds(List<String> ids, int maximum) {
+    final result = <String>[];
+    final seen = <String>{};
+    for (final value in ids) {
+      final id = value.trim();
+      if (_positiveId(id) == null) return null;
+      if (seen.add(id)) result.add(id);
+    }
+    return result.length <= maximum ? result : null;
+  }
+
+  /// One work's cross-author recommendations. This is not the discontinued
+  /// global /illust/recommended endpoint, nor the embedded userIllusts preview.
+  /// A null limit keeps the established client preload parameter of 18 and
+  /// returns every parsed server item; it is not a verified Pixiv default.
+  /// Public source: PixivBatchDownloader d808bb975b27ad03b936f6e5ffa98a3d2a915c67,
+  /// src/ts/API.ts getRelatedData. Pixiv's omitted-limit behavior is unverified.
+  /// Each explicit call issues a GET; this read path has no response cache and
+  /// cannot promise new recommendations when the server repeats the same seed.
+  Future<Res<PixivRecommendationsPage>> getWorkRecommendations(
+    String id, {
+    int? limit,
+  }) async {
+    final sourceId = id.trim();
+    if (_positiveId(sourceId) == null ||
+        (limit != null &&
+            (limit < 1 || limit > workRecommendationsBatchSize))) {
+      return const Res.error('推荐作品 id 或首批数量无效',
+          errorCode: ResErrorCode.invalidArgument);
+    }
+    final requestLimit = limit ?? workRecommendationsBatchSize;
+    final res = await _getFeedJson(
+        '$pixivWebBase/ajax/illust/$sourceId/recommend/init?limit=$requestLimit&lang=zh');
+    if (res.error) return Res.fromErrorRes(res);
+    try {
+      return Res(
+          parsePixivWorkRecommendations(res.data['body'], sourceId: sourceId));
+    } on FormatException catch (error) {
+      return Res.error(error.message, errorCode: ResErrorCode.parse);
+    }
+  }
+
+  /// Hydrate one bounded slice of the init nextIds queue; never rerun init for
+  /// pagination. Request order retains the server's recommendation ranking.
+  Future<Res<List<PixivComicBrief>>> getRecommendationWorks(
+      List<String> ids) async {
+    final batch = _validatedFeedIds(ids, workRecommendationsBatchSize);
+    if (batch == null) {
+      return const Res.error('推荐批次须为有效作品 id，且最多 18 件',
+          errorCode: ResErrorCode.invalidArgument);
+    }
+    if (batch.isEmpty) return const Res(<PixivComicBrief>[]);
+    final query = batch.map((id) => 'illust_ids[]=$id').join('&');
+    final res = await _getFeedJson(
+        '$pixivWebBase/ajax/illust/recommend/illusts?$query&lang=zh');
+    if (res.error) return Res.fromErrorRes(res);
+    try {
+      return Res(
+          parsePixivRecommendationWorks(res.data['body'], requestedIds: batch));
+    } on FormatException catch (error) {
+      return Res.error(error.message, errorCode: ResErrorCode.parse);
+    }
+  }
+
+  /// Read the existing merged illustration/manga IDs for preview supplementation.
+  /// Keep the legacy author page's private loader and pagination contract intact.
+  Future<Res<List<String>>> getAuthorWorkIds(String uid) async {
+    final id = uid.trim();
+    if (_positiveId(id) == null) {
+      return const Res.error('作者 uid 无效',
+          errorCode: ResErrorCode.invalidArgument);
+    }
+    final session = _session;
+    final account = _bookmarkAccount;
+    final res = await _fetchAuthorWorkIds(id);
+    if (session != _session || account != _bookmarkAccount) {
+      return const Res.error('账号已变化，请重新加载',
+          errorCode: ResErrorCode.loginRequired);
+    }
+    if (res.error) return Res.fromErrorRes(res);
+    return Res(List<String>.unmodifiable(
+        res.data.where((workId) => _positiveId(workId) != null)));
+  }
+
+  /// A maximum of five preview candidates, isolated from the legacy author's
+  /// full-page numeric sorting and all-empty error behavior.
+  Future<Res<List<PixivComicBrief>>> getAuthorPreviewWorks(
+      String uid, List<String> ids) async {
+    final id = uid.trim();
+    final batch = _validatedFeedIds(ids, authorPreviewBatchSize);
+    if (_positiveId(id) == null || batch == null) {
+      return const Res.error('作者 uid/作品 id 无效，预览批次最多 5 件',
+          errorCode: ResErrorCode.invalidArgument);
+    }
+    if (batch.isEmpty) return const Res(<PixivComicBrief>[]);
+    final res = await _getFeedJson(authorWorksUrl(id, batch));
+    if (res.error) return Res.fromErrorRes(res);
+    try {
+      return Res(parsePixivAuthorPreviewWorks(res.data['body'],
+          uid: id, requestedIds: batch));
+    } on FormatException catch (error) {
+      return Res.error(error.message, errorCode: ResErrorCode.parse);
+    }
+  }
+
+  /// Similar authors to one seed, fetched separately from the follow POST.
+  /// Public source evidence (not account verification): ppixiv commit
+  /// 200f4ffcec8f8c2ac160c5bc8109297bd8ca2f44,
+  /// web/vview/sites/pixiv/data-sources/discover-users.js.
+  /// The response embeds users and illustration thumbnails; no per-ID reads.
+  Future<Res<List<PixivRecommendedAuthor>>> getRecommendedAuthors(
+    String seedAuthorId, {
+    int limit = 5,
+    int workLimit = 3,
+  }) async {
+    final id = _positiveId(seedAuthorId);
+    // These are client bounds, not claimed platform maxima.
+    if (id == null ||
+        limit < 1 ||
+        limit > 5 ||
+        workLimit < 1 ||
+        workLimit > 3) {
+      return const Res.error('推荐作者 uid 或数量无效（最多 5 位作者，每位 3 件作品）',
+          errorCode: ResErrorCode.invalidArgument);
+    }
+    final res = await _getFeedJson('$pixivWebBase/ajax/user/$id/recommends'
+        '?userNum=$limit&workNum=$workLimit&isR18=false&lang=zh');
+    if (res.error) return Res.fromErrorRes(res);
+    try {
+      return Res(parsePixivRecommendedAuthors(res.data['body'],
+          seedAuthorId: id.toString(), limit: limit, workLimit: workLimit));
+    } on FormatException catch (error) {
+      return Res.error(error.message, errorCode: ResErrorCode.parse);
+    }
+  }
+
   /// 点按榜单收藏入口时确认当前账号的状态。只读，不预取整个榜单。
   Future<Res<PixivBookmarkState>> getBookmarkState(String illustId) async {
     final id = _positiveId(illustId);

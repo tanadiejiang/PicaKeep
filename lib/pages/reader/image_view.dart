@@ -42,8 +42,8 @@ extension ImageExt on ComicReadingPage {
         sourceKey: logic.data.sourceKey,
         pipelineSetting: appdata.settings[readerImagePipelineSettingIndex]);
     final viewportKey = logic.readerViewportKey;
-    double topPullDistance = 0;
-    double bottomPullDistance = 0;
+    logic.syncContinuousChapterGesture();
+    final continuousEpisode = logic.order;
 
     BoxFit getFit() => switch (appdata.settings[41]) {
           "1" => BoxFit.fitWidth,
@@ -71,6 +71,17 @@ extension ImageExt on ComicReadingPage {
             logic.data.loadCachedPreview(episode, imageIndex, url, original),
         viewportKey: viewportKey,
         sessionRasterCache: logic.sessionRasterCache,
+        failureDiagnostics: logic.failureDiagnosticsSession.page(
+            logicalIdentity: jsonEncode([
+              logic.data.sourceKey,
+              logic.data.id,
+              logic.data.downloadId,
+              episode,
+              imageIndex
+            ]),
+            chapter: episode,
+            page: imageIndex + 1,
+            readingMode: logic.readingMethod.name),
         transformChanges: logic.viewportChanges,
         mode: mode,
         controller: controller,
@@ -87,36 +98,11 @@ extension ImageExt on ComicReadingPage {
       );
     }
 
-    bool handleContinuousOverscroll(OverscrollNotification notification) {
-      if (!logic.data.hasEp) return false;
-      final metrics = notification.metrics;
-      if (notification.overscroll > 0 &&
-          metrics.pixels >= metrics.maxScrollExtent - 24) {
-        bottomPullDistance += notification.overscroll;
-        topPullDistance = 0;
-        if (bottomPullDistance >= 88) {
-          bottomPullDistance = 0;
-          logic.jumpToNextChapter();
-        }
-      } else if (notification.overscroll < 0 &&
-          metrics.pixels <= metrics.minScrollExtent + 24) {
-        topPullDistance += -notification.overscroll;
-        bottomPullDistance = 0;
-        if (topPullDistance >= 88) {
-          topPullDistance = 0;
-          logic.jumpToLastChapter();
-        }
-      } else {
-        topPullDistance = 0;
-        bottomPullDistance = 0;
-      }
-      return false;
-    }
-
     Widget continuous() => LayoutBuilder(builder: (context, constraints) {
           final width = _clampReaderImageWidth(constraints.maxWidth);
-          return NotificationListener<OverscrollNotification>(
-            onNotification: handleContinuousOverscroll,
+          return NotificationListener<ScrollNotification>(
+            onNotification: (notification) => logic
+                .handleContinuousChapterScroll(notification, continuousEpisode),
             child: Center(
                 child: SizedBox(
               width: width,
@@ -245,14 +231,14 @@ extension ImageExt on ComicReadingPage {
                     onPageChanged: (i) {
                       if (i == 0) {
                         if (!logic.data.hasEp || logic.order == 1) {
-                          logic.pageController.jumpByDeviceType(1);
+                          logic.jumpByDeviceType(1);
                           return;
                         }
                         logic.jumpToLastChapter();
                       } else if (i == itemCount - 1) {
                         if (!logic.data.hasEp ||
                             logic.order == logic.data.eps?.length) {
-                          logic.pageController.jumpByDeviceType(i - 1);
+                          logic.jumpByDeviceType(i - 1);
                           return;
                         }
                         logic.jumpToNextChapter();

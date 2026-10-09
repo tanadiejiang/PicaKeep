@@ -55,7 +55,7 @@ class ScrollManager {
       logic.update(["FAB"]);
     } else if (logic.fABValue >= 58) {
       logic.fABValue = 0;
-      logic.jumpToNextChapter();
+      logic.requestContinuousChapterChange(1, trigger: 'release');
     }
   }
 
@@ -72,10 +72,17 @@ class ScrollManager {
 
   /// handle pointer move event
   void addOffset(Offset value) {
+    if (!logic.scrollController.hasClients ||
+        logic.isLoading ||
+        logic.urls.isEmpty) {
+      logic.fABValue = 0;
+      return;
+    }
     if (logic.scrollController.offset ==
             logic.scrollController.position.maxScrollExtent &&
         logic.photoViewController.scale == 1 &&
-        logic.showFloatingButtonValue == 1) {
+        logic.showFloatingButtonValue == 1 &&
+        logic.canPullContinuousChapter) {
       logic.fABValue -= value.dy / 3;
       logic.update(["FAB"]);
       return;
@@ -131,6 +138,8 @@ class TapController {
 
   /// Pending tap/long-press callbacks belong to one reader session only.
   static void reset() {
+    StateController.findOrNull<ComicReadingPageLogic>()
+        ?.resetContinuousChapterGesture();
     _gestureGeneration++;
     _longPressTimer?.cancel();
     _longPressTimer = null;
@@ -157,6 +166,7 @@ class TapController {
     onTapUpReplacement = null;
     if (_activePointers.isEmpty) _multiPointerInteraction = false;
     final logic = StateController.findOrNull<ComicReadingPageLogic>();
+    logic?.endContinuousChapterGesture(event.pointer, cancelled: true);
     if (appdata.settings[9] == "4") logic?.scrollManager?.tapCancel();
   }
 
@@ -167,6 +177,8 @@ class TapController {
     }
     if (_activePointers.isEmpty) _multiPointerInteraction = false;
     _activePointers.add(event.pointer);
+    StateController.find<ComicReadingPageLogic>()
+        .beginContinuousChapterGesture(event);
     fingers = _activePointers.length;
     final isMultiPointer = fingers > 1;
     if (isMultiPointer) {
@@ -285,6 +297,8 @@ class TapController {
     if (!wasMultiPointer && onTapUpReplacement != null) {
       onTapUpReplacement!(detail);
       onTapUpReplacement = null;
+      StateController.findOrNull<ComicReadingPageLogic>()
+          ?.endContinuousChapterGesture(detail.pointer);
       return;
     }
 
@@ -299,6 +313,7 @@ class TapController {
         logic.scrollManager!.tapUp(detail);
       }
     }
+    logic.endContinuousChapterGesture(detail.pointer);
 
     if (wasMultiPointer) {
       _tapOffset = null;
@@ -355,6 +370,7 @@ class TapController {
 
   static void onPointerMove(PointerMoveEvent event) {
     final logic = StateController.find<ComicReadingPageLogic>();
+    logic.trackContinuousChapterPointer(event);
     if (event.pointer == _tapDownPointer?.id) {
       _tapDownPointer!.offset += event.delta;
       if (_tapDownPointer!.getDistance() > 1) {
