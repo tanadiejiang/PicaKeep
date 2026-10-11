@@ -20,6 +20,12 @@ class ArchiveImageProvider extends BaseImageProvider<ArchiveImageProvider> {
   final int mtimeMillis;
 
   @override
+  bool get supportsReaderInputLimits => true;
+
+  @override
+  int get readerInputOverheadBytes => (64 << 20) + (1 << 20);
+
+  @override
   String get key =>
       'archive::${fileSize}_$mtimeMillis::$archivePath::$entryPath';
 

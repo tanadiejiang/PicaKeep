@@ -22,7 +22,7 @@ publish_to: 'none'
 #
 # 本轮曾因误用 split 装出 4002，为覆盖它把基准临时抬到 4003；现已卸载重装，
 # 基准回到 1 重新开始。
-version: 1.9.96+13
+version: 1.9.97+14
 
 environment:
   sdk: '>=3.3.0'
@@ -95,6 +95,8 @@ dependencies:
   package_info_plus: ^8.3.1
 
 dependency_overrides:
+  photo_view:
+    path: packages/photo_view
   local_auth_windows:
     path: packages/local_auth_windows_stub
 

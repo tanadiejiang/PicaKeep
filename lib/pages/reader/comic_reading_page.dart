@@ -16,6 +16,7 @@ import 'package:photo_view/photo_view.dart';
 import 'package:photo_view/photo_view_gallery.dart';
 import 'package:picakeep/components/components.dart';
 import 'package:picakeep/components/select.dart' as reader_select;
+import 'package:picakeep/components/reader_large_image_policy_setting.dart';
 import 'package:picakeep/components/custom_slider.dart';
 import 'package:picakeep/components/scrollable_list/src/item_positions_listener.dart';
 import 'package:picakeep/components/scrollable_list/src/scrollable_positioned_list.dart';
@@ -43,6 +44,7 @@ import 'package:picakeep/foundation/image_pipeline/reader_failure_diagnostics.da
 import 'package:picakeep/foundation/image_pipeline/reader_session_raster_cache.dart';
 import 'package:picakeep/foundation/image_pipeline/derived_image_store.dart';
 import 'package:picakeep/pages/reader/reader_page_image.dart';
+import 'package:picakeep/pages/reader/reader_photo_view_owner.dart';
 import 'package:picakeep/pages/reader/reader_image_surface.dart';
 import 'package:picakeep/foundation/download_model.dart';
 import 'package:picakeep/foundation/untranslated_tags/untranslated_tag_coordinator.dart';
@@ -57,6 +59,9 @@ import 'package:picakeep/network/nhentai_network/nhentai_main_network.dart';
 import 'package:picakeep/network/pixiv_network/pixiv_network.dart';
 import 'package:picakeep/network/komiic_network/komiic_network.dart';
 import 'package:picakeep/foundation/image_loader/jm_image_recombine.dart';
+import 'package:picakeep/foundation/image_loader/jm_page_loader.dart';
+import 'package:picakeep/foundation/image_loader/reader_preview_provider.dart';
+import 'package:picakeep/foundation/image_loader/reader_preview_preloader.dart';
 import 'package:picakeep/tools/save_image.dart';
 import 'package:picakeep/tools/time.dart';
 import 'package:picakeep/foundation/app.dart';
@@ -71,6 +76,7 @@ part 'eps_view.dart';
 part 'image_view.dart';
 
 part 'image.dart';
+part 'reader_preview_page_image.dart';
 
 part 'touch_control.dart';
 
@@ -151,6 +157,22 @@ class _PersistentSelectedImage {
   const _PersistentSelectedImage({required this.path, required this.selected});
   final String path;
   final _SelectedOriginalPage selected;
+}
+
+void _retireOriginalSource(ReaderPageSource source) {
+  // An independent display consumer can retain the same original file until
+  // the reader closes. Start disposal now, but do not make a completed export
+  // or durable favorite wait for that unrelated consumer. The source's real
+  // disposal future still owns its leases, temporary files and cleanup.
+  unawaited(Future<void>.sync(source.dispose)
+      .catchError((Object error, StackTrace _) {
+    try {
+      LogManager.addLog(LogLevel.warning, 'Reader original cleanup',
+          'Source disposal failed: ${error.runtimeType}');
+    } catch (_) {
+      // Cleanup reporting must not create a second unhandled async error.
+    }
+  }));
 }
 
 class ComicReadingPage extends StatelessWidget {
@@ -788,7 +810,9 @@ class ComicReadingPage extends StatelessWidget {
         );
       }
       for (final candidate in candidates) {
-        if (!identical(candidate, selected)) await candidate.source.dispose();
+        if (!identical(candidate, selected)) {
+          _retireOriginalSource(candidate.source);
+        }
       }
       if (selected != null && !selected.source.isAuthoritativeOriginal) {
         showToast(message: '当前来源最高可用画质'.tl);
@@ -796,7 +820,7 @@ class ComicReadingPage extends StatelessWidget {
       return selected;
     } catch (_) {
       for (final candidate in candidates) {
-        await candidate.source.dispose();
+        _retireOriginalSource(candidate.source);
       }
       rethrow;
     }
@@ -811,7 +835,7 @@ class ComicReadingPage extends StatelessWidget {
     } catch (error) {
       showToast(message: error.toString());
     } finally {
-      await selected?.source.dispose();
+      if (selected != null) _retireOriginalSource(selected.source);
     }
   }
 
@@ -824,7 +848,7 @@ class ComicReadingPage extends StatelessWidget {
           identity: selected.source.identity);
       return _PersistentSelectedImage(path: path, selected: selected);
     } finally {
-      await selected.source.dispose();
+      _retireOriginalSource(selected.source);
     }
   }
 
@@ -837,7 +861,7 @@ class ComicReadingPage extends StatelessWidget {
     } catch (error) {
       showToast(message: error.toString());
     } finally {
-      await selected?.source.dispose();
+      if (selected != null) _retireOriginalSource(selected.source);
     }
   }
 

@@ -16,12 +16,85 @@ import 'package:crypto/crypto.dart';
 import 'package:image/image.dart' as img;
 import 'package:picakeep/foundation/log.dart';
 
+import 'reader_image_limits.dart';
+
 const String kJmScrambleId = '220980';
+
+/// A terminal source-restoration refusal, not a display quality choice. Neither
+/// safeWhole nor resizing the eventual display can repair this condition.
+class JmRecombineLimit extends ReaderImageLimit {
+  const JmRecombineLimit(
+    super.reason, {
+    required this.encodedBytes,
+    this.width,
+    this.height,
+    this.estimatedWorkingBytes,
+  });
+
+  final int encodedBytes;
+  final int? width, height;
+
+  /// A conservative estimate (minimum one pixel before metadata is available).
+  /// Null means the arithmetic result exceeds the exact JSON integer range;
+  /// never publish a wrapped, truncated or falsely saturated estimate.
+  final int? estimatedWorkingBytes;
+  int get maximumWorkingBytes => JmRecombineLimits.maximumWorkingBytes;
+
+  @override
+  String get message => reason == 'jm-recombine-animation'
+      ? '暂不支持对 JM 动态图片重组，无法保持完整动画；原文件未修改。'
+      : 'JM 图片重组超出安全内存预算，暂时无法处理此图片；原文件未修改。';
+}
+
+/// Pure admission arithmetic; tests need not allocate a budget-sized buffer.
+/// Keep both existing limits. The extra encoded copy must fit inside the same
+/// 128 MiB work budget, rather than increasing it to admit the previous mistake.
+class JmRecombineLimits {
+  static const maximumEncodedBytes = 64 << 20;
+  static const maximumWorkingBytes = 128 << 20;
+  static const _workingBytesPerPixel = 4 * 6;
+  static final _maximumExactJsonInteger = BigInt.from(0x1fffffffffffff);
+
+  /// ImmutableBuffer.fromUint8List copies the input. Reject a definitely
+  /// impossible job before making that copy, allowing at least one source pixel.
+  static int admitEncodedBytes(int encodedBytes) =>
+      _admit(encodedBytes, 1, 1, includeDimensions: false);
+
+  /// Called after metadata, but before instantiating/decoding the full codec.
+  static int admit(
+          {required int encodedBytes,
+          required int width,
+          required int height}) =>
+      _admit(encodedBytes, width, height);
+
+  static int _admit(int encodedBytes, int width, int height,
+      {bool includeDimensions = true}) {
+    if (encodedBytes < 0 || width <= 0 || height <= 0) {
+      throw ArgumentError('JM image byte length and dimensions are invalid');
+    }
+    // Header dimensions are untrusted. Compute before narrowing so very large
+    // products cannot wrap into a small, apparently admissible working set.
+    final working = BigInt.from(encodedBytes) * BigInt.two +
+        BigInt.from(width) *
+            BigInt.from(height) *
+            BigInt.from(_workingBytesPerPixel);
+    if (encodedBytes > maximumEncodedBytes ||
+        working > BigInt.from(maximumWorkingBytes)) {
+      throw JmRecombineLimit('jm-recombine-budget',
+          encodedBytes: encodedBytes,
+          width: includeDimensions ? width : null,
+          height: includeDimensions ? height : null,
+          estimatedWorkingBytes:
+              working <= _maximumExactJsonInteger ? working.toInt() : null);
+    }
+    // Admission guarantees this conversion is <= 128 MiB on every platform.
+    return working.toInt();
+  }
+}
 
 // ── 分块数算法（零容错，照搬原项目）──────────────────────────────────────
 
-int _getSegmentationNum(
-    String epsId, String scrambleID, String pictureName) {
+int _getSegmentationNum(String epsId, String scrambleID, String pictureName) {
   final scrambleId = int.parse(scrambleID);
   final epsID = int.parse(epsId);
 
@@ -97,8 +170,7 @@ Future<Uint8List> _segmentationPicture(_RecombineTask data) async {
     );
     return Uint8List.fromList(img.encodePng(desImg));
   } catch (e, stack) {
-    throw Exception(
-        'Image recombine failed:\n'
+    throw Exception('Image recombine failed:\n'
         '  epsId: ${data.epsId}\n'
         '  scrambleId: ${data.scrambleId}\n'
         '  pictureName: ${data.bookId}\n'
@@ -112,10 +184,10 @@ Future<Uint8List> _segmentationPicture(_RecombineTask data) async {
 // ── Isolate 任务数据 ───────────────────────────────────────────────────────
 
 class _RecombineTask {
-  _RecombineTask(
-      this.rgbaBytes, this.width, this.height, this.epsId, this.scrambleId, this.bookId, this.completer);
+  _RecombineTask(this.rgbaBytes, this.width, this.height, this.epsId,
+      this.scrambleId, this.bookId, this.completer);
 
-  final Uint8List rgbaBytes;  // RGBA 字节（主 isolate 用 ui 解码得到）
+  final Uint8List rgbaBytes; // RGBA 字节（主 isolate 用 ui 解码得到）
   final int width;
   final int height;
   final String epsId;
@@ -158,8 +230,8 @@ class JmRecombine {
     // 需要重排：主 isolate 解码 → 后台 isolate 重排 → PNG 无损
     final decoded = await _decodeToRgba(imgData);
     final completer = Completer<Uint8List>();
-    final task = _RecombineTask(
-        decoded.rgba, decoded.width, decoded.height, epsId, scrambleId, pictureName, completer);
+    final task = _RecombineTask(decoded.rgba, decoded.width, decoded.height,
+        epsId, scrambleId, pictureName, completer);
     _queue.add(task);
     if (_isolate == null && _receivePort == null) {
       _receivePort = ReceivePort();
@@ -174,24 +246,42 @@ class JmRecombine {
   static Future<({Uint8List rgba, int width, int height})> _decodeToRgba(
       Uint8List webpBytes) async {
     // Recombination has the source raster, readback, destination, isolate copy
-    // and encoder workspace alive together. Probe before allocating the codec;
-    // a small compressed JPEG/WebP is not evidence of a small working set.
+    // and encoder workspace alive together. The engine also copies encoded
+    // bytes while callers may still retain the input. Admit that copy first.
+    JmRecombineLimits.admitEncodedBytes(webpBytes.length);
     final buffer = await ui.ImmutableBuffer.fromUint8List(webpBytes);
     ui.ImageDescriptor? descriptor;
     ui.Codec? codec;
     ui.Image? image;
     try {
       descriptor = await ui.ImageDescriptor.encoded(buffer);
-      final estimatedWorking = descriptor.width * descriptor.height * 4 * 6 + webpBytes.length;
-      if (estimatedWorking > 128 * 1024 * 1024) {
-        throw StateError('JM页面重组超出安全内存预算，当前平台无法处理此原文件');
-      }
+      final estimatedWorking = JmRecombineLimits.admit(
+          encodedBytes: webpBytes.length,
+          width: descriptor.width,
+          height: descriptor.height);
       codec = await descriptor.instantiateCodec();
+      // A single reordered PNG cannot preserve later frames, timing or loops.
+      // No-reorder pages return their original bytes before entering this path.
+      if (codec.frameCount > 1) {
+        throw JmRecombineLimit('jm-recombine-animation',
+            encodedBytes: webpBytes.length,
+            width: descriptor.width,
+            height: descriptor.height,
+            estimatedWorkingBytes: estimatedWorking);
+      }
       final frame = await codec.getNextFrame();
       image = frame.image;
-      final byteData = await image.toByteData(format: ui.ImageByteFormat.rawRgba);
+      // package:image/PNG stores straight RGBA. Passing Flutter's premultiplied
+      // rawRgba here would encode already-darkened RGB and multiply alpha again
+      // when the resulting PNG is displayed. Keep the row algorithm unchanged.
+      final byteData =
+          await image.toByteData(format: ui.ImageByteFormat.rawStraightRgba);
       if (byteData == null) throw StateError('JM pixel readback failed');
-      return (rgba: byteData.buffer.asUint8List(), width: image.width, height: image.height);
+      return (
+        rgba: byteData.buffer.asUint8List(),
+        width: image.width,
+        height: image.height
+      );
     } finally {
       image?.dispose();
       codec?.dispose();

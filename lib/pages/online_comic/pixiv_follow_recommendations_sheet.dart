@@ -1,360 +1,516 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:picakeep/comic_source/comic_source.dart';
 import 'package:picakeep/components/pixiv_bookmark_feedback.dart';
+import 'package:picakeep/foundation/pixiv_detail_session.dart';
 import 'package:picakeep/network/pixiv_network/pixiv_network.dart';
 import 'package:picakeep/network/res.dart';
 import 'package:picakeep/pages/accounts/account_page_route.dart';
 import 'package:picakeep/pages/online_common/online_comic_list_item.dart';
 import 'package:picakeep/pages/online_common/online_recommendation_card.dart';
 
-/// A dismissible discovery panel after a successful follow. Its data is a
-/// separate read, so discovery errors cannot undo the confirmed follow.
-class PixivFollowRecommendationsSheet extends StatefulWidget {
-  const PixivFollowRecommendationsSheet({
-    super.key,
+class _DiscoveryScrollController extends ScrollController {
+  double _savedOffset = 0;
+
+  @override
+  ScrollPosition createScrollPosition(ScrollPhysics physics,
+          ScrollContext context, ScrollPosition? oldPosition) =>
+      ScrollPositionWithSingleContext(
+          physics: physics,
+          context: context,
+          initialPixels: _savedOffset,
+          keepScrollOffset: false,
+          oldPosition: oldPosition);
+
+  @override
+  void detach(ScrollPosition position) {
+    _savedOffset = position.pixels;
+    super.detach(position);
+  }
+}
+
+/// The detail entry owns this state, independently of sliver/panel placement.
+class PixivFollowDiscoveryController extends ChangeNotifier {
+  PixivFollowDiscoveryController({
     required this.seedAuthorId,
-    required this.source,
-    required this.bookmarks,
     required this.load,
     required this.writeFollow,
-    required this.writeBookmark,
     required this.ownerIsCurrent,
     required this.accountIdentity,
-    required this.isLoggedIn,
-    required this.onAccountsChanged,
-    required this.onOpenWork,
-  });
+  }) : account = accountIdentity();
 
   final String seedAuthorId;
-  final ComicSource source;
-  final RecommendationBookmarkController bookmarks;
+  final String account;
   final Future<Res<List<PixivRecommendedAuthor>>> Function(String) load;
   final Future<Res<bool>> Function(String, {required bool isFollowing})
       writeFollow;
-  final Future<Res<bool>> Function(String, {required bool isAdding})
-      writeBookmark;
   final bool Function() ownerIsCurrent;
   final String Function() accountIdentity;
-  final bool Function() isLoggedIn;
-  final Future<void> Function() onAccountsChanged;
-  final void Function(PixivComicBrief, List<PixivComicBrief>) onOpenWork;
-
-  @override
-  State<PixivFollowRecommendationsSheet> createState() =>
-      _PixivFollowRecommendationsSheetState();
-}
-
-class _PixivFollowRecommendationsSheetState
-    extends State<PixivFollowRecommendationsSheet> {
-  List<PixivRecommendedAuthor> _authors = const [];
+  final scrollController = _DiscoveryScrollController();
   final _busyAuthors = <String>{};
   final _followErrors = <String, String>{};
   final _followed = <String, bool>{};
-  bool _loading = true;
-  String? _error;
-  int _generation = 0;
-  late final String _account = widget.accountIdentity();
+  List<PixivRecommendedAuthor> authors = const [];
+  bool loading = false;
+  bool dismissed = false;
+  String? error;
+  int _readGeneration = 0;
+  bool _disposed = false;
 
-  bool get _current =>
-      mounted &&
-      widget.ownerIsCurrent() &&
-      widget.accountIdentity() == _account;
+  bool get isCurrent =>
+      !_disposed && ownerIsCurrent() && accountIdentity() == account;
+  bool isBusy(String id) => _busyAuthors.contains(id);
+  String? followError(String id) => _followErrors[id];
+  bool isFollowed(PixivAuthor author) =>
+      _followed[author.id] ?? author.isFollowed;
 
-  @override
-  void initState() {
-    super.initState();
-    _load();
-  }
-
-  Future<void> _load() async {
-    final generation = ++_generation;
-    setState(() {
-      _loading = true;
-      _error = null;
-    });
+  Future<void> read() async {
+    if (!isCurrent || dismissed || loading) return;
+    final generation = ++_readGeneration;
+    loading = true;
+    error = null;
+    notifyListeners();
     try {
-      final result = await widget.load(widget.seedAuthorId);
-      if (!_current || generation != _generation) return;
+      final result = await load(seedAuthorId);
+      if (!isCurrent || dismissed || generation != _readGeneration) return;
       if (result.error) throw StateError(result.errorMessageWithoutNull);
-      setState(() {
-        _authors = result.data;
-        _loading = false;
-      });
-    } catch (error) {
-      if (_current && generation == _generation) {
-        setState(() {
-          _error = error.toString().replaceFirst('Bad state: ', '');
-          _loading = false;
-        });
+      authors = List.unmodifiable(result.data.take(5).map((entry) =>
+          PixivRecommendedAuthor(
+              author: entry.author,
+              works: List.unmodifiable(entry.works.take(3)))));
+    } catch (failure) {
+      if (!isCurrent || dismissed || generation != _readGeneration) return;
+      error = failure.toString().replaceFirst('Bad state: ', '');
+    } finally {
+      if (!_disposed && generation == _readGeneration) {
+        loading = false;
+        notifyListeners();
       }
     }
   }
 
-  Future<void> _follow(PixivAuthor author) async {
-    if (!_current || _busyAuthors.contains(author.id)) return;
-    if (!widget.isLoggedIn()) {
-      await showAccountsPage(context);
-      if (_current) await widget.onAccountsChanged();
+  void dismiss() {
+    if (_disposed || dismissed) return;
+    dismissed = true;
+    _readGeneration++;
+    loading = false;
+    notifyListeners();
+  }
+
+  Future<void> follow(PixivAuthor author,
+      {required bool Function() actionsCurrent}) async {
+    if (!isCurrent || dismissed || !actionsCurrent() || isBusy(author.id)) {
       return;
     }
-    final generation = _generation;
-    final target = !(_followed[author.id] ?? author.isFollowed);
-    setState(() {
-      _busyAuthors.add(author.id);
-      _followErrors.remove(author.id);
-    });
+    final target = !isFollowed(author);
+    _busyAuthors.add(author.id);
+    _followErrors.remove(author.id);
+    notifyListeners();
     try {
-      final result = await widget.writeFollow(author.id, isFollowing: target);
-      if (!_current || generation != _generation) return;
-      setState(() {
-        if (result.error) {
+      final result = await writeFollow(author.id, isFollowing: target);
+      if (!isCurrent) return;
+      if (result.error) {
+        if (!dismissed && actionsCurrent()) {
           _followErrors[author.id] = result.errorMessageWithoutNull;
-        } else {
-          _followed[author.id] = target;
         }
-      });
+      } else {
+        _followed[author.id] = target;
+      }
     } catch (_) {
-      if (_current && generation == _generation) {
-        setState(() => _followErrors[author.id] = '关注失败，请重试');
+      if (isCurrent && !dismissed && actionsCurrent()) {
+        _followErrors[author.id] = '关注失败，请重试';
       }
     } finally {
-      if (_current && generation == _generation) {
-        setState(() => _busyAuthors.remove(author.id));
-      }
+      // Only this operation owns this author's lock, even after dismissal.
+      _busyAuthors.remove(author.id);
+      if (!_disposed) notifyListeners();
     }
   }
 
   @override
   void dispose() {
-    _generation++;
+    _disposed = true;
+    _readGeneration++;
+    scrollController.dispose();
     super.dispose();
+  }
+}
+
+class PixivFollowRecommendationsInline extends StatelessWidget {
+  const PixivFollowRecommendationsInline({
+    super.key,
+    required this.controller,
+    required this.source,
+    required this.bookmarks,
+    required this.writeBookmark,
+    required this.accountIdentity,
+    required this.isLoggedIn,
+    required this.onAccountsChanged,
+    required this.onOpenWork,
+    this.active = true,
+  });
+
+  final PixivFollowDiscoveryController controller;
+  final ComicSource source;
+  final RecommendationBookmarkController bookmarks;
+  final Future<Res<bool>> Function(String, {required bool isAdding})
+      writeBookmark;
+  final String Function() accountIdentity;
+  final bool Function() isLoggedIn;
+  final Future<void> Function() onAccountsChanged;
+  final void Function(PixivComicBrief, List<PixivComicBrief>) onOpenWork;
+  final bool active;
+
+  bool _actionsCurrent(BuildContext context) =>
+      controller.isCurrent &&
+      !controller.dismissed &&
+      active &&
+      PixivDetailEntryScope.isActiveOf(context) &&
+      TickerMode.valuesOf(context).enabled &&
+      (ModalRoute.of(context)?.isCurrent ?? true) &&
+      (PixivBookmarkFeedbackHost.maybeOf(context)?.isCurrent ?? true);
+
+  Future<void> _follow(BuildContext context, PixivAuthor author) async {
+    if (!_actionsCurrent(context)) return;
+    if (!isLoggedIn()) {
+      await showAccountsPage(context);
+      if (context.mounted && controller.isCurrent) await onAccountsChanged();
+      return;
+    }
+    await controller.follow(author,
+        actionsCurrent: () => context.mounted && _actionsCurrent(context));
+  }
+
+  double _textHeight(BuildContext context, String text, TextStyle style,
+      double width, int maxLines) {
+    final painter = TextPainter(
+      text: TextSpan(text: text, style: style),
+      textDirection: Directionality.of(context),
+      textScaler: MediaQuery.textScalerOf(context),
+      maxLines: maxLines,
+      ellipsis: '...',
+    )..layout(maxWidth: math.max(1, width));
+    final height = painter.height;
+    painter.dispose();
+    return height;
   }
 
   @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final active = _current && (ModalRoute.of(context)?.isCurrent ?? true);
-    final height =
-        (MediaQuery.sizeOf(context).height * .56).clamp(330.0, 480.0);
-    return SizedBox(
-      height: height,
-      child: PixivBookmarkFeedbackHost(
-        active: active,
-        identity: (
-          'follow-recommendations',
-          widget.seedAuthorId,
-          _account,
-          _generation
-        ),
-        bottomOffset: 16,
-        child: Builder(
-            builder: (context) => SafeArea(
-                  top: false,
-                  child: SizedBox(
-                    height: height,
-                    child: RepaintBoundary(
-                      key: const ValueKey('pixiv-follow-recommendations-sheet'),
-                      child: Padding(
-                        padding: const EdgeInsets.only(top: 8, bottom: 16),
-                        child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Row(children: [
-                                const SizedBox(width: 20),
-                                Container(
-                                  padding: const EdgeInsets.symmetric(
-                                      horizontal: 10, vertical: 5),
-                                  decoration: BoxDecoration(
-                                    color: theme.colorScheme.primaryContainer,
-                                    borderRadius: BorderRadius.circular(20),
-                                  ),
-                                  child: Text('已关注',
-                                      style: theme.textTheme.labelMedium
-                                          ?.copyWith(
-                                              color: theme.colorScheme
-                                                  .onPrimaryContainer)),
-                                ),
-                                const Spacer(),
-                                IconButton(
-                                    tooltip: '关闭作者推荐',
-                                    onPressed: () =>
-                                        Navigator.of(context).pop(),
-                                    icon: const Icon(Icons.close)),
-                                const SizedBox(width: 8),
-                              ]),
-                              Padding(
-                                padding:
-                                    const EdgeInsets.fromLTRB(20, 0, 20, 12),
-                                child: Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    children: [
-                                      Text('发现更多作者',
-                                          style: theme.textTheme.titleLarge
-                                              ?.copyWith(
-                                                  fontWeight: FontWeight.w600)),
-                                      const SizedBox(height: 4),
-                                      Text('左右滑动，看看他们的作品',
-                                          style: theme.textTheme.bodySmall
-                                              ?.copyWith(
-                                                  color: theme.colorScheme
-                                                      .onSurfaceVariant)),
-                                    ]),
-                              ),
-                              Expanded(
-                                child: _loading
-                                    ? const Center(
-                                        child: CircularProgressIndicator())
-                                    : _error != null
-                                        ? Center(
-                                            child: Padding(
-                                                padding:
-                                                    const EdgeInsets.all(20),
-                                                child: Column(
-                                                    mainAxisSize:
-                                                        MainAxisSize.min,
-                                                    children: [
-                                                      Text('推荐暂时没能加载：$_error',
-                                                          textAlign:
-                                                              TextAlign.center),
-                                                      TextButton.icon(
-                                                          onPressed: active
-                                                              ? _load
-                                                              : null,
-                                                          icon: const Icon(
-                                                              Icons.refresh),
-                                                          label: const Text(
-                                                              '重试推荐')),
-                                                    ])))
-                                        : _authors.isEmpty
-                                            ? const Center(
-                                                child: Text('暂无更多作者推荐'))
-                                            : LayoutBuilder(
-                                                builder: (context,
-                                                        constraints) =>
-                                                    ListView.separated(
-                                                      key: const ValueKey(
-                                                          'pixiv-follow-authors-scroll'),
-                                                      scrollDirection:
-                                                          Axis.horizontal,
-                                                      padding: const EdgeInsets
-                                                          .symmetric(
-                                                          horizontal: 20),
-                                                      itemCount:
-                                                          _authors.length,
-                                                      separatorBuilder:
-                                                          (_, __) =>
-                                                              const SizedBox(
-                                                                  width: 12),
-                                                      itemBuilder:
-                                                          (context, index) =>
-                                                              SizedBox(
-                                                        width: (constraints
-                                                                    .maxWidth *
-                                                                .84)
-                                                            .clamp(
-                                                                260.0, 380.0),
-                                                        child: _authorCard(
-                                                            context,
-                                                            _authors[index],
-                                                            active),
-                                                      ),
-                                                    )),
-                              ),
-                            ]),
-                      ),
+  Widget build(BuildContext context) => AnimatedBuilder(
+        animation: controller,
+        builder: (context, _) {
+          if (controller.dismissed) return const SizedBox.shrink();
+          final theme = Theme.of(context);
+          final enabled = _actionsCurrent(context);
+          return RepaintBoundary(
+            key: const ValueKey('pixiv-follow-recommendations-inline'),
+            child: ColoredBox(
+              color: theme.colorScheme.surface,
+              child: Padding(
+                padding: const EdgeInsets.only(top: 4, bottom: 16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      child: Row(children: [
+                        Expanded(
+                          child: Text('已关注，发现更多作者',
+                              style: theme.textTheme.titleSmall),
+                        ),
+                        IconButton(
+                          tooltip: '关闭作者推荐',
+                          constraints:
+                              const BoxConstraints(minWidth: 48, minHeight: 48),
+                          onPressed: enabled ? controller.dismiss : null,
+                          icon: const Icon(Icons.close),
+                        ),
+                      ]),
                     ),
-                  ),
-                )),
-      ),
-    );
+                    const SizedBox(height: 8),
+                    if (controller.loading ||
+                        controller.error != null ||
+                        controller.authors.isEmpty)
+                      _status(context, enabled)
+                    else
+                      LayoutBuilder(builder: (context, constraints) {
+                        final cardWidth =
+                            math.max(1.0, constraints.maxWidth - 32);
+                        // Match the page's author-preview gutters; only the two
+                        // image gaps consume space inside the three-column row.
+                        final innerWidth = cardWidth;
+                        final buttonStyle = theme.textTheme.labelMedium!;
+                        final buttonPainter = TextPainter(
+                          text: TextSpan(text: '处理中', style: buttonStyle),
+                          textDirection: Directionality.of(context),
+                          textScaler: MediaQuery.textScalerOf(context),
+                        )..layout();
+                        final buttonWidth =
+                            math.max(48.0, buttonPainter.width + 20);
+                        final buttonHeight =
+                            math.max(48.0, buttonPainter.height + 8);
+                        buttonPainter.dispose();
+                        final separate = cardWidth < 260 ||
+                            MediaQuery.textScalerOf(context).scale(14) > 20 ||
+                            innerWidth - buttonWidth - 48 < 88;
+                        final style = theme.textTheme.titleSmall!;
+                        final nameWidth = separate
+                            ? innerWidth - 40
+                            : innerWidth - buttonWidth - 48;
+                        var nameHeight = 0.0;
+                        var errorHeight = 0.0;
+                        for (final entry in controller.authors) {
+                          nameHeight = math.max(
+                              nameHeight,
+                              _textHeight(context, entry.author.name, style,
+                                  nameWidth, 2));
+                          final error = controller.followError(entry.author.id);
+                          if (error != null) {
+                            errorHeight = math.max(
+                                errorHeight,
+                                _textHeight(
+                                        context,
+                                        error,
+                                        theme.textTheme.bodySmall!,
+                                        innerWidth,
+                                        2) +
+                                    8);
+                          }
+                        }
+                        final headHeight = math.max(48.0, nameHeight) +
+                            (separate ? buttonHeight + 8 : 0);
+                        final imageSize = (innerWidth - 16) / 3;
+                        final cardHeight = 16 +
+                            headHeight +
+                            8 +
+                            math.max(48.0, imageSize) +
+                            errorHeight;
+                        return SizedBox(
+                          height: cardHeight,
+                          child: ListView.separated(
+                            key: const ValueKey('pixiv-follow-authors-scroll'),
+                            controller: controller.scrollController,
+                            scrollDirection: Axis.horizontal,
+                            padding: const EdgeInsets.symmetric(horizontal: 16),
+                            itemCount: controller.authors.length,
+                            separatorBuilder: (_, index) => SizedBox(
+                              width: 24,
+                              child: Center(
+                                child: SizedBox(
+                                  key: ValueKey(
+                                      'pixiv-follow-author-divider-$index'),
+                                  width: 1,
+                                  height: math.max(48.0, cardHeight - 16),
+                                  child: ColoredBox(
+                                    color: theme.colorScheme.outlineVariant
+                                        .withValues(alpha: .55),
+                                  ),
+                                ),
+                              ),
+                            ),
+                            itemBuilder: (context, index) => SizedBox(
+                              width: cardWidth,
+                              child: _authorCard(
+                                  context,
+                                  controller.authors[index],
+                                  enabled,
+                                  separate,
+                                  buttonWidth,
+                                  headHeight,
+                                  imageSize,
+                                  errorHeight),
+                            ),
+                          ),
+                        );
+                      }),
+                  ],
+                ),
+              ),
+            ),
+          );
+        },
+      );
+
+  Widget _status(BuildContext context, bool enabled) => Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(minHeight: 120),
+          child: Center(
+            child: controller.loading
+                ? const SizedBox.square(
+                    dimension: 24,
+                    child: CircularProgressIndicator(strokeWidth: 2))
+                : controller.error != null
+                    ? Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 8),
+                        child:
+                            Column(mainAxisSize: MainAxisSize.min, children: [
+                          Text('推荐暂时没能加载：${controller.error}',
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              textAlign: TextAlign.center),
+                          TextButton.icon(
+                            style: TextButton.styleFrom(
+                                minimumSize: const Size(48, 48)),
+                            onPressed: enabled ? controller.read : null,
+                            icon: const Icon(Icons.refresh),
+                            label: const Text('重试推荐'),
+                          ),
+                        ]),
+                      )
+                    : const Text('暂无更多作者推荐'),
+          ),
+        ),
+      );
+
+  Widget _recommendedAvatar(BuildContext context, PixivAuthor author) {
+    Widget placeholder({bool failed = false, bool loading = false}) =>
+        Semantics(
+          label: failed
+              ? '${author.name}头像加载失败'
+              : loading
+                  ? '${author.name}头像加载中'
+                  : '${author.name}头像',
+          child: const CircleAvatar(
+              radius: 16, child: Icon(Icons.person_outline, size: 20)),
+        );
+    final url = author.avatar.trim();
+    return SizedBox.square(
+        dimension: 32,
+        child: ClipOval(
+          child: url.isEmpty
+              ? placeholder()
+              : Image(
+                  image: onlineCoverProvider(url: url, headers: const {
+                    'Referer': 'https://www.pixiv.net/',
+                    'User-Agent': PixivNetwork.pixivWebUA,
+                  }),
+                  width: 32,
+                  height: 32,
+                  fit: BoxFit.cover,
+                  frameBuilder: (context, child, frame, synchronous) =>
+                      frame != null || synchronous
+                          ? child
+                          : placeholder(loading: true),
+                  errorBuilder: (_, __, ___) => placeholder(failed: true),
+                ),
+        ));
   }
 
   Widget _authorCard(
-      BuildContext context, PixivRecommendedAuthor entry, bool active) {
+      BuildContext context,
+      PixivRecommendedAuthor entry,
+      bool enabled,
+      bool separate,
+      double buttonWidth,
+      double headHeight,
+      double imageSize,
+      double errorHeight) {
     final theme = Theme.of(context);
     final author = entry.author;
-    final followed = _followed[author.id] ?? author.isFollowed;
+    final followButton = FilledButton.tonal(
+      key: ValueKey('pixiv-follow-author-button-${author.id}'),
+      style: FilledButton.styleFrom(
+        minimumSize: const Size(48, 32),
+        padding: const EdgeInsets.symmetric(horizontal: 10),
+        textStyle: theme.textTheme.labelMedium,
+        visualDensity: VisualDensity.standard,
+        tapTargetSize: MaterialTapTargetSize.padded,
+      ),
+      onPressed: enabled && !controller.isBusy(author.id)
+          ? () => _follow(context, author)
+          : null,
+      child: Text(controller.isBusy(author.id)
+          ? '处理中'
+          : controller.isFollowed(author)
+              ? '已关注'
+              : '关注'),
+    );
     return Material(
       key: ValueKey('pixiv-follow-author-${author.id}'),
-      color: theme.colorScheme.surfaceContainerLow,
-      borderRadius: BorderRadius.circular(18),
-      clipBehavior: Clip.antiAlias,
+      color: theme.colorScheme.surface,
       child: Padding(
-        padding: const EdgeInsets.all(12),
+        padding: const EdgeInsets.symmetric(vertical: 8),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Row(children: [
-            CircleAvatar(
-                radius: 18,
-                backgroundImage: author.avatar.isEmpty
-                    ? null
-                    : onlineCoverProvider(
-                        url: author.avatar,
-                        headers: const {'Referer': 'https://www.pixiv.net/'}),
-                child: author.avatar.isEmpty
-                    ? const Icon(Icons.person_outline)
-                    : null),
-            const SizedBox(width: 8),
-            Expanded(
-                child: Text(author.name,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: theme.textTheme.titleSmall)),
-            const SizedBox(width: 8),
-            FilledButton.tonal(
-              key: ValueKey('pixiv-follow-author-button-${author.id}'),
-              onPressed: active && !_busyAuthors.contains(author.id)
-                  ? () => _follow(author)
-                  : null,
-              child: Text(_busyAuthors.contains(author.id)
-                  ? '处理中'
-                  : followed
-                      ? '已关注'
-                      : '关注'),
-            ),
-          ]),
-          if (_followErrors[author.id] case final error?)
-            Padding(
-                padding: const EdgeInsets.only(top: 8),
-                child: Text(error,
-                    style: theme.textTheme.bodySmall
-                        ?.copyWith(color: theme.colorScheme.error))),
-          const SizedBox(height: 12),
-          Expanded(
-              child: entry.works.isEmpty
-                  ? const Center(child: Text('暂无可显示作品'))
-                  : ListView.separated(
-                      scrollDirection: Axis.horizontal,
-                      itemCount: entry.works.length,
-                      separatorBuilder: (_, __) => const SizedBox(width: 6),
-                      itemBuilder: (context, index) => SizedBox(
-                        width: 92,
+          SizedBox(
+            height: headHeight,
+            child: Column(children: [
+              Expanded(
+                child: Row(children: [
+                  _recommendedAvatar(context, author),
+                  const SizedBox(width: 8),
+                  Expanded(
+                      child: Tooltip(
+                    message: author.name,
+                    child: Text(author.name,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: theme.textTheme.titleSmall),
+                  )),
+                  if (!separate) ...[
+                    const SizedBox(width: 8),
+                    SizedBox(width: buttonWidth, child: followButton),
+                  ],
+                ]),
+              ),
+              if (separate) ...[
+                const SizedBox(height: 8),
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: SizedBox(width: buttonWidth, child: followButton),
+                ),
+              ],
+            ]),
+          ),
+          const SizedBox(height: 8),
+          SizedBox(
+            height: math.max(48.0, imageSize),
+            child: entry.works.isEmpty
+                ? const Center(child: Text('暂无可显示作品'))
+                : Row(children: [
+                    for (final (index, work) in entry.works.indexed) ...[
+                      if (index > 0) const SizedBox(width: 8),
+                      SizedBox(
+                        width: imageSize,
+                        height: imageSize,
                         child: OnlineRecommendationCard(
-                          key: ValueKey(
-                              'pixiv-follow-work-${entry.works[index].id}'),
+                          key: ValueKey('pixiv-follow-work-${work.id}'),
                           compactPreview: true,
-                          source: widget.source,
-                          comic: entry.works[index],
-                          bookmarks: widget.bookmarks,
-                          ownerIsCurrent: () =>
-                              _current &&
-                              (ModalRoute.of(context)?.isCurrent ?? true),
-                          actionsEnabled: active,
-                          feedbackCurrent: active,
-                          accountIdentity: widget.accountIdentity,
-                          isLoggedIn: widget.isLoggedIn,
-                          writeBookmark: widget.writeBookmark,
-                          onAccountsChanged: widget.onAccountsChanged,
+                          compactImageFit: BoxFit.cover,
+                          source: source,
+                          comic: work,
+                          bookmarks: bookmarks,
+                          ownerIsCurrent: () => _actionsCurrent(context),
+                          actionsEnabled: enabled,
+                          feedbackCurrent: enabled,
+                          accountIdentity: accountIdentity,
+                          isLoggedIn: isLoggedIn,
+                          writeBookmark: writeBookmark,
+                          onAccountsChanged: onAccountsChanged,
                           onOpenDetail: () {
-                            if (_current &&
-                                (ModalRoute.of(context)?.isCurrent ?? true)) {
-                              widget.onOpenWork(
-                                  entry.works[index], entry.works);
+                            if (_actionsCurrent(context)) {
+                              onOpenWork(work, entry.works);
                             }
                           },
                         ),
                       ),
-                    )),
+                    ],
+                  ]),
+          ),
+          if (errorHeight > 0)
+            SizedBox(
+              height: errorHeight,
+              child: Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: Text(controller.followError(author.id) ?? '',
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: theme.textTheme.bodySmall!
+                        .copyWith(color: theme.colorScheme.error)),
+              ),
+            ),
         ]),
       ),
     );

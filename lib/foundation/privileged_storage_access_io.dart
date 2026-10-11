@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
+import 'image_loader/reader_image_limits.dart';
 
 class PrivilegedFileStat {
   const PrivilegedFileStat({required this.size, required this.modifiedMillis});
@@ -111,6 +112,13 @@ class PrivilegedStorageAccess {
   }
 
   static Future<Uint8List?> readFileBytes(String path) async {
+    if (ReaderImageReadLimits.current != null) {
+      try {
+        return await readReaderImageFile(File(path));
+      } on FileSystemException {
+        return null;
+      }
+    }
     try {
       final file = File(path);
       if (!(await file.exists())) {

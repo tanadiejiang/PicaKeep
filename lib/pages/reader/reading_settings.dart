@@ -4,15 +4,16 @@ void showSettings(BuildContext context) {
   if (UiMode.m1(context)) {
     showModalBottomSheet(
         context: context,
+        useSafeArea: true,
         builder: (context) => AnimatedContainer(
               duration: const Duration(milliseconds: 200),
-              child: const ReadingSettings(),
+              child: const SafeArea(child: ReadingSettings()),
             ));
   } else {
     showSideBar(
         context,
-        const SingleChildScrollView(
-          child: ReadingSettings(),
+        const SafeArea(
+          child: SingleChildScrollView(child: ReadingSettings()),
         ),
         useSurfaceTintColor: true,
         width: 450);
@@ -92,6 +93,19 @@ class _ReadingSettingsState extends State<ReadingSettings> {
                 setState(() {});
               },
             ),
+          ),
+          ReaderLargeImagePolicySetting(
+            leading: const Icon(Icons.photo_size_select_large_outlined),
+            value: (ReaderImagePipelineSettings.tryParse(
+                      appdata.settings[readerImagePipelineSettingIndex],
+                    ) ??
+                    const ReaderImagePipelineSettings())
+                .largeImagePolicy,
+            onChanged: (policy) {
+              unawaited(appdata.setReaderLargeImagePolicy(policy));
+              logic.update();
+              setState(() {});
+            },
           ),
           if (appdata.settings[9] == "5" || appdata.settings[9] == "6")
             ListTile(

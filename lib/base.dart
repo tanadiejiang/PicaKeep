@@ -438,6 +438,18 @@ class Appdata {
     );
   }
 
+  /// Both settings UIs merge the latest configuration, never a stale snapshot.
+  Future<void> setReaderLargeImagePolicy(ReaderLargeImagePolicy policy) {
+    _ensureCurrentSettingsLength();
+    final config = ReaderImagePipelineSettings.tryParse(
+          settings[readerImagePipelineSettingIndex],
+        ) ??
+        const ReaderImagePipelineSettings();
+    settings[readerImagePipelineSettingIndex] =
+        config.withLargeImagePolicy(policy).encode();
+    return updateSettings();
+  }
+
   Future<void> updateSettings([bool syncData = true]) async {
     // Settings may still be an old, short array when a component writes before
     // normal startup/import. Capture missing legacy facts before appending the
@@ -578,6 +590,12 @@ class Appdata {
         newSettings.length > readerImagePipelineSettingIndex
             ? newSettings[readerImagePipelineSettingIndex]
             : existingReaderPolicy,
+        // Old backups may include schema2 but predate this global field.
+        // Explicit (even invalid) incoming fields are normalized on their own.
+        missingLargeImagePolicy:
+            ReaderImagePipelineSettings.tryParse(existingReaderPolicy)
+                    ?.largeImagePolicy ??
+                ReaderLargeImagePolicy.safeWhole,
         legacyComic: newSettings.length > readerHighQualityComicSettingIndex
             ? newSettings[readerHighQualityComicSettingIndex]
             : null,

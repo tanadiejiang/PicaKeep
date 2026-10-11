@@ -21,6 +21,7 @@ class DownloadedComicTile extends StatelessWidget {
     required this.author,
     required this.imagePath,
     this.imageProvider,
+    this.onCoverReady,
     this.readingHistoryOverride,
     this.isFavoriteOverride,
     this.favoriteTarget,
@@ -41,6 +42,7 @@ class DownloadedComicTile extends StatelessWidget {
   final String size;
   final File imagePath;
   final ImageProvider<Object>? imageProvider;
+  final ValueChanged<ImageProvider<Object>>? onCoverReady;
   final History? readingHistoryOverride;
   final bool? isFavoriteOverride;
 
@@ -404,6 +406,12 @@ class DownloadedComicTile extends StatelessWidget {
     }
     return Image(
       image: displayProvider,
+      frameBuilder: onCoverReady == null
+          ? null
+          : (_, child, frame, synchronous) {
+              if (frame != null || synchronous) onCoverReady!(displayProvider);
+              return child;
+            },
       fit: BoxFit.cover,
       height: double.infinity,
       gaplessPlayback: gaplessPlayback,

@@ -77,6 +77,14 @@ Widget _page({
           isLoggedIn: () => true,
           loadDetail: () async => Res(_detail(bookmarked: bookmarked)),
           loadPages: (_) async => const Res(<PixivPage>[]),
+          // Bookmark-only fixtures must not construct the production network
+          // singleton (or its native SQLite cookie store) for unrelated feeds.
+          loadAuthorWorkIds: (_) async => const Res(<String>[]),
+          loadAuthorPreviewWorks: (_, __) async =>
+              const Res(<PixivComicBrief>[]),
+          loadRecommendations: (_) async =>
+              const Res(PixivRecommendationsPage(items: [], nextIds: [])),
+          loadRecommendationWorks: (_) async => const Res(<PixivComicBrief>[]),
           writeBookmark: write,
           onRead: (_, __, ___) {},
           onDownload: (_, __) {},

@@ -4,10 +4,13 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:picakeep/foundation/archive/archive_models.dart';
 import 'package:picakeep/foundation/archive/archive_registry.dart';
 import 'package:picakeep/foundation/image_pipeline/derived_image_store.dart';
+import 'package:picakeep/foundation/image_pipeline/image_disk_quota.dart';
 import 'package:picakeep/foundation/image_pipeline/reader_page_source.dart';
 import 'package:picakeep/foundation/def.dart';
 import 'package:picakeep/foundation/local_library.dart';
 import 'package:picakeep/foundation/pixiv_artifact.dart';
+
+import 'support/image_disk_quota_fixture.dart';
 
 /// 28 号计划：**阅读链路必须同时认两种产物形态**。
 ///
@@ -24,12 +27,19 @@ void main() {
   setUpAll(ArchiveRegistry.initDefaults);
 
   late Directory tempRoot;
+  final previousQuota = ImageDiskQuota.overrideForTesting;
+  late ImageDiskQuota quota;
 
   setUp(() async {
     tempRoot = await Directory.systemTemp.createTemp('pk-pixiv-reading-test');
+    quota = installTaskDiskQuota(() => [tempRoot.path]);
   });
 
   tearDown(() async {
+    await quota.drain();
+    ImageDiskQuota.overrideForTesting = previousQuota;
+    expect(quota.activeBytes, 0);
+    expect(quota.pendingCount, 0);
     try {
       if (await tempRoot.exists()) {
         await tempRoot.delete(recursive: true);
@@ -142,6 +152,7 @@ void main() {
       final pages = await data.loadEp(0);
       final baseline = ImageTemporaryPool.shared.reservedBytes;
       final source = await data.resolvePageSource(0, 1, pages[1]);
+      addTearDown(source.dispose);
       final original = await source.openOriginalFile();
       expect(await original.readAsBytes(), pageBytes(2));
       expect(source.identity.page, 1);
@@ -149,6 +160,7 @@ void main() {
       expect(ImageTemporaryPool.shared.reservedBytes,
           baseline + pageBytes(2).length);
       final release = ReaderPageFileLease.acquire(original);
+      addTearDown(release);
       final disposal = source.dispose();
       await Future<void>.delayed(Duration.zero);
       expect(await original.exists(), isTrue);

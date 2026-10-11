@@ -16,9 +16,11 @@ import 'package:picakeep/foundation/comic_tile_display_config.dart';
 import 'package:picakeep/foundation/download_author_resolver.dart';
 import 'package:picakeep/foundation/image_loader/stream_image_provider.dart';
 import 'package:picakeep/foundation/local_favorites.dart';
+import 'package:picakeep/foundation/pixiv_detail_preview.dart';
 import 'package:picakeep/foundation/pixiv_detail_session.dart';
 import 'package:picakeep/network/base_comic.dart';
 import 'package:picakeep/network/online_image/online_image_manager.dart';
+import 'package:picakeep/network/pixiv_network/pixiv_parsing.dart';
 import 'package:picakeep/pages/online_comic/pixiv_detail_pager.dart';
 
 /// 在线列表卡片的固定高度（164dp 基线，与搜索页/网络收藏页一致）。
@@ -108,6 +110,45 @@ ImageProvider onlineComicCoverProvider({
   return onlineCoverProvider(url: url, headers: headers);
 }
 
+/// Carries the exact first-frame provider when available; cold entries request
+/// only the bounded thumbnail, not a fabricated original or work-detail URL.
+/// Any API-provided raw cover is decode-bounded with fit; never upscaled.
+PixivDetailPreview? onlinePixivDetailPreview(
+    ComicSource source, BaseComic comic) {
+  if (source.key.toLowerCase() != 'pixiv' || comic.id.isEmpty) return null;
+  final urls = pixivWaterfallThumbUrls(comic.cover);
+  if (urls.isEmpty) return null;
+  final account = pixivDetailAccountIdentity(source);
+  final headers = Map<String, String>.unmodifiable(
+      source.imageHeadersBuilder?.call(comic) ?? const <String, String>{});
+  final ready = PixivDetailPreviewRegistry.shared.lookup(
+    workId: comic.id,
+    coverUrl: comic.cover,
+    headers: headers,
+    accountIdentity: account,
+  );
+  final brief = comic is PixivComicBrief ? comic : null;
+  final width = brief?.width ?? 0;
+  final height = brief?.height ?? 0;
+  final dimensionsKnown = width > 0 && height > 0;
+  return PixivDetailPreview(
+    workId: comic.id,
+    provider: ready ??
+        ResizeImage(onlineCoverProvider(url: urls.first, headers: headers),
+            width: 360, height: 360, policy: ResizeImagePolicy.fit),
+    fallbackProvider: urls.length > 1
+        ? ResizeImage(onlineCoverProvider(url: urls.last, headers: headers),
+            width: 360, height: 360, policy: ResizeImagePolicy.fit)
+        : null,
+    aspectRatio: dimensionsKnown ? width / height : .75,
+    aspectRatioKnown: dimensionsKnown,
+    pageCount: brief?.pageCount ?? 0,
+    authorAvatarUrl: brief?.authorAvatar ?? '',
+    accountIdentity: account,
+    ownerIsCurrent: () => pixivDetailAccountIdentity(source) == account,
+  );
+}
+
 /// 在线列表条目卡片。搜索页与探索页共用同一实现，保证两处观感与跳转一致。
 class OnlineComicListItem extends StatelessWidget {
   const OnlineComicListItem({
@@ -165,6 +206,11 @@ class OnlineComicListItem extends StatelessWidget {
     String authors,
     String infoLine,
   ) {
+    final coverAccount = pixivDetailAccountIdentity(source);
+    final coverId = comic.id;
+    final coverUrl = comic.cover;
+    final coverHeaders = Map<String, String>.unmodifiable(
+        source.imageHeadersBuilder?.call(comic) ?? const <String, String>{});
     final tile = DownloadedComicTile(
       favoriteTarget: comic.id,
       favoriteType: switch (source.key) {
@@ -183,7 +229,24 @@ class OnlineComicListItem extends StatelessWidget {
       name: comic.title,
       author: authors,
       imagePath: File(''),
-      imageProvider: onlineComicCoverProvider(source: source, comic: comic),
+      imageProvider: onlineCoverProvider(url: coverUrl, headers: coverHeaders),
+      onCoverReady: source.key != 'pixiv'
+          ? null
+          : (provider) {
+              if (!context.mounted ||
+                  pixivDetailAccountIdentity(source) != coverAccount ||
+                  comic.id != coverId ||
+                  comic.cover != coverUrl) {
+                return;
+              }
+              PixivDetailPreviewRegistry.shared.rememberReady(
+                workId: coverId,
+                coverUrl: coverUrl,
+                headers: coverHeaders,
+                accountIdentity: coverAccount,
+                provider: provider,
+              );
+            },
       type: null,
       tag: comic.tags,
       size: infoLine,
@@ -244,6 +307,7 @@ PixivDetailEntry onlinePixivDetailEntry(ComicSource source, BaseComic comic) =>
       key: 'online:${comic.id}',
       comicId: comic.id,
       builder: (_) => source.comicPageBuilder!(comic),
+      preview: onlinePixivDetailPreview(source, comic),
     );
 
 String pixivDetailAccountIdentity(ComicSource source) =>

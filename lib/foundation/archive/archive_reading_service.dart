@@ -9,6 +9,11 @@ import 'archive_password_store.dart';
 import 'archive_registry.dart';
 import 'package:picakeep/foundation/local_cover_cache.dart';
 import 'package:picakeep/foundation/image_pipeline/derived_image_store.dart';
+import 'package:picakeep/foundation/app.dart';
+import '../image_loader/reader_image_limits.dart';
+import 'backends/dart_zip_backend.dart';
+
+export '../image_loader/reader_image_limits.dart' show ReaderImageLimit;
 
 class ArchiveReadingService {
   ArchiveReadingService._();
@@ -23,7 +28,14 @@ class ArchiveReadingService {
   Future<ArchiveIndex> getIndex(
     String archivePath, {
     bool forceRefresh = false,
+    bool readerInput = false,
   }) async {
+    if (readerInput && ReaderImageReadLimits.current == null) {
+      return runWithReaderImageReadLimits(const ReaderImageReadLimits(),
+          () => getIndex(archivePath, forceRefresh: forceRefresh));
+    }
+    final limits = ReaderImageReadLimits.current;
+    limits?.check(0);
     if (!forceRefresh) {
       final cached = _cache.getIndex(archivePath);
       if (cached != null) {
@@ -31,6 +43,11 @@ class ArchiveReadingService {
         if (fp != null &&
             fp.fileSize == cached.fileSize &&
             fp.mtimeMillis == cached.mtimeMillis) {
+          var metadataBytes = 0;
+          for (final path in cached.imageEntryPaths) {
+            metadataBytes += 256 + path.length * 6;
+            limits?.check(metadataBytes);
+          }
           return ArchiveIndex(
             archivePath: archivePath,
             format: archiveFormatForPath(archivePath),
@@ -51,8 +68,12 @@ class ArchiveReadingService {
     }
 
     final backend = _registry.backendForOrThrow(archivePath);
+    if (limits != null && backend is! DartZipBackend) {
+      throw const ReaderImageLimit('unbounded-archive-index');
+    }
     final password = _passwords.getSessionPassword(archivePath);
     final index = await backend.openIndex(archivePath, password: password);
+    limits?.check(0);
 
     _cache.putIndex(ArchiveIndexCacheEntry(
       archivePath: archivePath,
@@ -203,6 +224,8 @@ class ArchiveReadingService {
     String archivePath,
     String entryPath,
   ) async {
+    final limits = ReaderImageReadLimits.current;
+    limits?.check(0);
     final fp = await fingerprintForPath(archivePath);
     if (fp != null) {
       final cacheKey = ArchiveMemoryCache.entryCacheKey(
@@ -212,9 +235,13 @@ class ArchiveReadingService {
         fp.mtimeMillis,
       );
       final cached = _cache.getEntry(cacheKey);
-      if (cached != null) return cached;
+      if (cached != null) {
+        limits?.check(cached.length);
+        return cached;
+      }
 
       final data = await _readEntryWithPasswordFallback(archivePath, entryPath);
+      limits?.check(data.length);
       _cache.putEntry(cacheKey, data);
       return data;
     }
@@ -228,14 +255,21 @@ class ArchiveReadingService {
     final backend = _registry.backendForOrThrow(archivePath);
     final candidates = _passwords.passwordCandidates(archivePath);
 
+    final limits = ReaderImageReadLimits.current;
     ArchiveFailure? lastFailure;
     for (final password in candidates) {
+      limits?.check(0);
       try {
-        return await backend.readEntry(
-          archivePath,
-          entryPath,
-          password: password,
-        );
+        if (limits == null || backend is DartZipBackend) {
+          return await backend.readEntry(
+            archivePath, entryPath, password: password);
+        }
+        if (backend is StreamingArchiveBackend) {
+          return await _readBoundedMaterialization(
+              backend as StreamingArchiveBackend, archivePath, entryPath,
+              password, limits);
+        }
+        throw const ReaderImageLimit('unbounded-archive-backend');
       } on ArchiveFailure catch (f) {
         if (f.code == ArchiveErrorCode.wrongPassword ||
             f.code == ArchiveErrorCode.passwordRequired) {
@@ -250,6 +284,47 @@ class ArchiveReadingService {
           code: ArchiveErrorCode.passwordRequired,
           debugMessage: 'No valid password for $archivePath',
         );
+  }
+
+  Future<Uint8List> _readBoundedMaterialization(
+    StreamingArchiveBackend backend,
+    String archivePath,
+    String entryPath,
+    String? password,
+    ReaderImageReadLimits limits,
+  ) async {
+    limits.check(0);
+    final maximum = limits.maximumBytes > (64 << 20)
+        ? 64 << 20 : limits.maximumBytes;
+    if (maximum <= 0) {
+      throw const ReaderImageLimit('archive-staging-limit');
+    }
+    final stagedLimits = ReaderImageReadLimits(maximumBytes: maximum,
+        isCancelled: () => limits.isCancelled, cancelled: limits.cancelled);
+    final parent = Directory('${App.cachePath}/reader-archive-input');
+    await parent.create(recursive: true);
+    final directory = await parent.createTemp('member-');
+    final target = File('${directory.path}/original.bin');
+    ImageTemporaryReservation? reservation;
+    try {
+      reservation = await ImageTemporaryPool.shared.reserveOnDisk(
+          maximum, purpose: 'reader-archive-input', path: target.path);
+      stagedLimits.check(0);
+      await backend.materializeEntry(archivePath, entryPath, target,
+          password: password, maxBytes: maximum,
+          isCancelled: () => limits.isCancelled);
+      stagedLimits.check(0);
+      return await runWithReaderImageReadLimits(stagedLimits,
+          () => readReaderImageFile(target));
+    } finally {
+      // Await the extraction before cleanup, including failed/late cancellation.
+      // Delete only our unique directory, never a backend-returned/user path.
+      try {
+        if (await directory.exists()) await directory.delete(recursive: true);
+      } finally {
+        reservation?.release();
+      }
+    }
   }
 
   void disposeReadingSession(String archivePath) {

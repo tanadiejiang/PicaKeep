@@ -9,13 +9,15 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:picakeep/comic_source/comic_source.dart';
 import 'package:picakeep/components/pixiv_bookmark_button.dart';
+import 'package:picakeep/components/pixiv_bookmark_feedback.dart';
 import 'package:picakeep/foundation/pixiv_bookmark_state.dart';
-import 'package:picakeep/network/pixiv_network/pixiv_models.dart';
+import 'package:picakeep/network/pixiv_network/pixiv_network.dart';
 import 'package:picakeep/network/res.dart';
 import 'package:picakeep/pages/online_comic/pixiv_follow_recommendations_sheet.dart';
 import 'package:picakeep/pages/online_common/online_recommendation_card.dart';
+import 'package:picakeep/pages/online_common/online_comic_list_item.dart';
 
-const _output = 'docs/verification/pixiv-follow-discovery-040';
+const _output = 'docs/verification/pixiv-ui-050/049-regression/follow';
 const _font = 'FollowDiscovery040';
 const _account = 'offline-account-A';
 
@@ -29,11 +31,14 @@ class _DenyHttp extends HttpOverrides {
 }
 
 PixivComicBrief _work(String id, String uid,
-        {bool known = true, bool marked = false, bool canAdd = true}) =>
+        {bool known = true,
+        bool marked = false,
+        bool canAdd = true,
+        bool realImage = false}) =>
     PixivComicBrief(
       id: id,
       title: '作品$id・离线横向预览',
-      cover: '',
+      cover: realImage ? 'https://fixture.invalid/preview-$id.png' : '',
       author: '作者$uid',
       authorId: uid,
       authorAvatar: '',
@@ -54,6 +59,7 @@ List<PixivRecommendedAuthor> _authors({
   bool emptyFirst = false,
   bool duplicateWork = false,
   bool unknownFirst = false,
+  bool realImages = false,
 }) =>
     List.generate(count, (index) {
       final uid = '${50 + index}';
@@ -61,7 +67,7 @@ List<PixivRecommendedAuthor> _authors({
         author: PixivAuthor(
           id: uid,
           name: longNames ? '画师$uid・雲と花々／非常长的Unicode作者名字' : '画师$uid・雲と花々',
-          avatar: '',
+          avatar: realImages ? 'https://fixture.invalid/avatar-$uid.png' : '',
           comment: '',
           following: 0,
           isFollowed: index == 1,
@@ -73,6 +79,7 @@ List<PixivRecommendedAuthor> _authors({
                   _work(
                       duplicateWork && work == 0 ? '100' : '${index + 1}0$work',
                       uid,
+                      realImage: realImages,
                       known: !(unknownFirst && work == 0 && index == 0)),
               ],
       );
@@ -108,23 +115,17 @@ class _Harness {
 
   void rebuild() => revision.value++;
 
-  PixivFollowRecommendationsSheet sheet() => PixivFollowRecommendationsSheet(
-        seedAuthorId: '42',
+  PixivFollowDiscoveryController? discovery;
+
+  PixivFollowRecommendationsInline section() =>
+      PixivFollowRecommendationsInline(
+        controller: discovery!,
         source: source,
         bookmarks: bookmarks,
-        load: (id) {
-          loads.add(id);
-          return load(id);
-        },
-        writeFollow: (id, {required isFollowing}) {
-          followWrites.add((id, isFollowing));
-          return follow(id, isFollowing: isFollowing);
-        },
         writeBookmark: (id, {required isAdding}) {
           bookmarkWrites.add((id, isAdding));
           return bookmark(id, isAdding: isAdding);
         },
-        ownerIsCurrent: () => ownerCurrent,
         accountIdentity: () => account,
         isLoggedIn: () => loggedIn,
         onAccountsChanged: () async => accountsChanged++,
@@ -141,6 +142,20 @@ class _Harness {
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.reset);
     await _loadFonts(tester);
+    discovery?.dispose();
+    discovery = PixivFollowDiscoveryController(
+      seedAuthorId: '42',
+      load: (id) {
+        loads.add(id);
+        return load(id);
+      },
+      writeFollow: (id, {required isFollowing}) {
+        followWrites.add((id, isFollowing));
+        return follow(id, isFollowing: isFollowing);
+      },
+      ownerIsCurrent: () => ownerCurrent,
+      accountIdentity: () => account,
+    );
     await tester.pumpWidget(MaterialApp(
       navigatorKey: navigator,
       theme: ThemeData(
@@ -157,28 +172,23 @@ class _Harness {
       ),
       home: Scaffold(
         appBar: AppBar(title: const Text('作品详情')),
-        body: Builder(builder: (context) {
-          return Center(
-            child: FilledButton(
-              key: const ValueKey('open-discovery'),
-              onPressed: () {
-                route = showModalBottomSheet<void>(
-                  context: context,
-                  isScrollControlled: true,
-                  showDragHandle: true,
-                  useSafeArea: true,
-                  builder: (_) => ValueListenableBuilder<int>(
-                      valueListenable: revision,
-                      builder: (_, __, ___) => sheet()),
-                );
-              },
-              child: const Text('打开已确认关注的作者推荐'),
-            ),
-          );
-        }),
+        body: PixivBookmarkFeedbackHost(
+          identity: ('inline-fixture', account),
+          child: SingleChildScrollView(
+            key: const ValueKey('inline-parent-scroll'),
+            child: Column(children: [
+              const SizedBox(height: 24, child: Text('当前作者及作品预览')),
+              ValueListenableBuilder<int>(
+                valueListenable: revision,
+                builder: (_, __, ___) => section(),
+              ),
+              const SizedBox(height: 1000, child: Text('评论与作品推荐')),
+            ]),
+          ),
+        ),
       ),
     ));
-    await tester.tap(find.byKey(const ValueKey('open-discovery')));
+    unawaited(discovery!.read());
     await _frames(tester, 30);
   }
 
@@ -188,6 +198,7 @@ class _Harness {
   }
 
   void dispose() {
+    discovery?.dispose();
     bookmarks.dispose();
     store.dispose();
     revision.dispose();
@@ -238,10 +249,6 @@ ScrollableState _outer(WidgetTester tester) =>
             of: find.byKey(const ValueKey('pixiv-follow-authors-scroll')),
             matching: find.byType(Scrollable))
         .first);
-ScrollableState _inner(WidgetTester tester, String uid) =>
-    tester.state<ScrollableState>(find
-        .descendant(of: _author(uid), matching: find.byType(Scrollable))
-        .first);
 
 Map<String, double> _rect(Rect rect) => {
       'left': rect.left,
@@ -256,7 +263,7 @@ Future<void> _capture(WidgetTester tester, _Harness harness, String name,
   final boundary = harness.capture.currentContext!.findRenderObject()!
       as RenderRepaintBoundary;
   final sheet = tester.renderObject<RenderRepaintBoundary>(
-      find.byKey(const ValueKey('pixiv-follow-recommendations-sheet')));
+      find.byKey(const ValueKey('pixiv-follow-recommendations-inline')));
   await tester.runAsync(() async {
     final output = Directory(_output);
     await output.create(recursive: true);
@@ -293,6 +300,55 @@ Future<void> _capture(WidgetTester tester, _Harness harness, String name,
   });
 }
 
+Future<void> _seedLocalImages(
+    WidgetTester tester, List<PixivRecommendedAuthor> authors) async {
+  await tester.runAsync(() async {
+    Future<void> seed(String url, Size size, Color color,
+        {Map<String, String> headers = const {}, int? resizeWidth}) async {
+      final recorder = ui.PictureRecorder();
+      final canvas = Canvas(recorder);
+      canvas.drawRect(Offset.zero & size, Paint()..color = color);
+      canvas.drawRect(Rect.fromLTWH(2, 2, size.width - 4, size.height - 4),
+          Paint()..color = Colors.white);
+      canvas.drawCircle(Offset(size.width / 2, size.height / 2),
+          size.shortestSide / 4, Paint()..color = color);
+      final picture = recorder.endRecording();
+      final image =
+          await picture.toImage(size.width.toInt(), size.height.toInt());
+      picture.dispose();
+      final provider = onlineCoverProvider(url: url, headers: headers);
+      final candidates = [
+        provider,
+        if (resizeWidth != null)
+          ResizeImage.resizeIfNeeded(resizeWidth, null, provider),
+      ];
+      for (final candidate in candidates) {
+        final key = await candidate.obtainKey(ImageConfiguration.empty);
+        imageCache.putIfAbsent(
+            key,
+            () => OneFrameImageStreamCompleter(
+                Future.value(ImageInfo(image: image.clone()))));
+      }
+      image.dispose();
+    }
+
+    for (final author in authors) {
+      await seed(author.author.avatar, const Size(32, 32), Colors.deepPurple,
+          headers: const {
+            'Referer': 'https://www.pixiv.net/',
+            'User-Agent': PixivNetwork.pixivWebUA
+          });
+      for (final (index, work) in author.works.indexed) {
+        await seed(
+            work.cover,
+            [const Size(40, 80), const Size(80, 40), const Size(60, 60)][index],
+            [Colors.teal, Colors.orange, Colors.indigo][index],
+            resizeWidth: (((375.0 - 32 - 16) / 3) * 1.35).round());
+      }
+    }
+  });
+}
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   late _DenyHttp deny;
@@ -319,7 +375,7 @@ void main() {
         : Res(harness.authors);
     await harness.mount(tester);
     expect(harness.loads, ['42']);
-    expect(find.text('已关注'), findsOneWidget);
+    expect(find.text('已关注，发现更多作者'), findsOneWidget);
     expect(find.text('推荐暂时没能加载：离线读取失败'), findsOneWidget);
     expect(harness.followWrites, isEmpty);
     await tester.tap(find.text('重试推荐'));
@@ -336,7 +392,7 @@ void main() {
     harness.load = (_) async => throw StateError('离线异常');
     await harness.mount(tester);
     expect(find.text('推荐暂时没能加载：离线异常'), findsOneWidget);
-    expect(find.text('已关注'), findsOneWidget);
+    expect(find.text('已关注，发现更多作者'), findsOneWidget);
     expect(harness.followWrites, isEmpty);
     await harness.unmount(tester);
   });
@@ -377,7 +433,9 @@ void main() {
       pending.complete(
           fail ? const Res.error('late error') : Res(harness.authors));
       await _frames(tester);
-      expect(find.byType(PixivFollowRecommendationsSheet), findsNothing);
+      expect(find.byKey(const ValueKey('pixiv-follow-recommendations-inline')),
+          findsNothing);
+      expect(find.text('作品详情'), findsOneWidget);
       expect(tester.takeException(), isNull);
       await harness.unmount(tester);
     }
@@ -405,36 +463,29 @@ void main() {
     });
   }
 
-  testWidgets(
-      'header drags authors and overflowing thumbnails use their inner scroll',
+  testWidgets('preview drags authors without moving vertical detail scroll',
       (tester) async {
     harness.authors = _authors(count: 5);
-    for (final width in [375.0, 320.0]) {
+    for (final width in [375.0, 240.0]) {
       await harness.mount(tester, width: width);
       final outer = _outer(tester).position;
-      final inner = _inner(tester, '50').position;
-      expect(outer.pixels, 0);
-      final first = tester.getRect(_tile('100'));
+      final parent = tester
+          .state<ScrollableState>(find.descendant(
+              of: find.byKey(const ValueKey('inline-parent-scroll')),
+              matching: find.byWidgetPredicate((widget) =>
+                  widget is Scrollable &&
+                  widget.axisDirection == AxisDirection.down)))
+          .position;
+      final before = parent.pixels;
+      expect(
+          find.descendant(of: _author('50'), matching: find.byType(ListView)),
+          findsNothing);
       await tester.dragFrom(
-          first.center - const Offset(0, 30), const Offset(-70, 0));
+          tester.getCenter(_tile('100')) - const Offset(0, 30),
+          const Offset(-150, 0));
       await _frames(tester, 30);
-      if (inner.maxScrollExtent > 0) {
-        // The narrow fixture makes the same three works actually overflow.
-        expect(inner.pixels, greaterThan(0));
-        expect(outer.pixels, 0);
-      } else {
-        // All three previews fit at 375dp; dragging them can move the authors.
-        expect(inner.pixels, 0);
-        expect(outer.pixels, greaterThan(0));
-      }
-      outer.jumpTo(0);
-      await _frames(tester);
-      final avatar = find.descendant(
-          of: _author('50'), matching: find.byType(CircleAvatar));
-      await tester.dragFrom(tester.getCenter(avatar), const Offset(-310, 0));
-      await _frames(tester, 30);
-      expect(outer.pixels, greaterThan(200));
-      expect(_author('51'), findsOneWidget);
+      expect(outer.pixels, greaterThan(0));
+      expect(parent.pixels, before);
       expect(harness.opened, isEmpty);
       expect(harness.followWrites, isEmpty);
       expect(tester.takeException(), isNull);
@@ -551,7 +602,7 @@ void main() {
     expect(tester.widget<InkWell>(_detail('100')).onTap, isNull);
     await tester.tap(_follow('50'));
     await tester.tap(_heart('100'));
-    await tester.tap(_detail('100'));
+    await tester.tapAt(tester.getTopLeft(_tile('100')) + const Offset(10, 10));
     await _frames(tester);
     expect(harness.followWrites, isEmpty);
     expect(harness.bookmarkWrites, isEmpty);
@@ -696,6 +747,255 @@ void main() {
     await harness.unmount(tester);
   });
 
+  testWidgets('narrow large text error has a visible retry without overflow',
+      (tester) async {
+    harness.load = (_) async => const Res.error('非常长的网络错误说明，返回内容暂时无法解析，请稍后重试');
+    await harness.mount(tester,
+        width: 240, scale: 2, height: 320, brightness: Brightness.dark);
+    final retry = find.text('重试推荐');
+    await tester.ensureVisible(retry);
+    await _frames(tester);
+    expect(retry, findsOneWidget);
+    expect(tester.getSize(find.widgetWithText(TextButton, '重试推荐')).height,
+        greaterThanOrEqualTo(48));
+    expect(tester.takeException(), isNull);
+    await harness.unmount(tester);
+  });
+
+  testWidgets(
+      'narrow and landscape cards have square slots and large touch areas',
+      (tester) async {
+    harness.authors = _authors(count: 5, longNames: true);
+    for (final geometry in [const Size(240, 700), const Size(812, 375)]) {
+      await harness.mount(tester,
+          width: geometry.width,
+          height: geometry.height,
+          scale: geometry.width == 240 ? 2 : 1);
+      final tile = tester.getSize(_tile('100'));
+      expect(tile.width, greaterThanOrEqualTo(48));
+      expect(tile.height, closeTo(tile.width, .01));
+      expect(tester.getSize(_heart('100')), const Size(48, 48));
+      expect(tester.getSize(_follow('50')).height, greaterThanOrEqualTo(48));
+      expect(tester.getSize(find.byTooltip('关闭作者推荐')).height,
+          greaterThanOrEqualTo(48));
+      expect(tester.takeException(), isNull);
+      await harness.unmount(tester);
+    }
+  });
+
+  testWidgets('remounting inline retains parent data and horizontal offset',
+      (tester) async {
+    harness.authors = _authors(count: 5);
+    await harness.mount(tester);
+    final controller = harness.discovery!;
+    _outer(tester).position.jumpTo(250);
+    await _frames(tester);
+    await harness.unmount(tester);
+    await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+      body: PixivBookmarkFeedbackHost(
+          child: SingleChildScrollView(
+        child: harness.section(),
+      )),
+    )));
+    await _frames(tester);
+    expect(harness.discovery, same(controller));
+    expect(_outer(tester).position.pixels, closeTo(250, .01));
+    expect(harness.loads, ['42']);
+    expect(tester.takeException(), isNull);
+    await harness.unmount(tester);
+  });
+
+  testWidgets(
+      'three square previews fill page gutters and divider stays between authors',
+      (tester) async {
+    await harness.mount(tester);
+    final card = tester.getRect(_author('50'));
+    final tiles =
+        ['100', '101', '102'].map((id) => tester.getRect(_tile(id))).toList();
+    expect(card.left, 16);
+    expect(card.width, 343);
+    expect(tiles.first.left, card.left);
+    expect(tiles.last.right, closeTo(card.right, .01));
+    for (var index = 0; index < tiles.length; index++) {
+      expect(tiles[index].width, closeTo((343 - 16) / 3, .01));
+      expect(tiles[index].height, closeTo(tiles[index].width, .01));
+      if (index > 0) {
+        expect(tiles[index].left - tiles[index - 1].right, closeTo(8, .01));
+      }
+    }
+    final divider = find.byKey(const ValueKey('pixiv-follow-author-divider-0'));
+    final line = tester.getRect(divider);
+    expect(line.width, 1);
+    expect(line.left - card.right, closeTo(11.5, .01));
+    final color = tester
+        .widget<ColoredBox>(
+            find.descendant(of: divider, matching: find.byType(ColoredBox)))
+        .color;
+    expect(color.a, closeTo(.55, .01));
+    expect(tester.widget<Material>(_author('50')).color,
+        Theme.of(tester.element(_author('50'))).colorScheme.surface);
+    _outer(tester).position.jumpTo(card.width + 24);
+    await _frames(tester);
+    expect(tester.getRect(_author('51')).left, closeTo(16, .01));
+    await tester.tapAt(tester.getTopLeft(_tile('200')) + const Offset(12, 12));
+    expect(harness.opened, hasLength(1));
+    expect(harness.opened.single.$1, '200');
+    expect(harness.opened.single.$2, ['200', '201', '202']);
+    expect(harness.bookmarkWrites, isEmpty);
+    expect(harness.loads, ['42']);
+    expect(tester.takeException(), isNull);
+    await harness.unmount(tester);
+  });
+
+  testWidgets(
+      'compact follow pill retains padded hit area outside visible surface',
+      (tester) async {
+    final pending = Completer<Res<bool>>();
+    harness.follow = (_, {required isFollowing}) => pending.future;
+    await harness.mount(tester);
+    final button = _follow('50');
+    final hit = tester.getRect(button);
+    final surface = tester.getRect(
+        find.descendant(of: button, matching: find.byType(Material)).first);
+    expect(hit.width, greaterThanOrEqualTo(48));
+    expect(hit.width, lessThan(80));
+    expect(hit.height, greaterThanOrEqualTo(48));
+    expect(surface.height, closeTo(32, .01));
+    // Padded Material targets, not an IgnorePointer wrapper around a small pill.
+    await tester.tapAt(Offset(hit.center.dx, hit.top + 2));
+    await _frames(tester);
+    expect(harness.followWrites, [('50', true)]);
+    expect(_followLabel(tester, '50'), '处理中');
+    expect(tester.widget<FilledButton>(button).onPressed, isNull);
+    pending.complete(const Res(true));
+    await _frames(tester);
+    expect(_followLabel(tester, '50'), '已关注');
+    expect(tester.getRect(button), hit);
+    await harness.unmount(tester);
+  });
+
+  testWidgets(
+      'large-text follow labels fit stable padded targets in all three states',
+      (tester) async {
+    for (final width in [240.0, 375.0, 812.0]) {
+      final pending = Completer<Res<bool>>();
+      harness.follow = (_, {required isFollowing}) => pending.future;
+      await harness.mount(tester,
+          width: width, scale: 2, height: 900, brightness: Brightness.dark);
+      final button = _follow('50');
+      final initial = tester.getRect(button);
+      void expectLabelFits(String label) {
+        expect(_followLabel(tester, '50'), label);
+        final text = find.descendant(of: button, matching: find.byType(Text));
+        final textRect = tester.getRect(text);
+        final hit = tester.getRect(button);
+        final surface = tester.getRect(
+            find.descendant(of: button, matching: find.byType(Material)).first);
+        expect(hit.width, greaterThanOrEqualTo(48));
+        expect(hit.height, greaterThanOrEqualTo(48));
+        expect(textRect.left, greaterThanOrEqualTo(surface.left));
+        expect(textRect.right, lessThanOrEqualTo(surface.right + .01));
+        expect(textRect.top, greaterThanOrEqualTo(surface.top));
+        expect(textRect.bottom, lessThanOrEqualTo(surface.bottom + .01));
+        expect(hit, initial);
+      }
+
+      expectLabelFits('关注');
+      await tester.tap(button);
+      await _frames(tester);
+      expectLabelFits('处理中');
+      expect(tester.widget<FilledButton>(button).onPressed, isNull);
+      await tester.tap(button);
+      expect(
+          harness.followWrites.where((entry) => entry.$1 == '50').length,
+          harness
+              .loads.length); // One write for this mount, no double busy write.
+      pending.complete(const Res(true));
+      await _frames(tester);
+      expectLabelFits('已关注');
+      expect(tester.takeException(), isNull);
+      await harness.unmount(tester);
+    }
+  });
+
+  testWidgets('one author and fewer than three works retain honest slots',
+      (tester) async {
+    final original = _authors(count: 1).single;
+    harness.authors = [
+      PixivRecommendedAuthor(
+          author: original.author, works: original.works.take(2).toList())
+    ];
+    await harness.mount(tester);
+    expect(find.byType(OnlineRecommendationCard), findsNWidgets(2));
+    expect(_tile('102'), findsNothing);
+    expect(find.byKey(const ValueKey('pixiv-follow-author-divider-0')),
+        findsNothing);
+    expect(_outer(tester).position.maxScrollExtent, 0);
+    final first = tester.getRect(_tile('100'));
+    expect(first.width, closeTo((375 - 32 - 16) / 3, .01));
+    expect(harness.loads, ['42']);
+    expect(deny.attempts, 0);
+    expect(tester.takeException(), isNull);
+    await harness.unmount(tester);
+  });
+
+  testWidgets('preview height does not depend on viewport height',
+      (tester) async {
+    double? first;
+    for (final height in [600.0, 1200.0]) {
+      await harness.mount(tester, height: height);
+      final current = tester.getSize(_tile('100')).height;
+      if (first == null) {
+        first = current;
+      } else {
+        expect(current, first);
+      }
+      await harness.unmount(tester);
+    }
+  });
+
+  testWidgets(
+      'real local portrait landscape and square previews fill square slots',
+      (tester) async {
+    harness.authors = _authors(count: 5, realImages: true);
+    await _seedLocalImages(tester, harness.authors);
+    await harness.mount(tester);
+    for (final (index, id) in ['100', '101', '102'].indexed) {
+      final image = tester.widget<RawImage>(
+          find.descendant(of: _tile(id), matching: find.byType(RawImage)));
+      expect(image.fit, BoxFit.cover);
+      expect(image.image, isNotNull);
+      expect((image.image!.width, image.image!.height),
+          [(40, 80), (80, 40), (60, 60)][index]);
+    }
+    final inline = tester.getRect(
+        find.byKey(const ValueKey('pixiv-follow-recommendations-inline')));
+    expect(inline.height, lessThanOrEqualTo(280));
+    await _capture(tester, harness, '375-local-images', {
+      'images': 'Locally drawn portrait40x80 landscape80x40 square60x60; '
+          'seeded production provider and resize image-cache keys; no HTTP',
+      'inlineRect': _rect(inline),
+      'fit': 'cover',
+      'httpAttempts': deny.attempts,
+    });
+    _outer(tester).position.jumpTo(200);
+    await _frames(tester);
+    await _capture(tester, harness, '375-local-images-divider', {
+      'images':
+          'Local portrait/landscape/square fixtures; colored borders are drawn in the image, not card bands',
+      'logicalViewport': {'width': 375, 'height': 1000},
+      'fit': 'cover',
+      'horizontalPixels': _outer(tester).position.pixels,
+      'dividerRect': _rect(tester.getRect(
+          find.byKey(const ValueKey('pixiv-follow-author-divider-0')))),
+      'httpAttempts': deny.attempts,
+    });
+    expect(deny.attempts, 0);
+    expect(tester.takeException(), isNull);
+    await harness.unmount(tester);
+  });
+
   for (final brightness in [Brightness.light, Brightness.dark]) {
     for (final scale in [1.0, 2.0]) {
       testWidgets(
@@ -704,7 +1004,7 @@ void main() {
         harness.authors = _authors(count: 5, longNames: true);
         await harness.mount(tester, brightness: brightness, scale: scale);
         final sheet = tester.getRect(
-            find.byKey(const ValueKey('pixiv-follow-recommendations-sheet')));
+            find.byKey(const ValueKey('pixiv-follow-recommendations-inline')));
         final card = tester.getRect(_author('50'));
         final button = tester.getRect(_follow('50'));
         final tile = tester.getRect(_tile('100'));
@@ -726,6 +1026,15 @@ void main() {
           'sheetRect': _rect(sheet),
           'firstAuthorCardRect': _rect(card),
           'firstFollowButtonRect': _rect(button),
+          'firstFollowSurfaceRect': _rect(tester.getRect(find
+              .descendant(of: _follow('50'), matching: find.byType(Material))
+              .first)),
+          'threeWorkRects': [
+            for (final id in ['100', '101', '102'])
+              _rect(tester.getRect(_tile(id)))
+          ],
+          'dividerRect': _rect(tester.getRect(
+              find.byKey(const ValueKey('pixiv-follow-author-divider-0')))),
           'firstWorkRect': _rect(tile),
           'firstHeartRect': _rect(heart),
           'frameworkErrors': errors,
@@ -734,15 +1043,20 @@ void main() {
         expect(authorText.maxLines, 2);
         expect(authorText.overflow, TextOverflow.ellipsis);
         expect(sheet.width, 375);
-        expect(sheet.height, inInclusiveRange(330, 480));
-        expect(card.width, inInclusiveRange(260, 380));
-        expect(tile.height, greaterThan(48));
-        expect(button.height, greaterThanOrEqualTo(44));
+        if (scale == 1) expect(sheet.height, lessThanOrEqualTo(280));
+        expect(card.width, closeTo(375 - 32, .01));
+        expect(tile.height, closeTo(tile.width, .01));
+        expect(
+            tester
+                .widget<OnlineRecommendationCard>(_tile('100'))
+                .compactImageFit,
+            BoxFit.cover);
+        expect(button.height, greaterThanOrEqualTo(48));
         expect(heart.size, const Size(48, 48));
         expect(harness.loads, ['42']);
         expect(errors, isEmpty,
             reason:
-                'Production modal must fit real CJK font at requested scale');
+                'Production inline must fit real CJK font at requested scale');
         await harness.unmount(tester);
       });
     }

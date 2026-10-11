@@ -6,9 +6,12 @@ part of pica_reader;
 /// CDN 直链——[NhentaiNetwork.getImages] 一次性返回全部页的真实 URL（无需逐页解密），
 /// 故 [loadEpNetwork] 直接返回 URL 列表，[loadImageNetwork] 带 Referer 头直接下载。
 class NhentaiReadingData extends ReadingData {
-  NhentaiReadingData({required this.comic});
+  NhentaiReadingData({required this.comic, this.imageManager});
 
   final NhentaiComic comic;
+  final OnlineImageManager? imageManager;
+  OnlineImageManager get _images => imageManager ?? OnlineImageManager.instance;
+  static const _imageHeaders = {'Referer': 'https://nhentai.net/'};
 
   @override
   String get title => comic.title;
@@ -61,22 +64,42 @@ class NhentaiReadingData extends ReadingData {
 
   /// 缓存键与 ep 无关，仅 id + page（公共契约）。
   @override
-  String buildImageKey(int ep, int page, String url) => originalNetworkCacheIdentity(ep, page, url);
+  String buildImageKey(int ep, int page, String url) =>
+      originalNetworkCacheIdentity(ep, page, url);
 
   @override
-  Future<ReaderPageSource> resolvePageSource(int ep, int page, String url) async {
-    if (downloaded && checkEpDownloaded(ep)) return super.resolvePageSource(ep, page, url);
-    return networkPageSource(ep, page, url, headers: const {'Referer': 'https://nhentai.net/'});
+  Future<ReaderPageSource> resolvePageSource(
+      int ep, int page, String url) async {
+    if (downloaded && checkEpDownloaded(ep)) {
+      return super.resolvePageSource(ep, page, url);
+    }
+    return networkPageSource(ep, page, url,
+        headers: _imageHeaders,
+        imageManager: _images,
+        cacheIdentity: originalNetworkCacheIdentity(ep, page, url));
   }
 
   /// url 是 [loadEpNetwork] 返回的 CDN 直链，带 Referer 头规避防盗链，无需解密。
   @override
+  Future<StreamImageLoadResult> loadOriginalNetworkWithProgress(
+          int ep, int page, String url,
+          {StreamImageAbortSignal? abortSignal}) =>
+      _images.getImage(url,
+          cacheIdentity: originalNetworkCacheIdentity(ep, page, url),
+          headers: _imageHeaders,
+          abortSignal: abortSignal);
+
+  @override
   Stream<List<int>> loadImageNetwork(int ep, int page, String url) async* {
-    final result = await OnlineImageManager.instance.getImage(
-      url,
-      cacheIdentity: originalNetworkCacheIdentity(ep, page, url),
-      headers: const {'Referer': 'https://nhentai.net/'},
-    );
+    final result = await loadOriginalNetworkWithProgress(ep, page, url);
     yield* result.stream;
+  }
+
+  @override
+  Future<void> invalidateImage(int ep, int page, String url) async {
+    if (downloaded && checkEpDownloaded(ep)) return;
+    await _images.invalidateImage(url,
+        headers: _imageHeaders,
+        cacheIdentity: originalNetworkCacheIdentity(ep, page, url));
   }
 }

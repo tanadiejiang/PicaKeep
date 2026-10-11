@@ -144,6 +144,7 @@ class ReadingSettings extends StatelessWidget {
       ),
       const _ReaderDisplayModeSetting(isComic: true),
       const _ReaderDisplayModeSetting(isComic: false),
+      const _ReaderLargeImagePolicySetting(),
       SwitchSetting(
         title: "显示页面信息".tl,
         settingsIndex: 57,
@@ -157,6 +158,32 @@ class ReadingSettings extends StatelessWidget {
         settingsIndex: 70,
       ),
     ]);
+  }
+}
+
+class _ReaderLargeImagePolicySetting extends StatefulWidget {
+  const _ReaderLargeImagePolicySetting();
+
+  @override
+  State<_ReaderLargeImagePolicySetting> createState() =>
+      _ReaderLargeImagePolicySettingState();
+}
+
+class _ReaderLargeImagePolicySettingState
+    extends State<_ReaderLargeImagePolicySetting> {
+  @override
+  Widget build(BuildContext context) {
+    final config = ReaderImagePipelineSettings.tryParse(
+          appdata.settings[readerImagePipelineSettingIndex],
+        ) ??
+        const ReaderImagePipelineSettings();
+    return ReaderLargeImagePolicySetting(
+      value: config.largeImagePolicy,
+      onChanged: (policy) {
+        unawaited(appdata.setReaderLargeImagePolicy(policy));
+        setState(() {});
+      },
+    );
   }
 }
 

@@ -20,6 +20,10 @@ import 'package:picakeep/foundation/download_model.dart';
 import 'package:picakeep/foundation/download_stream_file.dart';
 import 'package:picakeep/foundation/download_author_resolver.dart';
 import 'package:picakeep/foundation/image_loader/jm_image_recombine.dart';
+import 'package:picakeep/foundation/image_loader/local_jm_page_repair.dart';
+import 'package:picakeep/foundation/image_loader/stream_image_provider.dart';
+import 'package:picakeep/foundation/image_pipeline/reader_page_source.dart';
+import 'package:picakeep/network/managed_image_retry.dart';
 import 'package:picakeep/foundation/local_favorites.dart';
 import 'package:picakeep/foundation/local_library.dart';
 import 'package:picakeep/foundation/log.dart';
@@ -31,6 +35,7 @@ import 'package:picakeep/foundation/pixiv_library_locations.dart';
 import 'package:path/path.dart' as p;
 import 'package:picakeep/foundation/untranslated_tags/untranslated_tag_coordinator.dart';
 import 'package:picakeep/network/app_dio.dart';
+import 'package:picakeep/network/http_image_body.dart';
 import 'package:picakeep/network/eh_network/eh_main_network.dart';
 import 'package:picakeep/network/eh_network/eh_models.dart';
 import 'package:picakeep/network/eh_network/get_gallery_id.dart';
@@ -366,12 +371,15 @@ class OnlineDownloadManager {
         chapterFileWriter,
     void Function(String directory, int chapterIndex)? chapterScanObserver,
     void Function(DownloadNoticeSnapshot snapshot)? noticeObserver,
-  })  : _testDownloadRoot = downloadRoot,
+    Dio? imageDio,
+  })  : _imageDio = imageDio,
+        _testDownloadRoot = downloadRoot,
         _chapterLoader = chapterLoader,
         _chapterFileWriter = chapterFileWriter,
         _chapterScanObserver = chapterScanObserver,
         _noticeObserver = noticeObserver;
 
+  Dio? _imageDio;
   String? _testDownloadRoot;
   Future<Res<List<String>>> Function(String, String, int, String)?
       _chapterLoader;
@@ -2494,7 +2502,7 @@ class OnlineDownloadManager {
         _throwIfCancelled(task);
         if (attempt >= 3) rethrow;
         final msg = error.toString();
-        final retryable = error is TimeoutException ||
+        final retryable = isRetryableHttpImageError(error) ||
             msg.contains('HandshakeException') ||
             msg.contains('SocketException') ||
             msg.contains('Connection');
@@ -2502,7 +2510,7 @@ class OnlineDownloadManager {
         await Future<void>.delayed(const Duration(seconds: 2));
       }
     }
-    if (raw.isEmpty) return;
+    if (raw.isEmpty) throw const HttpImageBodyException('empty-body');
 
     // 图块重组（若允许）
     final Uint8List bytes;
@@ -2533,40 +2541,19 @@ class OnlineDownloadManager {
 
   Future<Uint8List> _downloadJmBytes(
       OnlineDownloadTask task, String url) async {
-    final dio = logDio(BaseOptions(headers: getJmImgHeaders()));
+    final dio = _imageDio ?? logDio();
     final cancelToken = CancelToken();
     task.addToken(cancelToken);
     try {
-      final res = await dio.get<ResponseBody>(
-        url,
-        cancelToken: cancelToken,
-        options: Options(
-          responseType: ResponseType.stream,
-          sendTimeout: const Duration(seconds: 15),
-          receiveTimeout: const Duration(seconds: 30),
-        ),
-      );
-      _throwIfCancelled(task);
-      final body = res.data;
-      if (body == null) throw Exception('Empty response: $url');
-      final expectedLength =
-          int.tryParse(res.headers.value('content-length') ?? '');
-      final bytes = <int>[];
-      await for (final chunk in body.stream.timeout(
-        const Duration(seconds: 20),
-        onTimeout: (_) => throw TimeoutException('stream timeout'),
-      )) {
-        _throwIfCancelled(task);
-        task.onData(chunk.length);
-        bytes.addAll(chunk);
-      }
-      if (expectedLength != null && bytes.length < expectedLength) {
-        throw TimeoutException(
-            'Incomplete download: ${bytes.length}/$expectedLength bytes');
-      }
-      return Uint8List.fromList(bytes);
+      return await fetchHttpImageBytes(dio, url,
+          headers: getJmImgHeaders(),
+          maximumBytes: 64 << 20,
+          cancelToken: cancelToken,
+          checkCancelled: () => _throwIfCancelled(task),
+          onChunk: task.onData);
     } finally {
       task.removeToken(cancelToken);
+      if (_imageDio == null) dio.close();
     }
   }
 
@@ -2634,7 +2621,7 @@ class OnlineDownloadManager {
     // TLS 握手。options 仅首次调用生效，值必须与 EhNetwork.sharedDownloadBaseOptions()
     // 一致（同一单例，谁先初始化都得到同样配置）。CancelToken 与进度回调仍是
     // per-request 参数，不受共享实例影响。
-    final dio =
+    final dio = _imageDio ??
         sharedDownloadDio(options: EhNetwork.sharedDownloadBaseOptions());
     final cancelToken = CancelToken();
     task.addToken(cancelToken);
@@ -4056,7 +4043,19 @@ class OnlineLocalReadingData extends ReadingData {
     this.isNhentai = false,
     this.tagFlatTags = const <String>[],
     this.tagCategorizedTags = const <String, List<String>>{},
-  });
+    @visibleForTesting Dio? imageDio,
+    @visibleForTesting
+    Future<({String chapterId, List<String> urls})> Function(int)?
+        jmChapterLoader,
+    @visibleForTesting LocalJmPageRecombiner? jmRecombiner,
+  })  : _imageDio = imageDio,
+        _jmChapterLoader = jmChapterLoader,
+        _jmRecombiner = jmRecombiner;
+
+  final LocalJmPageRecombiner? _jmRecombiner;
+  final Dio? _imageDio;
+  final Future<({String chapterId, List<String> urls})> Function(int)?
+      _jmChapterLoader;
 
   @override
   final String title;
@@ -4088,6 +4087,10 @@ class OnlineLocalReadingData extends ReadingData {
   /// 缓存每个 ep 的在线章节信息，避免重复网络请求。
   /// key = ep 序号(1-based)，value = (chapterId, urls)。
   final Map<int, ({String chapterId, List<String> urls})> _jmEpCache = {};
+
+  // Reader-session metadata only. Retain repaired paths across retry-policy
+  // changes and shared-queue history eviction, never raw or decoded bytes.
+  final _jmRepairedFiles = <String, File>{};
 
   @override
   String get downloadId => id;
@@ -4172,33 +4175,165 @@ class OnlineLocalReadingData extends ReadingData {
         .where(_isImageFile)
         .toList(growable: false)
       ..sort((a, b) => _imageIndex(a).compareTo(_imageIndex(b)));
-    return files.map((file) => file.path).toList(growable: false);
+    if (!isJm) return files.map((file) => file.path).toList(growable: false);
+    // A successful repair can change extension. Keep every user file on disk,
+    // but do not show its old empty placeholder beside the completed same page.
+    final nonemptyPages = <int>{};
+    final nonemptyPaths = <String>{};
+    for (final file in files) {
+      try {
+        if (await _hasLocalBytes(file)) {
+          nonemptyPaths.add(file.path);
+          if (_imageIndex(file) > 0) nonemptyPages.add(_imageIndex(file));
+        }
+      } on FileSystemException {
+        // Unknown readability is not proof of emptiness; preserve this entry.
+        nonemptyPaths.add(file.path);
+      }
+    }
+    return [
+      for (final file in files)
+        if (nonemptyPaths.contains(file.path) ||
+            !nonemptyPages.contains(_imageIndex(file)))
+          file.path,
+    ];
+  }
+
+  bool get _canRepairJm => isJm && jmComicId?.isNotEmpty == true;
+
+  static Future<bool> _hasLocalBytes(File file) async =>
+      await file.exists() && await file.length() > 0;
+
+  @override
+  Future<ReaderPageSource> resolvePageSource(
+      int ep, int page, String url) async {
+    final local = await super.resolvePageSource(ep, page, url);
+    if (!_canRepairJm ||
+        url.isEmpty ||
+        url.startsWith('http://') ||
+        url.startsWith('https://') ||
+        (local.byteLength ?? 0) > 0) {
+      // This also preserves the inherited privileged-file reading path.
+      return local;
+    }
+    try {
+      if (await _hasLocalBytes(File(url))) return local;
+    } on FileSystemException {
+      // A permissions/IO error must never be reclassified as a missing page.
+      return local;
+    }
+    final identity = local.identity;
+    // Do not open the inherited missing-file source: that path cannot repair.
+    await local.dispose();
+    return LocalJmRepairReaderSource(
+        identity: identity, open: (abort) => _repairTicket(url, abort));
+  }
+
+  @override
+  Future<StreamImageLoadResult> loadOriginalNetworkWithProgress(
+      int ep, int page, String url,
+      {StreamImageAbortSignal? abortSignal}) async {
+    final abort = StreamImageAbortSignal();
+    if (abortSignal?.isAborted == true) abort.abort();
+    if (abortSignal != null) {
+      unawaited(abortSignal.aborted.then((_) => abort.abort()));
+    }
+    void check() {
+      if (abort.isAborted) throw StateError('Local image load cancelled');
+    }
+
+    check();
+    var file = File(url);
+    LocalJmPageRepairTicket? ticket;
+    if (!await _hasLocalBytes(file)) {
+      check();
+      if (!_canRepairJm) throw Exception('图片缺失且无法重新下载: $url');
+      ticket = _repairTicket(url, abort);
+      try {
+        file = await ticket.file;
+      } catch (_) {
+        // The progress entry has no source.dispose hook. Its failed load must
+        // retain ownership until non-preemptible metadata/recombine work ends.
+        await ticket.settled;
+        rethrow;
+      }
+    }
+    check();
+    final length = await file.length();
+    check();
+    Stream<List<int>> read() async* {
+      check();
+      final release = ReaderPageFileLease.acquire(file);
+      try {
+        await for (final chunk in file.openRead()) {
+          check();
+          yield chunk;
+        }
+        check();
+      } finally {
+        release();
+      }
+    }
+
+    return StreamImageLoadResult(
+        stream: read(),
+        expectedTotalBytes: length,
+        cancel: () async {
+          abort.abort();
+          ticket?.cancel();
+          await ticket?.settled;
+        });
   }
 
   @override
   Stream<List<int>> loadImageNetwork(int ep, int page, String url) async* {
-    // url 是 loadEpNetwork 返回的本地文件路径。
-    final file = File(url);
-    // 1) 先尝试本地：文件存在且非空即直接返回。
-    if (await file.exists()) {
-      final bytes = await file.readAsBytes();
-      if (bytes.isNotEmpty) {
-        yield bytes;
-        return;
-      }
-    }
-    // 2) 本地缺失/损坏：仅 jm 支持网络回退重下（含图块重组）。
-    if (!isJm || jmComicId == null || jmComicId!.isEmpty) {
-      // 非 jm 或缺少在线身份信息：无法回退，抛错让重试 UI 显示。
-      throw Exception('图片缺失且无法重新下载: $url');
-    }
-    final bytes = await _refetchJmPage(url);
-    yield bytes;
+    final result = await loadOriginalNetworkWithProgress(ep, page, url);
+    yield* result.stream;
   }
 
-  /// 从本地路径解析 ep/页序号，拉取在线章节图片列表，下载该页（含重组）写回磁盘并返回字节。
-  Future<Uint8List> _refetchJmPage(String localPath) async {
-    final f = File(localPath);
+  String _repairKey(String localPath) {
+    var path = p.normalize(p.absolute(localPath));
+    final pageNo = _imageIndex(File(path));
+    path = p.join(p.dirname(path), '$pageNo');
+    if (Platform.isWindows) path = path.toLowerCase();
+    return jsonEncode([path, isManagedImageRetry]);
+  }
+
+  LocalJmPageRepairTicket _repairTicket(
+      String localPath, StreamImageAbortSignal abort) {
+    final key = _repairKey(localPath);
+    final ticket = LocalJmPageRepairQueue.shared.request(
+        key: key,
+        abortSignal: abort,
+        run: (sharedAbort, token) => _refetchJmPage(localPath,
+            key: key, abort: sharedAbort, cancelToken: token));
+    return LocalJmPageRepairTicket(ticket.file.then((file) {
+      _jmRepairedFiles[p.normalize(p.absolute(localPath))] = file;
+      return file;
+    }), ticket.settled, ticket.cancel);
+  }
+
+  /// Repair only a missing/empty page. The returned file remains user-owned.
+  Future<File> _refetchJmPage(String localPath,
+      {required String key,
+      required StreamImageAbortSignal abort,
+      required CancelToken cancelToken}) async {
+    void check() {
+      if (abort.isAborted || cancelToken.isCancelled) {
+        throw StateError('Local image repair cancelled');
+      }
+    }
+
+    check();
+    final f = File(p.normalize(p.absolute(localPath)));
+    if (!p.isWithin(p.normalize(p.absolute(rootDirectoryPath)), f.path)) {
+      throw StateError('Local repair path is outside the downloaded comic');
+    }
+    if (await _hasLocalBytes(f)) return f;
+    final known = _jmRepairedFiles[f.path] ??
+        LocalJmPageRepairQueue.shared.completedFile(key);
+    if (known != null && await _hasLocalBytes(known)) return known;
+    check();
     final sep = Platform.pathSeparator;
     // 文件名形如 "{pageIndex+1}.{ext}"；上级目录名为 ep 序号（hasEp 时）。
     final fileName = f.uri.pathSegments.isNotEmpty
@@ -4218,7 +4353,8 @@ class OnlineLocalReadingData extends ReadingData {
         '';
     final epNo = hasEp ? (int.tryParse(parentName) ?? 1) : 1;
 
-    final info = await _ensureJmEp(epNo);
+    final info = await _ensureJmEp(epNo, checkCancelled: check);
+    check();
     final urls = info.urls;
     final idx = pageNo - 1;
     if (idx < 0 || idx >= urls.length) {
@@ -4229,39 +4365,68 @@ class OnlineLocalReadingData extends ReadingData {
     final pictureName = onlineFileName.replaceFirst(RegExp(r'\.[^.]+$'), '');
     final originalExt = _onlineExt(onlineUrl);
 
-    // 下载原始字节（带重试）。
-    final raw = await _downloadJmRawWithRetry(onlineUrl);
-    if (raw.isEmpty) {
-      throw Exception('下载到空字节: $onlineUrl');
-    }
-    final result = await JmRecombine.recombine(
+    final raw = await _downloadJmRawWithRetry(onlineUrl,
+        abort: abort, cancelToken: cancelToken, checkCancelled: check);
+    check();
+    final recombine = _jmRecombiner ?? JmRecombine.recombine;
+    final result = await recombine(
       raw,
       epsId: info.chapterId,
       scrambleId: kJmScrambleId,
       pictureName: pictureName,
       originalExtension: originalExt,
     );
-    // 写回磁盘：用解析出的 basePath（去掉原扩展名）+ 重组结果扩展名。
-    final basePath = '${f.parent.path}$sep$pageNo';
-    // 清掉同名残留的坏文件（任意扩展名）。
-    for (final ext in const ['.png', '.webp', '.jpg', '.jpeg']) {
-      final old = File('$basePath$ext');
-      if (await old.exists()) {
-        try {
-          await old.delete();
-        } catch (_) {}
-      }
+    // Recombination cannot be preempted. Admission remains occupied until its
+    // real completion, and cancellation after that must prevent publication.
+    check();
+    final type = readerPageTypeFromHeader(result.bytes);
+    final extension =
+        type.extension == '.bin' ? result.extension : type.extension;
+    if (!RegExp(r'^\.[a-zA-Z0-9]+$').hasMatch(extension)) {
+      throw StateError('Invalid repaired image extension');
     }
-    final out = File('$basePath${result.extension}');
-    await out.writeAsBytes(result.bytes, flush: true);
-    return result.bytes;
+    final basePath = '${f.parent.path}$sep$pageNo';
+    final out = File('$basePath$extension');
+    if (await _hasLocalBytes(out)) return out;
+    check();
+    // Use an owned UUID staging name, never a shared canonical .part. This
+    // cannot trample a task download or another reader's in-progress writer.
+    final staged = File(
+        p.join(f.parent.path, '.reader-repair-${const Uuid().v4()}.pending'));
+    try {
+      await writeDownloadStreamFile(
+          target: staged,
+          stream: Stream.value(result.bytes),
+          checkCancelled: check,
+          expectedLength: result.bytes.length);
+      check();
+      // No await between this final nonempty guard and the short commit, so
+      // another repair in this isolate cannot replace an existing user page.
+      if (f.existsSync() && f.lengthSync() > 0) return f;
+      if (out.existsSync() && out.lengthSync() > 0) return out;
+      staged.renameSync(out.path);
+      return out;
+    } finally {
+      // Only this invocation's staging file is owned; adjacent extensions and
+      // the original zero-byte placeholder remain untouched.
+      if (await staged.exists()) await staged.delete();
+    }
   }
 
   /// 拉取并缓存某 ep 的在线章节信息（chapterId + 图片 url 列表）。
-  Future<({String chapterId, List<String> urls})> _ensureJmEp(int epNo) async {
+  Future<({String chapterId, List<String> urls})> _ensureJmEp(int epNo,
+      {required void Function() checkCancelled}) async {
+    checkCancelled();
     final cached = _jmEpCache[epNo];
     if (cached != null) return cached;
+    if (_jmChapterLoader != null) {
+      final entry = await _jmChapterLoader(epNo);
+      checkCancelled();
+      _jmEpCache[epNo] = entry;
+      return entry;
+    }
     final infoRes = await JmNetwork().getComicInfo(jmComicId!);
+    checkCancelled();
     if (infoRes.error) {
       throw Exception('获取漫画信息失败: ${infoRes.errorMessageWithoutNull}');
     }
@@ -4280,6 +4445,7 @@ class OnlineLocalReadingData extends ReadingData {
       chapterId = sorted[i].value;
     }
     final chapRes = await JmNetwork().getChapter(chapterId);
+    checkCancelled();
     if (chapRes.error) {
       throw Exception('获取章节失败: ${chapRes.errorMessageWithoutNull}');
     }
@@ -4288,33 +4454,39 @@ class OnlineLocalReadingData extends ReadingData {
     return entry;
   }
 
-  Future<Uint8List> _downloadJmRawWithRetry(String url) async {
+  Future<Uint8List> _downloadJmRawWithRetry(String url,
+      {required StreamImageAbortSignal abort,
+      required CancelToken cancelToken,
+      required void Function() checkCancelled}) async {
+    final managed = isManagedImageRetry;
     var attempt = 0;
     while (true) {
+      checkCancelled();
       attempt++;
+      // Body validation rejects/cancels its own attempt token. Do not mistake
+      // that for consumer cancellation and silently disable standalone retry.
+      final attemptToken = CancelToken();
+      unawaited(
+          cancelToken.whenCancel.then((error) => attemptToken.cancel(error)));
       try {
-        final dio = logDio(BaseOptions(headers: getJmImgHeaders()));
-        final res = await dio.get<List<int>>(
-          url,
-          options: Options(
-            responseType: ResponseType.bytes,
-            sendTimeout: const Duration(seconds: 15),
-            receiveTimeout: const Duration(seconds: 30),
-          ),
-        );
-        final data = res.data;
-        if (data == null || data.isEmpty) {
-          throw Exception('空响应: $url');
+        final dio = _imageDio ?? logDio();
+        try {
+          return await fetchHttpImageBytes(dio, url,
+              headers: getJmImgHeaders(),
+              maximumBytes: 64 << 20,
+              cancelToken: attemptToken,
+              checkCancelled: checkCancelled);
+        } finally {
+          if (_imageDio == null) dio.close();
         }
-        final expectedLength =
-            int.tryParse(res.headers.value('content-length') ?? '');
-        if (expectedLength != null && data.length < expectedLength) {
-          throw Exception('下载不完整: ${data.length}/$expectedLength');
-        }
-        return Uint8List.fromList(data);
       } catch (error) {
-        if (attempt >= 3) rethrow;
-        await Future<void>.delayed(const Duration(seconds: 2));
+        checkCancelled();
+        if (managed || attempt >= 3) rethrow;
+        await Future.any<void>([
+          Future<void>.delayed(const Duration(seconds: 2)),
+          abort.aborted,
+        ]);
+        checkCancelled();
       }
     }
   }

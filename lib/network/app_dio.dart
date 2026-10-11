@@ -7,6 +7,7 @@ import 'package:dio/io.dart';
 import 'package:picakeep/base.dart';
 import 'package:picakeep/foundation/log.dart';
 import 'package:picakeep/foundation/log_file_service.dart';
+import 'package:picakeep/network/managed_image_retry.dart';
 
 const Duration networkConnectTimeout = Duration(seconds: 20);
 const Duration networkReceiveTimeout = Duration(seconds: 30);
@@ -178,11 +179,8 @@ class RetryHttpClientAdapter extends IOHttpClientAdapter {
       try {
         return await super.fetch(options, requestStream, cancelFuture);
       } catch (error) {
+        if (isManagedImageRetry || options.extra['noRetry'] == true) rethrow;
         if (error is DioException) {
-          final noRetry = options.extra['noRetry'] == true;
-          if (noRetry) {
-            rethrow;
-          }
           final code = error.response?.statusCode;
           // 4xx 一律不重试 —— **但 429 必须排除在外**（43 号）。
           //

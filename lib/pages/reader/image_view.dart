@@ -43,6 +43,11 @@ extension ImageExt on ComicReadingPage {
         pipelineSetting: appdata.settings[readerImagePipelineSettingIndex]);
     final viewportKey = logic.readerViewportKey;
     logic.syncContinuousChapterGesture();
+    // Visible children acquire their existing preload lease before the old
+    // window releases it; otherwise every page turn discards the warm frame.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (context.mounted) logic.syncPreviewPreloads(mode, context);
+    });
     final continuousEpisode = logic.order;
 
     BoxFit getFit() => switch (appdata.settings[41]) {
@@ -62,13 +67,74 @@ extension ImageExt on ComicReadingPage {
       }
       final episode = logic.order;
       final url = logic.urls[imageIndex];
+      final data = logic.data;
+      final resourceKey = _readerResourceKey(data, episode, imageIndex, url);
+      void verify() {
+        if (!identical(logic.data, data) ||
+            _readerResourceKey(data, episode, imageIndex, url) != resourceKey) {
+          throw observeReaderImageReason(
+              StateError('Reader image scope or provider version changed'),
+              ReaderImageReason.sourceChanged);
+        }
+      }
+      Future<void> invalidate() {
+        verify();
+        return data.invalidateImage(episode, imageIndex, url);
+      }
+      if (mode == ReaderDisplayMode.previewFirst) {
+        return ReaderPreviewPageImage(
+          key: ValueKey('preview:$resourceKey'),
+          resourceKey: resourceKey,
+          pool: logic.previewImagePool,
+          loadProvider: (abort) {
+            verify();
+            return data.createImageProvider(episode, imageIndex, url,
+                abortSignal: abort);
+          },
+          onInvalidate: invalidate,
+          onUseSafeWhole: () async {
+            final latest = ReaderImagePipelineSettings.tryParse(
+                appdata.settings[readerImagePipelineSettingIndex]) ??
+                const ReaderImagePipelineSettings();
+            appdata.settings[readerImagePipelineSettingIndex] = latest
+                .withMode(readerReadingIsComic(data.sourceKey), ReaderDisplayMode.sharpFirst)
+                .withLargeImagePolicy(ReaderLargeImagePolicy.safeWhole).encode();
+            await appdata.updateSettings();
+            if (context.mounted) logic.update();
+          },
+          sizeHint: continuousWidth == null ? null
+              : logic.pageSizeHints[resourceKey] ??
+                  logic.data.imageSize(episode, imageIndex, url),
+          onSourceSize: continuousWidth == null ? null
+              : (size) => logic.pageSizeHints[resourceKey] = size,
+          failureDiagnostics: logic.failureDiagnosticsSession.page(
+              logicalIdentity: jsonEncode([logic.data.sourceKey, logic.data.id,
+                logic.data.downloadId, episode, imageIndex]),
+              chapter: episode, page: imageIndex + 1,
+              readingMode: logic.readingMethod.name),
+          controller: controller, continuousWidth: continuousWidth,
+          fit: fit, alignment: alignment, backgroundDecoration: decoration,
+          nativeScaleChanged: controllerIndex == null ? null : (scale) =>
+              logic.nativePixelScales[controllerIndex] = logic.readingMethod.isTwoPage
+                  ? math.max(logic.nativePixelScales[controllerIndex] ?? 0, scale)
+                  : scale,
+        );
+      }
       return ReaderPageImage(
-        key: ValueKey('$episode:$imageIndex:$url'),
-        resourceKey: '$episode:$imageIndex:$url',
-        loadSource: () =>
-            logic.data.resolvePageSource(episode, imageIndex, url),
+        key: ValueKey(resourceKey),
+        resourceKey: resourceKey,
+        sizeHint:
+            continuousWidth == null ? null : logic.pageSizeHints[resourceKey],
+        onSourceSize: continuousWidth == null
+            ? null
+            : (size) => logic.pageSizeHints[resourceKey] = size,
+        loadSource: () {
+          verify();
+          return data.resolvePageSource(episode, imageIndex, url);
+        },
+        onInvalidate: invalidate,
         loadCachedPreview: (original) =>
-            logic.data.loadCachedPreview(episode, imageIndex, url, original),
+            data.loadCachedPreview(episode, imageIndex, url, original),
         viewportKey: viewportKey,
         sessionRasterCache: logic.sessionRasterCache,
         failureDiagnostics: logic.failureDiagnosticsSession.page(
@@ -84,6 +150,13 @@ extension ImageExt on ComicReadingPage {
             readingMode: logic.readingMethod.name),
         transformChanges: logic.viewportChanges,
         mode: mode,
+        largeImagePolicy: ReaderImagePipelineSettings.tryParse(
+                appdata.settings[readerImagePipelineSettingIndex])
+            ?.largeImagePolicy ?? ReaderLargeImagePolicy.safeWhole,
+        onUseSafeWhole: () async {
+          await appdata.setReaderLargeImagePolicy(ReaderLargeImagePolicy.safeWhole);
+          if (context.mounted) logic.update();
+        },
         controller: controller,
         continuousWidth: continuousWidth,
         fit: fit,
@@ -190,7 +263,7 @@ extension ImageExt on ComicReadingPage {
                 child: SizedBox(
                   width: width,
                   height: constraints.maxHeight,
-                  child: PhotoViewGallery.builder(
+                  child: ReaderPhotoViewGallery.builder(
                     key: ValueKey(
                         'double:${logic.order}:${logic.readingMethod.index}'),
                     backgroundDecoration: decoration,
@@ -258,13 +331,17 @@ extension ImageExt on ComicReadingPage {
     if (logic.readingMethod.index < 3) {
       body = single();
     } else if (logic.readingMethod == ReadingMethod.topToBottomContinuously) {
-      body = PhotoView.customChild(
+      body = ReaderPhotoViewOwner(
+        key: ValueKey('continuous:${logic.order}'),
+        controller: logic.ensurePhotoViewController(0),
+        builder: (_, controller, scaleState) => PhotoView.customChild(
         backgroundDecoration: decoration,
         key: ValueKey('continuous:${logic.order}'),
         minScale: 1.0,
         maxScale: 64.0,
         strictScale: true,
-        controller: logic.ensurePhotoViewController(0),
+        controller: controller,
+        scaleStateController: scaleState,
         onScaleEnd: (context, detail, value) {
           final previous = logic.currentScale;
           logic.currentScale = value.scale ?? 1;
@@ -275,7 +352,7 @@ extension ImageExt on ComicReadingPage {
               updateLocation(context, logic.photoViewController);
         },
         child: continuous(),
-      );
+      ));
     } else {
       body = doublePage();
     }
@@ -391,6 +468,6 @@ extension ImageExt on ComicReadingPage {
     return false;
   }
 
-  // PageView's adjacent pages and one continuous viewport provide bounded
-  // original-file prefetch. No whole-image precache or fictitious idle queue.
+  // Preview uses bounded whole-provider preloading; sharp uses its existing
+  // original-source lifecycle. Neither invents an unverified idle queue.
 }

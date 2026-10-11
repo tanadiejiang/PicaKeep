@@ -3,15 +3,26 @@ import 'dart:ui' as ui;
 import 'dart:typed_data' show Uint8List;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'reader_image_limits.dart';
+import 'reader_image_observation.dart';
+import 'reader_image_stream_completer.dart';
 
 abstract class BaseImageProvider<T extends BaseImageProvider<T>>
     extends ImageProvider<T> {
   const BaseImageProvider();
 
+  /// Opt in only after the actual upstream loader enforces the reader Zone's
+  /// byte bound before buffering (including privileged/archive adapters).
+  bool get supportsReaderInputLimits => false;
+
+  /// Additional bounded metadata/scratch kept alive while producing encoded
+  /// input (for example ZIP's directory). This is not a catalog-cache budget.
+  int get readerInputOverheadBytes => 0;
+
   @override
   ImageStreamCompleter loadImage(T key, ImageDecoderCallback decode) {
     final chunkEvents = StreamController<ImageChunkEvent>();
-    return MultiFrameImageStreamCompleter(
+    return readerAwareImageCompleter(
       codec: _loadBufferAsync(key, chunkEvents, decode),
       chunkEvents: chunkEvents.stream,
       scale: 1.0,
@@ -25,6 +36,7 @@ abstract class BaseImageProvider<T extends BaseImageProvider<T>>
   ) async {
     try {
       Uint8List? data;
+      var fromRawCache = false;
       final cacheKey = key.key;
       // cacheRawBytes=false 的子类（如已有磁盘缓存的远程封面）不进这个静态堆
       // 字节缓存：原始压缩字节在堆上驻留是滚动时老年代 GC 的主要压力源，
@@ -32,15 +44,20 @@ abstract class BaseImageProvider<T extends BaseImageProvider<T>>
       if (cacheRawBytes) {
         final cachedData = _cache.remove(cacheKey);
         if (cachedData != null && cachedData.isNotEmpty) {
+          observeReaderImageFacts(rawCacheHit: true);
           _cache[cacheKey] = cachedData;
           data = cachedData;
+          fromRawCache = true;
         } else {
+          observeReaderImageFacts(rawCacheHit: false);
           if (cachedData != null) {
             _cache.remove(cacheKey);
           }
           data = await load(chunkEvents);
+          ReaderImageReadLimits.current?.check(data.length);
           if (data.isEmpty) {
-            throw Exception('Empty image data');
+            throw observeReaderImageReason(
+                Exception('Empty image data'), ReaderImageReason.emptyInput);
           }
           if (data.length <= _cacheSizeLimit) {
             final previous = _cache.remove(cacheKey);
@@ -53,40 +70,61 @@ abstract class BaseImageProvider<T extends BaseImageProvider<T>>
       } else {
         data = await load(chunkEvents);
         if (data.isEmpty) {
-          throw Exception('Empty image data');
+          throw observeReaderImageReason(
+              Exception('Empty image data'), ReaderImageReason.emptyInput);
         }
       }
       if (data.isEmpty) {
         if (cacheRawBytes) {
           _cache.remove(cacheKey);
         }
-        throw Exception('Empty image data');
+        throw observeReaderImageReason(
+            Exception('Empty image data'), ReaderImageReason.emptyInput);
       }
-      final buffer = await ui.ImmutableBuffer.fromUint8List(data);
+      final limits = ReaderImageReadLimits.current;
+      try {
+        limits?.check(data.length);
+      } catch (error, stack) {
+        // Keep the original check exactly here, after the same cache/LRU work.
+        // Only a proven raw hit makes this a cache input-admission failure.
+        try {
+          if (fromRawCache && limits?.isCancelled != true) {
+            observeReaderImageFailure(ReaderImageStage.cache, error, stack);
+          }
+        } catch (_) {} // Observing cancellation must not replace the failure.
+        rethrow;
+      }
+      final encoded = data;
+      final buffer = await observeReaderImageStage(ReaderImageStage.decode,
+          () => ui.ImmutableBuffer.fromUint8List(encoded));
       // 子类可通过 targetDecodeWidth 指定按宽缩放解码（如封面缩略图），
       // 避免把原图全尺寸解码——既省解码耗时（滚动时 UI isolate 上的解码
       // 回调是卡顿主因），也省内存。默认 null 时行为不变。
       final targetWidth = targetDecodeWidth;
       if (targetWidth != null && targetWidth > 0) {
-        return await decode(
-          buffer,
-          getTargetSize: (intrinsicWidth, intrinsicHeight) {
-            if (intrinsicWidth <= targetWidth) {
-              return ui.TargetImageSize(
-                width: intrinsicWidth,
-                height: intrinsicHeight,
-              );
-            }
-            final scaledHeight =
-                (intrinsicHeight * targetWidth / intrinsicWidth).round();
-            return ui.TargetImageSize(
-              width: targetWidth,
-              height: scaledHeight < 1 ? 1 : scaledHeight,
-            );
-          },
-        );
+        return await observeReaderImageStage(
+            ReaderImageStage.decode,
+            () => decode(
+                  buffer,
+                  getTargetSize: (intrinsicWidth, intrinsicHeight) {
+                    if (intrinsicWidth <= targetWidth) {
+                      return ui.TargetImageSize(
+                        width: intrinsicWidth,
+                        height: intrinsicHeight,
+                      );
+                    }
+                    final scaledHeight =
+                        (intrinsicHeight * targetWidth / intrinsicWidth)
+                            .round();
+                    return ui.TargetImageSize(
+                      width: targetWidth,
+                      height: scaledHeight < 1 ? 1 : scaledHeight,
+                    );
+                  },
+                ));
       }
-      return await decode(buffer);
+      return await observeReaderImageStage(
+          ReaderImageStage.decode, () => decode(buffer));
     } catch (e) {
       scheduleMicrotask(() {
         PaintingBinding.instance.imageCache.evict(key);

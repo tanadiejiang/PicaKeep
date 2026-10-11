@@ -1,0 +1,14 @@
+{
+  "packages": 165,
+  "changed": [
+    "photo_view"
+  ],
+  "otherPackagesUnchanged": 164,
+  "sdksUnchanged": true,
+  "resolvedPhotoView": {
+    "name": "photo_view",
+    "rootUri": "../packages/photo_view",
+    "packageUri": "lib/",
+    "languageVersion": "3.3"
+  }
+}

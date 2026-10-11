@@ -1,7 +1,9 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:ui' as ui;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
@@ -12,7 +14,8 @@ import 'package:picakeep/network/res.dart';
 import 'package:picakeep/pages/online_comic/pixiv_comments_section.dart';
 import 'package:picakeep/pages/online_comic/pixiv_detail_shell.dart';
 
-const _output = 'docs/verification/pixiv-detail-panel-handoff-043';
+const _output = 'docs/verification/pixiv-ui-050/049-regression/handoff';
+const _inlineKey = ValueKey('pixiv-inline-details');
 const _mainScrollKey = ValueKey('pixiv-detail-page-scroll');
 const _panelKey = ValueKey('pixiv-detail-panel');
 const _panelScrollKey = ValueKey('pixiv-detail-panel-scroll');
@@ -127,14 +130,16 @@ class _FixtureState extends State<_Fixture> {
       );
 }
 
-Widget _host(Widget child, {double scale = 1, bool dark = false}) =>
+Widget _host(Widget child,
+        {double scale = 1, bool dark = false, bool reduceMotion = false}) =>
     MaterialApp(
       theme: ThemeData(
           fontFamily: 'PanelCapture043',
           brightness: dark ? Brightness.dark : Brightness.light),
       builder: (context, child) => MediaQuery(
-          data: MediaQuery.of(context)
-              .copyWith(textScaler: TextScaler.linear(scale)),
+          data: MediaQuery.of(context).copyWith(
+              textScaler: TextScaler.linear(scale),
+              disableAnimations: reduceMotion),
           child: child!),
       home: child,
     );
@@ -154,19 +159,17 @@ ScrollPosition _position(WidgetTester tester, {bool panel = false}) => tester
 
 Future<void> _open(WidgetTester tester) async {
   final header = find.byKey(_headerKey);
-  if (header.evaluate().isNotEmpty) {
-    await tester.scrollUntilVisible(header, 120,
-        scrollable: find.descendant(
-            of: find.byKey(_mainScrollKey), matching: find.byType(Scrollable)));
+  for (var index = 0; index < 40 && tester.getRect(header).top < 56; index++) {
+    await tester.drag(find.byKey(_mainScrollKey), const Offset(0, 120));
     await tester.pumpAndSettle();
   }
-  await tester.tap(find.byTooltip('展开详情'));
+  await tester.tap(find.byKey(const ValueKey('pixiv-author-header-cluster')));
   await tester.pumpAndSettle();
 }
 
 Future<void> _reachEnd(WidgetTester tester, {bool settle = true}) async {
   for (var index = 0;
-      index < 40 && find.byKey(_headerKey).evaluate().isEmpty;
+      index < 40 && find.byKey(_inlineKey).evaluate().isEmpty;
       index++) {
     await tester.drag(find.byKey(_mainScrollKey), const Offset(0, -220));
     if (settle) {
@@ -212,7 +215,10 @@ void main() {
       expect(rect.width, 375);
       expect(rect.height, closeTo(375 / ratio, .01));
     }
-    expect(tester.getSize(find.byTooltip('展开详情')).height,
+    expect(
+        tester
+            .getSize(find.byKey(const ValueKey('pixiv-author-header-cluster')))
+            .height,
         greaterThanOrEqualTo(48));
     _position(tester).jumpTo(_position(tester).maxScrollExtent);
     await tester.pumpAndSettle();
@@ -244,8 +250,9 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byKey(_headerKey), findsOneWidget);
     final headerTopAfterHandoff = tester.getTopLeft(find.byKey(_headerKey)).dy;
-    expect(headerTopAfterHandoff, closeTo(450, 2));
-    expect(headerTopAfterHandoff, lessThan(headerTopBeforeRelease));
+    expect(headerTopAfterHandoff, closeTo(1375 - position.pixels, 1));
+    expect(headerTopAfterHandoff, closeTo(headerTopBeforeRelease, 1));
+    expect(position.pixels, closeTo(pixelsBeforeRelease, 1));
     await tester.runAsync(() async {
       await Directory(_output).create(recursive: true);
       await File('$_output/actual-user-handoff.json')
@@ -256,7 +263,9 @@ void main() {
         'headerAfterHandoff': headerTopAfterHandoff,
         'pixelsBeforeRelease': pixelsBeforeRelease,
         'pixelsAfterHandoff': position.pixels,
-        'targetViewportFraction': .45,
+        'galleryEnd': 1375,
+        'headerExtent': tester.getSize(find.byKey(_headerKey)).height,
+        'continuousAuthorAnchor': true,
         'recommendationRequests': probe.recommendations,
       }));
     });
@@ -294,15 +303,15 @@ void main() {
 
     position.jumpTo(370);
     await tester.pumpAndSettle();
-    expect(find.byKey(const ValueKey('pixiv-detail-entry-bar')), findsNothing,
+    expect(probe.transitions, [true],
         reason: 'programmatic positioning alone must not retract details');
-    expect(probe.transitions, [true]);
+    final headerElement = tester.element(find.byKey(_headerKey));
     await tester.drag(find.byKey(_mainScrollKey), const Offset(0, 80));
     await tester.pumpAndSettle();
 
-    expect(find.byKey(_headerKey), findsNothing);
-    expect(
-        find.byKey(const ValueKey('pixiv-detail-entry-bar')), findsOneWidget);
+    expect(find.byKey(_headerKey), findsOneWidget);
+    expect(identical(headerElement, tester.element(find.byKey(_headerKey))),
+        isTrue);
     expect(find.byKey(const ValueKey('recommendations')), findsNothing);
     expect(probe.transitions, [true, false]);
     expect(probe.recommendations, 1);
@@ -315,8 +324,7 @@ void main() {
                 .state(find.byType(PixivCommentsSection, skipOffstage: false))),
         isTrue);
 
-    await tester.drag(find.byKey(_mainScrollKey), const Offset(0, -120));
-    await tester.pumpAndSettle();
+    await _reachEnd(tester);
     expect(find.byKey(_headerKey), findsOneWidget);
     expect(probe.transitions, [true, false, true]);
     expect(probe.roots, 1);
@@ -387,7 +395,7 @@ void main() {
             tester
                 .state(find.byType(PixivCommentsSection, skipOffstage: false))),
         isTrue);
-    await tester.tap(find.byTooltip('收起详情'));
+    await tester.tap(find.byKey(const ValueKey('pixiv-detail-panel-toggle')));
     await tester.pumpAndSettle();
     await _reachEnd(tester);
     expect(
@@ -419,12 +427,13 @@ void main() {
         tester.state(find.byType(PixivCommentsSection, skipOffstage: false));
     final position = _position(tester);
     final before = position.pixels;
-    await tester.scrollUntilVisible(find.byTooltip('展开详情'), -150,
+    await tester.scrollUntilVisible(
+        find.byKey(const ValueKey('pixiv-author-header-cluster')), -150,
         scrollable: find.descendant(
             of: find.byKey(_mainScrollKey), matching: find.byType(Scrollable)));
     await tester.pumpAndSettle();
-    final openOffset = position.pixels;
     await _open(tester);
+    final openOffset = position.pixels;
     expect(
         identical(
             comments,
@@ -432,7 +441,7 @@ void main() {
                 .state(find.byType(PixivCommentsSection, skipOffstage: false))),
         isTrue);
     expect(probe.roots, 1);
-    await tester.tap(find.byTooltip('收起详情'));
+    await tester.tap(find.byKey(const ValueKey('pixiv-detail-panel-toggle')));
     await tester.pumpAndSettle();
     expect(
         identical(
@@ -440,12 +449,11 @@ void main() {
             tester
                 .state(find.byType(PixivCommentsSection, skipOffstage: false))),
         isTrue);
-    expect(position.pixels,
-        openOffset.clamp(position.minScrollExtent, position.maxScrollExtent));
+    expect(position.pixels, closeTo(openOffset, .01));
     expect(before, greaterThan(0));
-    expect(
-        find.byKey(const ValueKey('pixiv-detail-entry-bar')), findsOneWidget);
-    expect(find.byType(PixivCommentsSection), findsNothing);
+    expect(find.byKey(_headerKey), findsOneWidget);
+    expect(find.byKey(_inlineKey), findsOneWidget);
+    expect(find.byType(PixivCommentsSection), findsOneWidget);
     expect(
         find.byType(PixivCommentsSection, skipOffstage: false), findsOneWidget);
     await _reachEnd(tester);
@@ -480,7 +488,7 @@ void main() {
     expect(probe.favorites, 1);
     expect(probe.actions, 1);
     expect(find.byKey(_panelKey), findsOneWidget);
-    await tester.tap(find.byTooltip('收起详情'));
+    await tester.tap(find.byKey(const ValueKey('pixiv-detail-panel-toggle')));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('pixiv-image-42-0')));
     expect(probe.readImages, [0]);
@@ -524,7 +532,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.drag(find.byKey(_mainScrollKey), const Offset(0, -180));
     await tester.pumpAndSettle();
-    await tester.tap(find.byTooltip('展开详情'));
+    await tester.tap(find.byKey(const ValueKey('pixiv-author-header-cluster')));
     await tester.pumpAndSettle();
     expect(probe.builds, 0);
     expect(probe.roots, 0);
@@ -550,7 +558,10 @@ void main() {
       await _open(tester);
       expect(tester.getSize(find.byKey(_panelKey)).height,
           closeTo(spec.$2 * .75, .01));
-      expect(tester.getSize(find.byTooltip('收起详情')).height,
+      expect(
+          tester
+              .getSize(find.byKey(const ValueKey('pixiv-detail-panel-toggle')))
+              .height,
           greaterThanOrEqualTo(48));
       final position = _position(tester, panel: true);
       position.jumpTo(position.maxScrollExtent);
@@ -574,16 +585,354 @@ void main() {
     await tester.pump(const Duration(milliseconds: 30));
     expect(probe.builds, 0);
     expect(probe.roots, 0);
-    await tester.tap(find.byTooltip('展开详情'));
-    await tester.pump(const Duration(milliseconds: 30));
+    await tester.tap(find.byKey(const ValueKey('pixiv-author-header-cluster')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
     expect(find.byKey(_panelKey), findsOneWidget);
     expect(probe.roots, 1);
-    await tester.tap(find.byTooltip('收起详情'));
-    await tester.pump(const Duration(milliseconds: 30));
+    await tester.tap(find.byKey(const ValueKey('pixiv-detail-panel-toggle')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 220));
     expect(find.byKey(_panelKey), findsNothing);
     expect(probe.readImages, isEmpty);
     expect(tester.takeException(), isNull);
   });
+
+  for (final inline in [false, true]) {
+    testWidgets(
+        'rotation and text scale keep geometry without new handoff inline$inline',
+        (tester) async {
+      _view(tester);
+      await _fonts(tester);
+      final probe = _Probe();
+      await tester
+          .pumpWidget(_host(_Fixture(probe: probe), reduceMotion: true));
+      await tester.pumpAndSettle();
+      final position = _position(tester);
+      if (inline) {
+        await _reachEnd(tester);
+        position.jumpTo(1275);
+      } else {
+        position.jumpTo(200);
+      }
+      await tester.pumpAndSettle();
+      final before = position.pixels;
+      final header = tester.element(find.byKey(_headerKey));
+      final top = tester.getTopLeft(find.byKey(_headerKey)).dy;
+      final callbacks = List<bool>.of(probe.transitions);
+      tester.view.physicalSize = const Size(812, 375);
+      await tester.pump();
+      await tester.pumpAndSettle();
+      expect(identical(position, _position(tester)), isTrue);
+      expect(identical(header, tester.element(find.byKey(_headerKey))), isTrue);
+      expect(probe.transitions, callbacks);
+      if (inline) {
+        expect(tester.getTopLeft(find.byKey(_headerKey)).dy, closeTo(top, 1));
+        expect(position.pixels,
+            closeTo(before + (812 - 375) * (1 + 2 + 1 / 1.5), 1));
+      } else {
+        expect(position.pixels, closeTo(before * 812 / 375, 1));
+        expect(probe.builds, 0);
+      }
+      final rotated = position.pixels;
+      final rotatedTop = tester.getTopLeft(find.byKey(_headerKey)).dy;
+      await tester.pumpWidget(
+          _host(_Fixture(probe: probe), scale: 2, reduceMotion: true));
+      await tester.pumpAndSettle();
+      expect(probe.transitions, callbacks);
+      expect(position.pixels, closeTo(rotated, 1));
+      if (inline) {
+        expect(tester.getTopLeft(find.byKey(_headerKey)).dy,
+            closeTo(rotatedTop, 1));
+      } else {
+        expect(probe.builds, 0);
+      }
+      await tester.pump(const Duration(seconds: 1));
+      expect(position.pixels, closeTo(rotated, 1));
+      expect(tester.takeException(), isNull);
+    });
+  }
+
+  for (final height in [250, 1000]) {
+    testWidgets('late unknown ratio preserves visible author anchor $height',
+        (tester) async {
+      _view(tester);
+      final delayed = _DelayedImageProvider();
+      final transitions = <bool>[];
+      var reads = 0;
+      await tester.pumpWidget(_host(PixivDetailShell(
+        title: '迟到尺寸作品',
+        author: '作者',
+        galleryCollapsible: true,
+        images: [
+          PixivDetailImage(
+              key: 'known', provider: null, aspectRatio: 1, onRead: () {}),
+          PixivDetailImage(
+              key: 'late',
+              provider: delayed,
+              aspectRatio: .75,
+              aspectRatioKnown: false,
+              onRead: () {}),
+          PixivDetailImage(
+              key: 'last', provider: null, aspectRatio: 1.5, onRead: () {}),
+        ],
+        actionLabel: '下载',
+        actionIcon: Icons.download_outlined,
+        onGalleryExpansionChanged: transitions.add,
+        sliversBuilder: (_) {
+          reads++;
+          return const [SliverToBoxAdapter(child: SizedBox(height: 1400))];
+        },
+      )));
+      await tester.pumpAndSettle();
+      final position = _position(tester);
+      position.jumpTo(position.maxScrollExtent);
+      await tester.pumpAndSettle();
+      expect(reads, 0);
+      await tester.dragFrom(const Offset(100, 500), const Offset(0, -100));
+      await tester.pumpAndSettle();
+      expect(transitions, [true]);
+      final pixelsBefore = position.pixels;
+      final topBefore = tester.getTopLeft(find.byKey(_headerKey)).dy;
+      final image = await tester.runAsync(() async {
+        final recorder = ui.PictureRecorder();
+        Canvas(recorder).drawRect(Rect.fromLTWH(0, 0, 375, height.toDouble()),
+            Paint()..color = const Color(0xFFA6C9EB));
+        final picture = recorder.endRecording();
+        final result = await picture.toImage(375, height);
+        picture.dispose();
+        return result;
+      });
+      delayed.complete(ImageInfo(image: image!));
+      await tester.pump();
+      await tester.pump();
+      await tester.pump();
+      expect(
+          tester.getSize(find.byKey(const ValueKey('pixiv-image-late'))).height,
+          closeTo(height.toDouble(), .01));
+      expect(
+          tester.getTopLeft(find.byKey(_headerKey)).dy, closeTo(topBefore, 1));
+      expect(position.pixels, closeTo(pixelsBefore + height - 500, 1));
+      expect(transitions, [true]);
+      expect(identical(position, _position(tester)), isTrue);
+      await tester.pump(const Duration(seconds: 1));
+      expect(
+          tester.getTopLeft(find.byKey(_headerKey)).dy, closeTo(topBefore, 1));
+      await tester.runAsync(() async {
+        await File('$_output/late-ratio-$height.json')
+            .writeAsString(const JsonEncoder.withIndent('  ').convert({
+          'offline': true,
+          'resolvedHeight': height,
+          'headerTopBefore': topBefore,
+          'headerTopAfter': tester.getTopLeft(find.byKey(_headerKey)).dy,
+          'pixelsBefore': pixelsBefore,
+          'pixelsAfter': position.pixels,
+          'transitionCallbacks': transitions,
+          'sameMainPosition': true,
+        }));
+      });
+      expect(tester.takeException(), isNull);
+    });
+  }
+
+  for (final closing in [false, true]) {
+    testWidgets('late ratio during panel or closing preserves anchor $closing',
+        (tester) async {
+      _view(tester);
+      final delayed = _DelayedImageProvider();
+      final transitions = <bool>[];
+      await tester.pumpWidget(_host(PixivDetailShell(
+        title: '迟到面板尺寸',
+        author: '作者',
+        galleryCollapsible: true,
+        images: [
+          PixivDetailImage(
+              key: 'known', provider: null, aspectRatio: 1, onRead: () {}),
+          PixivDetailImage(
+              key: 'late',
+              provider: delayed,
+              aspectRatio: .75,
+              aspectRatioKnown: false,
+              onRead: () {}),
+          PixivDetailImage(
+              key: 'last', provider: null, aspectRatio: 1.5, onRead: () {}),
+        ],
+        actionLabel: '下载',
+        actionIcon: Icons.download_outlined,
+        onGalleryExpansionChanged: transitions.add,
+        sliversBuilder: (_) =>
+            const [SliverToBoxAdapter(child: SizedBox(height: 1400))],
+      )));
+      await tester.pumpAndSettle();
+      final position = _position(tester);
+      position.jumpTo(position.maxScrollExtent);
+      await tester.pumpAndSettle();
+      await tester.dragFrom(const Offset(100, 500), const Offset(0, -100));
+      await tester.pumpAndSettle();
+      expect(find.byKey(_inlineKey), findsOneWidget);
+      final top = tester.getTopLeft(find.byKey(_headerKey)).dy;
+      final before = position.pixels;
+      await _open(tester);
+      if (closing) {
+        await tester.tapAt(const Offset(100, 100));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 64));
+        expect(find.byKey(_panelKey), findsOneWidget);
+      }
+      final height = closing ? 1000 : 250;
+      final image = await tester.runAsync(() async {
+        final recorder = ui.PictureRecorder();
+        Canvas(recorder).drawRect(Rect.fromLTWH(0, 0, 375, height.toDouble()),
+            Paint()..color = const Color(0xFFA6C9EB));
+        final picture = recorder.endRecording();
+        final image = await picture.toImage(375, height);
+        picture.dispose();
+        return image;
+      });
+      delayed.complete(ImageInfo(image: image!));
+      await tester.pump();
+      await tester.pump();
+      await tester.pump();
+      if (!closing) {
+        await tester.tapAt(const Offset(100, 100));
+      }
+      await tester.pumpAndSettle();
+      expect(find.byKey(_panelKey), findsNothing);
+      expect(find.byKey(_inlineKey), findsOneWidget);
+      expect(identical(position, _position(tester)), isTrue);
+      expect(position.pixels, closeTo(before + height - 500, 1));
+      expect(tester.getTopLeft(find.byKey(_headerKey)).dy, closeTo(top, 1));
+      expect(
+          tester.getRect(find.byKey(const ValueKey('pixiv-image-last'))).bottom,
+          closeTo(top, 1));
+      expect(transitions, [true, false, true]);
+      final idle = position.pixels;
+      await tester.pump(const Duration(seconds: 1));
+      expect(position.pixels, idle);
+      expect(tester.takeException(), isNull);
+    });
+  }
+
+  for (final spec in [
+    (375.0, 1000.0, 1.0, false),
+    (375.0, 1000.0, 2.0, false),
+    (240.0, 850.0, 2.0, true),
+    (812.0, 375.0, 1.0, false),
+  ]) {
+    testWidgets('continuous author anchor frames ${spec.$1} scale${spec.$3}',
+        (tester) async {
+      _view(tester, width: spec.$1, height: spec.$2);
+      await _fonts(tester);
+      final probe = _Probe();
+      final boundary = GlobalKey();
+      await tester.pumpWidget(_host(
+          RepaintBoundary(key: boundary, child: _Fixture(probe: probe)),
+          scale: spec.$3,
+          dark: spec.$4));
+      await tester.pumpAndSettle();
+      final position = _position(tester);
+      final header = find.byKey(_headerKey);
+      final element = tester.element(header);
+      final height = tester.getSize(header).height;
+      final end = spec.$1 * (1 + 2 + 1 / 1.5);
+      expect(position.maxScrollExtent,
+          closeTo((end + height + 88 - spec.$2).clamp(0, double.infinity), 1));
+      position.jumpTo((end - spec.$2 + height - 40)
+          .clamp(position.minScrollExtent, position.maxScrollExtent));
+      await tester.pumpAndSettle();
+      expect(probe.builds, 0);
+      final frames = <Map<String, Object?>>[];
+      void sample(String phase) {
+        final actual = tester.getRect(header);
+        final anchor = end - position.pixels;
+        final dock = spec.$2 - height;
+        final expected = anchor < dock ? anchor : dock;
+        expect(actual.top, closeTo(expected, 1));
+        expect(actual.height, closeTo(height, 1));
+        expect(identical(element, tester.element(header)), isTrue);
+        expect(identical(position, _position(tester)), isTrue);
+        frames.add({
+          'phase': phase,
+          'pixels': position.pixels,
+          'anchor': anchor,
+          'headerTop': actual.top,
+          'headerHeight': actual.height,
+          'expectedTop': expected,
+          'avatarLeft': tester
+              .getTopLeft(
+                  find.byKey(const ValueKey('pixiv-gallery-author-avatar')))
+              .dx,
+          'titleTop': tester
+              .getTopLeft(
+                  find.byKey(const ValueKey('pixiv-author-header-title')))
+              .dy,
+          'inline': find.byKey(_inlineKey).evaluate().isNotEmpty,
+        });
+      }
+
+      sample('before');
+      final gesture =
+          await tester.startGesture(Offset(spec.$1 * .5, spec.$2 * .35));
+      for (var index = 0; index < 24 && probe.transitions.isEmpty; index++) {
+        await gesture.moveBy(const Offset(0, -20),
+            timeStamp: Duration(milliseconds: (index + 1) * 400));
+        await tester.pump(const Duration(milliseconds: 16));
+        await tester.pump(const Duration(milliseconds: 16));
+        sample('down-$index');
+      }
+      expect(probe.transitions, [true]);
+      for (var index = 0; index < 20; index++) {
+        await gesture.moveBy(const Offset(0, 20),
+            timeStamp: Duration(milliseconds: (index + 9) * 400));
+        await tester.pump(const Duration(milliseconds: 16));
+        await tester.pump(const Duration(milliseconds: 16));
+        sample('reverse-$index');
+      }
+      await gesture.up(timeStamp: const Duration(seconds: 13));
+      await tester.pumpAndSettle();
+      expect(find.byKey(_inlineKey), findsNothing);
+      expect(probe.transitions, [true, false]);
+      final idle = position.pixels;
+      await tester.pump(const Duration(seconds: 1));
+      expect(position.pixels, idle);
+      sample('idle');
+      expect(
+          tester
+              .getTopLeft(
+                  find.byKey(const ValueKey('pixiv-gallery-expansion-toggle')))
+              .dx,
+          lessThan(tester
+              .getTopLeft(
+                  find.byKey(const ValueKey('pixiv-gallery-author-avatar')))
+              .dx));
+      expect(
+          tester
+              .getTopLeft(
+                  find.byKey(const ValueKey('pixiv-gallery-author-avatar')))
+              .dx,
+          lessThan(tester
+              .getTopLeft(
+                  find.byKey(const ValueKey('pixiv-author-header-title')))
+              .dx));
+      await tester.tap(find.byTooltip('下载'));
+      await tester.longPress(find.byTooltip('下载'));
+      await tester.pumpAndSettle();
+      expect(probe.actions, 1);
+      expect(probe.longActions, 1);
+      final prefix = 'anchor-${spec.$1.toInt()}-scale${spec.$3.toInt()}';
+      await _capture(tester, boundary, prefix, {
+        'realPointer': true,
+        'frames': frames,
+        'sameHeaderElement': true,
+        'sameMainPosition': true,
+        'downloadTap': probe.actions,
+        'downloadLongPress': probe.longActions,
+        'commentRequests': probe.roots,
+        'recommendationRequests': probe.recommendations,
+      });
+      expect(tester.takeException(), isNull);
+    });
+  }
 
   for (final scale in [1.0, 2.0]) {
     testWidgets('actual engine handoff/panel/closed screenshots scale$scale',
@@ -618,16 +967,15 @@ void main() {
       expect(probe.builds, 0);
       await _reachEnd(tester);
       expect(find.byKey(_headerKey), findsOneWidget);
-      expect(
-          tester
-              .widget<Text>(find.byKey(const ValueKey('pixiv-image-counter')))
-              .data,
-          '3 / 3');
+      expect(find.byKey(_inlineKey), findsOneWidget);
+      final counterBeforePanel = tester
+          .widget<Text>(find.byKey(const ValueKey('pixiv-image-counter')))
+          .data;
       await _capture(tester, boundary, '$prefix-last-page-handoff', {
         'pixels': position.pixels,
         'headerTop': tester.getTopLeft(find.byKey(_headerKey)).dy,
-        'currentImage': 3,
-        'lastImageStart': 1125.0,
+        'imageCounter': counterBeforePanel,
+        'galleryEnd': 1375.0,
         'commentRequests': probe.roots,
         'recommendationRequests': probe.recommendations,
       });
@@ -665,15 +1013,19 @@ void main() {
         'commentRequests': probe.roots,
         'recommendationRequests': probe.recommendations,
       });
-      expect(position.pixels, closeTo(1125, 1));
+      expect(position.pixels, closeTo(openOffset, .01));
       expect(
           tester
               .widget<Text>(find.byKey(const ValueKey('pixiv-image-counter')))
               .data,
-          '3 / 3');
+          counterBeforePanel);
+      expect(find.byKey(_headerKey), findsOneWidget);
+      expect(find.byKey(_inlineKey), findsOneWidget);
+      expect(find.byType(PixivCommentsSection, skipOffstage: false),
+          findsOneWidget);
       expect(
-          find.byKey(const ValueKey('pixiv-detail-entry-bar')), findsOneWidget);
-      expect(find.byType(PixivCommentsSection), findsNothing);
+          tester.state(find.byType(PixivCommentsSection, skipOffstage: false)),
+          same(comments));
       expect(probe.readImages, isEmpty);
       expect(probe.recommendations, 0);
       await _reachEnd(tester);
@@ -686,17 +1038,13 @@ void main() {
         'recommendationRequests': probe.recommendations,
       });
       for (var index = 0;
-          index < 40 &&
-              find
-                  .byKey(const ValueKey('pixiv-detail-entry-bar'))
-                  .evaluate()
-                  .isEmpty;
+          index < 40 && find.byKey(_inlineKey).evaluate().isNotEmpty;
           index++) {
-        await tester.drag(find.byKey(_mainScrollKey), const Offset(0, 220));
+        await tester.dragFrom(const Offset(100, 300), const Offset(0, 220));
         await tester.pumpAndSettle();
       }
-      expect(
-          find.byKey(const ValueKey('pixiv-detail-entry-bar')), findsOneWidget);
+      expect(find.byKey(_headerKey), findsOneWidget);
+      expect(find.byKey(_inlineKey), findsNothing);
       expect(find.byType(PixivCommentsSection), findsNothing);
       expect(probe.roots, 1);
       expect(probe.recommendations, 1);
@@ -712,6 +1060,18 @@ void main() {
       expect(tester.takeException(), isNull);
     });
   }
+}
+
+class _DelayedImageProvider extends ImageProvider<_DelayedImageProvider> {
+  final _image = Completer<ImageInfo>();
+  void complete(ImageInfo image) => _image.complete(image);
+  @override
+  Future<_DelayedImageProvider> obtainKey(ImageConfiguration configuration) =>
+      SynchronousFuture(this);
+  @override
+  ImageStreamCompleter loadImage(
+          _DelayedImageProvider key, ImageDecoderCallback decode) =>
+      OneFrameImageStreamCompleter(_image.future);
 }
 
 class _DenyHttp extends HttpOverrides {
@@ -790,8 +1150,8 @@ Future<void> _capture(WidgetTester tester, GlobalKey key, String name,
         .writeAsString(const JsonEncoder.withIndent('  ').convert({
       'offline': true,
       'renderer': 'Flutter RenderRepaintBoundary.toImage',
-      'width': 375,
-      'height': 1000,
+      'width': boundary.size.width,
+      'height': boundary.size.height,
       'font': 'C:/Windows/Fonts/msyh.ttc',
       ...extra,
     }));

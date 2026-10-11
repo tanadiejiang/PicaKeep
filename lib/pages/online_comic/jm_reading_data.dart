@@ -1,7 +1,7 @@
 part of pica_reader;
 
 class JmReadingData extends ReadingData {
-  JmReadingData({required this.info, this.forceOnline = false})
+  JmReadingData({required this.info, this.forceOnline = false, this.pageLoader})
       : eps = {
           for (final entry in info.series.entries)
             entry.key.toString(): entry.key <= info.epNames.length
@@ -10,6 +10,9 @@ class JmReadingData extends ReadingData {
         };
 
   final JmComicInfo info;
+
+  /// Tests can replace transport while keeping the production page-source path.
+  final JmPageLoader? pageLoader;
 
   /// 强制在线阅读：true 时忽略本地下载，始终走网络（长按章节触发）。
   final bool forceOnline;
@@ -51,34 +54,87 @@ class JmReadingData extends ReadingData {
     return res.data;
   }
 
-  /// 下载图片字节 + 图块重组 → 返回重组后字节流
   @override
-  Stream<List<int>> loadImageNetwork(int ep, int page, String url) async* {
-    // 1. 下载原始字节
-    final result = await OnlineImageManager.instance.getImage(
-      url,
+  String buildImageKey(int ep, int page, String url) =>
+      '${JmPageLoader.algorithmVersion}:${originalNetworkCacheIdentity(ep, page, url)}';
+
+  Future<JmLoadedPage> _loadPage(int ep, int page, String url,
+      {StreamImageAbortSignal? abortSignal}) {
+    final fileName = Uri.parse(url).pathSegments.last;
+    return (pageLoader ?? JmPageLoader.instance).load(
+      url: url,
       cacheIdentity: originalNetworkCacheIdentity(ep, page, url),
       headers: getJmImgHeaders(),
-    );
-    final bytes = <int>[];
-    await for (final chunk in result.stream) {
-      if (bytes.length + chunk.length > 64 * 1024 * 1024) {
-        throw StateError('JM recombination input exceeds the bounded decode budget');
-      }
-      bytes.addAll(chunk);
-    }
-    final raw = Uint8List.fromList(bytes);
-
-    // 2. 图块重组
-    final chapterId = info.series[ep] ?? info.id;
-    final fileName = Uri.parse(url).pathSegments.last;
-    final bookId = fileName.replaceFirst(RegExp(r'\.[^.]+$'), '');
-    final recombined = await JmRecombine.recombine(
-      raw,
-      epsId: chapterId,
+      episodeId: info.series[ep] ?? info.id,
       scrambleId: kJmScrambleId,
-      pictureName: bookId,
+      pictureName: fileName.replaceFirst(RegExp(r'\.[^.]+$'), ''),
+      abortSignal: abortSignal,
     );
-    yield recombined.bytes;
+  }
+
+  @override
+  Future<void> invalidateImage(int ep, int page, String url) async {
+    if (downloaded && checkEpDownloaded(ep)) return;
+    if (url.isEmpty) return;
+    final fileName = Uri.parse(url).pathSegments.last;
+    await (pageLoader ?? JmPageLoader.instance).invalidatePage(
+      url: url,
+      cacheIdentity: originalNetworkCacheIdentity(ep, page, url),
+      headers: getJmImgHeaders(),
+      episodeId: info.series[ep] ?? info.id,
+      scrambleId: kJmScrambleId,
+      pictureName: fileName.replaceFirst(RegExp(r'\.[^.]+$'), ''),
+    );
+  }
+
+  @override
+  Future<ReaderPageSource> resolvePageSource(
+      int ep, int page, String url) async {
+    if (downloaded && checkEpDownloaded(ep)) {
+      return super.resolvePageSource(ep, page, url);
+    }
+    return JmReaderPageSource(
+      identity: _pageIdentity(ep, page, url,
+          sourceVersion: buildImageKey(ep, page, url)),
+      load: (abort) => _loadPage(ep, page, url, abortSignal: abort),
+    );
+  }
+
+  // Inherit the provider's request-scope and input guards. The virtual loader
+  // below still returns the same complete, losslessly reconstructed JM page.
+  @override
+  Future<StreamImageLoadResult> loadOriginalNetworkWithProgress(
+      int ep, int page, String url,
+      {StreamImageAbortSignal? abortSignal}) async {
+    final loaded = await _loadPage(ep, page, url, abortSignal: abortSignal);
+    Stream<List<int>> read() async* {
+      try {
+        await for (final chunk in loaded.file.openRead()) {
+          if (abortSignal?.isAborted == true) {
+            throw StateError('JM page load aborted');
+          }
+          yield chunk;
+        }
+      } catch (error, stack) {
+        if (abortSignal?.isAborted != true) {
+          // The final leased JM cache file read is a cache boundary.
+          observeReaderImageFailure(ReaderImageStage.cache, error, stack);
+        }
+        rethrow;
+      } finally {
+        loaded.release();
+      }
+    }
+
+    return StreamImageLoadResult(
+        stream: read(),
+        expectedTotalBytes: loaded.byteLength,
+        cancel: () async => loaded.release());
+  }
+
+  @override
+  Stream<List<int>> loadImageNetwork(int ep, int page, String url) async* {
+    final response = await loadOriginalNetworkWithProgress(ep, page, url);
+    yield* response.stream;
   }
 }

@@ -54,8 +54,81 @@ class ComicReadingPageLogic extends StateController {
   final readerViewportKey = GlobalKey();
   final sessionRasterCache = ReaderSessionRasterCache();
   final failureDiagnosticsSession = ReaderFailureDiagnosticsSession();
+
+  /// Resolved page sizes keyed by `ReaderPageImage.resourceKey` (053). Pages
+  /// recycled above the continuous viewport reuse them on rebuild.
+  final pageSizeHints = <String, Size>{};
+  final previewImagePool = ReaderPreviewImagePool();
+  late final previewPreloader = ReaderPreviewPreloader(pool: previewImagePool);
+  ReaderDisplayMode? _previewMode;
+  ImageConfiguration _previewConfiguration = ImageConfiguration.empty;
+  bool _previewStopped = false, _previewRefreshQueued = false;
+
+  void syncPreviewPreloads(ReaderDisplayMode mode, BuildContext context) {
+    _previewMode = mode;
+    _previewConfiguration = createLocalImageConfiguration(context);
+    _refreshPreviewWindow();
+  }
+
+  void _schedulePreviewWindow() {
+    if (_previewStopped || _previewMode == null || _previewRefreshQueued) return;
+    _previewRefreshQueued = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _previewRefreshQueued = false;
+      _refreshPreviewWindow();
+    });
+    WidgetsBinding.instance.ensureVisualUpdate();
+  }
+
+  void _refreshPreviewWindow() {
+    final mode = _previewMode;
+    if (_previewStopped || mode == null) return;
+    final episode = order;
+    final pages = List<String>.unmodifiable(urls);
+    final source = data;
+    final current = index - 1;
+    // Keys are captured when the window is queued, not when its asynchronous
+    // worker eventually starts under potentially different credentials.
+    final keys = <int, String>{};
+    final visible = <int>{current};
+    if (readingMethod.isTwoPage && (!singlePageForFirstScreen || current > 0)) {
+      visible.add(current + 1);
+    }
+    if (readingMethod == ReadingMethod.topToBottomContinuously) {
+      visible.addAll(itemScrollListener.itemPositions.value
+          .where((position) => position.itemTrailingEdge > 0 &&
+              position.itemLeadingEdge < 1)
+          .map((position) => position.index));
+    }
+    previewPreloader.update(
+      currentPage: current, pageCount: pages.length,
+      preloadCount: mode == ReaderDisplayMode.previewFirst
+          ? int.tryParse(appdata.settings[28]) ?? 0 : 0,
+      visiblePages: visible,
+      resourceKeyForPage: (page) => keys.putIfAbsent(page,
+          () => _readerResourceKey(source, episode, page, pages[page])),
+      loadProvider: (page, abort) {
+        final expected = keys[page];
+        if (!identical(data, source) || expected == null ||
+            _readerResourceKey(source, episode, page, pages[page]) != expected) {
+          throw observeReaderImageReason(
+              StateError('Queued reader image scope or provider version changed'),
+              ReaderImageReason.sourceChanged);
+        }
+        return source.createImageProvider(episode, page, pages[page],
+            abortSignal: abort);
+      },
+      configuration: _previewConfiguration,
+      // No fictitious global idle queue: retain the explicit setting's window.
+      // Additional idle pages require a verified cross-source budget signal.
+    );
+  }
+
   @override
   void dispose() {
+    _previewStopped = true;
+    previewPreloader.dispose();
+    previewImagePool.dispose();
     sessionRasterCache.dispose();
     failureDiagnosticsSession.dispose();
     super.dispose();
@@ -70,7 +143,7 @@ class ComicReadingPageLogic extends StateController {
 
   PhotoViewController ensurePhotoViewController(int index) {
     return photoViewControllers.putIfAbsent(index, () {
-      final controller = PhotoViewController();
+      final controller = ReaderPhotoViewController();
       _transformSubscriptions.add(
           controller.outputStateStream.listen((_) => notifyViewportChanged()));
       return controller;
@@ -148,6 +221,9 @@ class ComicReadingPageLogic extends StateController {
 
   void abortActiveImageLoads() {
     imageAbortSignal.abort();
+    _previewStopped = true;
+    previewPreloader.dispose();
+    previewImagePool.dispose();
     chapterLoadRequestId++;
   }
 
@@ -450,6 +526,7 @@ class ComicReadingPageLogic extends StateController {
   ///当前的页面, 0和最后一个为空白页, 用于进行章节跳转
   set index(int value) {
     _index = value;
+    _schedulePreviewWindow();
     for (var element in _indexChangeCallbacks) {
       element(value);
     }

@@ -33,7 +33,8 @@ Map<String, String> getJmBaseHeaders() => {
 Map<String, String> getJmImgHeaders() => {
       'Accept':
           'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
-      'Accept-Encoding': 'gzip, deflate, br',
+      // Dart IO autoUncompress supports gzip only; API headers stay unchanged.
+      'Accept-Encoding': 'gzip',
       'Accept-Language': 'zh-CN,zh;q=0.9,en-US;q=0.8,en;q=0.7',
       'Connection': 'keep-alive',
       'Referer': 'https://localhost/',

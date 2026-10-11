@@ -19,14 +19,13 @@ import 'package:picakeep/foundation/image_pipeline/derived_image_store.dart';
 import 'package:picakeep/foundation/image_pipeline/image_disk_quota.dart';
 import 'package:picakeep/foundation/image_pipeline/cover_target_provider.dart';
 import 'package:picakeep/foundation/image_pipeline/image_server_protocol.dart';
-import 'package:picakeep/foundation/image_pipeline/server_reader_page_source.dart';
-import 'package:picakeep/foundation/image_pipeline/reader_page_source.dart';
 import 'package:picakeep/foundation/local_favorites.dart';
 import 'package:picakeep/foundation/local_library_settings.dart';
 import 'package:picakeep/foundation/local_cover_cache.dart';
 import 'package:picakeep/foundation/log.dart';
 import 'package:picakeep/pages/reader/comic_reading_page.dart';
 import 'package:picakeep/network/remote_service_network_policy.dart';
+import 'package:picakeep/network/http_image_body.dart';
 
 class RemoteLibraryDataSourceException implements Exception {
   const RemoteLibraryDataSourceException(this.message);
@@ -898,33 +897,9 @@ class RemoteLibraryReadingData extends ReadingData {
           {StreamImageAbortSignal? abortSignal}) =>
       item.client.loadImageWithProgress(url, abortSignal: abortSignal);
 
-  @override
-  Future<ReaderPageSource> resolvePageSource(
-      int ep, int page, String url) async {
-    final manifest = await item.client.fetchImageManifest(url);
-    if (manifest == null ||
-        !manifest.tilesAvailable ||
-        manifest.levels.isEmpty) {
-      return super.resolvePageSource(ep, page, url);
-    }
-    final original = await super.resolvePageSource(
-        ep, page, item.client.resolveUrlString(manifest.originalUrl));
-    return ServerReaderPageSource(
-        original: original,
-        manifest: manifest,
-        serverScope: item.client.baseUrl,
-        cacheRoot:
-            p.join(App.dataPath, 'cache', 'image_pipeline_v1', 'remote_reader'),
-        request: (target, {etag, maximumBodyBytes, localBody, abortSignal}) =>
-            item.client.loadImageDerivative(target,
-                etag: etag,
-                maximumBodyBytes: maximumBodyBytes ?? 32 * 1024 * 1024,
-                localBody: localBody,
-                abortSignal: abortSignal),
-        refreshManifest: () async {
-          await item.client.fetchImageManifest(url);
-        });
-  }
+  // Both reader modes consume the same complete page interface as the provider.
+  // Do not negotiate a server tile manifest or wrap the original in an ROI
+  // backend here. Derivative/manifest APIs remain available to non-reader uses.
 
   @override
   final FavoriteType favoriteType = const FavoriteType(0);
@@ -2982,8 +2957,32 @@ class RemoteLibraryClient {
           response.statusCode,
         );
       }
-      // Permit ownership transfers to the body stream — released in its finally
-      // (on normal completion, error, or consumer cancellation).
+      final headers = <String, List<String>>{};
+      response.headers.forEach((name, values) => headers[name] = values);
+      late final HttpImageBodyContract bodyContract;
+      try {
+        bodyContract = HttpImageBodyContract.fromHeaders(
+          headers,
+          // Keep the reader's original staging limit; never use compressed
+          // Content-Length as a bound on bytes delivered after decompression.
+          maximumBytes: 512 << 20,
+          autoUncompress: response.compressionState ==
+              HttpClientResponseCompressionState.decompressed,
+        );
+      } catch (_) {
+        // A rejected header still owns a live response/connection. No body
+        // consumer will be installed, so release both socket and permit here.
+        try {
+          request.abort();
+        } catch (_) {}
+        try {
+          await response.listen((_) {}, onError: (_) {}).cancel();
+        } catch (_) {}
+        releasePermit();
+        rethrow;
+      }
+      // Permit ownership transfers to the validated body stream — released in
+      // its finally on normal completion, validation failure or cancellation.
       return StreamImageLoadResult(
         stream: _abortableDerivativeBody(
             _guardedImageBody(
@@ -2991,10 +2990,10 @@ class RemoteLibraryClient {
               response,
               releasePermit,
               () => _rebuildTransportsIfCurrent(transportGeneration),
+              bodyContract,
             ),
             abortSignal),
-        expectedTotalBytes:
-            response.contentLength >= 0 ? response.contentLength : null,
+        expectedTotalBytes: bodyContract.expectedBytes,
         cancel: () async {
           try {
             request?.abort();
@@ -3069,12 +3068,13 @@ class RemoteLibraryClient {
     HttpClientRequest request,
     HttpClientResponse response,
     void Function() releasePermit,
-    void Function() onTransportFailure,
-  ) async* {
+    void Function() onTransportFailure, [
+    HttpImageBodyContract? bodyContract,
+  ]) async* {
     var completed = false;
     var transportFailure = false;
     try {
-      yield* response.timeout(
+      final body = response.timeout(
         const Duration(seconds: 15),
         onTimeout: (sink) {
           try {
@@ -3087,6 +3087,9 @@ class RemoteLibraryClient {
           sink.close();
         },
       );
+      // Derivative callers retain their existing protocol; only the complete
+      // image entry supplies this decoded-body contract.
+      yield* bodyContract?.validate(body) ?? body;
       completed = true;
     } on SocketException {
       transportFailure = true;

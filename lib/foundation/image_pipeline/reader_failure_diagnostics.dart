@@ -1,8 +1,15 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 
 import 'package:crypto/crypto.dart';
+import 'package:dio/dio.dart';
+import '../image_loader/reader_image_retry.dart';
+import '../image_loader/reader_image_limits.dart';
+import '../image_loader/reader_image_observation.dart';
+import '../../network/http_image_body.dart';
+import 'image_disk_quota.dart';
 import 'package:picakeep_image_engine/picakeep_image_engine.dart';
 
 import '../log.dart';
@@ -246,6 +253,7 @@ class ReaderFailureAttemptDiagnostics {
     StackTrace? stackTrace,
     Map<String, Object?> snapshot = const {},
     bool terminal = true,
+    ReaderImageReason? reasonHint,
   }) {
     if (_closed ||
         readerFailureIsCancellation(error) ||
@@ -253,9 +261,21 @@ class ReaderFailureAttemptDiagnostics {
         _page._session._disposed) {
       return;
     }
-    final reason = _reason(error);
+    final reason = reasonHint?.name ?? _reason(error);
     final safeStage = _token(stage) ?? 'unknown';
-    final key = '$safeStage:$reason:$terminal';
+    final details = <String, Object?>{...snapshot};
+    if (error is DioException && error.response?.statusCode != null) {
+      details['httpStatusClass'] =
+          readerHttpStatusClass(error.response!.statusCode).name;
+    }
+    final factSignature = _safeSnapshot({
+      'httpStatusClass': details['httpStatusClass'] ?? 'unknown',
+      'encodingContract': details['encodingContract'] ?? 'unknown',
+      'rawCacheHit': details['rawCacheHit'],
+      'onlineCacheHit': details['onlineCacheHit'],
+      'processedCacheHit': details['processedCacheHit'],
+    });
+    final key = '$safeStage:$reason:$terminal:${jsonEncode(factSignature)}';
     _failureCount++;
     _awaitingRecovery = true;
     if (_failures.containsKey(key)) {
@@ -264,7 +284,12 @@ class ReaderFailureAttemptDiagnostics {
     }
     if (_failures.length >= 32) return;
     _failures[key] = 1;
-    final details = <String, Object?>{...snapshot};
+    if (error is ImageDiskQuotaExceeded) {
+      details.addAll({
+        'requestBytes': error.requestedBytes,
+        'availableBytes': error.availableBytes
+      });
+    }
     if (error is ReaderResidentBudgetExceeded) {
       details.addAll(error.snapshot);
     } else if (error is ImageWorkBudgetExceeded) {
@@ -371,6 +396,48 @@ String? _token(String? value) =>
         : null;
 
 String _reason(Object error) {
+  if (error is ReaderImageLimit) {
+    return switch (error.reason) {
+      'encoded-input' => 'encodedInputLimit',
+      'source-pixels' => 'sourcePixelLimit',
+      'codec-work' || 'provider-overhead' => 'workBudget',
+      'input-residency' ||
+      'input-metadata-residency' ||
+      'shared-residency' =>
+        'residentBudget',
+      'queue' => 'queueFull',
+      'unbounded-provider' => 'unboundedProvider',
+      'jm-recombine-budget' => 'transformBudget',
+      'jm-recombine-animation' => 'unsupportedTransform',
+      _ => 'imageLimit',
+    };
+  }
+  if (error is HttpImageBodyException) {
+    return switch (error.reason) {
+      'unsupported-content-encoding' => 'unsupportedEncoding',
+      'invalid-content-length' => 'invalidLength',
+      'maximum-bytes-exceeded' => 'inputLimit',
+      'body-length-mismatch' => 'lengthMismatch',
+      'empty-body' => 'emptyBody',
+      _ => 'bodyContract',
+    };
+  }
+  if (error is ImageDiskQuotaExceeded) return 'diskAdmission';
+  if (error is DioException) {
+    return switch (error.type) {
+      DioExceptionType.badResponse => 'httpStatus',
+      DioExceptionType.connectionTimeout ||
+      DioExceptionType.sendTimeout ||
+      DioExceptionType.receiveTimeout =>
+        'timeout',
+      DioExceptionType.badCertificate => 'tls',
+      DioExceptionType.connectionError => 'network',
+      _ => 'other',
+    };
+  }
+  if (error is TimeoutException) return 'timeout';
+  if (error is TlsException || error is HandshakeException) return 'tls';
+  if (error is SocketException || error is HttpException) return 'network';
   if (error is ReaderSourceSnapshotMismatch) return 'sourceChanged';
   if (error is ReaderResidentBudgetExceeded) return 'residentBudget';
   if (error is ReaderRasterDimensionMismatch) return 'dimensionMismatch';
@@ -409,6 +476,8 @@ String _safeStack(StackTrace stack) {
 
 bool readerFailureIsCancellation(Object error) =>
     error is ImageWorkCancelled ||
+    error is ReaderImageCancelled ||
+    error is DioException && error.type == DioExceptionType.cancel ||
     error is ImageEngineException && error.isCancelled;
 
 Map<String, Object?> _safeSnapshot(Map<String, Object?> input) {
@@ -422,6 +491,14 @@ Map<String, Object?> _safeSnapshot(Map<String, Object?> input) {
     'height',
     'format',
     'generation',
+    'operationId',
+    'executionId',
+    'replayed',
+    'httpStatusClass',
+    'encodingContract',
+    'rawCacheHit',
+    'onlineCacheHit',
+    'processedCacheHit',
     'tileWidth',
     'tileHeight',
     'density',
@@ -479,6 +556,25 @@ Map<String, Object?> _safeSnapshot(Map<String, Object?> input) {
   for (final entry in input.entries) {
     if (!allowed.contains(entry.key)) continue;
     final value = entry.value;
+    if (entry.key == 'httpStatusClass') {
+      result[entry.key] = value is String &&
+              ReaderHttpStatusClass.values.any((v) => v.name == value)
+          ? value
+          : 'unknown';
+      continue;
+    }
+    if (entry.key == 'encodingContract') {
+      result[entry.key] = value is String &&
+              ReaderEncodingContract.values.any((v) => v.name == value)
+          ? value
+          : 'unknown';
+      continue;
+    }
+    if (const {'rawCacheHit', 'onlineCacheHit', 'processedCacheHit'}
+        .contains(entry.key)) {
+      result[entry.key] = value is bool ? value : null;
+      continue;
+    }
     if (value == null || value is bool || value is num && value.isFinite) {
       result[entry.key] = value;
     } else if (value is String) {

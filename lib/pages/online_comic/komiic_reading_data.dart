@@ -8,9 +8,12 @@ part of pica_reader;
 /// 二者都建立在"eps 的插入顺序 == 章节顺序"这一前提上，因此这里直接用章节列表
 /// 顺序构 map，并让 [loadEpNetwork] 用 `ep - 1` 反查章节 id，保证两端索引同源。
 class KomiicReadingData extends ReadingData {
-  KomiicReadingData({required this.comic}) : _chapters = comic.chapters;
+  KomiicReadingData({required this.comic, this.imageManager})
+      : _chapters = comic.chapters;
 
   final KomiicComicInfo comic;
+  final OnlineImageManager? imageManager;
+  OnlineImageManager get _images => imageManager ?? OnlineImageManager.instance;
 
   /// 章节顺序快照：[loadEpNetwork] 与 [loadImageNetwork] 都用 `ep - 1` 索引它，
   /// 与 [eps] 的生成顺序严格一致。
@@ -68,49 +71,63 @@ class KomiicReadingData extends ReadingData {
   String buildImageKey(int ep, int page, String url) =>
       originalNetworkCacheIdentity(ep, page, url);
 
+  // The public source key is historically `Komiic`; the source registry uses
+  // `komiic`. Use the same credential as the image header without renaming the
+  // source or falling back to a shared public Flutter/raw-memory cache key.
+  @override
+  String get imageAccessScope =>
+      sha256.convert(utf8.encode(KomiicNetwork().token)).toString();
+
   @override
   Future<ReaderPageSource> resolvePageSource(
       int ep, int page, String url) async {
     if (downloaded && checkEpDownloaded(ep)) {
       return super.resolvePageSource(ep, page, url);
     }
-    final index = ep - 1;
-    if (index < 0 || index >= _chapters.length) {
-      throw StateError('Komiic chapter is unavailable');
-    }
-    final token = KomiicNetwork().token;
-    return networkPageSource(ep, page, url, headers: {
-      'Referer':
-          'https://komiic.com/comic/${comic.id}/chapter/${_chapters[index].id}/images/all',
-      'User-Agent': KomiicNetwork.komiicUA,
-      if (token.isNotEmpty) 'Authorization': 'Bearer $token',
-    });
+    return networkPageSource(ep, page, url,
+        headers: _imageHeaders(ep),
+        imageManager: _images,
+        cacheIdentity: originalNetworkCacheIdentity(ep, page, url));
   }
 
   /// url 是 [loadEpNetwork] 返回的 CDN 直链，带章节图片页 Referer（防盗链）。
   ///
   /// Komiic 站点对已登录用户会校验 Bearer token，因此 token 非空时一并附上；
   /// 未登录（token 为空）时按匿名请求下发，能拿到公开章节即可。
-  @override
-  Stream<List<int>> loadImageNetwork(int ep, int page, String url) async* {
+  Map<String, String> _imageHeaders(int ep) {
     final index = ep - 1;
     if (index < 0 || index >= _chapters.length) {
-      throw Exception('Komiic 章节越界：ep=$ep，共 ${_chapters.length} 章');
+      throw StateError('Komiic chapter is unavailable');
     }
-    final chapterId = _chapters[index].id;
-    final network = KomiicNetwork();
-    final token = network.token;
-    final headers = <String, String>{
+    final token = KomiicNetwork().token;
+    return {
       'Referer':
-          'https://komiic.com/comic/${comic.id}/chapter/$chapterId/images/all',
+          'https://komiic.com/comic/${comic.id}/chapter/${_chapters[index].id}/images/all',
       'User-Agent': KomiicNetwork.komiicUA,
       if (token.isNotEmpty) 'Authorization': 'Bearer $token',
     };
-    final result = await OnlineImageManager.instance.getImage(
-      url,
-      cacheIdentity: originalNetworkCacheIdentity(ep, page, url),
-      headers: headers,
-    );
+  }
+
+  @override
+  Future<StreamImageLoadResult> loadOriginalNetworkWithProgress(
+          int ep, int page, String url,
+          {StreamImageAbortSignal? abortSignal}) =>
+      _images.getImage(url,
+          cacheIdentity: originalNetworkCacheIdentity(ep, page, url),
+          headers: _imageHeaders(ep),
+          abortSignal: abortSignal);
+
+  @override
+  Stream<List<int>> loadImageNetwork(int ep, int page, String url) async* {
+    final result = await loadOriginalNetworkWithProgress(ep, page, url);
     yield* result.stream;
+  }
+
+  @override
+  Future<void> invalidateImage(int ep, int page, String url) async {
+    if (downloaded && checkEpDownloaded(ep)) return;
+    await _images.invalidateImage(url,
+        headers: _imageHeaders(ep),
+        cacheIdentity: originalNetworkCacheIdentity(ep, page, url));
   }
 }

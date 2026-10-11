@@ -21,7 +21,7 @@ import 'package:picakeep/pages/online_comic/pixiv_detail_pager.dart';
 import 'package:sqlite3/open.dart';
 import 'package:picakeep/pages/online_comic/pixiv_online_detail_view.dart';
 
-const _output = 'docs/verification/pixiv-comments-preview-038';
+const _output = 'docs/verification/pixiv-ui-050/comments-regression';
 const _frame = Duration(milliseconds: 16);
 
 PixivComment _comment(String id, {bool replies = false, String? text}) =>

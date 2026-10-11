@@ -41,6 +41,8 @@ class OnlineWaterfallCard extends StatelessWidget {
     required this.title,
     required this.cover,
     this.fallbackCover,
+    this.coverCandidatesBuilder,
+    this.onCoverReady,
     required this.imageHeaders,
     required this.onTap,
     this.author = '',
@@ -73,6 +75,13 @@ class OnlineWaterfallCard extends StatelessWidget {
 
   /// Original API thumbnail, tried once if a derived proportional URL fails.
   final String? fallbackCover;
+
+  /// Optional rendition selection using the actual physical longest-edge budget.
+  /// Non-Pixiv callers keep the original cover plus single API fallback.
+  final List<String> Function(double targetLongestEdge)? coverCandidatesBuilder;
+
+  /// Reports only a painted first frame, preserving the exact decoded key.
+  final ValueChanged<ImageProvider<Object>>? onCoverReady;
 
   /// 防盗链头（Pixiv 的 `i.pximg.net` 缺 Referer 会直接 403）。
   final Map<String, String> imageHeaders;
@@ -357,32 +366,46 @@ class OnlineWaterfallCard extends StatelessWidget {
         final devicePixelRatio =
             MediaQuery.of(context).devicePixelRatio.clamp(1.0, 3.0).toDouble();
         final width = constraints.maxWidth;
-        final cacheWidth = width.isFinite && width > 0
-            ? (width * devicePixelRatio * _decodeQualityScale).round()
-            : null;
-        Widget imageFor(String url, {bool allowFallback = false}) {
-          final provider = onlineCoverProvider(url: url, headers: imageHeaders);
+        final decodeWidth = width.isFinite && width > 0
+            ? width * devicePixelRatio * _decodeQualityScale
+            : 0.0;
+        final cacheWidth = decodeWidth > 0 ? decodeWidth.round() : null;
+        final longestEdge =
+            aspectRatio < 1 ? decodeWidth / aspectRatio : decodeWidth;
+        final urls = (coverCandidatesBuilder?.call(longestEdge) ??
+                [cover, if (fallbackCover != null) fallbackCover!])
+            .map((url) => url.trim())
+            .where((url) => url.isNotEmpty)
+            .toSet()
+            .take(3)
+            .toList();
+        if (urls.isEmpty) return _placeholder(context);
+        Widget imageFor(int index) {
+          final provider =
+              onlineCoverProvider(url: urls[index], headers: imageHeaders);
+          final displayProvider = cacheWidth == null
+              ? provider
+              : ResizeImage.resizeIfNeeded(cacheWidth, null, provider);
           return Image(
-            image: cacheWidth == null
-                ? provider
-                : ResizeImage.resizeIfNeeded(cacheWidth, null, provider),
+            image: displayProvider,
             fit: BoxFit.contain,
             gaplessPlayback: true,
             filterQuality: FilterQuality.medium,
-            frameBuilder: (context, child, frame, wasSynchronouslyLoaded) =>
-                frame != null || wasSynchronouslyLoaded
-                    ? child
-                    : _placeholder(context, loading: true),
-            errorBuilder: (context, error, stackTrace) {
-              final fallback = fallbackCover?.trim() ?? '';
-              return allowFallback && fallback.isNotEmpty && fallback != url
-                  ? imageFor(fallback)
-                  : _placeholder(context);
+            frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
+              if (frame != null || wasSynchronouslyLoaded) {
+                onCoverReady?.call(displayProvider);
+                return child;
+              }
+              return _placeholder(context, loading: true);
             },
+            errorBuilder: (context, error, stackTrace) =>
+                index + 1 < urls.length
+                    ? imageFor(index + 1)
+                    : _placeholder(context),
           );
         }
 
-        return imageFor(cover, allowFallback: true);
+        return imageFor(0);
       },
     );
   }

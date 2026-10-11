@@ -13,6 +13,7 @@ class PixivCommentsSection extends StatefulWidget {
     super.key,
     required this.illustId,
     this.autoLoad = true,
+    this.commentsDisabled = false,
     this.previewLimit,
     this.loadRoots,
     this.loadReplies,
@@ -20,6 +21,10 @@ class PixivCommentsSection extends StatefulWidget {
 
   final String illustId;
   final bool autoLoad;
+
+  /// True only when artwork metadata explicitly disables comments.
+  /// Missing/unknown metadata must not be inferred from a zero comment count.
+  final bool commentsDisabled;
 
   /// A null limit preserves the full, manually paginated comments section.
   final int? previewLimit;
@@ -79,7 +84,8 @@ class _PixivCommentsSectionState extends State<PixivCommentsSection> {
   @override
   void didUpdateWidget(covariant PixivCommentsSection oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.illustId != widget.illustId) {
+    if (oldWidget.illustId != widget.illustId ||
+        oldWidget.commentsDisabled != widget.commentsDisabled) {
       _generation++;
       _comments.clear();
       _replies.clear();
@@ -112,6 +118,7 @@ class _PixivCommentsSectionState extends State<PixivCommentsSection> {
 
   void _queueVisibleAutoLoad() {
     if (!widget.autoLoad ||
+        widget.commentsDisabled ||
         !_entryActive ||
         _loaded ||
         _loading ||
@@ -123,14 +130,18 @@ class _PixivCommentsSectionState extends State<PixivCommentsSection> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted || generation != _generation) return;
       _autoLoadQueued = false;
-      if (widget.autoLoad && _entryActive && _autoLoadVisible && !_loaded) {
+      if (widget.autoLoad &&
+          !widget.commentsDisabled &&
+          _entryActive &&
+          _autoLoadVisible &&
+          !_loaded) {
         _loadRoots();
       }
     });
   }
 
   void _expandRoots() {
-    if (_loading || !_entryActive) return;
+    if (widget.commentsDisabled || _loading || !_entryActive) return;
     final needsPage = _hasNext && _comments.length <= widget.previewLimit!;
     setState(() => _expanded = true);
     // Revealing cached roots is enough. A user expansion requests at most one
@@ -160,7 +171,7 @@ class _PixivCommentsSectionState extends State<PixivCommentsSection> {
   }
 
   Future<void> _loadRoots() async {
-    if (_loading || !_entryActive) return;
+    if (widget.commentsDisabled || _loading || !_entryActive) return;
     final generation = _generation;
     final limit = widget.previewLimit != null && !_expanded && _offset == 0
         ? widget.previewLimit!
@@ -196,7 +207,7 @@ class _PixivCommentsSectionState extends State<PixivCommentsSection> {
   }
 
   Future<void> _toggleReplies(PixivComment root) async {
-    if (!_entryActive) return;
+    if (widget.commentsDisabled || !_entryActive) return;
     final state = _replies.putIfAbsent(root.id, _ReplyState.new);
     if (state.loading) return;
     if (state.loaded) {
@@ -240,6 +251,20 @@ class _PixivCommentsSectionState extends State<PixivCommentsSection> {
 
   @override
   Widget build(BuildContext context) {
+    if (widget.commentsDisabled) {
+      return SliverMainAxisGroup(slivers: [
+        SliverToBoxAdapter(child: _header(context)),
+        SliverToBoxAdapter(
+          child: Padding(
+            key: ValueKey('pixiv-comments-disabled-${widget.illustId}'),
+            padding: const EdgeInsets.fromLTRB(16, 24, 16, 24),
+            child: Text('作者已关闭评论区',
+                style: TextStyle(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant)),
+          ),
+        ),
+      ]);
+    }
     if (!_loaded && !widget.autoLoad) return _explicitTrigger(context);
     return SliverLayoutBuilder(
       builder: (context, constraints) {

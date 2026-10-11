@@ -915,14 +915,20 @@ class PixivNetwork {
   /// 本文件其它端点（搜索 `:954`、排行 `:1143`、作者页 `:1271/:1280/:1295`）
   /// 都带了，只有这里曾漏掉。
   Future<Res<PixivComicInfo>> getComicInfo(String id) async {
-    if (id.trim().isEmpty) {
-      return const Res.error('作品 id 为空',
+    final value = _positiveId(id);
+    if (value == null) {
+      return const Res.error('作品 id 无效',
           errorCode: ResErrorCode.invalidArgument);
     }
+    final workId = value.toString();
     final account = _bookmarkAccount;
     final requestSession = _session;
-    final revision = _bookmarkStore.revisionFor(account, id);
-    final res = await _getJson('$pixivWebBase/ajax/illust/$id?lang=zh');
+    final revision = _bookmarkStore.revisionFor(account, workId);
+    final res = await _getJson('$pixivWebBase/ajax/illust/$workId?lang=zh');
+    if (requestSession != _session || account != _bookmarkAccount) {
+      return const Res.error('账号已变化，请重新加载详情',
+          errorCode: ResErrorCode.loginRequired);
+    }
     if (res.error) return Res.fromErrorRes(res);
     final body = res.data['body'];
     if (body is! Map) {
@@ -932,10 +938,13 @@ class PixivNetwork {
     try {
       final normalized = body.map((k, v) => MapEntry(k.toString(), v));
       final info = parsePixivComicInfo(normalized);
+      if (info.id != workId) {
+        return const Res.error('作品响应 ID 与请求不一致', errorCode: ResErrorCode.parse);
+      }
       if (_bookmarkAccountIsCurrent(account, requestSession)) {
         try {
           _bookmarkStore.confirm(
-              account, id, parsePixivBookmarkState(normalized),
+              account, workId, parsePixivBookmarkState(normalized),
               expectedRevision: revision);
         } on FormatException {
           // Incomplete detail metadata may still be displayed, but must not
@@ -1166,15 +1175,66 @@ class PixivNetwork {
       return const Res.error('评论查询参数无效',
           errorCode: ResErrorCode.invalidArgument);
     }
-    final url = Uri.parse('$pixivWebBase/ajax/illusts/comments/roots').replace(
-      queryParameters: {
-        'illust_id': id.toString(),
-        'offset': offset.toString(),
-        'limit': limit.toString(),
-        'lang': 'zh',
-      },
-    );
-    return _getCommentPage(url);
+    Uri urlFor(int pageLimit) =>
+        Uri.parse('$pixivWebBase/ajax/illusts/comments/roots').replace(
+          queryParameters: {
+            'illust_id': id.toString(),
+            'offset': offset.toString(),
+            'limit': pageLimit.toString(),
+            'lang': 'zh',
+          },
+        );
+    final session = _session;
+    final account = _bookmarkAccount;
+    bool current() => session == _session && account == _bookmarkAccount;
+    final first = await _getCommentPage(urlFor(limit));
+    if (!current()) {
+      return const Res.error('账号已变化，请重新加载评论',
+          errorCode: ResErrorCode.loginRequired);
+    }
+    // A few business responses reject a small preview page. Keep successful
+    // small pages unchanged; retry only an invalid-request refusal, once, with
+    // the already verified standard 20-item wire page. This is compatibility,
+    // not proof that Pixiv universally disallows a four-comment preview.
+    if (limit >= 20 || !_canRetryCommentPreview(first)) return first;
+    final fallback = await _getCommentPage(urlFor(20));
+    if (!current()) {
+      return const Res.error('账号已变化，请重新加载评论',
+          errorCode: ResErrorCode.loginRequired);
+    }
+    return fallback;
+  }
+
+  bool _canRetryCommentPreview(Res<PixivCommentPage> result) {
+    if (!result.error ||
+        result.errorCode == ResErrorCode.loginRequired ||
+        result.errorCode == ResErrorCode.network ||
+        result.statusCode == 401 ||
+        result.statusCode == 403 ||
+        result.statusCode == 404 ||
+        result.statusCode == 429) {
+      return false;
+    }
+    // _getJson classifies a parsed HTTP 400 business refusal as accessDenied;
+    // malformed JSON at HTTP 400 is parse and must not trigger this fallback.
+    if (result.statusCode == 400 &&
+        result.errorCode != ResErrorCode.accessDenied) {
+      return false;
+    }
+    if (result.statusCode != null &&
+        result.statusCode != 200 &&
+        result.statusCode != 400) {
+      return false;
+    }
+    // These are exact business messages, not substrings of a parser failure,
+    // an access-denied explanation, or a generic response/transport error.
+    return const {
+      '不正确的请求。',
+      '不正确的请求',
+      'Invalid request.',
+      'Invalid request',
+      '不正なリクエストです。',
+    }.contains(result.errorMessage?.trim());
   }
 
   Future<Res<PixivCommentPage>> getCommentReplies(
@@ -1844,18 +1904,25 @@ class PixivNetwork {
   /// 不要求登录：公开作者资料游客可见，而 ID 直跳区的 chip 也不以登录为前提
   /// （搜索页只要源已注册就会给出 chip）。
   Future<Res<PixivAuthor>> getAuthorInfo(String uid) async {
-    final id = uid.trim();
-    if (id.isEmpty || int.tryParse(id) == null) {
+    final value = _positiveId(uid);
+    if (value == null) {
       return const Res.error(
         '作者 uid 无效（应为纯数字）',
         errorCode: ResErrorCode.invalidArgument,
       );
     }
+    final id = value.toString();
+    final session = _session;
+    final account = _bookmarkAccount;
     const stepLabel = '作者信息';
     final res = await _getJson(
       authorInfoUrl(id),
       step: '$stepLabel GET ${authorInfoUrl(id)}',
     );
+    if (session != _session || account != _bookmarkAccount) {
+      return const Res.error('账号已变化，请重新加载作者信息',
+          errorCode: ResErrorCode.loginRequired);
+    }
     if (res.error) return Res.fromErrorRes(res);
     final body = res.data['body'];
     if (body is! Map) {
@@ -1867,9 +1934,17 @@ class PixivNetwork {
       );
     }
     try {
-      return Res<PixivAuthor>(
-        parsePixivAuthorInfo(body.map((k, v) => MapEntry(k.toString(), v))),
-      );
+      final normalized = body.map((k, v) => MapEntry(k.toString(), v));
+      final author = parsePixivAuthorInfo(normalized);
+      if (author.id.isNotEmpty && author.id != id) {
+        return const Res.error('作者响应 UID 与请求不一致',
+            errorCode: ResErrorCode.parse);
+      }
+      // Some profile variants omit their redundant ID. Retain the requested
+      // identity, but do not invent a name or an avatar for empty server fields.
+      return Res<PixivAuthor>(author.id.isNotEmpty
+          ? author
+          : parsePixivAuthorInfo({...normalized, 'userId': id}));
     } catch (e) {
       return Res.error(
         '$stepLabel解析失败：$e（body 键: '

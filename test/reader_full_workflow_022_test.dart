@@ -1,7 +1,8 @@
 // These tests isolate the real reader and original operations from user data.
-// Native raster IO has a deterministic bitmap backend; original export bytes,
-// page selection, toolbar callbacks, SQLite writes and widget lifecycles are
-// production code. Native pixel accuracy/performance is measured separately.
+// File-backed originals use the production whole/preview paths, not raster locators.
+// Display decodes generated task-owned PNGs; original export bytes, selection,
+// toolbar callbacks, SQLite writes and widget lifecycles are production code.
+// Native pixel accuracy/performance is measured separately.
 // ignore_for_file: depend_on_referenced_packages
 import 'dart:async';
 import 'dart:ffi' show DynamicLibrary;
@@ -16,18 +17,19 @@ import 'package:picakeep/base.dart';
 import 'package:picakeep/foundation/app.dart';
 import 'package:picakeep/foundation/history.dart';
 import 'package:picakeep/foundation/image_favorites.dart';
+import 'package:picakeep/foundation/image_loader/reader_preview_provider.dart';
 import 'package:picakeep/foundation/image_pipeline/derived_image_store.dart';
 import 'package:picakeep/foundation/image_pipeline/image_work_scheduler.dart';
 import 'package:picakeep/foundation/image_pipeline/original_image_operations.dart';
 import 'package:picakeep/foundation/image_pipeline/reader_page_source.dart';
-import 'package:picakeep/foundation/image_pipeline/reader_raster_backend.dart';
-import 'package:picakeep/foundation/image_pipeline/reader_viewport.dart';
+
 import 'package:picakeep/foundation/local_data_source.dart';
 import 'package:picakeep/foundation/local_favorites.dart';
 import 'package:picakeep/foundation/reader_image_quality.dart';
 import 'package:picakeep/pages/reader/comic_reading_page.dart';
 import 'package:picakeep/pages/reader/reader_image_surface.dart';
 import 'package:picakeep/pages/reader/reader_page_image.dart';
+import 'package:picakeep/pages/reader/reader_whole_image.dart';
 import 'package:share_plus_platform_interface/method_channel/method_channel_share.dart';
 import 'package:share_plus_platform_interface/share_plus_platform_interface.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -57,75 +59,32 @@ class _TaskSaveDialog extends FileSelectorPlatform {
   }
 }
 
-class _BitmapBackend extends ReaderRasterBackend {
-  _BitmapBackend(this.color);
-  final Color color;
-  int decodes = 0;
-  @override
-  bool get requiresFileBacking => false;
-  @override
-  Future<ReaderRasterMetadata> probe(File file) async => _metadata;
-  static const _metadata = ReaderRasterMetadata(
-      size: Size(1600, 2400),
-      animated: false,
-      format: 'test-png',
-      workingBytes: 1);
-  @override
-  Future<ui.Image> decode(
-    File file,
-    ReaderTileDemand demand, {
-    required String backingPath,
-    required int memoryBudgetBytes,
-    required bool Function() isCancelled,
-    Future<void>? cancelled,
-  }) async {
-    if (isCancelled()) throw const ImageWorkCancelled();
-    decodes++;
-    final recorder = ui.PictureRecorder();
-    Canvas(recorder).drawRect(
-        Rect.fromLTWH(0, 0, demand.outputWidth.toDouble(),
-            demand.outputHeight.toDouble()),
-        Paint()..color = color);
-    final picture = recorder.endRecording();
-    try {
-      return picture.toImageSync(demand.outputWidth, demand.outputHeight);
-    } finally {
-      picture.dispose();
-    }
-  }
-}
-
-class _TaskSource extends FileReaderPageSource
-    implements RasterReaderPageSource {
+class _TaskSource extends FileReaderPageSource {
   _TaskSource(
       {required super.identity,
       required File file,
-      required this.rasterBackend,
       this.gate,
       this.exportEntered})
-      : rasterLocator = file,
-        super(
+      : super(
             file: file,
             width: 1600,
             height: 2400,
             extension: '.png',
             mimeType: 'image/png');
-  @override
-  final File rasterLocator;
-  @override
-  final ReaderRasterBackend rasterBackend;
   final Completer<void>? gate;
   final Completer<ReaderPageIdentity>? exportEntered;
   bool disposed = false;
-  @override
-  Future<ReaderRasterMetadata> openRasterMetadata() async =>
-      _BitmapBackend._metadata;
   @override
   Future<File> openOriginalFile({ReaderPageCancellation? cancellation}) async {
     if (exportEntered != null && !exportEntered!.isCompleted) {
       exportEntered!.complete(identity);
     }
-    if (gate != null) await gate!.future;
+    if (gate != null) {
+      await (cancellation == null
+          ? gate!.future
+          : Future.any<void>([gate!.future, cancellation.cancelled]));
+      cancellation?.throwIfCancelled();
+    }
     return super.openOriginalFile(cancellation: cancellation);
   }
 
@@ -180,7 +139,6 @@ class _TaskReadingData extends ReadingData {
             page: page,
             sourceVersion: '${files[page].path}:version1'),
         file: files[page],
-        rasterBackend: _BitmapBackend(_colors[page]),
         gate: exportGate,
         exportEntered: exportEntered);
     sources.add(source);
@@ -314,12 +272,15 @@ void main() {
 
   Future<ComicReadingPageLogic> open(WidgetTester tester, _TaskReadingData data,
       String layout, ReaderDisplayMode mode,
-      {int initialPage = 1}) async {
+      {int initialPage = 1,
+      ReaderLargeImagePolicy policy = ReaderLargeImagePolicy.safeWhole}) async {
     tester.view.physicalSize = const Size(1200, 900);
     tester.view.devicePixelRatio = 1;
     appdata.settings[9] = layout;
     appdata.settings[readerImagePipelineSettingIndex] =
-        ReaderImagePipelineSettings(comic: mode, illust: mode).encode();
+        ReaderImagePipelineSettings(
+                comic: mode, illust: mode, largeImagePolicy: policy)
+            .encode();
     final page = ComicReadingPage(data, initialPage, 1);
     await tester.pumpWidget(MaterialApp(
         navigatorKey: App.navigatorKey,
@@ -327,11 +288,34 @@ void main() {
         theme: ThemeData(
             colorScheme: ColorScheme.fromSeed(seedColor: Colors.blue))));
     final logic = StateController.find<ComicReadingPageLogic>();
-    await _until(tester,
-        () => !logic.isLoading && ReaderSurfaceDiagnostics.residentBytes > 0,
-        reason: 'real ComicReadingPage should load authoritative sources');
+    final renderer = mode == ReaderDisplayMode.previewFirst
+        ? find.byType(ReaderPreviewPageImage)
+        : find.byType(ReaderWholeImage);
+    await _until(
+        tester,
+        () =>
+            !logic.isLoading &&
+            find
+                .descendant(
+                    of: renderer,
+                    matching: find.byWidgetPredicate(
+                        (widget) => widget is RawImage && widget.image != null))
+                .evaluate()
+                .isNotEmpty,
+        reason: 'real ComicReadingPage must present complete image pixels');
     await _pump(tester);
-    expect(find.byType(ReaderPageImage), findsWidgets);
+    if (mode == ReaderDisplayMode.previewFirst) {
+      expect(find.byType(ReaderPreviewPageImage), findsWidgets);
+      expect(find.byType(ReaderPageImage), findsNothing);
+      expect(find.byType(ReaderWholeImage), findsNothing);
+    } else {
+      expect(find.byType(ReaderPageImage), findsWidgets);
+      expect(find.byType(ReaderWholeImage), findsWidgets);
+      expect(find.byType(ReaderPreviewPageImage), findsNothing);
+    }
+    expect(find.byType(ReaderImageSurface), findsNothing);
+    expect(ReaderSurfaceDiagnostics.activeSurfaces, 0);
+    expect(ReaderSurfaceDiagnostics.residentBytes, 0);
     expect(tester.takeException(), isNull);
     return logic;
   }
@@ -344,6 +328,9 @@ void main() {
         () =>
             ReaderSurfaceDiagnostics.activeSurfaces == 0 &&
             ReaderSurfaceDiagnostics.residentBytes == 0 &&
+            ReaderWholeImageResidency.shared.bytes == 0 &&
+            ReaderPreviewImagePool.globalReservedWorkingBytes == 0 &&
+            ReaderPreviewImagePool.globalReservedDecodedBytes == 0 &&
             !ImageWorkScheduler.shared.hasWork &&
             ReaderPageFileLease.activeLeaseCount == 0 &&
             data.sources.every((source) => source.disposed),
@@ -386,7 +373,10 @@ void main() {
           expect(before.scale,
               closeTo(logic.nativePixelScales[scaleKey]!, .00001));
           expect(data.sources.length, sourceCount,
-              reason: 'quality upgrade should not reopen original sources');
+              reason: 'native-scale change should not reopen original sources');
+          expect(find.byType(ReaderImageSurface), findsNothing);
+          expect(ReaderSurfaceDiagnostics.activeSurfaces, 0);
+          expect(ReaderSurfaceDiagnostics.residentBytes, 0);
           expect(tester.takeException(), isNull);
           await close(tester, logic, data);
           for (final original in originals) {
@@ -398,65 +388,72 @@ void main() {
   }
 
   for (final operation in ['save', 'share', 'favorite']) {
-    testWidgets(
-        '$operation freezes selected original and metadata while page/chapter/work change',
-        (tester) async {
-      final data = _TaskReadingData(originals, 'frozen-$operation');
-      final logic = await open(tester, data, '1', ReaderDisplayMode.sharpFirst);
-      logic.tools = true;
-      logic.update();
-      await _pump(tester);
-      data.exportGate = Completer<void>();
-      data.exportEntered = Completer<ReaderPageIdentity>();
-      await tester.tap(find.byIcon(operation == 'save'
-          ? Icons.save_alt
-          : operation == 'share'
-              ? Icons.share
-              : Icons.favorite_outline));
-      await _until(tester, () => data.exportEntered!.isCompleted,
-          reason: 'operation must open the frozen page');
-      final selected = await data.exportEntered!.future;
-      expect(selected.page, 0);
-      expect(selected.episode, 1);
-      final originalId = data.workId;
-      logic.pageController.jumpToPage(2);
-      logic.order = 2;
-      data.workId = 'other-work';
-      data.label = 'changed-title';
-      data.exportGate!.complete();
-      if (operation == 'save') {
-        await _until(tester, () => saveDialog.calls == 1,
-            reason: 'save dialog should receive source file');
-        await _pump(tester);
-        final digest =
-            await tester.runAsync(() => originalImageDigest(saveDialog.target));
-        expect(digest,
-            await tester.runAsync(() => originalImageDigest(originals[0])));
-      } else if (operation == 'share') {
-        await _until(tester, () => shared.isNotEmpty,
-            reason: 'share plugin should receive source file');
-        expect(await tester.runAsync(() => originalImageDigest(shared.single)),
-            await tester.runAsync(() => originalImageDigest(originals[0])));
-      } else {
-        await _until(tester, () => ImageFavoriteManager.length == 1,
-            reason: 'favorite transaction should finish');
-        final favorite = ImageFavoriteManager.getAll().single;
-        expect(favorite.id, 'task-original-reader-$originalId');
-        expect(favorite.title, 'task-original-title');
-        expect(favorite.ep, 1);
-        expect(favorite.page, 1);
-        expect(favorite.otherInfo['url'], originals[0].path);
-        expect(favorite.otherInfo['sourceVersion'], selected.sourceVersion);
-        expect(favorite.otherInfo['downloadId'], 'task-download-$originalId');
-        expect(
-            await tester
-                .runAsync(() => originalImageDigest(File(favorite.imagePath))),
-            await tester.runAsync(() => originalImageDigest(originals[0])));
+    for (final mode in ReaderDisplayMode.values) {
+      for (final policy in ReaderLargeImagePolicy.values) {
+        testWidgets(
+            '$operation ${mode.name}/${policy.name} freezes selected original and metadata while page/chapter/work change',
+            (tester) async {
+          final data = _TaskReadingData(
+              originals, 'frozen-$operation-${mode.name}-${policy.name}');
+          final logic = await open(tester, data, '1', mode, policy: policy);
+          logic.tools = true;
+          logic.update();
+          await _pump(tester);
+          data.exportGate = Completer<void>();
+          data.exportEntered = Completer<ReaderPageIdentity>();
+          await tester.tap(find.byIcon(operation == 'save'
+              ? Icons.save_alt
+              : operation == 'share'
+                  ? Icons.share
+                  : Icons.favorite_outline));
+          await _until(tester, () => data.exportEntered!.isCompleted,
+              reason: 'operation must open the frozen page');
+          final selected = await data.exportEntered!.future;
+          expect(selected.page, 0);
+          expect(selected.episode, 1);
+          final originalId = data.workId;
+          logic.pageController.jumpToPage(2);
+          logic.order = 2;
+          data.workId = 'other-work';
+          data.label = 'changed-title';
+          data.exportGate!.complete();
+          if (operation == 'save') {
+            await _until(tester, () => saveDialog.calls == 1,
+                reason: 'save dialog should receive source file');
+            await _pump(tester);
+            final digest = await tester
+                .runAsync(() => originalImageDigest(saveDialog.target));
+            expect(digest,
+                await tester.runAsync(() => originalImageDigest(originals[0])));
+          } else if (operation == 'share') {
+            await _until(tester, () => shared.isNotEmpty,
+                reason: 'share plugin should receive source file');
+            expect(
+                await tester.runAsync(() => originalImageDigest(shared.single)),
+                await tester.runAsync(() => originalImageDigest(originals[0])));
+          } else {
+            await _until(tester, () => ImageFavoriteManager.length == 1,
+                reason: 'favorite transaction should finish');
+            final favorite = ImageFavoriteManager.getAll().single;
+            expect(favorite.id, 'task-original-reader-$originalId');
+            expect(favorite.title, 'task-original-title');
+            expect(favorite.ep, 1);
+            expect(favorite.page, 1);
+            expect(favorite.otherInfo['url'], originals[0].path);
+            expect(favorite.otherInfo['sourceVersion'], selected.sourceVersion);
+            expect(
+                favorite.otherInfo['downloadId'], 'task-download-$originalId');
+            expect(
+                await tester.runAsync(
+                    () => originalImageDigest(File(favorite.imagePath))),
+                await tester.runAsync(() => originalImageDigest(originals[0])));
+          }
+          data.exportGate = null;
+          data.exportEntered = null;
+          await close(tester, logic, data);
+        });
       }
-      data.exportGate = null;
-      data.exportEntered = null;
-      await close(tester, logic, data);
-    });
+    }
   }
 
   for (final layout in ['4', '5']) {
@@ -503,6 +500,71 @@ void main() {
       expect(await tester.runAsync(() => originalImageDigest(shared.single)),
           await tester.runAsync(() => originalImageDigest(originals[chosen])));
       await close(tester, logic, data);
+    });
+  }
+
+  for (final layout in ['4', '5']) {
+    testWidgets(
+        'sharp layout $layout shares a selected visible original without waiting for display leases',
+        (tester) async {
+      final data = _TaskReadingData(originals, 'live-selection-$layout');
+      final logic =
+          await open(tester, data, layout, ReaderDisplayMode.sharpFirst);
+      if (layout == '4') {
+        logic.itemScrollController.jumpTo(index: 0, alignment: -1.3);
+        await _pump(tester);
+      }
+      logic.tools = true;
+      logic.update();
+      await _pump(tester);
+      final visible = layout == '5'
+          ? [0, 1]
+          : (logic.itemScrollListener.itemPositions.value
+              .where((item) =>
+                  item.itemLeadingEdge < 1 && item.itemTrailingEdge > 0)
+              .map((item) => item.index)
+              .toSet()
+              .toList()
+            ..sort());
+      expect(visible.length, greaterThan(1));
+      final beforePage = logic.index;
+      final beforeChapter = logic.order;
+      final beforeSources = data.sources.length;
+      expect(ReaderPageFileLease.activeLeaseCount, greaterThan(0));
+
+      await tester.tap(find.byIcon(Icons.share));
+      await _pump(tester);
+      expect(find.text('选择屏幕上的图片'), findsOneWidget);
+      final operationSources = data.sources.sublist(beforeSources);
+      expect(operationSources.map((source) => source.identity.page).toList(),
+          visible);
+      for (final index in visible) {
+        expect(
+            find.descendant(
+                of: find.byType(SimpleDialog),
+                matching: find.widgetWithText(ListTile, '${index + 1}')),
+            findsOneWidget);
+      }
+      final chosen = visible.last;
+      await tester.tap(find.descendant(
+          of: find.byType(SimpleDialog),
+          matching: find.widgetWithText(ListTile, '${chosen + 1}')));
+      await _until(tester, () => shared.length == 1,
+          reason:
+              'share completes while the unchanged sharp reader stays open');
+      expect(logic.index, beforePage);
+      expect(logic.order, beforeChapter);
+      expect(find.byType(ReaderWholeImage), findsWidgets);
+      expect(await tester.runAsync(() => originalImageDigest(shared.single)),
+          await tester.runAsync(() => originalImageDigest(originals[chosen])));
+      expect(operationSources.any((source) => !source.disposed), isTrue,
+          reason: 'operation cleanup still waits for the real display lease');
+      expect(ReaderPageFileLease.activeLeaseCount, greaterThan(0),
+          reason:
+              'publishing a share must not retire the visible reader lease');
+      await close(tester, logic, data);
+      expect(operationSources.every((source) => source.disposed), isTrue);
+      expect(ReaderPageFileLease.activeLeaseCount, 0);
     });
   }
 }

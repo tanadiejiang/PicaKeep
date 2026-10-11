@@ -17,6 +17,7 @@ import 'package:picakeep/foundation/archive/archive_registry.dart';
 import 'package:picakeep/foundation/app_runtime_mode.dart';
 import 'package:picakeep/foundation/history.dart';
 import 'package:picakeep/foundation/image_favorites.dart';
+import 'package:picakeep/foundation/image_loader/reader_preview_provider.dart';
 import 'package:picakeep/foundation/image_pipeline/derived_image_store.dart';
 import 'package:picakeep/foundation/image_pipeline/image_disk_quota.dart';
 import 'package:picakeep/foundation/image_pipeline/image_work_scheduler.dart';
@@ -30,6 +31,8 @@ import 'package:picakeep/foundation/reader_image_quality.dart';
 import 'package:picakeep/foundation/remote_library_data_source.dart';
 import 'package:picakeep/pages/reader/comic_reading_page.dart';
 import 'package:picakeep/pages/reader/reader_image_surface.dart';
+import 'package:picakeep/pages/reader/reader_page_image.dart';
+import 'package:picakeep/pages/reader/reader_whole_image.dart';
 import 'package:picakeep/server/local_server_runtime.dart';
 import 'package:picakeep/server/server_config.dart';
 import 'package:picakeep_image_engine/picakeep_image_engine.dart';
@@ -311,7 +314,9 @@ void main() {
       for (final item in remoteItems.values) {
         final source = await RemoteLibraryReadingData(item: item)
             .resolvePageSource(0, 0, item.pageUrls.first);
-        expect(source, isA<RasterReaderPageSource>());
+        expect(source, isNot(isA<RasterReaderPageSource>()),
+            reason:
+                'remote reading uses complete originals, not negotiated tile sources');
         expect(source.isAuthoritativeOriginal, isTrue);
         await source.dispose();
       }
@@ -359,12 +364,33 @@ void main() {
               navigatorKey: App.navigatorKey,
               home: ComicReadingPage(data, 1, 0)));
           final logic = StateController.find<ComicReadingPageLogic>();
+          final renderer = mode == ReaderDisplayMode.previewFirst
+              ? find.byType(ReaderPreviewPageImage)
+              : find.byType(ReaderWholeImage);
           await until(
               tester,
               () =>
                   !logic.isLoading &&
-                  ReaderSurfaceDiagnostics.residentBytes > 0,
-              'real native-enabled reader must present a raster');
+                  find
+                      .descendant(
+                          of: renderer,
+                          matching: find.byWidgetPredicate((widget) =>
+                              widget is RawImage && widget.image != null))
+                      .evaluate()
+                      .isNotEmpty,
+              'real reader must present complete image pixels');
+          if (mode == ReaderDisplayMode.previewFirst) {
+            expect(find.byType(ReaderPreviewPageImage), findsWidgets);
+            expect(find.byType(ReaderPageImage), findsNothing);
+            expect(find.byType(ReaderWholeImage), findsNothing);
+          } else {
+            expect(find.byType(ReaderPageImage), findsWidgets);
+            expect(find.byType(ReaderWholeImage), findsWidgets);
+            expect(find.byType(ReaderPreviewPageImage), findsNothing);
+          }
+          expect(find.byType(ReaderImageSurface), findsNothing);
+          expect(ReaderSurfaceDiagnostics.activeSurfaces, 0);
+          expect(ReaderSurfaceDiagnostics.residentBytes, 0);
           logic.tools = true;
           logic.update();
           for (var i = 0; i < 12; i++) {
@@ -446,6 +472,9 @@ void main() {
               () =>
                   ReaderSurfaceDiagnostics.activeSurfaces == 0 &&
                   ReaderSurfaceDiagnostics.residentBytes == 0 &&
+                  ReaderWholeImageResidency.shared.bytes == 0 &&
+                  ReaderPreviewImagePool.globalReservedWorkingBytes == 0 &&
+                  ReaderPreviewImagePool.globalReservedDecodedBytes == 0 &&
                   !ImageWorkScheduler.shared.hasWork &&
                   ReaderPageFileLease.activeLeaseCount == 0 &&
                   ImageTemporaryPool.shared.reservedBytes == 0 &&

@@ -11,6 +11,7 @@ import 'package:picakeep/foundation/image_pipeline/reader_page_source.dart';
 import 'package:picakeep/foundation/image_pipeline/reader_raster_backend.dart';
 import 'package:picakeep/foundation/image_pipeline/reader_viewport.dart';
 import 'package:picakeep/foundation/reader_image_quality.dart';
+import 'package:picakeep/network/managed_image_retry.dart';
 import 'package:picakeep/pages/reader/reader_image_surface.dart';
 import 'package:picakeep/pages/reader/reader_page_image.dart';
 import 'package:picakeep_image_engine/picakeep_image_engine.dart';
@@ -92,7 +93,9 @@ class _Harness {
   Future<void> mount(
           WidgetTester tester, Future<ReaderPageSource> Function() load,
           {String resource = 'first',
-          ReaderDisplayMode mode = ReaderDisplayMode.sharpFirst}) =>
+          ReaderDisplayMode mode = ReaderDisplayMode.sharpFirst,
+          ReaderLargeImagePolicy? largeImagePolicy,
+          Future<void> Function()? onInvalidate}) =>
       tester.pumpWidget(MaterialApp(
           home: SizedBox(
               width: 400,
@@ -104,7 +107,9 @@ class _Harness {
                   viewportKey: viewport,
                   failureDiagnostics: failureDiagnostics,
                   transformChanges: changes,
-                  mode: mode))));
+                  mode: mode,
+                  largeImagePolicy: largeImagePolicy,
+                  onInvalidate: onInvalidate))));
 }
 
 Future<void> _flush(WidgetTester tester) async {
@@ -620,5 +625,123 @@ void main() {
     peerReleased = true;
     await _flush(tester);
     expect(ReaderPageFileLease.activeLeaseCount, 0);
+  });
+
+  testWidgets(
+      'whole source uses managed 2/4/8 backoff, then requires an explicit retry',
+      (tester) async {
+    final harness = _Harness();
+    addTearDown(harness.changes.dispose);
+    final zones = <bool>[];
+    var invalidations = 0;
+    Future<ReaderPageSource> load() async {
+      zones.add(isManagedImageRetry);
+      throw const SocketException('offline fixture');
+    }
+
+    await harness
+        .mount(tester, load, largeImagePolicy: ReaderLargeImagePolicy.safeWhole,
+            onInvalidate: () async {
+      invalidations++;
+    });
+    await _flush(tester);
+    expect(zones, [true]);
+    for (final seconds in [2, 4, 8]) {
+      final before = zones.length;
+      await _advance(tester, seconds * 1000 - 1);
+      expect(zones.length, before);
+      await _advance(tester, 1);
+      expect(zones.length, before + 1);
+    }
+    await _advance(tester, 60000);
+    expect(zones, [true, true, true, true]);
+    expect(invalidations, 0);
+    expect(find.byType(TextButton), findsOneWidget);
+    await tester.tap(find.byType(TextButton));
+    await _flush(tester);
+    expect(invalidations, 1);
+    expect(zones.length, 5);
+    await tester.pumpWidget(const SizedBox());
+    await _advance(tester, 20000);
+    expect(zones.length, 5,
+        reason: 'exiting cancels the newly scheduled backoff');
+  });
+
+  testWidgets(
+      'whole manual invalidation is awaited and cannot affect a replacement page',
+      (tester) async {
+    final harness = _Harness();
+    addTearDown(harness.changes.dispose);
+    final invalidation = Completer<void>();
+    var oldLoads = 0, newLoads = 0, oldInvalidations = 0, newInvalidations = 0;
+    await harness.mount(
+        tester,
+        () async {
+          oldLoads++;
+          throw const FormatException('fixture');
+        },
+        largeImagePolicy: ReaderLargeImagePolicy.safeWhole,
+        onInvalidate: () {
+          oldInvalidations++;
+          return invalidation.future;
+        });
+    await _flush(tester);
+    await tester.tap(find.byType(TextButton));
+    await _flush(tester);
+    expect(oldInvalidations, 1);
+    expect(oldLoads, 1,
+        reason: 'do not race a fresh load with stale cache metadata');
+    await harness.mount(
+        tester,
+        () async {
+          newLoads++;
+          throw const FormatException('next fixture');
+        },
+        resource: 'next',
+        largeImagePolicy: ReaderLargeImagePolicy.safeWhole,
+        onInvalidate: () async {
+          newInvalidations++;
+        });
+    await _flush(tester);
+    invalidation.complete();
+    await _flush(tester);
+    expect(oldLoads, 1);
+    expect(newLoads, 1);
+    expect(oldInvalidations, 1);
+    expect(newInvalidations, 0);
+    expect(
+        tester
+            .widget<ReaderPageImage>(find.byType(ReaderPageImage))
+            .resourceKey,
+        'next');
+    await tester.pumpWidget(const SizedBox());
+    await _flush(tester);
+  });
+
+  testWidgets(
+      'whole source does not retry TLS or deterministic format failures',
+      (tester) async {
+    final harness = _Harness();
+    addTearDown(harness.changes.dispose);
+    var loads = 0;
+    for (final error in <Object>[
+      const HandshakeException('fixture'),
+      const FormatException('fixture'),
+      const FileSystemException('fixture'),
+    ]) {
+      final before = loads;
+      await harness.mount(tester, () async {
+        loads++;
+        throw error;
+      },
+          resource: 'failure-$before',
+          largeImagePolicy: ReaderLargeImagePolicy.safeWhole);
+      await _flush(tester);
+      await _advance(tester, 60000);
+      expect(loads, before + 1);
+      expect(find.byType(TextButton), findsOneWidget);
+    }
+    await tester.pumpWidget(const SizedBox());
+    await _flush(tester);
   });
 }

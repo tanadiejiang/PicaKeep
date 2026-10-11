@@ -1,0 +1,28 @@
+{
+  "schema": 1,
+  "zlib": "1.3.2",
+  "generator": "streaming RGBA rows; PNG filter 0; zlib level9; CRC32 each chunk; no huge bitmap",
+  "validation": "full inflated length + SHA in <=64KiB chunks; no large frame decode",
+  "fixtures": [
+    {
+      "file": "safety_long_24x6000.png",
+      "width": 24,
+      "height": 6000,
+      "decoded_rgba_bytes": 576000,
+      "encoded_bytes": 2081,
+      "sha256": "7e2441a69f880b568185fd1ed6b42399ee89ab2cdefaa851d0f6c029371c001b",
+      "inflated_scanline_bytes": 582000,
+      "inflated_scanline_sha256": "09fd0a2329603fdcab6d0f69d5c740115e1cd7c564f413858c36e810e3d77c5e"
+    },
+    {
+      "file": "safety_large_8192x8192.png",
+      "width": 8192,
+      "height": 8192,
+      "decoded_rgba_bytes": 268435456,
+      "encoded_bytes": 277678,
+      "sha256": "59c64bba6d3f1b59b37ad579710df6327c711a47037366cc2879c55ee818329c",
+      "inflated_scanline_bytes": 268443648,
+      "inflated_scanline_sha256": "3e636e936d0c214702ae7e6e88831df6d1cbf649a3ef22c06a42368e2bd13c6f"
+    }
+  ]
+}

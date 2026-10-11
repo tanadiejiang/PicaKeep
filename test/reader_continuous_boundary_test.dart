@@ -1,6 +1,4 @@
-import 'dart:convert';
 import 'dart:io';
-import 'dart:ui' as ui;
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
@@ -10,24 +8,33 @@ import 'package:picakeep/components/scrollable_list/src/scrollable_positioned_li
 import 'package:picakeep/foundation/app.dart';
 import 'package:picakeep/foundation/image_pipeline/image_work_scheduler.dart';
 import 'package:picakeep/foundation/image_pipeline/reader_page_source.dart';
-import 'package:picakeep/foundation/image_pipeline/reader_raster_backend.dart';
-import 'package:picakeep/foundation/image_pipeline/reader_viewport.dart';
+import 'package:image/image.dart' as img;
+import 'package:picakeep/foundation/image_loader/reader_preview_provider.dart';
+import 'package:picakeep/foundation/image_pipeline/derived_image_store.dart';
+import 'package:picakeep/foundation/image_pipeline/image_disk_quota.dart';
+import 'package:picakeep/foundation/image_pipeline/reader_raster_cache.dart';
+import 'package:picakeep/foundation/reader_image_quality.dart';
+import 'package:picakeep/pages/reader/reader_whole_image.dart';
+
+import 'support/image_disk_quota_fixture.dart';
 import 'package:picakeep/foundation/local_favorites.dart';
 import 'package:picakeep/foundation/log.dart';
 import 'package:picakeep/pages/reader/comic_reading_page.dart';
 import 'package:picakeep/pages/reader/reader_image_surface.dart';
 
 class _BoundaryReadingData extends ReadingData {
-  _BoundaryReadingData(this.file);
+  _BoundaryReadingData(this.file, this.fixtureId);
 
   final File file;
+  final String fixtureId;
+  String get sourceVersion => '$fixtureId:400x${imageHeight.toInt()}';
   int chapters = 3;
   int pages = 2;
   double imageHeight = 2400;
 
   List<String> get urls => List.generate(pages, (i) => '$i');
   @override
-  String get id => 'reader-boundary-test';
+  String get id => fixtureId;
   @override
   String get downloadId => id;
   @override
@@ -48,75 +55,37 @@ class _BoundaryReadingData extends ReadingData {
   @override
   Future<List<String>> loadEpNetwork(int ep) async => urls;
   @override
-  String buildImageKey(int ep, int page, String url) => '$id-$ep-$page';
+  String buildImageKey(int ep, int page, String url) =>
+      '$sourceVersion-$ep-$page';
   @override
   Stream<List<int>> loadImageNetwork(int ep, int page, String url) =>
-      Stream.value(const <int>[]);
+      file.openRead();
   @override
   Future<ReaderPageSource> resolvePageSource(
           int ep, int page, String url) async =>
-      _BoundaryPageSource(
-          file,
-          ReaderPageIdentity(
+      FileReaderPageSource(
+          file: file,
+          width: 400,
+          height: imageHeight.toInt(),
+          extension: '.png',
+          mimeType: 'image/png',
+          identity: ReaderPageIdentity(
               sourceKey: sourceKey,
               workId: id,
               downloadId: downloadId,
               episode: ep,
               page: page,
-              sourceVersion: 'fixture'),
-          Size(400, imageHeight));
-}
-
-class _BoundaryPageSource extends FileReaderPageSource
-    implements RasterReaderPageSource {
-  _BoundaryPageSource(File file, ReaderPageIdentity identity, this.size)
-      : rasterLocator = file,
-        super(identity: identity, file: file);
-
-  final Size size;
-  @override
-  final File rasterLocator;
-  @override
-  ReaderRasterBackend get rasterBackend => _BoundaryBackend(size);
-  @override
-  Future<ReaderRasterMetadata> openRasterMetadata() async =>
-      _BoundaryBackend(size).metadata;
-}
-
-class _BoundaryBackend extends ReaderRasterBackend {
-  const _BoundaryBackend(this.size);
-  final Size size;
-  ReaderRasterMetadata get metadata => ReaderRasterMetadata(
-      size: size, animated: false, format: 'fixture', workingBytes: 1);
-  @override
-  bool get requiresFileBacking => false;
-  @override
-  Future<ReaderRasterMetadata> probe(File file) async => metadata;
-  @override
-  Future<ui.Image> decode(File file, ReaderTileDemand demand,
-      {required String backingPath,
-      required int memoryBudgetBytes,
-      required bool Function() isCancelled,
-      Future<void>? cancelled}) async {
-    if (isCancelled()) throw const ImageWorkCancelled();
-    final recorder = ui.PictureRecorder();
-    Canvas(recorder).drawRect(
-        Rect.fromLTWH(0, 0, demand.outputWidth.toDouble(),
-            demand.outputHeight.toDouble()),
-        Paint()..color = Colors.green);
-    final picture = recorder.endRecording();
-    try {
-      return picture.toImageSync(demand.outputWidth, demand.outputHeight);
-    } finally {
-      picture.dispose();
-    }
-  }
+              sourceVersion: sourceVersion));
 }
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   late Directory taskRoot;
-  late File original;
+  final pngByHeight = <int, List<int>>{};
+  var fixtureSerial = 0;
+  var logicDisposed = false;
+  final savedQuota = ImageDiskQuota.overrideForTesting;
+  late ImageDiskQuota quota;
   late List<String> savedSettings;
   late _BoundaryReadingData data;
   late ComicReadingPage page;
@@ -129,12 +98,21 @@ void main() {
     App.dataPath = taskRoot.path;
     App.cachePath = '${taskRoot.path}/cache';
     await Directory(App.cachePath).create(recursive: true);
-    original = await File('${taskRoot.path}/original.png').writeAsBytes(
-        base64Decode(
-            'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII='));
+    quota = installTaskDiskQuota(() => [App.cachePath]);
+    for (final height in [400, 600, 800, 2400]) {
+      pngByHeight[height] = img.encodePng(img.Image(width: 400, height: height)
+        ..clear(img.ColorRgb8(0, 180, 0)));
+    }
   });
   tearDownAll(() async {
-    if (await taskRoot.exists()) await taskRoot.delete(recursive: true);
+    try {
+      await quota.drain();
+      expect(taskRoot.uri.pathSegments.where((part) => part.isNotEmpty).last,
+          startsWith('reader-boundary-045-'));
+      if (await taskRoot.exists()) await taskRoot.delete(recursive: true);
+    } finally {
+      ImageDiskQuota.overrideForTesting = savedQuota;
+    }
   });
   setUp(() {
     savedSettings = List.of(appdata.settings);
@@ -142,24 +120,40 @@ void main() {
     savedLogging = LogManager.recordingEnabled;
     LogManager.recordingEnabled = false;
     appdata.settings[9] = '4';
+    appdata.settings[28] = '0';
+    appdata.settings[readerImagePipelineSettingIndex] =
+        const ReaderImagePipelineSettings(
+                comic: ReaderDisplayMode.sharpFirst,
+                illust: ReaderDisplayMode.sharpFirst)
+            .encode();
     appdata.settings[43] = '0';
     appdata.settings[49] = '0';
     appdata.settings[55] = '0';
     TapController.reset();
     TapController.lastScrollTime = DateTime(2023);
-    data = _BoundaryReadingData(original);
+    final fixtureId = 'boundary-case-${fixtureSerial++}';
+    data = _BoundaryReadingData(
+        File('${taskRoot.path}/$fixtureId.png'), fixtureId);
+    logicDisposed = false;
     page = ComicReadingPage(data, 1, 1);
     logic = StateController.find<ComicReadingPageLogic>();
     logic.urls = data.urls;
     logic.isLoading = false;
     logic.scrollManager = ScrollManager(logic);
   });
-  tearDown(() {
+  void disposeLogic() {
+    if (logicDisposed) return;
+    logicDisposed = true;
     logic.clearPhotoViewControllers();
     logic.pageController.dispose();
     logic.scrollController.dispose();
     logic.focusNode.dispose();
+    logic.viewportChanges.dispose();
     logic.dispose();
+  }
+
+  tearDown(() {
+    disposeLogic();
     appdata.settings = savedSettings;
     appdata.implicitData = savedImplicit;
     TapController.reset();
@@ -174,6 +168,20 @@ void main() {
     }
   }
 
+  bool budgetsDrained() =>
+      ReaderSurfaceDiagnostics.activeSurfaces == 0 &&
+      ReaderSurfaceDiagnostics.residentBytes == 0 &&
+      ReaderWholeImageResidency.shared.bytes == 0 &&
+      ReaderPreviewImagePool.globalReservedWorkingBytes == 0 &&
+      ReaderPreviewImagePool.globalReservedDecodedBytes == 0 &&
+      ReaderPageFileLease.activeLeaseCount == 0 &&
+      ReaderRasterCache.pendingBytes == 0 &&
+      !ImageWorkScheduler.shared.hasWork &&
+      ImageWorkScheduler.shared.reservedBytes == 0 &&
+      ImageTemporaryPool.shared.reservedBytes == 0 &&
+      quota.pendingOperations == 0 &&
+      quota.activeBytes == 0;
+
   Future<void> pumpReader(WidgetTester tester) async {
     tester.view.physicalSize = const Size(400, 800);
     tester.view.devicePixelRatio = 1;
@@ -181,8 +189,20 @@ void main() {
     addTearDown(tester.view.resetDevicePixelRatio);
     addTearDown(() async {
       await tester.pumpWidget(const SizedBox());
-      await finishRasterWork(tester);
+      disposeLogic();
+      for (var i = 0; i < 300 && !budgetsDrained(); i++) {
+        await tester.pump(const Duration(milliseconds: 16));
+        await tester.runAsync(
+            () => Future<void>.delayed(const Duration(milliseconds: 5)));
+      }
+      expect(budgetsDrained(), isTrue,
+          reason:
+              'boundary reader exit releases all real whole/preview/cache budgets');
+      await tester.runAsync(quota.drain);
+      expect(tester.takeException(), isNull);
     });
+    await tester.runAsync(
+        () => data.file.writeAsBytes(pngByHeight[data.imageHeight.toInt()]!));
     await tester.pumpWidget(MaterialApp(
       navigatorKey: App.navigatorKey,
       home: Scaffold(body: Builder(builder: (context) {
@@ -205,11 +225,27 @@ void main() {
       await tester.pump(const Duration(milliseconds: 16));
       await tester.runAsync(
           () => Future<void>.delayed(const Duration(milliseconds: 2)));
-      if (ReaderSurfaceDiagnostics.residentBytes > 0 &&
+      if (tester
+              .widgetList<RawImage>(find.byType(RawImage))
+              .any((widget) => widget.image != null) &&
           !ImageWorkScheduler.shared.hasWork) {
         break;
       }
     }
+    final images = tester
+        .widgetList<RawImage>(find.byType(RawImage))
+        .where((widget) => widget.image != null)
+        .toList();
+    expect(images, isNotEmpty,
+        reason: 'real complete PNG pixels must precede boundary assertions');
+    for (final image in images) {
+      expect((image.image!.width, image.image!.height),
+          (400, data.imageHeight.toInt()));
+    }
+    expect(find.byType(ReaderWholeImage), findsWidgets);
+    expect(find.byType(ReaderPreviewPageImage), findsNothing);
+    expect(find.byType(ReaderImageSurface), findsNothing);
+    expect(ReaderSurfaceDiagnostics.residentBytes, 0);
     await tester.pumpAndSettle();
     expect(
         logic.readingMethod == ReadingMethod.topToBottomContinuously
@@ -219,6 +255,11 @@ void main() {
   }
 
   Future<void> goToBottom(WidgetTester tester) async {
+    logic.scrollController
+        .jumpTo(logic.scrollController.position.maxScrollExtent);
+    // The newly visible page now probes a real PNG rather than returning
+    // synchronous fake metadata. Establish the bottom after its layout settles.
+    await finishRasterWork(tester);
     logic.scrollController
         .jumpTo(logic.scrollController.position.maxScrollExtent);
     await tester.pumpAndSettle();
@@ -416,7 +457,7 @@ void main() {
       final notification = overscroll(tester, 150,
           axis: foreign == 'axis' ? Axis.horizontal : Axis.vertical,
           dispatchFrom: foreign == 'depth'
-              ? tester.element(find.byType(ReaderImageSurface).first)
+              ? tester.element(find.byType(RawImage).first)
               : null);
       if (foreign == 'depth') expect(notification.depth, greaterThan(0));
       expect(logic.order, 1);

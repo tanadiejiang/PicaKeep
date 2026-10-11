@@ -18,6 +18,7 @@ import 'package:picakeep/comic_source/comic_source.dart';
 import 'package:picakeep/tools/translations.dart';
 import 'package:picakeep/components/select.dart' hide AnimatedContainer;
 import 'package:picakeep/components/scrollable.dart';
+import 'package:picakeep/components/reader_large_image_policy_setting.dart';
 import 'package:picakeep/foundation/app.dart';
 import 'package:picakeep/foundation/appearance_settings.dart';
 import 'package:picakeep/foundation/comic_tile_display_config.dart';

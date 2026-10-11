@@ -1,5 +1,50 @@
 part of pica_reader;
 
+// Shared by visible pages, their size hints and speculative work. Preserve the
+// adapter's provider version (not just the URL), but never log its credentials.
+String _readerResourceKey(ReadingData data, int ep, int page, String url) =>
+    'reader-page-v1:${sha256.convert(utf8.encode(jsonEncode([
+      data.sourceKey, data.id, data.downloadId, data.imageAccessScope,
+      data.buildImageKey(ep, page, url), ep, page,
+    ])))}';
+
+class _ScopedReaderImageProvider extends StreamImageProvider {
+  _ScopedReaderImageProvider(FutureOr<StreamImageLoadResult> Function() load,
+      String key, this.verify, {StreamImageAbortSignal? abortSignal})
+      : super.withProgress(load, key, abortSignal: abortSignal);
+  final VoidCallback verify;
+
+  @override
+  Future<StreamImageProvider> obtainKey(ImageConfiguration configuration) {
+    verify();
+    return super.obtainKey(configuration);
+  }
+
+  @override
+  Future<bool> evict({ImageCache? cache,
+      ImageConfiguration configuration = ImageConfiguration.empty}) async =>
+      (cache ?? PaintingBinding.instance.imageCache).evict(this);
+
+  @override
+  ImageStreamCompleter loadImage(StreamImageProvider key, ImageDecoderCallback decode) {
+    verify();
+    return super.loadImage(key, (buffer, {getTargetSize}) async {
+      try { verify(); } catch (_) { buffer.dispose(); rethrow; }
+      final codec = await decode(buffer, getTargetSize: getTargetSize);
+      try { verify(); } catch (_) { codec.dispose(); rethrow; }
+      return codec;
+    });
+  }
+}
+
+Future<void> _discardReaderResponse(StreamImageLoadResult result) async {
+  if (result.cancel != null) {
+    await result.cancel!();
+  } else {
+    await result.stream.listen((_) {}, onError: (Object _) {}).cancel();
+  }
+}
+
 abstract class ReadingData {
   ReadingData();
 
@@ -99,11 +144,41 @@ abstract class ReadingData {
     if (downloaded && checkEpDownloaded(ep)) {
       return FileImageProvider(downloadId, hasEp ? ep : 0, page);
     } else {
-      return StreamImageProvider(
-        () => loadImage(ep, page, url),
-        buildImageKey(ep, page, url),
-        abortSignal: abortSignal,
-      );
+      final resourceKey = _readerResourceKey(this, ep, page, url);
+      void verify() {
+        if (_readerResourceKey(this, ep, page, url) != resourceKey) {
+          throw observeReaderImageReason(
+              StateError('Reader image access scope or provider version changed'),
+              ReaderImageReason.sourceChanged);
+        }
+      }
+      return _ScopedReaderImageProvider(() async {
+        verify();
+        final result = await loadOriginalNetworkWithProgress(ep, page, url,
+            abortSignal: abortSignal);
+        try { verify(); } catch (_) {
+          await _discardReaderResponse(result);
+          rethrow;
+        }
+        Stream<List<int>> guarded() async* {
+          var subscribed = false;
+          try {
+            verify();
+            subscribed = true;
+            await for (final chunk in result.stream) {
+              verify();
+              yield chunk;
+            }
+            verify();
+          } finally {
+            // await-for cancels its subscription when a body check throws.
+            // Before subscribing, the headers-only response still needs release.
+            if (!subscribed) await _discardReaderResponse(result);
+          }
+        }
+        return StreamImageLoadResult(stream: guarded(),
+            expectedTotalBytes: result.expectedTotalBytes, cancel: result.cancel);
+      }, resourceKey, verify, abortSignal: abortSignal);
     }
   }
 
@@ -115,6 +190,11 @@ abstract class ReadingData {
       null;
 
   String buildImageKey(int ep, int page, String url) => url;
+
+  /// Explicit retry may discard this page's regenerable network cache, never
+  /// user/download files. Source adapters must use the same account, headers
+  /// and cache identity as their fetch; the generic implementation cannot guess.
+  Future<void> invalidateImage(int ep, int page, String url) async {}
 
   String epDisplayName(int index) {
     return eps?.values.elementAt(index) ?? '';
@@ -368,6 +448,8 @@ abstract class ReadingData {
     int page,
     String url, {
     Map<String, String>? headers,
+    String? cacheIdentity,
+    OnlineImageManager? imageManager,
     bool isOriginal = true,
     int? width,
     int? height,
@@ -387,11 +469,12 @@ abstract class ReadingData {
       opener: (cancellation) async {
         final abort = StreamImageAbortSignal();
         unawaited(cancellation.cancelled.then((_) => abort.abort()));
-        final file = await OnlineImageManager.instance.getImageFile(
+        cancellation.throwIfCancelled();
+        final file = await (imageManager ?? OnlineImageManager.instance).getImageFile(
           url,
           headers: headers,
           abortSignal: abort,
-          cacheIdentity: identity.stableKey,
+          cacheIdentity: cacheIdentity ?? identity.stableKey,
         );
         release = OnlineImageCache.instance.lease(file);
         return file;

@@ -8,6 +8,9 @@ import 'package:crypto/crypto.dart';
 import 'package:flutter/material.dart';
 import 'package:photo_view/photo_view.dart';
 import 'package:picakeep/foundation/app.dart';
+import 'package:picakeep/foundation/image_loader/reader_image_retry.dart';
+import 'package:picakeep/foundation/image_loader/reader_image_limits.dart';
+import 'package:picakeep/network/managed_image_retry.dart';
 import 'package:picakeep/foundation/image_pipeline/image_work_scheduler.dart';
 import 'package:picakeep/foundation/image_pipeline/reader_failure_diagnostics.dart';
 import 'package:picakeep/foundation/image_pipeline/reader_original_raster_handoff.dart';
@@ -19,6 +22,8 @@ import 'package:picakeep/tools/translations.dart';
 import 'package:picakeep_image_engine/picakeep_image_engine.dart';
 
 import 'reader_image_surface.dart';
+import 'reader_whole_image.dart';
+import 'reader_photo_view_owner.dart';
 
 /// Some external filesystems refresh cached ctime on the first actual read.
 /// Establish the baseline before probing; later source checks stay strict.
@@ -159,6 +164,11 @@ class ReaderPageImage extends StatefulWidget {
     this.persistRaster = true,
     this.sessionRasterCache,
     this.failureDiagnostics,
+    this.sizeHint,
+    this.onSourceSize,
+    this.largeImagePolicy,
+    this.onUseSafeWhole,
+    this.onInvalidate,
   });
 
   final Future<ReaderPageSource> Function() loadSource;
@@ -192,6 +202,20 @@ class ReaderPageImage extends StatefulWidget {
   final ReaderSessionRasterCache? sessionRasterCache;
   final ReaderFailurePageDiagnostics? failureDiagnostics;
 
+  /// Source size already known to the reading session (053). A continuous
+  /// page rebuilt above the viewport must lay out at its real height on the
+  /// first frame; a 1.4 placeholder that later shrinks shifts every visible
+  /// page and snaps upward drags back.
+  final Size? sizeHint;
+
+  /// Reports the resolved source size so the session can provide [sizeHint].
+  final ValueChanged<Size>? onSourceSize;
+
+  /// Non-null for production sharp reading. No partial/ROI surface is reachable.
+  final ReaderLargeImagePolicy? largeImagePolicy;
+  final VoidCallback? onUseSafeWhole;
+  final Future<void> Function()? onInvalidate;
+
   @override
   State<ReaderPageImage> createState() => _ReaderPageImageState();
 }
@@ -210,6 +234,8 @@ class _ReaderPageImageState extends State<ReaderPageImage> {
   int _generation = 0;
   Future<void> _resolutionTail = Future<void>.value();
   Future<void> _sourceDrain = Future<void>.value();
+  Future<({Object error, StackTrace stack})?> _invalidationDrain =
+      Future.value(null);
   Timer? _resolutionRetry;
   Timer? _sourceLoadingTimer;
   bool _showSourceLoading = false;
@@ -240,6 +266,7 @@ class _ReaderPageImageState extends State<ReaderPageImage> {
   @override
   void initState() {
     super.initState();
+    _pendingSourceSize = widget.sizeHint;
     _selectFailurePage();
     _beginFailureAttempt();
     _startSourceLoadingFeedback();
@@ -262,6 +289,9 @@ class _ReaderPageImageState extends State<ReaderPageImage> {
     super.didUpdateWidget(oldWidget);
     _failureAttempt.updateQualityMode(widget.mode.name);
     if (widget.resourceKey != oldWidget.resourceKey ||
+        (widget.mode != oldWidget.mode &&
+            (widget.largeImagePolicy != null || oldWidget.largeImagePolicy != null)) ||
+        widget.largeImagePolicy != oldWidget.largeImagePolicy ||
         widget.failureDiagnostics != oldWidget.failureDiagnostics ||
         widget.fullOrdinaryImage != oldWidget.fullOrdinaryImage ||
         widget.earlyOriginalRaster != oldWidget.earlyOriginalRaster ||
@@ -307,6 +337,11 @@ class _ReaderPageImageState extends State<ReaderPageImage> {
     _resolutionRetry?.cancel();
     _resolutionRetry = null;
     _resolutionRetries = 0;
+    final invalidate = rebuild ? widget.onInvalidate : null;
+    _invalidationDrain = invalidate == null ? Future.value(null)
+        : Future<void>.sync(invalidate).then<({Object error, StackTrace stack})?>(
+            (_) => null,
+            onError: (Object error, StackTrace stack) => (error: error, stack: stack));
     _originalRasterHandoff?.cancel();
     _originalRasterHandoff = null;
     _releaseResolvedHandoff?.call();
@@ -321,7 +356,7 @@ class _ReaderPageImageState extends State<ReaderPageImage> {
       _resolvedOriginal = null;
       _fullOrdinaryImage = false;
       _showSourceLoading = false;
-      _pendingSourceSize = null;
+      _pendingSourceSize = widget.sizeHint;
       _error = null;
     }
 
@@ -337,10 +372,23 @@ class _ReaderPageImageState extends State<ReaderPageImage> {
   Future<void> _resolve() {
     final generation = _generation;
     final previous = _resolutionTail;
+    final invalidation = _invalidationDrain;
     final next = () async {
       await previous;
       await _sourceDrain;
-      if (_isCurrent(generation)) await _resolveAttempt(generation);
+      final failure = await invalidation;
+      if (!_isCurrent(generation)) return;
+      if (failure != null) {
+        _failureAttempt.failure(stage: 'invalidate', error: failure.error,
+            stackTrace: failure.stack);
+        setState(() => _error = failure.error);
+        return;
+      }
+      if (widget.largeImagePolicy != null) {
+        await runWithManagedImageRetry(() => _resolveAttempt(generation));
+      } else {
+        await _resolveAttempt(generation);
+      }
     }();
     _resolutionTail = next;
     return next;
@@ -355,7 +403,8 @@ class _ReaderPageImageState extends State<ReaderPageImage> {
     ReaderSessionSourceKey? metadataGuard;
     ReaderPageSource? source;
     void Function()? releaseMetadata;
-    var retryQueueFailure = false;
+    var retryResolution = false;
+    Duration? retryDelay;
     var stage = 'loadSource';
     final failureAttempt = _failureAttempt;
     try {
@@ -383,7 +432,7 @@ class _ReaderPageImageState extends State<ReaderPageImage> {
       ReaderRasterMetadata metadata;
       late ReaderRasterBackend backend;
       var compatibility = false;
-      if (source is RasterReaderPageSource) {
+      if (source is RasterReaderPageSource && widget.largeImagePolicy == null) {
         backend = source.rasterBackend;
         file = source.rasterLocator;
         final metadataClock = Stopwatch()..start();
@@ -462,6 +511,37 @@ class _ReaderPageImageState extends State<ReaderPageImage> {
           width: metadata.size.width,
           height: metadata.size.height,
           format: metadata.format);
+      if (widget.largeImagePolicy != null) {
+        if (compatibility) {
+          // This backend only receives a complete source rect from the whole
+          // renderer. It cannot silently ask native code for partial regions.
+          backend = FlutterReaderRasterBackend(metadata,
+              persistRaster: widget.persistRaster);
+        }
+        final resolved = ReaderResolvedOriginal(source: source, file: file,
+            metadata: metadata, fileSnapshot: originalSnapshot!);
+        if (!_isCurrent(generation)) return;
+        _originalRasterHandoff?.cancel();
+        _originalRasterHandoff = null;
+        _releaseResolvedHandoff?.call();
+        _releaseResolvedHandoff = ReaderPageFileLease.acquire(file);
+        _sourceLoadingTimer?.cancel();
+        _sourceLoadingTimer = null;
+        failureAttempt.rendererPath('whole');
+        setState(() {
+          _backend = backend;
+          _compatibility = false;
+          _file = file;
+          _metadata = metadata;
+          _resolvedOriginal = resolved;
+          _fullOrdinaryImage = true;
+          _showSourceLoading = false;
+          _pendingSourceSize = metadata.size;
+          _error = null;
+        });
+        widget.onSourceSize?.call(metadata.size);
+        return;
+      }
       failureAttempt.rendererPath(compatibility ? 'compatibility' : 'surface');
       // The legacy renderer is restricted to a bounded decoded working set.
       // A huge unsupported file must not trigger a whole-image allocation.
@@ -557,17 +637,23 @@ class _ReaderPageImageState extends State<ReaderPageImage> {
         _pendingSourceSize = metadata.size;
         _error = null;
       });
+      widget.onSourceSize?.call(metadata.size);
     } catch (error, stack) {
       if (_isCurrent(generation) && !readerFailureIsCancellation(error)) {
         _disposeSelectedSource();
-        retryQueueFailure = (error is ImageEngineQueueExceeded ||
+        retryResolution = (error is ImageEngineQueueExceeded ||
                 error is ImageWorkQueueExceeded) &&
             _resolutionRetries < _maximumResolutionRetries;
+        if (!retryResolution && widget.largeImagePolicy != null &&
+            (stage == 'loadSource' || stage == 'openOriginal')) {
+          retryDelay = readerImageRetryDelay(error, _resolutionRetries + 1);
+          retryResolution = retryDelay != null;
+        }
         failureAttempt.failure(
             stage: stage,
             error: error,
             stackTrace: stack,
-            terminal: !retryQueueFailure,
+            terminal: !retryResolution,
             snapshot: {
               'generation': generation,
               'retry': _resolutionRetries,
@@ -575,9 +661,9 @@ class _ReaderPageImageState extends State<ReaderPageImage> {
               'pending': ImageWorkScheduler.shared.pendingCount,
               'reservedBytes': ImageWorkScheduler.shared.reservedBytes,
             });
-        // Only bounded queue admission failures recover automatically. Native
-        // status 3 also covers hard budgets, so its generic form must not retry.
-        if (!retryQueueFailure) {
+        // Queue pressure and classified transient transfers can retry; native
+        // hard budgets, format failures and authentication are never hidden.
+        if (!retryResolution) {
           _sourceLoadingTimer?.cancel();
           _sourceLoadingTimer = null;
           setState(() => _error = error);
@@ -595,13 +681,13 @@ class _ReaderPageImageState extends State<ReaderPageImage> {
       });
       releaseMetadata?.call();
     }
-    if (retryQueueFailure) {
+    if (retryResolution) {
       await _sourceDrain;
       if (!_isCurrent(generation)) return;
       _resolutionRetries++;
       failureAttempt.retry(stage: stage, retry: _resolutionRetries);
       _resolutionRetry =
-          Timer(Duration(milliseconds: 120 * _resolutionRetries), () {
+          Timer(retryDelay ?? Duration(milliseconds: 120 * _resolutionRetries), () {
         _resolutionRetry = null;
         if (_isCurrent(generation)) unawaited(_resolve());
       });
@@ -614,20 +700,57 @@ class _ReaderPageImageState extends State<ReaderPageImage> {
     }
     final buffer = await ui.ImmutableBuffer.fromFilePath(file.path);
     ui.ImageDescriptor? descriptor;
+    ui.Codec? codec;
     try {
       descriptor = await ui.ImageDescriptor.encoded(buffer);
+      var animated = true;
+      if (widget.largeImagePolicy != null) {
+        final sourceBytes = descriptor.width * descriptor.height * 4;
+        if (sourceBytes > 64 << 20) {
+          throw const ReaderWholeImageLimit('codec-peak',
+              '当前平台缺少此格式的安全整图解码支持，无法仅靠缩小输出避免大图内存开销');
+        }
+        codec = await descriptor.instantiateCodec(targetWidth: 1, targetHeight: 1);
+        animated = codec.frameCount > 1;
+      }
       return ReaderRasterMetadata(
           size: Size(descriptor.width.toDouble(), descriptor.height.toDouble()),
-          animated: true,
+          animated: animated,
           format: 'compatibility',
+          // Without native metadata a profile cannot be ruled out. Preserve
+          // Flutter colour handling and do not persist an assumed sRGB raster.
+          hasColorProfile: widget.largeImagePolicy != null,
           workingBytes: descriptor.width * descriptor.height * 4);
     } finally {
+      codec?.dispose();
       descriptor?.dispose();
       buffer.dispose();
     }
   }
 
   Widget _pixels() {
+    final wholePolicy = widget.largeImagePolicy;
+    if (wholePolicy != null) {
+      final generation = _generation;
+      return ReaderWholeImage(
+          key: ValueKey('whole:${widget.resourceKey}:${wholePolicy.name}'),
+          file: _file!, resourceKey: widget.resourceKey,
+          metadata: _metadata!, backend: _backend, policy: wholePolicy,
+          textureEdge: widget.textureEdgeLowerBound > 0
+              ? math.min(4096, widget.textureEdgeLowerBound) : 4096,
+          verifyOriginal: _resolvedOriginal?.verifyCurrent,
+          failureAttempt: _failureAttempt,
+          onUseSafeWhole: widget.onUseSafeWhole,
+          reloadSource: _restartResolution,
+          onFailure: (error) {
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (_isCurrent(generation)) setState(() => _error = error);
+            });
+            WidgetsBinding.instance.scheduleFrame();
+          },
+          onFirstRasterPresented: widget.onFirstRasterPresented,
+          fit: widget.fit, alignment: widget.alignment);
+    }
     if (_compatibility) {
       return Image.file(_file!,
           fit: widget.fit,
@@ -670,7 +793,7 @@ class _ReaderPageImageState extends State<ReaderPageImage> {
 
   @override
   Widget build(BuildContext context) {
-    if (_metadata == null) {
+    if (_metadata == null || (widget.largeImagePolicy != null && _error != null)) {
       final pending = Center(
           child: _error == null
               ? _showSourceLoading
@@ -679,21 +802,47 @@ class _ReaderPageImageState extends State<ReaderPageImage> {
                       height: 22,
                       child: CircularProgressIndicator(strokeWidth: 2))
                   : const SizedBox.shrink()
-              : Column(mainAxisSize: MainAxisSize.min, children: [
-                  const Padding(
-                      padding: EdgeInsets.all(12),
-                      child: Text('图片暂时无法打开，请重试', maxLines: 3)),
+              : Material(
+                   color: Theme.of(context).colorScheme.surface,
+                   child: SingleChildScrollView(
+                     child: Column(mainAxisSize: MainAxisSize.min, children: [
+                  Padding(
+                      padding: const EdgeInsets.all(12),
+                      child: Text(_error is ReaderWholeImageLimit
+                          ? (_error! as ReaderWholeImageLimit).message
+                          : _error is ReaderImageLimit
+                               ? (_error! as ReaderImageLimit).message
+                               : _error is ImageWorkBudgetExceeded
+                                   ? '整图解码超出当前安全工作预算，原文件未修改。'
+                                   : '图片暂时无法打开，请重试',
+                          textAlign: TextAlign.center)),
                   TextButton(
-                      onPressed: _restartResolution, child: Text('重试'.tl)),
-                ]));
+                      onPressed: _restartResolution,
+                      style: TextButton.styleFrom(minimumSize: const Size(48, 48)),
+                      child: Text('重试'.tl)),
+                   if (widget.largeImagePolicy == ReaderLargeImagePolicy.strictOriginal &&
+                       widget.onUseSafeWhole != null && _metadata != null &&
+                       (_error is ImageWorkBudgetExceeded ||
+                           _error is ReaderWholeImageLimit &&
+                           (_error! as ReaderWholeImageLimit).kind == 'original-limit'))
+                     Padding(
+                       padding: const EdgeInsets.only(top: 8),
+                       child: TextButton(
+                         onPressed: widget.onUseSafeWhole,
+                         style: TextButton.styleFrom(minimumSize: const Size(48, 48)),
+                         child: const Text('改为安全整图显示'))),
+                ]))));
+      final placeholderHeight = widget.continuousWidth == null ? 0.0
+          : widget.continuousWidth! * (_pendingSourceSize == null ? 1.4
+              : _pendingSourceSize!.height / _pendingSourceSize!.width);
       return widget.continuousWidth == null
           ? pending
           : SizedBox(
               width: widget.continuousWidth,
-              height: widget.continuousWidth! *
-                  (_pendingSourceSize == null
-                      ? 1.4
-                      : _pendingSourceSize!.height / _pendingSourceSize!.width),
+              // Error actions need a usable viewport even for extremely wide
+              // source pages. Loading and successful image geometry stay exact.
+              height: _error == null ? placeholderHeight
+                  : math.max(160.0, placeholderHeight),
               child: pending);
     }
     final sourceSize = _metadata!.size;
@@ -728,8 +877,11 @@ class _ReaderPageImageState extends State<ReaderPageImage> {
       };
       final native = 1 / View.of(context).devicePixelRatio;
       widget.nativeScaleChanged?.call(native);
-      return PhotoView.customChild(
-          controller: widget.controller,
+      return ReaderPhotoViewOwner(
+          controller: widget.controller!,
+          builder: (_, controller, scaleState) => PhotoView.customChild(
+          controller: controller,
+          scaleStateController: scaleState,
           childSize: sourceSize,
           backgroundDecoration: widget.backgroundDecoration,
           minScale: contained,
@@ -739,7 +891,7 @@ class _ReaderPageImageState extends State<ReaderPageImage> {
                   sourceSize.height * initial > constraints.maxHeight
               ? Alignment.topCenter
               : Alignment.center,
-          child: _pixels());
+          child: _pixels()));
     });
   }
 

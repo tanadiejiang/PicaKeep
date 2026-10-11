@@ -22,6 +22,9 @@ class ComicImage extends StatefulWidget {
     this.filterQuality = FilterQuality.medium,
     this.isAntiAlias = false,
     this.knownImageSize,
+    this.onSourceSize,
+    this.onError,
+    this.onRetry,
     Map<String, String>? headers,
     int? cacheWidth,
     int? cacheHeight,
@@ -62,6 +65,9 @@ class ComicImage extends StatefulWidget {
   final bool isAntiAlias;
 
   final Size? knownImageSize;
+  final ValueChanged<Size>? onSourceSize;
+  final void Function(Object, StackTrace?)? onError;
+  final VoidCallback? onRetry;
 
   static void clear() => _ComicImageState.clear();
 
@@ -173,9 +179,11 @@ class _ComicImageState extends State<ComicImage> with WidgetsBindingObserver {
         _handleImageFrame,
         onChunk: _handleImageChunk,
         onError: (Object error, StackTrace? stackTrace) {
+          if (!mounted) return;
           setState(() {
             _lastException = error;
           });
+          widget.onError?.call(error, stackTrace);
         },
       );
     }
@@ -183,6 +191,13 @@ class _ComicImageState extends State<ComicImage> with WidgetsBindingObserver {
   }
 
   void _handleImageFrame(ImageInfo imageInfo, bool synchronousCall) {
+    final size = Size(imageInfo.image.width.toDouble(), imageInfo.image.height.toDouble());
+    final provider = widget.image;
+    if (widget.onSourceSize != null) {
+      SchedulerBinding.instance.addPostFrameCallback((_) {
+        if (mounted && widget.image == provider) widget.onSourceSize?.call(size);
+      });
+    }
     setState(() {
       _replaceImage(info: imageInfo);
       _loadingProgress = null;
@@ -303,7 +318,8 @@ class _ComicImageState extends State<ComicImage> with WidgetsBindingObserver {
                 Expanded(
                   child: Center(
                     child: Text(
-                      _lastException.toString(),
+                      widget.onError == null ? _lastException.toString()
+                          : '图片暂时无法打开，请重试',
                       maxLines: 3,
                     ),
                   ),
@@ -316,6 +332,10 @@ class _ComicImageState extends State<ComicImage> with WidgetsBindingObserver {
                   child: Listener(
                     onPointerDown: (details) {
                       TapController.ignoreNextTap = true;
+                      if (widget.onRetry != null) {
+                        widget.onRetry!();
+                        return;
+                      }
                       widget.image.evict(); // 清除缓存，确保重试真正重新加载
                       _resolveImage();
                     },

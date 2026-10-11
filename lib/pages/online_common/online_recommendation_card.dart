@@ -7,13 +7,14 @@ import 'package:picakeep/components/pixiv_bookmark_feedback.dart';
 import 'package:picakeep/comic_source/comic_source.dart';
 import 'package:picakeep/foundation/app_page_route.dart';
 import 'package:picakeep/foundation/pixiv_detail_session.dart';
+import 'package:picakeep/foundation/pixiv_detail_preview.dart';
 import 'package:picakeep/foundation/pixiv_bookmark_state.dart';
 import 'package:picakeep/foundation/comic_tile_display_config.dart';
 import 'package:picakeep/foundation/download_author_resolver.dart';
 import 'package:picakeep/network/base_comic.dart';
 import 'package:picakeep/network/pixiv_network/pixiv_network.dart';
 import 'package:picakeep/network/pixiv_network/pixiv_parsing.dart'
-    show pixivProportionalThumbUrl;
+    show pixivProportionalThumbUrl, pixivWaterfallThumbUrls;
 import 'package:picakeep/network/res.dart';
 import 'package:picakeep/pages/accounts/account_page_route.dart';
 import 'package:picakeep/pages/online_comic/pixiv_author_page_v2.dart';
@@ -345,6 +346,7 @@ class OnlineRecommendationCard extends StatefulWidget {
     this.detailSessionBuilder,
     this.isAuthorPage = false,
     this.compactPreview = false,
+    this.compactImageFit = BoxFit.cover,
   });
 
   final ComicSource source;
@@ -372,6 +374,7 @@ class OnlineRecommendationCard extends StatefulWidget {
   /// Image-only author-strip tile; the parent supplies its width and height.
   /// Unknown bookmark state resolves on tap, avoiding per-preview startup GETs.
   final bool compactPreview;
+  final BoxFit compactImageFit;
 
   @override
   State<OnlineRecommendationCard> createState() =>
@@ -609,11 +612,38 @@ class _OnlineRecommendationCardState extends State<OnlineRecommendationCard> {
     final settings = readComicTileDisplaySettings();
     final headers = widget.source.imageHeadersBuilder?.call(comic) ??
         const <String, String>{};
+    final coverAccount = _account;
+    final coverGeneration = _generation;
+    final coverSource = widget.source;
     final card = OnlineWaterfallCard(
       title: comic.title,
       cover:
           pixiv == null ? comic.cover : pixivProportionalThumbUrl(comic.cover),
       fallbackCover: pixiv == null ? null : comic.cover,
+      coverCandidatesBuilder: pixiv == null
+          ? null
+          : (edge) =>
+              pixivWaterfallThumbUrls(comic.cover, targetLongestEdge: edge),
+      onCoverReady: pixiv == null || !_actionsCurrent
+          ? null
+          : (provider) {
+              if (!mounted ||
+                  !_actionsCurrent ||
+                  _account != coverAccount ||
+                  _generation != coverGeneration ||
+                  !identical(widget.source, coverSource) ||
+                  widget.comic.id != comic.id ||
+                  widget.comic.cover != comic.cover) {
+                return;
+              }
+              PixivDetailPreviewRegistry.shared.rememberReady(
+                workId: comic.id,
+                coverUrl: comic.cover,
+                headers: headers,
+                accountIdentity: coverAccount,
+                provider: provider,
+              );
+            },
       imageHeaders: headers,
       onTap: _openDetail,
       author: widget.isAuthorPage ? '' : author,
@@ -762,7 +792,7 @@ class _OnlineRecommendationCardState extends State<OnlineRecommendationCard> {
         return Image(
           key: ValueKey(('compact-preview-cover', url)),
           image: ResizeImage.resizeIfNeeded(cacheWidth, null, provider),
-          fit: BoxFit.cover,
+          fit: widget.compactImageFit,
           gaplessPlayback: true,
           filterQuality: FilterQuality.medium,
           frameBuilder: (context, child, frame, synchronous) =>

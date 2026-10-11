@@ -803,6 +803,7 @@ class _LocalLibraryPageState extends State<LocalLibraryPage>
   List<IllustLibraryEntry>? _filteredIllustCache;
   String? _filteredIllustCacheKey;
   List<IllustLibraryEntry>? _illustLayoutEntries;
+  ({List<IllustLibraryEntry> entries, int first, int last})? _illustLastLayout;
   int _illustGeneration = 0;
   bool _illustRouteActive = true, _illustAppActive = true;
   int _illustThumbWidth = 0;
@@ -932,6 +933,7 @@ class _LocalLibraryPageState extends State<LocalLibraryPage>
   void _onIllustLayout(int first, int last) {
     if (!mounted || !_isIllustView) return;
     final entries = _filteredIllustEntries;
+    _illustLastLayout = (entries: entries, first: first, last: last);
     _illustLaidOut = entries
         .skip(first.clamp(0, entries.length))
         .take((last - first + 1).clamp(0, entries.length))
@@ -1375,6 +1377,10 @@ class _LocalLibraryPageState extends State<LocalLibraryPage>
     _illustCoverBuckets.clear();
     _illustInfo.clear();
     _filteredIllustCache = null;
+    // 清空封面表必须同时 reset 队列：加载窗口内新挂载的瀑布流可能已用旧封面
+    // 把可见 id 标成 done，不 reset 的话 `_done` 会挡住重新排队，卡片永久空白
+    // （52 号：插画 → 图集 → 快速切回插画）。
+    _illustWork.reset();
     _updateIllustWorkState();
   }
 
@@ -2980,12 +2986,36 @@ class _LocalLibraryPageState extends State<LocalLibraryPage>
   Widget _buildIllustContent() {
     final entries = _filteredIllustEntries;
     if (!identical(entries, _illustLayoutEntries)) {
-      // A zero-result filter removes the masonry, so no new layout callback
-      // follows. Drop its old admission immediately; the new masonry will
-      // report its own range. Keep completed source-bound covers for reuse.
       _illustLayoutEntries = entries;
-      _illustLaidOut = [];
-      _illustWork.setVisible(const []);
+      final layout = _illustLastLayout;
+      if (entries.isNotEmpty &&
+          layout != null &&
+          entries.length == layout.entries.length &&
+          entries.indexed.every(
+              (entry) => entry.$2.id == layout.entries[entry.$1].id)) {
+        // 同 id 同序时瀑布流可能不重新 layout（054 实测），不能等它再上报
+        // 范围。加载完成会 reset 队列，下一帧用新 entries 恢复可见任务。
+        // 非空 setVisible 可能发布结果，必须等 build 结束后再调用。
+        final generation = _illustGeneration;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted ||
+              !_isIllustView ||
+              generation != _illustGeneration ||
+              !identical(entries, _filteredIllustEntries) ||
+              identical(_illustLastLayout?.entries, entries)) {
+            return;
+          }
+          // A real layout for these entries takes precedence if it arrived
+          // first; otherwise its later callback replaces this fallback range.
+          _onIllustLayout(layout.first, layout.last);
+        });
+      } else {
+        // Changed membership/order remounts the masonry. Empty filters have
+        // no layout callback at all, so cancel their old admission immediately.
+        _illustLastLayout = null;
+        _illustLaidOut = [];
+        _illustWork.setVisible(const []);
+      }
     }
     final columns = _illustViewWaterfallColumns;
     final ratio = MediaQuery.devicePixelRatioOf(context);

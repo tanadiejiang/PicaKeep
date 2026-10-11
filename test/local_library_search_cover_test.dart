@@ -28,6 +28,7 @@ import 'package:picakeep/foundation/local_trash_store.dart';
 import 'package:picakeep/foundation/pixiv_download_naming.dart';
 import 'package:picakeep/foundation/pixiv_library.dart';
 import 'package:picakeep/pages/local_library_illust_card.dart';
+import 'package:picakeep/pages/local_library_illust_switcher.dart';
 import 'package:picakeep/pages/local_library_illust_view.dart';
 import 'package:picakeep/pages/local_library_page.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -120,7 +121,12 @@ class _ObservedHandle implements RandomAccessFile {
       throw StateError('Unexpected handle call: ${invocation.memberName}');
 }
 
-void main() {
+void main() => runLocalLibraryCoverTests(scrollReloadOnly: false);
+
+// The scrolled reload suite runs in a separate isolate: the legacy cover-cache
+// writer retains futures from each widget test's fake async zone. Sharing it
+// with the album tests can strand a later manual refresh before page loading.
+void runLocalLibraryCoverTests({required bool scrollReloadOnly}) {
   TestWidgetsFlutterBinding.ensureInitialized();
   final savedSettings = List<String>.of(appdata.settings);
   final savedPaths = PathProviderPlatform.instance;
@@ -187,7 +193,8 @@ void main() {
     await workspace.delete(recursive: true);
   });
 
-  Future<List<String>> writeWorks({bool inFolders = false}) async {
+  Future<List<String>> writeWorks(
+      {bool inFolders = false, int count = 3, int height = 48}) async {
     final covers = <String>[];
     final folderPaths = <String>[root.path, root.path, root.path];
     if (inFolders) {
@@ -198,16 +205,17 @@ void main() {
     }
     final databases = <String, Database>{};
     try {
-      for (var i = 0; i < colors.length; i++) {
-        final folderPath = folderPaths[i];
+      for (var i = 0; i < count; i++) {
+        final folderPath = folderPaths[i % folderPaths.length];
         final db = databases.putIfAbsent(
             folderPath, () => sqlite3.open(p.join(folderPath, 'download.db')));
         db.execute('CREATE TABLE IF NOT EXISTS download(id TEXT PRIMARY KEY,'
             'title TEXT,subtitle TEXT,time INT,directory TEXT,size REAL,json TEXT)');
         final directory =
             await Directory(p.join(folderPath, 'work_$i')).create();
-        final image = img.Image(width: 96, height: 48);
-        final c = colors[i];
+        final c = colors[i % colors.length];
+        const width = 96;
+        final image = img.Image(width: width, height: height);
         img.fill(image, color: img.ColorRgba8(c[0], c[1], c[2], c[3]));
         final bytes = img.encodePng(image);
         final cover = p.join(directory.path, 'cover.png');
@@ -231,8 +239,8 @@ void main() {
             'downloadedEps': [0],
             'tags': ['tag_$i'],
             'cover': cover,
-            'width': 96,
-            'height': 48,
+            'width': width,
+            'height': height,
           }),
         ]);
       }
@@ -296,6 +304,133 @@ void main() {
     await waitFor(tester, () => done, reason: 'all fixture work drains');
     await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);
+  }
+
+  if (scrollReloadOnly) {
+    // 54 号：插画 → 图集 → 切回插画时，页面会换上**新的 List 实例**（同 id 同序）
+    // 并清空可见集合；实测此时已滚动过的瀑布流**不会**重新 layout，也就不会再上报
+    // 一次可见范围，队列的 `_visible` 停在空集合 —— 卡片有数据、无封面，用户必须
+    // 手指滚一下才触发加载。本用例锁定"切回来不滚动也要补齐首屏封面"。
+    for (final switchView in [false, true]) {
+      testWidgets(
+          switchView
+              ? 'switching back after scrolling paints covers without user scroll'
+              : 'refresh after scrolling restores covers without another layout',
+          (tester) async {
+        await tester.runAsync(() => writeWorks(count: 24, height: 288));
+        tester.view.physicalSize = const Size(1200, 1800);
+        tester.view.devicePixelRatio = 1;
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
+        await tester.pumpWidget(
+            const MaterialApp(home: LocalLibraryPage(albumOnly: true)));
+        await waitFor(
+            tester, () => find.byType(IllustCard).evaluate().length > 4,
+            reason: 'a multi-screen illustration library populates the page');
+
+        final scroll = find.byType(CustomScrollView);
+        ScrollPosition position() =>
+            tester.widget<CustomScrollView>(scroll).controller!.position;
+        // 只关心当前视口内真正挂载的卡片：瀑布流有 cacheExtent，屏外的卡片本来就
+        // 允许没有封面。
+        Iterable<IllustCard> onScreen() {
+          const viewportTop = 0.0;
+          final viewportBottom =
+              tester.view.physicalSize.height / tester.view.devicePixelRatio;
+          return find
+              .byType(IllustCard)
+              .evaluate()
+              .map((element) => element.widget)
+              .cast<IllustCard>()
+              .where((card) {
+            final box = tester.renderObject<RenderBox>(find.byWidget(card));
+            final top = box.localToGlobal(Offset.zero).dy;
+            final bottom = top + box.size.height;
+            return bottom > viewportTop && top < viewportBottom;
+          });
+        }
+
+        bool onScreenPainted() =>
+            onScreen().isNotEmpty &&
+            onScreen().every((card) {
+              final finder = find.byWidget(card);
+              final images =
+                  find.descendant(of: finder, matching: find.byType(RawImage));
+              return images.evaluate().isNotEmpty &&
+                  tester.renderObject<RenderImage>(images).image != null;
+            });
+
+        expect(onScreen(), isNotEmpty);
+        await waitFor(tester, onScreenPainted,
+            reason: 'the first screen paints its covers before scrolling');
+        final paintedAtTop = onScreen().map((card) => card.entry.id).toList();
+
+        // Windows starts with wheel-only physics. Rebuild after pointer-down so
+        // the first touch gesture can actually drag the scroll view.
+        final gesture = await tester.startGesture(tester.getCenter(scroll));
+        await tester.pump();
+        await gesture.cancel();
+        expect(position().maxScrollExtent, greaterThan(1800));
+        await tester.fling(scroll, const Offset(0, -1400), 4000);
+        await tester.pumpAndSettle();
+        double offset() => position().pixels;
+        expect(offset(), greaterThan(1200),
+            reason: 'the page is scrolled well past the first screen');
+        await waitFor(tester, onScreenPainted,
+            reason: 'the newly visible screen loads its own covers');
+        final scrolledIds = onScreen().map((card) => card.entry.id).toList();
+        expect(scrolledIds, isNot(paintedAtTop), reason: '滚动确实换了一批可见卡片（用例前提）');
+        final offsetBeforeSwitch = offset();
+        final entriesBefore = tester
+            .widget<LocalLibraryIllustSlivers>(
+                find.byType(LocalLibraryIllustSlivers))
+            .entries;
+
+        if (switchView) {
+          await tester.tap(find.byKey(illustViewSwitcherFabKey));
+          await tester.pump();
+          await tester
+              .tap(find.byKey(illustViewOptionKey(IllustLibraryView.album)));
+          await tester.pump(const Duration(milliseconds: 250));
+          expect(find.byType(IllustCard), findsNothing);
+          await tester.tap(find.byKey(illustViewSwitcherFabKey));
+          await tester.pump();
+          await tester
+              .tap(find.byKey(illustViewOptionKey(IllustLibraryView.illust)));
+          await tester.pump();
+        } else {
+          await tester.tap(find.byTooltip('刷新图集'));
+          await tester.pump();
+        }
+
+        // Old providers can still paint while the async reload is in flight.
+        // Wait for the new entries and the queue reset before checking pixels.
+        await waitFor(tester, () {
+          final slivers = find.byType(LocalLibraryIllustSlivers);
+          if (slivers.evaluate().isEmpty) return false;
+          final view = tester.widget<LocalLibraryIllustSlivers>(slivers);
+          return !view.loading && !identical(view.entries, entriesBefore);
+        }, reason: 'the reload completes and replaces the entry list');
+
+        // No further scrolling or refresh: the completed reload must paint.
+        await waitFor(tester, onScreenPainted,
+            reason:
+                'reload restores every visible cover without another scroll');
+        // This small album fixture clamps the shared scroll offset to zero on
+        // switching. The refresh case exercises the same reload at a preserved
+        // nonzero offset, where masonry does not send another layout callback.
+        if (!switchView) {
+          expect(onScreen().map((card) => card.entry.id).toList(), scrolledIds,
+              reason: 'refresh keeps the same scrolled cards in view');
+          final offsetAfterSwitch = offset();
+          expect((offsetAfterSwitch - offsetBeforeSwitch).abs(), lessThan(24),
+              reason: 'refresh preserves the nonzero scroll offset');
+        }
+        expect(find.byIcon(Icons.image_not_supported_outlined), findsNothing);
+        await unmountAndDrain(tester);
+      });
+    }
+    return;
   }
 
   testWidgets(
@@ -503,6 +638,54 @@ void main() {
         reason: 'all-folder restoration returns each correct cached provider');
     expect(tester.widget<IllustCard>(card('Work 1')).imageProvider,
         same(provider));
+    await unmountAndDrain(tester);
+  });
+
+  // 52 号：插画 → 图集 → 快速切回插画后，加载窗口内新挂载的瀑布流会用旧封面
+  // 把可见 id 标成 done；`_loadIllust` 结尾清空封面表时若不 reset 队列，
+  // 这些卡片会永久停在破图占位，只有点刷新才恢复。
+  testWidgets('fast illust -> album -> illust switch restores every cover',
+      (tester) async {
+    await tester.runAsync(writeWorks);
+    tester.view.physicalSize = const Size(1200, 1800);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    await tester
+        .pumpWidget(const MaterialApp(home: LocalLibraryPage(albumOnly: true)));
+    bool allPainted() =>
+        List.generate(3, (i) => hasPixels(tester, 'Work $i')).every((v) => v);
+    await waitFor(tester, allPainted,
+        reason: 'the first illustration visit paints every cover');
+
+    for (var round = 0; round < 3; round++) {
+      await tester.tap(find.byKey(illustViewSwitcherFabKey));
+      await tester.pump();
+      await tester
+          .tap(find.byKey(illustViewOptionKey(IllustLibraryView.album)));
+      // Let the 200 ms title cross-fade finish; real IO does not advance under
+      // fake time, so the `_loadIllust` window is still open afterwards.
+      await tester.pump(const Duration(milliseconds: 250));
+      await tester.tap(find.byKey(illustViewSwitcherFabKey));
+      await tester.pump();
+      await tester
+          .tap(find.byKey(illustViewOptionKey(IllustLibraryView.illust)));
+      // Let the real `updateSettings` IO finish before the first frame so
+      // `_loadIllust` has already reset the queue (timing B). The following
+      // frame then reports the remounted masonry range inside the load window,
+      // which is the ordering that used to strand covers.
+      await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 15)));
+      await tester.pump();
+      await waitFor(tester, allPainted,
+          reason:
+              'round $round: switching back restores covers without refresh');
+      expect(find.byIcon(Icons.image_not_supported_outlined), findsNothing);
+      await tester.pump(const Duration(milliseconds: 250));
+    }
+    for (var i = 0; i < 3; i++) {
+      await checkColor(tester, i);
+    }
     await unmountAndDrain(tester);
   });
 }

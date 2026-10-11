@@ -8,6 +8,7 @@ import 'package:pointycastle/export.dart' as pc;
 import '../archive_backend.dart';
 import '../archive_errors.dart';
 import '../archive_models.dart';
+import '../../image_loader/reader_image_limits.dart';
 
 class DartZipBackend implements ArchiveBackend, StreamingArchiveBackend {
   @override
@@ -54,7 +55,11 @@ class DartZipBackend implements ArchiveBackend, StreamingArchiveBackend {
       );
     } on ArchiveFailure {
       rethrow;
-    } catch (_) {
+    } catch (error) {
+      if (error is ReaderImageLimit ||
+          (ReaderImageReadLimits.current != null && error is StateError)) {
+        rethrow;
+      }
       return _probeFallback(archivePath, format);
     }
   }
@@ -87,7 +92,11 @@ class DartZipBackend implements ArchiveBackend, StreamingArchiveBackend {
       );
     } on ArchiveFailure {
       rethrow;
-    } catch (_) {
+    } catch (error) {
+      if (error is ReaderImageLimit ||
+          (ReaderImageReadLimits.current != null && error is StateError)) {
+        rethrow;
+      }
       return _openIndexFallback(archivePath, format);
     }
   }
@@ -98,6 +107,28 @@ class DartZipBackend implements ArchiveBackend, StreamingArchiveBackend {
     String entryPath, {
     String? password,
   }) async {
+    final limits = ReaderImageReadLimits.current;
+    if (limits != null) {
+      limits.check(0);
+      final bytes = BytesBuilder(copy: false);
+      var bytesSinceYield = 0;
+      await _extractEntryToSink(archivePath, entryPath,
+          password: password,
+          maxBytes: limits.maximumBytes,
+          write: (chunk) async {
+            bytes.add(chunk);
+            bytesSinceYield += chunk.length;
+            // Memory sinks, unlike file writes, otherwise only yield through
+            // microtasks and can starve real UI-exit/timer cancellation events.
+            if (bytesSinceYield >= 256 * 1024) {
+              bytesSinceYield = 0;
+              await Future<void>.delayed(Duration.zero);
+              limits.check(bytes.length);
+            }
+          });
+      limits.check(bytes.length);
+      return bytes.takeBytes();
+    }
     if (!isValidArchiveEntryPath(entryPath)) {
       throw ArchiveFailure(
         code: ArchiveErrorCode.entryNotFound,
@@ -164,6 +195,56 @@ class DartZipBackend implements ArchiveBackend, StreamingArchiveBackend {
     int maxBytes = 2 * 1024 * 1024 * 1024,
     bool Function()? isCancelled,
   }) async {
+    RandomAccessFile? output;
+    var opened = false;
+    Future<RandomAccessFile> openOutput() async {
+      if (output != null) return output!;
+      await destination.parent.create(recursive: true);
+      output = await destination.open(mode: FileMode.write);
+      opened = true;
+      return output!;
+    }
+    try {
+      await _extractEntryToSink(archivePath, entryPath,
+          password: password, maxBytes: maxBytes, isCancelled: isCancelled,
+          write: (chunk) async { await (await openOutput()).writeFrom(chunk); });
+      final target = await openOutput(); // Preserve valid empty-member output.
+      await target.flush();
+      await target.close();
+      output = null;
+      return destination;
+    } catch (error) {
+      await output?.close();
+      output = null;
+      if (opened && await destination.exists()) await destination.delete();
+      if (error is FileSystemException) {
+        throw ArchiveFailure(code: ArchiveErrorCode.ioError,
+            debugMessage: 'Bounded ZIP extraction failed: $error', cause: error);
+      }
+      rethrow;
+    } finally {
+      await output?.close();
+    }
+  }
+
+  /// Shared decrypt/inflate/CRC engine. Reader memory and original disk sinks
+  /// validate every chunk before either growing a buffer or writing a file.
+  Future<void> _extractEntryToSink(
+    String archivePath,
+    String entryPath, {
+    required Future<void> Function(List<int>) write,
+    String? password,
+    int maxBytes = 2 * 1024 * 1024 * 1024,
+    bool Function()? isCancelled,
+  }) async {
+    final limits = ReaderImageReadLimits.current;
+    void checkCancelled() {
+      limits?.check(0);
+      if (isCancelled?.call() == true) {
+        throw StateError('Archive extraction cancelled');
+      }
+    }
+    checkCancelled();
     if (!isValidArchiveEntryPath(entryPath)) {
       throw const ArchiveFailure(
           code: ArchiveErrorCode.entryNotFound,
@@ -179,6 +260,8 @@ class DartZipBackend implements ArchiveBackend, StreamingArchiveBackend {
           code: ArchiveErrorCode.entryNotFound,
           debugMessage: 'Archive member not found');
     }
+    limits?.check(match.compressedSize);
+    limits?.check(match.uncompressedSize);
     if (match.uncompressedSize > maxBytes || maxBytes < 0) {
       throw StateError('Archive entry exceeds reserved disk bytes');
     }
@@ -195,7 +278,6 @@ class DartZipBackend implements ArchiveBackend, StreamingArchiveBackend {
     }
 
     final input = await File(archivePath).open();
-    RandomAccessFile? output;
     RawZLibFilter? inflater;
     try {
       await input.setPosition(match.localHeaderOffset);
@@ -246,6 +328,33 @@ class DartZipBackend implements ArchiveBackend, StreamingArchiveBackend {
         await input.setPosition(payloadOffset + remaining);
         expectedMac = await input.read(10);
         await input.setPosition(payloadOffset);
+        if (limits != null) {
+          // Preserve readEntry's authenticate-before-inflate semantics. A bad
+          // password can collide with the two-byte verifier; it must still be
+          // reported as a password failure, not random deflate corruption.
+          var toAuthenticate = remaining;
+          var authenticated = match.compressedSize - remaining;
+          while (toAuthenticate > 0) {
+            checkCancelled();
+            final chunk = await input.read(toAuthenticate > 64 * 1024
+                ? 64 * 1024 : toAuthenticate);
+            if (chunk.isEmpty) {
+              throw const FormatException('Truncated AES ZIP payload');
+            }
+            toAuthenticate -= chunk.length;
+            authenticated += chunk.length;
+            limits.check(authenticated);
+            hmac.update(chunk, 0, chunk.length);
+          }
+          final mac = Uint8List(hmac.macSize);
+          hmac.doFinal(mac, 0);
+          if (!_bytesEqual(Uint8List.sublistView(mac, 0, 10), expectedMac)) {
+            throw const ArchiveFailure(code: ArchiveErrorCode.wrongPassword,
+                debugMessage: 'AES authentication failed');
+          }
+          hmac = null;
+          await input.setPosition(payloadOffset);
+        }
       } else if (match.isEncrypted) {
         if (remaining < 12) {
           throw const FormatException('Truncated ZipCrypto payload');
@@ -268,36 +377,38 @@ class DartZipBackend implements ArchiveBackend, StreamingArchiveBackend {
         remaining -= 12;
       }
 
-      await destination.parent.create(recursive: true);
-      output = await destination.open(mode: FileMode.write);
+      checkCancelled();
       if (match.compressionMethod == 8) {
         inflater = RawZLibFilter.inflateFilter(windowBits: -15);
       }
       var total = 0;
+      var decryptedTotal = 0;
+      var compressedTotal = match.compressedSize - remaining;
+      limits?.check(compressedTotal);
       var crc = 0xffffffff;
       Future<void> writeChunk(List<int> bytes) async {
-        if (isCancelled?.call() == true) {
-          throw StateError('Archive extraction cancelled');
-        }
-        total += bytes.length;
-        if (total > maxBytes || total > match.uncompressedSize) {
+        checkCancelled();
+        final next = total + bytes.length;
+        limits?.check(next); // Before the memory/disk sink receives this chunk.
+        if (next > maxBytes || next > match.uncompressedSize) {
           throw StateError(
               'Archive inflated output exceeds declared/reserved bytes');
         }
+        total = next;
         for (final byte in bytes) {
           crc = (crc >> 8) ^ _crcTable[(crc ^ byte) & 255];
         }
-        await output!.writeFrom(bytes);
+        await write(bytes);
       }
 
       while (remaining > 0) {
-        if (isCancelled?.call() == true) {
-          throw StateError('Archive extraction cancelled');
-        }
+        checkCancelled();
         final chunk =
             await input.read(remaining > 64 * 1024 ? 64 * 1024 : remaining);
         if (chunk.isEmpty) throw const FormatException('Truncated ZIP member');
         remaining -= chunk.length;
+        compressedTotal += chunk.length;
+        limits?.check(compressedTotal);
         if (hmac != null) hmac.update(chunk, 0, chunk.length);
         if (aes != null) aes.xor(chunk);
         if (zipKeys != null) {
@@ -307,6 +418,8 @@ class DartZipBackend implements ArchiveBackend, StreamingArchiveBackend {
             chunk[index] = byte;
           }
         }
+        decryptedTotal += chunk.length;
+        limits?.check(decryptedTotal);
         if (inflater == null) {
           await writeChunk(chunk);
         } else {
@@ -341,15 +454,12 @@ class DartZipBackend implements ArchiveBackend, StreamingArchiveBackend {
           ((crc ^ 0xffffffff) & 0xffffffff) != match.crc32) {
         throw const FormatException('ZIP CRC32 mismatch');
       }
-      await output.flush();
-      await output.close();
-      output = null;
-      return destination;
+      checkCancelled();
     } catch (error) {
-      await output?.close();
-      output = null;
-      if (await destination.exists()) await destination.delete();
-      if (error is ArchiveFailure || error is StateError) rethrow;
+      if (error is ArchiveFailure || error is StateError ||
+          error is ReaderImageLimit) {
+        rethrow;
+      }
       throw ArchiveFailure(
           code: error is FileSystemException
               ? ArchiveErrorCode.ioError
@@ -358,7 +468,6 @@ class DartZipBackend implements ArchiveBackend, StreamingArchiveBackend {
           cause: error);
     } finally {
       await input.close();
-      await output?.close();
     }
   }
 
@@ -709,11 +818,14 @@ class DartZipBackend implements ArchiveBackend, StreamingArchiveBackend {
 
   Future<List<_CdEntry>> _parseCentralDirectoryWithOffsets(
       String archivePath) async {
+    final limits = ReaderImageReadLimits.current;
+    limits?.check(0);
     final file = await File(archivePath).open();
     try {
       final fileSize = await file.length();
       final searchSize = (65536 + 22).clamp(0, fileSize);
       final searchOffset = fileSize - searchSize;
+      limits?.check(searchSize);
       await file.setPosition(searchOffset);
       final searchBuf = await file.read(searchSize);
 
@@ -762,9 +874,11 @@ class DartZipBackend implements ArchiveBackend, StreamingArchiveBackend {
         throw const FormatException(
             'ZIP central directory exceeds bounded index limits');
       }
+      limits?.check(cdSize);
       final cd = await file.read(cdSize);
 
       final entries = <_CdEntry>[];
+      var metadataBytes = 0;
       int pos = 0;
       while (pos + 46 <= cd.length) {
         if (cd[pos] != 0x50 ||
@@ -789,6 +903,10 @@ class DartZipBackend implements ArchiveBackend, StreamingArchiveBackend {
         var localOffset = _u32(cd, pos + 42);
 
         if (pos + 46 + fnLen > cd.length) break;
+        // Bound entry objects and decoded/path-normalized strings as well as
+        // the directory byte array, before allocating the next name/record.
+        metadataBytes += 256 + fnLen * 6;
+        limits?.check(cdSize + metadataBytes);
         final fnBytes = cd.sublist(pos + 46, pos + 46 + fnLen);
         final name = _decodeZipEntryPath(fnBytes, flags: flags);
 
@@ -840,6 +958,10 @@ class DartZipBackend implements ArchiveBackend, StreamingArchiveBackend {
           crc32: _u32(cd, pos + 16),
         ));
         pos += 46 + fnLen + extraLen + commentLen;
+        if (limits != null && entries.length % 128 == 0) {
+          await Future<void>.delayed(Duration.zero);
+          limits.check(cdSize + metadataBytes);
+        }
       }
       return entries;
     } finally {

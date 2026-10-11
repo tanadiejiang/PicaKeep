@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:ffi' show DynamicLibrary;
 import 'dart:io';
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -18,6 +19,7 @@ import 'package:picakeep/foundation/pixiv_bookmark_state.dart';
 import 'package:picakeep/foundation/pixiv_detail_feeds.dart';
 import 'package:picakeep/foundation/pixiv_detail_session.dart';
 import 'package:picakeep/pages/online_common/online_recommendation_card.dart';
+import 'package:picakeep/pages/online_common/online_comic_list_item.dart';
 import 'package:picakeep/network/pixiv_network/pixiv_network.dart';
 import 'package:picakeep/network/res.dart';
 import 'package:picakeep/pages/accounts/accounts_page.dart';
@@ -150,6 +152,7 @@ PixivComicInfo _info({
   int height = 600,
   bool? isBookmarkable = true,
   List<PixivComicBrief> relatedWorks = const [],
+  String authorAvatar = '',
 }) =>
     PixivComicInfo(
       id: '123',
@@ -173,6 +176,7 @@ PixivComicInfo _info({
       isBookmarked: isBookmarked,
       isBookmarkable: isBookmarkable,
       relatedWorks: relatedWorks,
+      authorAvatar: authorAvatar,
     );
 
 PixivPage _imagePage({int width = 400, int height = 600}) => PixivPage(
@@ -300,6 +304,25 @@ Future<void> _revealAuthor(WidgetTester tester) async {
   await _pumpFrames(tester);
 }
 
+Future<void> _seedAvatar(WidgetTester tester, String url) async {
+  await tester.runAsync(() async {
+    final recorder = ui.PictureRecorder();
+    Canvas(recorder).drawRect(
+        const Rect.fromLTWH(0, 0, 32, 32), Paint()..color = Colors.teal);
+    final image = await recorder.endRecording().toImage(32, 32);
+    final provider = onlineCoverProvider(url: url, headers: const {
+      'Referer': 'https://www.pixiv.net/',
+      'User-Agent': PixivNetwork.pixivWebUA,
+    });
+    final key = await provider.obtainKey(ImageConfiguration.empty);
+    imageCache.putIfAbsent(
+        key,
+        () => OneFrameImageStreamCompleter(
+            Future.value(ImageInfo(image: image))));
+  });
+  await tester.pump();
+}
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   open.overrideFor(
@@ -346,6 +369,167 @@ void main() {
       ..addAll(previousSources);
   });
 
+  testWidgets(
+      'multipage missing avatar reads metadata once without deferred feeds',
+      (tester) async {
+    _mobileView(tester);
+    final pending = Completer<Res<PixivAuthor>>();
+    var authorReads = 0;
+    var previewReads = 0;
+    var relatedReads = 0;
+    await tester.pumpWidget(_page(
+      loadDetail: () async => Res(_info(pageCount: 2)),
+      loadPages: (_) async => Res([_imagePage(), _imagePage()]),
+      loadAuthor: (_) {
+        authorReads++;
+        return pending.future;
+      },
+      loadAuthorWorkIds: (_) async {
+        previewReads++;
+        return const Res([]);
+      },
+      loadRecommendations: (_) async {
+        relatedReads++;
+        return const Res(PixivRecommendationsPage(items: [], nextIds: []));
+      },
+    ));
+    await _pumpFrames(tester);
+    expect(authorReads, 1);
+    expect(_shell(tester).authorAvatarLoading, isTrue);
+    expect(find.byType(PixivCommentsSection), findsNothing);
+    expect(previewReads, 0);
+    expect(relatedReads, 0);
+    await _pumpFrames(tester);
+    expect(authorReads, 1);
+    pending.complete(const Res.error('头像资料离线失败'));
+    await _pumpFrames(tester);
+    expect(_shell(tester).authorAvatarError, '头像资料离线失败');
+    expect(_shell(tester).authorAvatarLoading, isFalse);
+    await _pumpFrames(tester);
+    expect(authorReads, 1);
+    expect(previewReads, 0);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+      'known work avatar survives blank author and missing-avatar retry',
+      (tester) async {
+    _mobileView(tester);
+    const avatar = 'https://fixture.invalid/known-avatar.png';
+    await _seedAvatar(tester, avatar);
+    var reads = 0;
+    await tester.pumpWidget(_page(
+      loadDetail: () async =>
+          Res(_info(pageCount: 2, authorAvatar: ' $avatar ')),
+      loadPages: (_) async => Res([_imagePage(), _imagePage()]),
+      loadAuthor: (_) async {
+        reads++;
+        return const Res(_author);
+      },
+    ));
+    await _pumpFrames(tester);
+    expect(reads, 0);
+    expect(_shell(tester).authorAvatarUrl, avatar);
+    _shell(tester).onRetryAuthorAvatar!();
+    await _pumpFrames(tester);
+    expect(reads, 1);
+    expect(_shell(tester).authorAvatarUrl, avatar);
+    expect(_shell(tester).authorAvatarLoading, isFalse);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+      'avatar thrown read retries explicitly and rejects pre-refresh data',
+      (tester) async {
+    _mobileView(tester);
+    final old = Completer<Res<PixivAuthor>>();
+    var reads = 0;
+    await tester.pumpWidget(_page(
+      loadDetail: () async => Res(_info(pageCount: 2)),
+      loadAuthor: (_) {
+        reads++;
+        if (reads == 1) return old.future;
+        if (reads == 2) throw StateError('回补异常');
+        return Future.value(const Res(_author));
+      },
+    ));
+    await _pumpFrames(tester);
+    _shell(tester).onMenu!('refresh');
+    await _pumpFrames(tester);
+    expect(reads, 2);
+    old.complete(Res(_author.copyWith(isFollowed: true)));
+    await _pumpFrames(tester);
+    expect(_shell(tester).authorAvatarError, '回补异常');
+    expect(_shell(tester).authorAvatarLoading, isFalse);
+    _shell(tester).onRetryAuthorAvatar!();
+    await _pumpFrames(tester);
+    expect(reads, 3);
+    expect(_shell(tester).authorAvatarError, isNull);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('late avatar metadata cannot overwrite a confirmed follow write',
+      (tester) async {
+    _mobileView(tester);
+    final snapshots = <Completer<Res<PixivAuthor>>>[];
+    var reads = 0;
+    await tester.pumpWidget(_page(
+      loadDetail: () async => Res(_shortInfo()),
+      loadAuthor: (_) {
+        if (++reads == 1) return Future.value(const Res(_author));
+        final snapshot = Completer<Res<PixivAuthor>>();
+        snapshots.add(snapshot);
+        return snapshot.future;
+      },
+      isLoggedIn: () => true,
+      writeFollow: (_, {required isFollowing}) async => Res(isFollowing),
+    ));
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.text('加关注'));
+    await tester.pumpAndSettle();
+    _shell(tester).onRetryAuthorAvatar!();
+    await _pumpFrames(tester);
+    await tester.tap(find.text('加关注'));
+    await _pumpFrames(tester);
+    snapshots[0].complete(const Res(_author));
+    await tester.pumpAndSettle();
+    expect(find.text('已关注'), findsOneWidget);
+    expect(find.text('加关注'), findsNothing);
+    await tester.tap(find.byTooltip('关闭作者推荐'));
+    await tester.pumpAndSettle();
+    _shell(tester).onRetryAuthorAvatar!();
+    await _pumpFrames(tester);
+    await tester.tap(find.text('已关注'));
+    await _pumpFrames(tester);
+    snapshots[1].complete(Res(_author.copyWith(isFollowed: true)));
+    await tester.pumpAndSettle();
+    expect(find.text('加关注'), findsOneWidget);
+    expect(find.text('已关注'), findsNothing);
+    expect(reads, 3);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('inactive multipage entry does not backfill author metadata',
+      (tester) async {
+    _mobileView(tester);
+    var reads = 0;
+    await tester.pumpWidget(PixivDetailEntryScope(
+      isActive: false,
+      entry: PixivDetailEntry(
+          key: '123', comicId: '123', builder: (_) => const SizedBox.shrink()),
+      child: _page(
+          loadDetail: () async => Res(_info(pageCount: 2)),
+          loadAuthor: (_) async {
+            reads++;
+            return const Res(_author);
+          }),
+    ));
+    await _pumpFrames(tester);
+    expect(reads, 0);
+    expect(find.byType(PixivCommentsSection), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('online work images and details share one vertical position',
       (tester) async {
     _mobileView(tester);
@@ -371,11 +555,16 @@ void main() {
       (tester) async {
     _mobileView(tester);
     var reads = 0;
-    await tester.pumpWidget(_page(loadAuthor: (id) async {
-      expect(id, '42');
-      reads++;
-      return const Res(_author);
-    }));
+    const avatar = 'https://fixture.invalid/single-known-avatar.png';
+    await _seedAvatar(tester, avatar);
+    await tester.pumpWidget(_page(
+      loadDetail: () async => Res(_info(authorAvatar: avatar)),
+      loadAuthor: (id) async {
+        expect(id, '42');
+        reads++;
+        return const Res(_author);
+      },
+    ));
     await tester.pumpAndSettle();
     expect(reads, 0);
     final slivers = _shell(tester)
@@ -994,17 +1183,264 @@ void main() {
     await tester.pumpAndSettle();
     expect(writes, [('42', true)]);
     expect(recommendedReads, 1);
-    expect(find.byType(PixivFollowRecommendationsSheet), findsOneWidget);
-    expect(find.text('发现更多作者'), findsOneWidget);
+    expect(find.byType(PixivFollowRecommendationsInline), findsOneWidget);
+    expect(find.text('已关注，发现更多作者'), findsOneWidget);
     await tester.tap(find.byTooltip('关闭作者推荐'));
     await tester.pumpAndSettle();
-    expect(find.byType(PixivFollowRecommendationsSheet), findsNothing);
+    expect(find.byType(PixivFollowRecommendationsInline), findsNothing);
     expect(find.text('已关注'), findsOneWidget);
     await tester.tap(find.text('已关注'));
     await tester.pumpAndSettle();
     expect(writes, [('42', true), ('42', false)]);
     expect(recommendedReads, 1);
-    expect(find.byType(PixivFollowRecommendationsSheet), findsNothing);
+    expect(find.byType(PixivFollowRecommendationsInline), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+      'multipage follow inline survives panel and child route without new reads',
+      (tester) async {
+    _mobileView(tester);
+    PixivComicBrief work(String id, String uid) => PixivComicBrief(
+          id: id,
+          title: 'Inline $id',
+          cover: '',
+          author: 'Author $uid',
+          authorId: uid,
+          tags: const [],
+          illustType: 0,
+          pageCount: 1,
+          width: 600,
+          height: 900,
+          isBookmarkable: true,
+        );
+    final authors = [
+      for (var uid = 50; uid < 55; uid++)
+        PixivRecommendedAuthor(
+            author: PixivAuthor(
+                id: '$uid',
+                name: 'Author $uid',
+                avatar: '',
+                comment: '',
+                following: 0),
+            works: [for (var id = 0; id < 3; id++) work('$uid$id', '$uid')]),
+    ];
+    var discoveryReads = 0;
+    var previewReads = 0;
+    var relatedReads = 0;
+    PixivDetailSession? opened;
+    await tester.pumpWidget(_page(
+      loadDetail: () async => Res(_info(pageCount: 2, description: '')),
+      loadPages: (_) async => Res([_imagePage(), _imagePage()]),
+      loadAuthorWorkIds: (_) async {
+        previewReads++;
+        return const Res([]);
+      },
+      loadRecommendations: (_) async {
+        relatedReads++;
+        return const Res(PixivRecommendationsPage(items: [], nextIds: []));
+      },
+      isLoggedIn: () => true,
+      writeFollow: (_, {required isFollowing}) async => Res(isFollowing),
+      loadRecommendedAuthors: (_) async {
+        discoveryReads++;
+        return Res(authors);
+      },
+      onOpenWork: (work, session) async {
+        opened = session;
+        await Navigator.of(tester.element(find.byType(PixivOnlineDetailView)))
+            .push(MaterialPageRoute(
+                builder: (_) => const Scaffold(
+                    body: Center(child: Text('child author detail')))));
+      },
+    ));
+    await tester.pumpAndSettle();
+    expect(previewReads, 0);
+    final position = _position(tester);
+    for (var i = 0; i < 15 && find.text('加关注').evaluate().isEmpty; i++) {
+      await tester.drag(find.byKey(const ValueKey('pixiv-detail-page-scroll')),
+          const Offset(0, -180));
+      await tester.pumpAndSettle();
+    }
+    await tester.ensureVisible(find.text('加关注'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('加关注'));
+    await tester.pumpAndSettle();
+    final inline = find.byType(PixivFollowRecommendationsInline);
+    await tester.ensureVisible(inline);
+    await tester.pumpAndSettle();
+    final discovery =
+        tester.widget<PixivFollowRecommendationsInline>(inline).controller;
+    expect(discoveryReads, 1);
+    expect(find.byType(BottomSheet), findsNothing);
+    final authorScroll = discovery.scrollController;
+    authorScroll.jumpTo(220);
+    await tester.pumpAndSettle();
+    expect(identical(position, _position(tester)), isTrue);
+    position.jumpTo(450);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('pixiv-author-header-cluster')));
+    await tester.pumpAndSettle();
+    expect(tester.widget<PixivFollowRecommendationsInline>(inline).controller,
+        same(discovery));
+    expect(authorScroll.offset, closeTo(220, .01));
+    expect(discoveryReads, 1);
+    await tester.tap(find.byKey(const ValueKey('pixiv-detail-panel-toggle')));
+    await tester.pumpAndSettle();
+    for (var i = 0; i < 15 && inline.evaluate().isEmpty; i++) {
+      await tester.drag(find.byKey(const ValueKey('pixiv-detail-page-scroll')),
+          const Offset(0, -180));
+      await tester.pumpAndSettle();
+    }
+    await tester.ensureVisible(inline);
+    await tester.pumpAndSettle();
+    expect(tester.widget<PixivFollowRecommendationsInline>(inline).controller,
+        same(discovery));
+    expect(authorScroll.offset, closeTo(220, .01));
+    authorScroll.jumpTo(0);
+    await tester.pumpAndSettle();
+    final tile = find.byKey(const ValueKey('pixiv-follow-work-500'));
+    await tester.tapAt(tester.getTopLeft(tile) + const Offset(10, 10));
+    await tester.pumpAndSettle();
+    expect(find.text('child author detail'), findsOneWidget);
+    expect(opened!.scope, PixivDetailScope.author);
+    expect(
+        opened!.entries.map((entry) => entry.comicId), ['500', '501', '502']);
+    expect(opened!.ownerIsCurrent!(), isTrue,
+        reason: 'Parent route coverage must not expire the child session');
+    Navigator.of(tester.element(find.text('child author detail'))).pop();
+    await tester.pumpAndSettle();
+    expect(discoveryReads, 1);
+    expect(discovery.isCurrent, isTrue);
+    expect(relatedReads, lessThanOrEqualTo(1));
+    await tester.tap(find.byTooltip('关闭作者推荐'));
+    await tester.pumpAndSettle();
+    expect(find.byType(PixivOnlineDetailView), findsOneWidget);
+    expect(find.text('已关注'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+      '049 follow workflow uses page-wide three previews without changing main position',
+      (tester) async {
+    _mobileView(tester);
+    PixivComicBrief work(String id, String uid) => PixivComicBrief(
+          id: id,
+          title: '049作品$id',
+          author: '作者$uid',
+          authorId: uid,
+          cover: '',
+          tags: const [],
+          illustType: 0,
+          pageCount: 1,
+          isBookmarked: false,
+          isBookmarkable: true,
+          bookmarkStateKnown: true,
+        );
+    final recommended = [
+      for (final uid in ['50', '51'])
+        PixivRecommendedAuthor(
+          author: PixivAuthor(
+              id: uid, name: '作者$uid', avatar: '', comment: '', following: 0),
+          works: [for (var i = 0; i < 3; i++) work('$uid$i', uid)],
+        )
+    ];
+    final followWrites = <(String, bool)>[];
+    final bookmarkWrites = <(String, bool, bool)>[];
+    var discoveryReads = 0;
+    PixivDetailSession? opened;
+    await tester.pumpWidget(_page(
+      loadDetail: () async => Res(_info(
+          pageCount: 2,
+          description: '',
+          relatedWorks: [for (var i = 201; i < 206; i++) work('$i', '42')])),
+      loadPages: (_) async => Res([_imagePage(), _imagePage()]),
+      isLoggedIn: () => true,
+      writeFollow: (id, {required isFollowing}) async {
+        followWrites.add((id, isFollowing));
+        return Res(isFollowing);
+      },
+      writeBookmark: (id, {required isAdding, required isPrivate}) async {
+        bookmarkWrites.add((id, isAdding, isPrivate));
+        return Res(isAdding);
+      },
+      loadRecommendedAuthors: (_) async {
+        discoveryReads++;
+        return Res(recommended);
+      },
+      onOpenWork: (_, session) async {
+        opened = session;
+      },
+    ));
+    await tester.pumpAndSettle();
+    final mainPosition = _position(tester);
+    _expectFavoriteVisible(tester);
+    final favoriteRect = tester.getRect(_favorite);
+    mainPosition.jumpTo(200);
+    await tester.pumpAndSettle();
+    _expectFavoriteVisible(tester);
+    expect(tester.getRect(_favorite), favoriteRect);
+    await tester.tap(_favorite);
+    await tester.pumpAndSettle();
+    expect(bookmarkWrites, [('123', true, false)]);
+    expect(_shell(tester).isFavorited, isTrue);
+    for (var i = 0; i < 15 && find.text('加关注').evaluate().isEmpty; i++) {
+      await tester.drag(find.byKey(const ValueKey('pixiv-detail-page-scroll')),
+          const Offset(0, -160));
+      await tester.pumpAndSettle();
+    }
+    await tester.ensureVisible(find.text('加关注'));
+    await tester.pumpAndSettle();
+    final mainPreview = find.descendant(
+        of: find.byKey(const ValueKey('pixiv-author-preview-201')),
+        matching: find.byType(OnlineRecommendationCard));
+    final mainPreviewWidth = tester.getSize(mainPreview).width;
+    await tester.tap(find.text('加关注'));
+    await tester.pumpAndSettle();
+    final inline = find.byType(PixivFollowRecommendationsInline);
+    await tester.ensureVisible(inline);
+    await tester.pumpAndSettle();
+    expect(discoveryReads, 1);
+    expect(followWrites, [('42', true)]);
+    expect(_position(tester), same(mainPosition));
+    final cards = [
+      for (var i = 0; i < 3; i++) find.byKey(ValueKey('pixiv-follow-work-50$i'))
+    ];
+    final rects = cards.map(tester.getRect).toList();
+    expect(rects.first.left, 16);
+    expect(rects.last.right, closeTo(400 - 16, .01));
+    expect(rects.first.width - mainPreviewWidth, closeTo(8, .01));
+    for (var i = 0; i < 3; i++) {
+      expect(rects[i].size, Size(rects.first.width, rects.first.width));
+      expect(tester.widget<OnlineRecommendationCard>(cards[i]).compactImageFit,
+          BoxFit.cover);
+    }
+    final parentPixels = mainPosition.pixels;
+    final controller =
+        tester.widget<PixivFollowRecommendationsInline>(inline).controller;
+    await tester
+        .tap(find.byKey(const ValueKey('pixiv-follow-author-button-50')));
+    await tester.pumpAndSettle();
+    expect(followWrites, [('42', true), ('50', true)]);
+    final heart = find.descendant(
+        of: cards.first, matching: find.byType(PixivBookmarkButton));
+    await tester.tap(heart);
+    await tester.pumpAndSettle();
+    expect(bookmarkWrites, [('123', true, false), ('500', true, false)]);
+    expect(tester.widget<PixivBookmarkButton>(heart).isBookmarked, isTrue);
+    expect(opened, isNull);
+    expect(mainPosition.pixels, closeTo(parentPixels, .01));
+    controller.scrollController.jumpTo(400 - 32 + 24);
+    await tester.pumpAndSettle();
+    final nextTile = find.byKey(const ValueKey('pixiv-follow-work-510'));
+    await tester.tapAt(tester.getTopLeft(nextTile) + const Offset(12, 12));
+    await tester.pumpAndSettle();
+    expect(opened!.scope, PixivDetailScope.author);
+    expect(
+        opened!.entries.map((entry) => entry.comicId), ['510', '511', '512']);
+    expect(_position(tester), same(mainPosition));
+    expect(mainPosition.pixels, closeTo(parentPixels, .01));
+    expect(discoveryReads, 1);
     expect(tester.takeException(), isNull);
   });
 
@@ -1033,7 +1469,7 @@ void main() {
     pending.complete(const Res(true));
     await tester.pumpAndSettle();
     expect(recommendedReads, 0);
-    expect(find.byType(PixivFollowRecommendationsSheet), findsNothing);
+    expect(find.byType(PixivFollowRecommendationsInline), findsNothing);
     final button =
         tester.widget<FilledButton>(find.widgetWithText(FilledButton, '加关注'));
     expect(button.onPressed, isNotNull);
@@ -1236,12 +1672,13 @@ void main() {
     expect(recommendations, 0);
     expect(find.byType(PixivCommentsSection), findsNothing);
     final position = _position(tester);
-    await tester.tap(find.byTooltip('展开详情'));
+    await tester.tap(find.byKey(const ValueKey('pixiv-author-header-cluster')));
     await tester.pumpAndSettle();
-    expect(find.byTooltip('收起详情'), findsOneWidget);
+    expect(find.byKey(const ValueKey('pixiv-detail-panel-toggle')),
+        findsOneWidget);
     expect(recommendations, 0);
     expect(find.text('相关推荐'), findsNothing);
-    await tester.tap(find.byTooltip('收起详情'));
+    await tester.tap(find.byKey(const ValueKey('pixiv-detail-panel-toggle')));
     await tester.pumpAndSettle();
     expect(identical(position, _position(tester)), isTrue);
     expect(readerOpens, 0);

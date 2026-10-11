@@ -8,11 +8,19 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:picakeep/base.dart';
 import 'package:picakeep/foundation/app.dart';
 import 'package:picakeep/foundation/image_loader/stream_image_provider.dart';
+import 'package:picakeep/foundation/image_loader/reader_preview_provider.dart';
+import 'package:picakeep/foundation/image_pipeline/derived_image_store.dart';
+import 'package:picakeep/foundation/image_pipeline/image_disk_quota.dart';
+import 'package:picakeep/foundation/image_pipeline/reader_raster_cache.dart';
+import 'package:picakeep/foundation/reader_image_quality.dart';
+import 'package:picakeep/pages/reader/reader_page_image.dart';
+import 'package:picakeep/pages/reader/reader_whole_image.dart';
+
+import 'support/image_disk_quota_fixture.dart';
 import 'package:picakeep/foundation/local_favorites.dart';
 import 'package:picakeep/foundation/image_pipeline/image_work_scheduler.dart';
 import 'package:picakeep/foundation/image_pipeline/reader_page_source.dart';
-import 'package:picakeep/foundation/image_pipeline/reader_raster_backend.dart';
-import 'package:picakeep/foundation/image_pipeline/reader_viewport.dart';
+
 import 'package:picakeep/pages/reader/reader_image_surface.dart';
 import 'package:picakeep/pages/reader/comic_reading_page.dart';
 
@@ -25,7 +33,7 @@ class _MemoryReadingData extends ReadingData {
   bool hasChapters = false;
 
   @override
-  String get id => 'zoom-test';
+  String get id => 'zoom-test-${file.uri.pathSegments.last}';
   @override
   String get downloadId => id;
   @override
@@ -46,7 +54,7 @@ class _MemoryReadingData extends ReadingData {
   @override
   Future<List<String>> loadEpNetwork(int ep) async => ['0', '1'];
   @override
-  String buildImageKey(int ep, int page, String url) => '$id-$page';
+  String buildImageKey(int ep, int page, String url) => '$id-$ep-$page';
   @override
   Stream<List<int>> loadImageNetwork(int ep, int page, String url) =>
       Stream.value(bytes);
@@ -66,71 +74,43 @@ class _MemoryReadingData extends ReadingData {
               downloadId: downloadId,
               episode: ep,
               page: page,
-              sourceVersion: 'test-original'),
+              sourceVersion: '${file.path}:400x600'),
           provider is _DeferredImage
-              ? (provider as _DeferredImage).metadata
-              : Future.value(_ZoomBackend.metadata));
+              ? (provider as _DeferredImage).ready
+              : null);
 }
 
-class _ZoomPageSource extends FileReaderPageSource
-    implements RasterReaderPageSource {
-  _ZoomPageSource(File file, ReaderPageIdentity identity, this.metadata)
-      : rasterLocator = file,
-        super(identity: identity, file: file, width: 400, height: 600);
-  final Future<ReaderRasterMetadata> metadata;
-  @override
-  final File rasterLocator;
-  @override
-  ReaderRasterBackend get rasterBackend => const _ZoomBackend();
-  @override
-  Future<ReaderRasterMetadata> openRasterMetadata() => metadata;
-}
+// This is an actual opened original, never an opaque remote raster locator.
+class _ZoomPageSource extends FileReaderPageSource {
+  _ZoomPageSource(File file, ReaderPageIdentity identity, this.ready)
+      : super(identity: identity, file: file, width: 400, height: 600);
+  final Future<void>? ready;
 
-class _ZoomBackend extends ReaderRasterBackend {
-  const _ZoomBackend();
-  static const metadata = ReaderRasterMetadata(
-      size: Size(400, 600),
-      animated: false,
-      format: 'test-png',
-      workingBytes: 1);
   @override
-  bool get requiresFileBacking => false;
-  @override
-  Future<ReaderRasterMetadata> probe(File file) async => metadata;
-  @override
-  Future<ui.Image> decode(File file, ReaderTileDemand demand,
-      {required String backingPath,
-      required int memoryBudgetBytes,
-      required bool Function() isCancelled,
-      Future<void>? cancelled}) async {
-    if (isCancelled()) throw const ImageWorkCancelled();
-    final recorder = ui.PictureRecorder();
-    Canvas(recorder).drawRect(
-        Rect.fromLTWH(0, 0, demand.outputWidth.toDouble(),
-            demand.outputHeight.toDouble()),
-        Paint()..color = Colors.blue);
-    final picture = recorder.endRecording();
-    try {
-      return picture.toImageSync(demand.outputWidth, demand.outputHeight);
-    } finally {
-      picture.dispose();
+  Future<File> openOriginalFile({ReaderPageCancellation? cancellation}) async {
+    // Gate the actual file opener so the loading-gesture case really waits.
+    if (ready != null) {
+      if (cancellation == null) {
+        await ready;
+      } else {
+        await Future.any<void>([
+          ready!,
+          cancellation.cancelled
+              .then((_) => throw StateError('Fixture source cancelled')),
+        ]);
+        cancellation.throwIfCancelled();
+      }
     }
+    return super.openOriginalFile(cancellation: cancellation);
   }
 }
 
 class _DeferredImage extends ImageProvider<_DeferredImage> {
   _DeferredImage(this.image);
   final Future<ui.Image> image;
-  Future<ReaderRasterMetadata>? _metadata;
-  Future<ReaderRasterMetadata> get metadata =>
-      _metadata ??= image.then((value) {
-        final result = ReaderRasterMetadata(
-            size: Size(value.width.toDouble(), value.height.toDouble()),
-            animated: false,
-            format: 'test-png',
-            workingBytes: 1);
+  Future<void>? _ready;
+  Future<void> get ready => _ready ??= image.then((value) {
         value.dispose();
-        return result;
       });
 
   @override
@@ -164,6 +144,10 @@ void main() {
   late ComicReadingPageLogic logic;
   late Directory taskRoot;
   late File originalFile;
+  var fixtureSerial = 0;
+  var logicDisposed = false;
+  final savedQuota = ImageDiskQuota.overrideForTesting;
+  late ImageDiskQuota quota;
 
   setUpAll(() async {
     final base = Platform.isWindows
@@ -174,16 +158,32 @@ void main() {
     App.dataPath = taskRoot.path;
     App.cachePath = '${taskRoot.path}/cache';
     await Directory(App.cachePath).create(recursive: true);
+    quota = installTaskDiskQuota(() => [App.cachePath]);
     bytes = await _imageBytes();
-    originalFile =
-        await File('${taskRoot.path}/original.png').writeAsBytes(bytes);
   });
   tearDownAll(() async {
-    if (await taskRoot.exists()) await taskRoot.delete(recursive: true);
+    try {
+      await quota.drain();
+      expect(taskRoot.uri.pathSegments.where((part) => part.isNotEmpty).last,
+          startsWith('reader-zoom-'));
+      if (await taskRoot.exists()) await taskRoot.delete(recursive: true);
+    } finally {
+      ImageDiskQuota.overrideForTesting = savedQuota;
+    }
   });
-  setUp(() {
+  setUp(() async {
+    originalFile =
+        await File('${taskRoot.path}/original-${fixtureSerial++}.png')
+            .writeAsBytes(bytes);
+    logicDisposed = false;
     originalSettings = List.of(appdata.settings);
     appdata.settings[9] = '1';
+    appdata.settings[28] = '0';
+    appdata.settings[readerImagePipelineSettingIndex] =
+        const ReaderImagePipelineSettings(
+                comic: ReaderDisplayMode.sharpFirst,
+                illust: ReaderDisplayMode.sharpFirst)
+            .encode();
     appdata.settings[43] = '0';
     appdata.settings[49] = '1';
     appdata.settings[55] = '0';
@@ -194,35 +194,100 @@ void main() {
     logic.urls = ['0', '1'];
     logic.isLoading = false;
   });
-  tearDown(() {
+  void disposeLogic() {
+    if (logicDisposed) return;
+    logicDisposed = true;
     logic.clearPhotoViewControllers();
     logic.pageController.dispose();
     logic.scrollController.dispose();
     logic.focusNode.dispose();
+    logic.viewportChanges.dispose();
     logic.dispose();
+  }
+
+  tearDown(() {
+    disposeLogic();
     appdata.settings = originalSettings;
     TapController.reset();
   });
 
-  Future<void> waitForOriginal(WidgetTester tester) async {
+  Future<void> waitForOriginal(WidgetTester tester, {int? targetPage}) async {
+    Finder pixels() {
+      final raw = find.byWidgetPredicate(
+          (widget) => widget is RawImage && widget.image != null);
+      if (targetPage == null) return raw;
+      // PageView may still mount the old page while the new page is opening its
+      // file, before that work even reaches ImageWorkScheduler. Match the real
+      // builder's logical page and require its pixels to be visible on screen.
+      return find
+          .descendant(
+              of: find.byWidgetPredicate((widget) =>
+                  widget is ReaderPageImage &&
+                  widget.failureDiagnostics?.page == targetPage),
+              matching: raw)
+          .hitTestable();
+    }
+
     for (var i = 0; i < 80; i++) {
       await tester.pump(const Duration(milliseconds: 16));
       await tester.runAsync(
           () => Future<void>.delayed(const Duration(milliseconds: 2)));
-      if (ReaderSurfaceDiagnostics.residentBytes > 0 &&
+      if (pixels().evaluate().isNotEmpty &&
           !ImageWorkScheduler.shared.hasWork) {
-        return;
+        break;
       }
     }
-    expect(ReaderSurfaceDiagnostics.residentBytes, greaterThan(0),
-        reason: 'Original source should resolve before gesture assertions');
+    final images = tester.widgetList<RawImage>(pixels()).toList();
+    expect(images, isNotEmpty,
+        reason:
+            'actual original pixels must resolve before gesture assertions; '
+            'targetPage=$targetPage, '
+            'mountedPages=${tester.widgetList<ReaderPageImage>(find.byType(ReaderPageImage)).map((widget) => widget.failureDiagnostics?.page).toList()}, '
+            'whole=${find.byType(ReaderWholeImage).evaluate().length}, '
+            'work=${ImageWorkScheduler.shared.hasWork}, '
+            'UI=${tester.widgetList<Text>(find.byType(Text)).map((text) => text.data).toList()}');
+    for (final image in images) {
+      expect((image.image!.width, image.image!.height), (400, 600));
+    }
+    expect(find.byType(ReaderPageImage), findsWidgets);
+    expect(find.byType(ReaderWholeImage), findsWidgets);
+    expect(find.byType(ReaderPreviewPageImage), findsNothing);
+    expect(find.byType(ReaderImageSurface), findsNothing);
+    expect(ReaderSurfaceDiagnostics.residentBytes, 0);
   }
+
+  bool budgetsDrained() =>
+      ReaderSurfaceDiagnostics.activeSurfaces == 0 &&
+      ReaderSurfaceDiagnostics.residentBytes == 0 &&
+      ReaderWholeImageResidency.shared.bytes == 0 &&
+      ReaderPreviewImagePool.globalReservedWorkingBytes == 0 &&
+      ReaderPreviewImagePool.globalReservedDecodedBytes == 0 &&
+      ReaderPageFileLease.activeLeaseCount == 0 &&
+      ReaderRasterCache.pendingBytes == 0 &&
+      !ImageWorkScheduler.shared.hasWork &&
+      ImageWorkScheduler.shared.reservedBytes == 0 &&
+      ImageTemporaryPool.shared.reservedBytes == 0 &&
+      quota.pendingOperations == 0 &&
+      quota.activeBytes == 0;
 
   Future<void> pumpReader(WidgetTester tester, {bool preload = true}) async {
     tester.view.physicalSize = const Size(400, 800);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
+    addTearDown(() async {
+      await tester.pumpWidget(const SizedBox());
+      disposeLogic();
+      for (var i = 0; i < 300 && !budgetsDrained(); i++) {
+        await tester.pump(const Duration(milliseconds: 16));
+        await tester.runAsync(
+            () => Future<void>.delayed(const Duration(milliseconds: 5)));
+      }
+      expect(budgetsDrained(), isTrue,
+          reason: 'zoom reader exit releases real whole/preview/cache budgets');
+      await tester.runAsync(quota.drain);
+      expect(tester.takeException(), isNull);
+    });
     await tester.pumpWidget(MaterialApp(
       navigatorKey: App.navigatorKey,
       home: Scaffold(body: Builder(builder: (context) {
@@ -418,6 +483,13 @@ void main() {
     (page.readingData as _MemoryReadingData).provider =
         _DeferredImage(image.future);
     await pumpReader(tester, preload: false);
+    expect(
+        tester
+            .widgetList<RawImage>(find.byType(RawImage))
+            .where((widget) => widget.image != null),
+        isEmpty,
+        reason:
+            'the real whole source must still be gated during loading touches');
     final a = await tester.startGesture(const Offset(150, 400), pointer: 1);
     final b = await tester.startGesture(const Offset(250, 400), pointer: 2);
     await tester.pump(const Duration(milliseconds: 350));
@@ -452,7 +524,7 @@ void main() {
     await pumpReader(tester);
     await tester.dragFrom(const Offset(340, 400), const Offset(-300, 0));
     await tester.pump(const Duration(milliseconds: 400));
-    await waitForOriginal(tester);
+    await waitForOriginal(tester, targetPage: 2);
     await tester.pumpAndSettle();
     expect(logic.index, 2);
     final controller = logic.photoViewControllers[2]!;

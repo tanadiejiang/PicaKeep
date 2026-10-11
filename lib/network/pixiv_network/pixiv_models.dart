@@ -250,6 +250,7 @@ class PixivComicInfo {
     this.regularUrl = '',
     this.authorAvatar = '',
     this.commentCount = 0,
+    this.commentsDisabled,
     this.relatedWorks = const <PixivComicBrief>[],
   });
 
@@ -318,6 +319,10 @@ class PixivComicInfo {
   final String authorAvatar;
   final int commentCount;
 
+  /// Explicit detail commentOff state; null means absent or unrecognized.
+  /// A zero comment count does not establish whether comments are disabled.
+  final bool? commentsDisabled;
+
   /// Valid, available objects already embedded in userIllusts, in server order.
   final List<PixivComicBrief> relatedWorks;
 
@@ -359,6 +364,7 @@ class PixivComicInfo {
         regularUrl: regularUrl,
         authorAvatar: authorAvatar,
         commentCount: commentCount,
+        commentsDisabled: commentsDisabled,
         relatedWorks: relatedWorks ?? this.relatedWorks,
       );
 }

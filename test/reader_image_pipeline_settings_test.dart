@@ -61,6 +61,71 @@ void main() {
         ReaderDisplayMode.previewFirst);
   });
 
+  test('large-image policy defaults and migrates without changing modes', () {
+    const original = ReaderImagePipelineSettings(
+      comic: ReaderDisplayMode.previewFirst,
+      legacyComic: 'comic-fact',
+      legacyIllust: 'illust-fact',
+    );
+    expect(original.largeImagePolicy, ReaderLargeImagePolicy.safeWhole);
+    final raw = jsonDecode(original.encode()) as Map<String, dynamic>;
+    raw.remove('largeImagePolicy');
+    for (final value in [
+      jsonEncode(raw),
+      for (final invalid in [null, '', 'invalid', 'StrictOriginal', 1, {}, []])
+        jsonEncode({...raw, 'largeImagePolicy': invalid}),
+    ]) {
+      final normalized = normalizeReaderImagePipelineSettings(value);
+      final config = ReaderImagePipelineSettings.tryParse(normalized)!;
+      expect(config.largeImagePolicy, ReaderLargeImagePolicy.safeWhole);
+      expect(config.comic, ReaderDisplayMode.previewFirst);
+      expect(config.illust, ReaderDisplayMode.sharpFirst);
+      expect(config.legacyComic, original.legacyComic);
+      expect(config.legacyIllust, original.legacyIllust);
+      expect(normalizeReaderImagePipelineSettings(normalized), normalized);
+    }
+  });
+
+  test('withMode and withLargeImagePolicy preserve each other and legacy facts',
+      () {
+    var config = const ReaderImagePipelineSettings(
+      legacyComic: 'comic-fact',
+      legacyIllust: 'illust-fact',
+    ).withLargeImagePolicy(ReaderLargeImagePolicy.strictOriginal);
+    for (final isComic in [true, false]) {
+      config = config.withMode(isComic, ReaderDisplayMode.previewFirst);
+      expect(config.largeImagePolicy, ReaderLargeImagePolicy.strictOriginal);
+    }
+    config = config.withLargeImagePolicy(ReaderLargeImagePolicy.safeWhole);
+    expect(config.comic, ReaderDisplayMode.previewFirst);
+    expect(config.illust, ReaderDisplayMode.previewFirst);
+    expect(config.legacyComic, 'comic-fact');
+    expect(config.legacyIllust, 'illust-fact');
+    expect(ReaderImagePipelineSettings.tryParse(config.encode())!.encode(),
+        config.encode());
+  });
+
+  test('backup fallback applies only to a missing policy field', () {
+    final raw = jsonDecode(const ReaderImagePipelineSettings(
+      comic: ReaderDisplayMode.previewFirst,
+    ).encode()) as Map<String, dynamic>;
+    raw.remove('largeImagePolicy');
+    ReaderImagePipelineSettings parse(Map<String, dynamic> data) =>
+        ReaderImagePipelineSettings.tryParse(
+          jsonEncode(data),
+          missingLargeImagePolicy: ReaderLargeImagePolicy.strictOriginal,
+        )!;
+    expect(parse(raw).largeImagePolicy, ReaderLargeImagePolicy.strictOriginal);
+    for (final incoming in ['safeWhole', 'invalid', null]) {
+      final config = parse({...raw, 'largeImagePolicy': incoming});
+      expect(config.largeImagePolicy, ReaderLargeImagePolicy.safeWhole);
+      expect(config.comic, ReaderDisplayMode.previewFirst);
+    }
+    expect(
+        parse({...raw, 'largeImagePolicy': 'strictOriginal'}).largeImagePolicy,
+        ReaderLargeImagePolicy.strictOriginal);
+  });
+
   test('unknown schema/modes have deterministic sharpFirst recovery', () {
     for (final raw in [
       '',

@@ -9,6 +9,8 @@ import 'package:picakeep/network/res.dart';
 import 'package:picakeep/pages/online_comic/pixiv_author_page_v2.dart';
 import 'package:picakeep/pages/online_comic/pixiv_comic_page_v2.dart';
 import 'package:picakeep/pages/online_comic/pixiv_login_page.dart';
+import 'package:picakeep/pages/online_common/online_comic_list_item.dart'
+    show onlinePixivDetailPreview;
 
 // ═══════════════════════════════════════════════════════════════════════════
 //  Pixiv 源定义（第十八轮新增）
@@ -156,7 +158,8 @@ final ComicSource pixiv = ComicSource.named(
   ),
 
   // ── 详情页构造器 ───────────────────────────────────────────────────────────
-  comicPageBuilder: (comic) => PixivComicPageV2(comic.id),
+  comicPageBuilder: (comic) => PixivComicPageV2(comic.id,
+      initialPreview: onlinePixivDetailPreview(pixiv, comic)),
 
   // ── 封面请求头 ────────────────────────────────────────────────────────────
   // Pixiv 图片 CDN（i.pximg.net）有严格的 Referer 防盗链：裸请求会 403，

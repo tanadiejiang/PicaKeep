@@ -783,11 +783,9 @@ packages:
   photo_view:
     dependency: "direct main"
     description:
-      path: "."
-      ref: a1255d1
-      resolved-ref: a1255d1b5945aad4b7323303ec2ecdf0c90ffc4c
-      url: "https://github.com/wgh136/photo_view"
-    source: git
+      path: "packages/photo_view"
+      relative: true
+    source: path
     version: "0.14.0"
   picakeep_image_engine:
     dependency: "direct main"

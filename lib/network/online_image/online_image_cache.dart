@@ -5,6 +5,7 @@ import 'dart:async';
 import 'package:crypto/crypto.dart';
 import 'package:path/path.dart' as p;
 import 'package:picakeep/foundation/app.dart';
+import 'package:picakeep/foundation/image_loader/reader_image_observation.dart';
 import 'package:picakeep/foundation/image_pipeline/derived_image_store.dart';
 import 'package:picakeep/foundation/image_pipeline/image_disk_quota.dart';
 
@@ -61,10 +62,26 @@ class OnlineImageCache {
 
   String keyForUrl(String url) => sha1.convert(utf8.encode(url)).toString();
 
+  /// Forget only this completed cache entry. Existing readers retain their
+  /// leased body; normal trimming reclaims it once they finish. Retry callers
+  /// use a new identity generation rather than overwriting a still-leased path.
+  Future<void> invalidate(String identity) => observeReaderImageStage(
+      ReaderImageStage.cache, () => _invalidate(identity));
+
+  Future<void> _invalidate(String identity) async {
+    final metadata = _metaFile(keyForUrl(identity));
+    try {
+      if (await metadata.exists()) await metadata.delete();
+    } on FileSystemException {
+      if (await metadata.exists()) rethrow;
+    }
+  }
+
   Future<OnlineImageCacheEntry?> get(String url) async {
     final key = keyForUrl(url);
     final metaFile = _metaFile(key);
-    if (!await metaFile.exists()) {
+    if (!await observeReaderImageStage(
+        ReaderImageStage.cache, () => metaFile.exists())) {
       return null;
     }
     try {
@@ -88,65 +105,143 @@ class OnlineImageCache {
     String url,
     List<int> bytes, {
     String contentType = '',
+    int maximumBytes = maxInputBytes,
+    bool Function()? isCancelled,
   }) =>
       putStream(url, Stream.value(bytes),
-          contentType: contentType, expectedBytes: bytes.length);
+          contentType: contentType,
+          expectedBytes: bytes.length,
+          maximumBytes: maximumBytes,
+          isCancelled: isCancelled);
 
   Future<File> putStream(String identity, Stream<List<int>> stream,
-      {String contentType = '', int? expectedBytes}) async {
+      {String contentType = '',
+      int? expectedBytes,
+      int maximumBytes = maxInputBytes,
+      bool Function()? isCancelled}) async {
+    // Unknown upstream input errors are not disk-writer failures. A known inner
+    // fetch origin is already recorded and wins over this generic input scope.
+    final observedStream = ReaderImageObservation.current == null
+        ? stream
+        : stream.handleError((Object error, StackTrace stack) {
+            if (isCancelled?.call() != true) {
+              observeReaderImageFailure(ReaderImageStage.unknown, error, stack);
+            }
+            Error.throwWithStackTrace(error, stack);
+          });
+    try {
+      return await _putStream(identity, observedStream,
+          contentType: contentType,
+          expectedBytes: expectedBytes,
+          maximumBytes: maximumBytes,
+          isCancelled: isCancelled);
+    } catch (error, stack) {
+      // Includes root initialization and quota as well as body/metadata I/O.
+      if (isCancelled?.call() != true) {
+        observeReaderImageFailure(ReaderImageStage.cache, error, stack);
+      }
+      rethrow;
+    }
+  }
+
+  Future<File> _putStream(String identity, Stream<List<int>> stream,
+      {String contentType = '',
+      int? expectedBytes,
+      int maximumBytes = maxInputBytes,
+      bool Function()? isCancelled}) async {
+    void checkCancelled() {
+      if (isCancelled?.call() == true) throw StateError('Image load aborted');
+    }
+
+    checkCancelled();
+    if (maximumBytes <= 0 || maximumBytes > maxInputBytes) {
+      throw ArgumentError.value(maximumBytes, 'maximumBytes');
+    }
+    if (expectedBytes != null &&
+        (expectedBytes < 0 || expectedBytes > maximumBytes)) {
+      throw observeReaderImageReason(
+          StateError('Image file exceeds disk budget'),
+          ReaderImageReason.diskBudget);
+    }
+    if (expectedBytes == 0) {
+      throw observeReaderImageReason(
+          StateError('Empty image response'), ReaderImageReason.emptyInput);
+    }
     await _root.create(recursive: true);
     final key = keyForUrl(identity);
     final extension = _extensionFromContentType(contentType);
     final file = _dataFile(key, extension);
     if (_leases.containsKey(file.path)) {
-      throw StateError('An original cache body is still leased');
+      throw observeReaderImageReason(
+          StateError('An original cache body is still leased'),
+          ReaderImageReason.cacheLeaseConflict);
     }
     final part = File('${file.path}.part');
-    final maximum = expectedBytes != null && expectedBytes > 0
-        ? expectedBytes
-        : maxInputBytes;
-    if (maximum > maxInputBytes) {
-      throw StateError('Image file exceeds disk budget');
-    }
+    // Exact decoded length can tighten admission, but never replaces the
+    // caller's independent safety limit. A wire gzip length must not be passed.
+    final reservationBytes = expectedBytes ?? maximumBytes;
     ImageTemporaryReservation? temporary;
     ImageDiskReservation? disk;
     final oldBytes = await file.exists() ? await file.length() : 0;
-    temporary =
-        ImageTemporaryPool.shared.reserve(maximum, purpose: 'online-original');
+    temporary = ImageTemporaryPool.shared
+        .reserve(reservationBytes, purpose: 'online-original');
     if (temporary == null) {
-      throw StateError('Image source workspace budget exhausted');
+      throw observeReaderImageReason(
+          StateError('Image source workspace budget exhausted'),
+          ReaderImageReason.workspaceBudget);
     }
     try {
       disk = await ImageDiskQuota.shared.admitWorkspace(
           p.withoutExtension(file.path),
-          peakBytes: oldBytes + maximum + 16 * 1024);
+          peakBytes: oldBytes + reservationBytes + 16 * 1024);
     } catch (_) {
       temporary.release();
       rethrow;
     }
     var length = 0;
     final sink = part.openWrite();
+    unawaited(sink.done.catchError((Object _) {}));
     try {
       await sink.addStream(stream.map((chunk) {
+        checkCancelled();
         length += chunk.length;
-        if (length > maximum) {
-          throw StateError('Image file exceeds disk budget');
+        if (length > maximumBytes ||
+            (expectedBytes != null && length > expectedBytes)) {
+          throw observeReaderImageReason(
+              StateError('Image file exceeds disk budget'),
+              ReaderImageReason.diskBudget);
         }
         return chunk;
       }));
       await sink.flush();
       await sink.close();
-      if (length == 0) throw StateError('Empty image response');
+      checkCancelled();
+      if (length == 0) {
+        throw observeReaderImageReason(
+            StateError('Empty image response'), ReaderImageReason.emptyInput);
+      }
       if (expectedBytes != null && length != expectedBytes) {
-        throw StateError('Image response length changed');
+        throw observeReaderImageReason(
+            StateError('Image response length changed'),
+            ReaderImageReason.lengthMismatch);
       }
       if (_leases.containsKey(file.path)) {
-        throw StateError(
-            'An original cache body was leased during publication');
+        throw observeReaderImageReason(
+            StateError('An original cache body was leased during publication'),
+            ReaderImageReason.cacheLeaseConflict);
       }
-      if (await file.exists()) await file.delete();
+      // Retire old metadata before changing the body: metadata failure must
+      // never make new bytes match a stale record with coincidentally equal size.
+      if (await _metaFile(key).exists()) await _metaFile(key).delete();
+      checkCancelled();
       await part.rename(file.path);
-    } catch (_) {
+    } catch (error, stack) {
+      // This is the cache/writer boundary. An upstream fetch error already
+      // recorded by the body contract is not overwritten (innermost wins), and
+      // a consumer cancellation is not a failure.
+      if (isCancelled?.call() != true) {
+        observeReaderImageFailure(ReaderImageStage.cache, error, stack);
+      }
       try {
         await sink.close();
       } catch (_) {/* Preserve the stream failure. */}
@@ -167,12 +262,16 @@ class OnlineImageCache {
         flush: true,
       );
       if (await _metaFile(key).exists()) await _metaFile(key).delete();
+      checkCancelled();
       await metaPart.rename(_metaFile(key).path);
       await disk.finishWorkspace();
       final previous = _diskFiles[file.path];
       _diskFiles[file.path] = disk;
       await previous?.abort();
-    } catch (_) {
+    } catch (error, stack) {
+      if (isCancelled?.call() != true) {
+        observeReaderImageFailure(ReaderImageStage.cache, error, stack);
+      }
       if (await metaPart.exists()) await metaPart.delete();
       await disk.abort();
       rethrow;

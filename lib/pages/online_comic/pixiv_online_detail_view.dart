@@ -12,6 +12,7 @@ import 'package:picakeep/foundation/online_download_manager.dart';
 import 'package:picakeep/foundation/pixiv_detail_feeds.dart';
 import 'package:picakeep/foundation/pixiv_detail_feed_settings.dart';
 import 'package:picakeep/foundation/pixiv_detail_session.dart';
+import 'package:picakeep/foundation/pixiv_detail_preview.dart';
 import 'package:picakeep/foundation/pixiv_bookmark_state.dart';
 import 'package:picakeep/network/pixiv_network/pixiv_network.dart';
 import 'package:picakeep/network/res.dart';
@@ -51,6 +52,7 @@ class PixivOnlineDetailView extends StatefulWidget {
     this.bookmarkStore,
     this.accountIdentity,
     this.isLoggedIn,
+    this.initialPreview,
   });
 
   final String comicId;
@@ -76,6 +78,7 @@ class PixivOnlineDetailView extends StatefulWidget {
   final PixivBookmarkStateStore? bookmarkStore;
   final String Function()? accountIdentity;
   final bool Function()? isLoggedIn;
+  final PixivDetailPreview? initialPreview;
 
   @override
   State<PixivOnlineDetailView> createState() => _PixivOnlineDetailViewState();
@@ -98,12 +101,18 @@ class _PixivOnlineDetailViewState extends State<PixivOnlineDetailView> {
   bool _favorite = false;
   bool _favoriteBusy = false;
   bool _authorLoading = false;
+  bool _authorAttempted = false;
+  bool _avatarReadQueued = false;
   bool _followBusy = false;
+  int _authorFollowRevision = 0;
   PixivAuthor? _author;
   String? _authorError;
   PixivAuthorPreviewController? _authorPreview;
   PixivWorkRecommendationsController? _recommendations;
+  PixivFollowDiscoveryController? _discovery;
   int _generation = 0;
+  int _imageRequestVersion = 0;
+  PixivDetailPreview? _entryPreview;
   String _loadedAccount = '';
   int _bookmarkSequence = 0;
   int _bookmarkOperationGeneration = 0;
@@ -112,6 +121,19 @@ class _PixivOnlineDetailViewState extends State<PixivOnlineDetailView> {
   bool _galleryExpanded = true;
   double _bottomPullDistance = 0;
   bool _pullTriggered = false;
+
+  PixivDetailSession? get _session => context
+      .getInheritedWidgetOfExactType<PixivDetailSessionScope>()
+      ?.notifier;
+
+  String get _authorName {
+    final profile = _author?.name.trim() ?? '';
+    if (profile.isNotEmpty) return profile;
+    final detail = _data?.author.trim() ?? '';
+    if (detail.isNotEmpty) return detail;
+    final id = _data?.authorId.trim() ?? '';
+    return id.isEmpty ? '作者信息待完善' : '作者 $id';
+  }
 
   String get _account =>
       widget.accountIdentity?.call() ?? pixivBookmarkAccountIdentity();
@@ -125,7 +147,7 @@ class _PixivOnlineDetailViewState extends State<PixivOnlineDetailView> {
     _bookmarkStore.addListener(_onBookmarkChanged);
     App.localDataVersion.addListener(_onLocalChanged);
     App.displaySettingsVersion.addListener(_onDisplaySettingsChanged);
-    _load();
+    _load(reuseSession: true);
   }
 
   void _onLocalChanged() {
@@ -164,6 +186,7 @@ class _PixivOnlineDetailViewState extends State<PixivOnlineDetailView> {
   void didChangeDependencies() {
     super.didChangeDependencies();
     final active = PixivDetailEntryScope.isActiveOf(context);
+    _entryPreview = PixivDetailSessionScope.previewOf(context);
     if (_entryActive != active) _bookmarkEvent = null;
     _entryActive = active;
   }
@@ -181,6 +204,63 @@ class _PixivOnlineDetailViewState extends State<PixivOnlineDetailView> {
     _recommendations?.dispose();
     _authorPreview = null;
     _recommendations = null;
+  }
+
+  PixivDetailPreview? get _preview {
+    final preview = _entryPreview ?? widget.initialPreview;
+    if (preview == null ||
+        preview.workId != widget.comicId ||
+        preview.accountIdentity != _account ||
+        !preview.isCurrent) {
+      return null;
+    }
+    return preview;
+  }
+
+  String get _authorAvatar {
+    final profile = _author?.avatar.trim() ?? '';
+    final detail = _data?.authorAvatar.trim() ?? '';
+    return profile.isNotEmpty
+        ? profile
+        : detail.isNotEmpty
+            ? detail
+            : (_preview?.authorAvatarUrl.trim() ?? '');
+  }
+
+  void _queueMissingAvatar(bool active) {
+    final data = _data;
+    if (!active ||
+        _loading ||
+        data == null ||
+        _loadedAccount != _account ||
+        data.authorId.trim().isEmpty ||
+        _authorAvatar.isNotEmpty ||
+        _authorAttempted ||
+        _authorLoading ||
+        _avatarReadQueued ||
+        !(ModalRoute.of(context)?.isCurrent ?? true)) {
+      return;
+    }
+    _avatarReadQueued = true;
+    final generation = _generation;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _avatarReadQueued = false;
+      if (!mounted ||
+          generation != _generation ||
+          !_entryActive ||
+          !TickerMode.valuesOf(context).enabled ||
+          !(ModalRoute.of(context)?.isCurrent ?? true) ||
+          _authorAvatar.isNotEmpty) {
+        return;
+      }
+      unawaited(_loadAuthor());
+    });
+  }
+
+  void _disposeDiscovery() {
+    _discovery?.removeListener(_onFeedChanged);
+    _discovery?.dispose();
+    _discovery = null;
   }
 
   void _onFeedChanged() {
@@ -232,6 +312,7 @@ class _PixivOnlineDetailViewState extends State<PixivOnlineDetailView> {
   void dispose() {
     _generation++;
     _disposeFeeds();
+    _disposeDiscovery();
     App.localDataVersion.removeListener(_onLocalChanged);
     App.displaySettingsVersion.removeListener(_onDisplaySettingsChanged);
     _bookmarks.dispose();
@@ -239,17 +320,24 @@ class _PixivOnlineDetailViewState extends State<PixivOnlineDetailView> {
     super.dispose();
   }
 
-  Future<void> _load() async {
+  Future<void> _load({bool reuseSession = false}) async {
+    if (!reuseSession) {
+      _session?.invalidateResponses(account: _account, workId: widget.comicId);
+    }
     final generation = ++_generation;
     final account = _account;
     _disposeFeeds();
+    _disposeDiscovery();
     setState(() {
       _loading = true;
+      _data = null;
+      _imageRequestVersion++;
       _galleryExpanded = true;
       _bookmarkEvent = null;
       _error = null;
       _author = null;
       _authorLoading = false;
+      _authorAttempted = false;
       _authorError = null;
       _imagesLoading = false;
       _imageError = null;
@@ -257,7 +345,16 @@ class _PixivOnlineDetailViewState extends State<PixivOnlineDetailView> {
       _images = const [];
     });
     try {
-      final result = await widget.loadDetail();
+      final session = _session;
+      final result = await (session == null
+          ? widget.loadDetail()
+          : session.readResponse<Res<PixivComicInfo>>(
+              account: account,
+              workId: widget.comicId,
+              kind: 'detail',
+              load: widget.loadDetail,
+              isReusable: (value) => !value.error,
+            ));
       if (!mounted || generation != _generation || account != _account) return;
       if (result.error) throw StateError(result.errorMessageWithoutNull);
       setState(() {
@@ -271,7 +368,7 @@ class _PixivOnlineDetailViewState extends State<PixivOnlineDetailView> {
       });
       await _loadPages();
     } catch (error) {
-      if (mounted && generation == _generation) {
+      if (mounted && generation == _generation && account == _account) {
         setState(() {
           _loading = false;
           _error = error.toString();
@@ -284,6 +381,15 @@ class _PixivOnlineDetailViewState extends State<PixivOnlineDetailView> {
     if (_imagesLoading || _data == null) return;
     final generation = _generation;
     final data = _data!;
+    final account = _loadedAccount;
+    if (account != _account) return;
+    final requestVersion = ++_imageRequestVersion;
+    bool current() =>
+        mounted &&
+        generation == _generation &&
+        requestVersion == _imageRequestVersion &&
+        account == _account &&
+        data.id == _data?.id;
     if (data.pageCount == 1) {
       _pages = [
         PixivPage(
@@ -305,8 +411,18 @@ class _PixivOnlineDetailViewState extends State<PixivOnlineDetailView> {
       _imageError = null;
     });
     try {
-      final result = await widget.loadPages(data.id);
-      if (!mounted || generation != _generation) return;
+      final session = _session;
+      final result = await (session == null
+          ? widget.loadPages(data.id)
+          : session.readResponse<Res<List<PixivPage>>>(
+              account: account,
+              workId: data.id,
+              kind: 'pages',
+              load: () => widget.loadPages(data.id),
+              isReusable: (value) =>
+                  !value.error && value.data.length == data.pageCount,
+            ));
+      if (!current()) return;
       if (result.error) throw StateError(result.errorMessageWithoutNull);
       setState(() {
         _pages = result.data;
@@ -317,7 +433,7 @@ class _PixivOnlineDetailViewState extends State<PixivOnlineDetailView> {
         _buildImages();
       });
     } catch (error) {
-      if (mounted && generation == _generation) {
+      if (current()) {
         setState(() {
           _imagesLoading = false;
           _imageError = error.toString();
@@ -326,22 +442,96 @@ class _PixivOnlineDetailViewState extends State<PixivOnlineDetailView> {
     }
   }
 
+  Future<void> _retryImages() async {
+    if (_imagesLoading || _data == null || _loadedAccount != _account) return;
+    _session?.invalidateResponses(
+        account: _account, workId: widget.comicId, kind: 'pages');
+    final generation = _generation;
+    final version = _imageRequestVersion;
+    final account = _account;
+    final width = (MediaQuery.sizeOf(context).width *
+            MediaQuery.devicePixelRatioOf(context) *
+            1.2)
+        .round();
+    final configuration = createLocalImageConfiguration(context);
+    for (final image in _images) {
+      final provider = image.provider;
+      if (provider == null) continue;
+      await ResizeImage.resizeIfNeeded(width, null, provider)
+          .evict(configuration: configuration);
+      await provider.evict(configuration: configuration);
+    }
+    if (!mounted ||
+        generation != _generation ||
+        version != _imageRequestVersion ||
+        account != _account) {
+      return;
+    }
+    await _loadPages();
+  }
+
   void _buildImages() {
     final data = _data!;
+    final preview = _preview;
     _images = List.generate(_pages.length, (index) {
       final page = _pages[index];
       final url = page.regular.isNotEmpty ? page.regular : page.original;
+      final pageRatioKnown = page.width > 0 && page.height > 0;
+      final seed = index == 0 ? preview : null;
       return PixivDetailImage(
         key: '${data.id}-$index',
+        contentIdentity: (_generation, _imageRequestVersion),
         provider: url.isEmpty
             ? null
             : onlineCoverProvider(url: url, headers: _headers),
-        aspectRatio:
-            page.width > 0 && page.height > 0 ? page.width / page.height : .75,
-        aspectRatioKnown: page.width > 0 && page.height > 0,
+        previewProvider: seed?.provider,
+        previewFallbackProvider: seed?.fallbackProvider,
+        aspectRatio: pageRatioKnown
+            ? page.width / page.height
+            : (seed?.aspectRatio ?? .75),
+        aspectRatioKnown: pageRatioKnown || (seed?.aspectRatioKnown ?? false),
         onRead: () => widget.onRead(context, data, index + 1),
       );
     }, growable: false);
+  }
+
+  List<PixivDetailImage> get _displayImages {
+    final preview = _preview;
+    if (_images.isNotEmpty) {
+      final first = _images.first;
+      if (first.previewProvider == preview?.provider &&
+          first.previewFallbackProvider == preview?.fallbackProvider) {
+        return _images;
+      }
+      return [
+        PixivDetailImage(
+          key: first.key,
+          provider: first.provider,
+          previewProvider: preview?.provider,
+          previewFallbackProvider: preview?.fallbackProvider,
+          contentIdentity: first.contentIdentity,
+          aspectRatio: first.aspectRatio,
+          aspectRatioKnown: first.aspectRatioKnown,
+          onRead: first.onRead,
+        ),
+        ..._images.skip(1),
+      ];
+    }
+    if (preview == null || _data == null) return _images;
+    final data = _data!;
+    final known = data.width > 0 && data.height > 0;
+    return [
+      PixivDetailImage(
+        key: '${data.id}-0',
+        contentIdentity: (_generation, _imageRequestVersion),
+        provider: null,
+        previewProvider: preview.provider,
+        previewFallbackProvider: preview.fallbackProvider,
+        aspectRatio: known ? data.width / data.height : preview.aspectRatio,
+        aspectRatioKnown: known || preview.aspectRatioKnown,
+        onRead: () => widget.onRead(context, data, 1),
+      ),
+    ];
   }
 
   Future<void> _favoriteAction(BuildContext feedbackContext,
@@ -476,31 +666,62 @@ class _PixivOnlineDetailViewState extends State<PixivOnlineDetailView> {
     ..clearSnackBars()
     ..showSnackBar(SnackBar(content: Text(text)));
 
-  Future<void> _loadAuthor() async {
-    if (_authorLoading || _author != null || _data?.authorId.isEmpty != false) {
+  Future<void> _loadAuthor({bool retry = false}) async {
+    final data = _data;
+    if (_authorLoading ||
+        (!retry && (_authorAttempted || _author != null)) ||
+        data == null ||
+        data.authorId.trim().isEmpty ||
+        _loading ||
+        _loadedAccount != _account ||
+        !_entryActive ||
+        !TickerMode.valuesOf(context).enabled) {
       return;
     }
     final generation = _generation;
     final account = _account;
+    final followRevision = _authorFollowRevision;
+    bool current() =>
+        mounted &&
+        generation == _generation &&
+        account == _account &&
+        data.id == _data?.id &&
+        data.authorId == _data?.authorId;
     setState(() {
       _authorLoading = true;
+      _authorAttempted = true;
       _authorError = null;
     });
-    final result = await (widget.loadAuthor ??
-        PixivNetwork().getAuthorInfo)(_data!.authorId);
-    if (!mounted || generation != _generation || account != _account) return;
-    setState(() {
-      _authorLoading = false;
-      if (result.error) {
-        _authorError = result.errorMessageWithoutNull;
-      } else {
-        _author = result.data;
+    try {
+      final result = await (widget.loadAuthor ??
+          PixivNetwork().getAuthorInfo)(data.authorId);
+      if (!current()) return;
+      if (result.error) throw StateError(result.errorMessageWithoutNull);
+      setState(() => _author =
+          followRevision != _authorFollowRevision && _author != null
+              ? result.data.copyWith(isFollowed: _author!.isFollowed)
+              : result.data);
+    } catch (error) {
+      if (current()) {
+        setState(() =>
+            _authorError = error.toString().replaceFirst('Bad state: ', ''));
       }
-    });
+    } finally {
+      if (current()) setState(() => _authorLoading = false);
+    }
   }
 
+  void _retryAuthor() => unawaited(_loadAuthor(retry: true));
+
   Future<void> _follow() async {
-    if (_followBusy || _author == null || _loadedAccount != _account) return;
+    if (_followBusy ||
+        _author == null ||
+        _loadedAccount != _account ||
+        !_entryActive ||
+        !TickerMode.valuesOf(context).enabled ||
+        !(ModalRoute.of(context)?.isCurrent ?? true)) {
+      return;
+    }
     if (!(widget.isLoggedIn?.call() ?? PixivNetwork().isLoggedIn)) {
       await showAccountsPage(context);
       if (mounted) await _load();
@@ -516,17 +737,34 @@ class _PixivOnlineDetailViewState extends State<PixivOnlineDetailView> {
           PixivNetwork().setFollow)(authorId, isFollowing: target);
       if (!mounted || generation != _generation || account != _account) return;
       if (result.error) {
-        _message(result.errorMessageWithoutNull);
+        if (_entryActive &&
+            TickerMode.valuesOf(context).enabled &&
+            (ModalRoute.of(context)?.isCurrent ?? true)) {
+          _message(result.errorMessageWithoutNull);
+        }
       } else {
-        setState(() => _author = _author!.copyWith(isFollowed: target));
-        if (target && _entryActive) {
-          unawaited(_showFollowRecommendations(authorId, generation, account));
-        } else {
+        setState(() {
+          _authorFollowRevision++;
+          _author = _author!.copyWith(isFollowed: target);
+        });
+        if (target &&
+            _entryActive &&
+            TickerMode.valuesOf(context).enabled &&
+            (ModalRoute.of(context)?.isCurrent ?? true)) {
+          _showFollowRecommendations(authorId, generation, account);
+        } else if (!target &&
+            _entryActive &&
+            (ModalRoute.of(context)?.isCurrent ?? true)) {
           _message('已取消关注');
         }
       }
     } catch (_) {
-      if (mounted && generation == _generation && account == _account) {
+      if (mounted &&
+          generation == _generation &&
+          account == _account &&
+          _entryActive &&
+          TickerMode.valuesOf(context).enabled &&
+          (ModalRoute.of(context)?.isCurrent ?? true)) {
         _message('关注失败，请重试');
       }
     } finally {
@@ -538,51 +776,55 @@ class _PixivOnlineDetailViewState extends State<PixivOnlineDetailView> {
     }
   }
 
-  Future<void> _showFollowRecommendations(
-      String authorId, int generation, String account) async {
+  void _showFollowRecommendations(
+      String authorId, int generation, String account) {
+    final workId = _data?.id;
+    if (ComicSource.find('pixiv') == null || !mounted || workId == null) return;
+    _disposeDiscovery();
+    late final PixivFollowDiscoveryController discovery;
+    discovery = PixivFollowDiscoveryController(
+      seedAuthorId: authorId,
+      load:
+          widget.loadRecommendedAuthors ?? PixivNetwork().getRecommendedAuthors,
+      writeFollow: widget.writeFollow ?? PixivNetwork().setFollow,
+      ownerIsCurrent: () =>
+          mounted &&
+          generation == _generation &&
+          account == _account &&
+          workId == _data?.id &&
+          authorId == _data?.authorId &&
+          identical(_discovery, discovery),
+      accountIdentity: () => _account,
+    )..addListener(_onFeedChanged);
+    setState(() => _discovery = discovery);
+    unawaited(discovery.read());
+  }
+
+  Future<void> _openDiscoveryWork(PixivFollowDiscoveryController discovery,
+      PixivComicBrief work, List<PixivComicBrief> works) async {
     final source = ComicSource.find('pixiv');
-    if (source == null || !mounted) return;
-    bool current() =>
-        mounted &&
-        generation == _generation &&
-        account == _account &&
-        authorId == _author?.id;
-    await showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      useSafeArea: true,
-      showDragHandle: true,
-      shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
-      builder: (sheetContext) => PixivFollowRecommendationsSheet(
-        seedAuthorId: authorId,
-        source: source,
-        bookmarks: _bookmarks,
-        load: widget.loadRecommendedAuthors ??
-            PixivNetwork().getRecommendedAuthors,
-        writeFollow: widget.writeFollow ?? PixivNetwork().setFollow,
-        writeBookmark: (id, {required isAdding}) =>
-            widget.writeBookmark(id, isAdding: isAdding, isPrivate: false),
-        ownerIsCurrent: current,
-        accountIdentity: () => _account,
-        isLoggedIn: widget.isLoggedIn ?? () => PixivNetwork().isLoggedIn,
-        onAccountsChanged: _load,
-        onOpenWork: (work, works) {
-          if (!current()) return;
-          final session = PixivDetailSession(
-            scope: PixivDetailScope.author,
-            entries: works.map((item) => onlinePixivDetailEntry(source, item)),
-            ownerIsCurrent: current,
-          );
-          if (widget.onOpenWork case final open?) {
-            unawaited(open(work, session).whenComplete(session.dispose));
-          } else {
-            unawaited(openOnlineComic(sheetContext, source, work,
-                detailSession: session));
-          }
-        },
-      ),
+    if (source == null ||
+        !discovery.isCurrent ||
+        discovery.dismissed ||
+        !_entryActive ||
+        !TickerMode.valuesOf(context).enabled ||
+        !(ModalRoute.of(context)?.isCurrent ?? true)) {
+      return;
+    }
+    final session = PixivDetailSession(
+      scope: PixivDetailScope.author,
+      entries: works.map((item) => onlinePixivDetailEntry(source, item)),
+      ownerIsCurrent: () => discovery.isCurrent,
     );
+    if (widget.onOpenWork case final open?) {
+      try {
+        await open(work, session);
+      } finally {
+        session.dispose();
+      }
+    } else {
+      await openOnlineComic(context, source, work, detailSession: session);
+    }
   }
 
   Future<void> _openWork(PixivComicBrief comic,
@@ -745,24 +987,54 @@ class _PixivOnlineDetailViewState extends State<PixivOnlineDetailView> {
     return false;
   }
 
+  Widget _currentAuthorAvatar(BuildContext context) {
+    final url = _authorAvatar;
+    final fallbackUrl = _data?.authorAvatar.trim() ?? '';
+    Widget placeholder({bool failed = false, bool loading = false}) =>
+        Semantics(
+          label: loading || _authorLoading && url.isEmpty
+              ? '作者头像加载中'
+              : failed || _authorError != null
+                  ? '作者头像加载失败'
+                  : '暂无作者头像',
+          child: CircleAvatar(
+              radius: 20,
+              child: _authorLoading && url.isEmpty
+                  ? const SizedBox.square(
+                      dimension: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2))
+                  : const Icon(Icons.person_outline)),
+        );
+    Widget image(String source, {bool allowFallback = false}) => Image(
+          image: onlineCoverProvider(url: source, headers: _headers),
+          width: 40,
+          height: 40,
+          fit: BoxFit.cover,
+          frameBuilder: (context, child, frame, synchronous) =>
+              frame != null || synchronous ? child : placeholder(loading: true),
+          errorBuilder: (_, __, ___) =>
+              allowFallback && fallbackUrl.isNotEmpty && fallbackUrl != source
+                  ? image(fallbackUrl)
+                  : placeholder(failed: true),
+        );
+    return SizedBox.square(
+      dimension: 40,
+      child: ClipOval(
+          child: url.isEmpty ? placeholder() : image(url, allowFallback: true)),
+    );
+  }
+
   Widget _authorCard(BuildContext context, PixivComicInfo data) {
-    final avatar = _author?.avatar ?? data.authorAvatar;
     final preview = _authorPreview!;
     final works = preview.items;
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
       child: Column(children: [
         Row(children: [
-          CircleAvatar(
-            radius: 20,
-            backgroundImage: avatar.isEmpty
-                ? null
-                : onlineCoverProvider(url: avatar, headers: _headers),
-            child: avatar.isEmpty ? const Icon(Icons.person_outline) : null,
-          ),
+          _currentAuthorAvatar(context),
           const SizedBox(width: 12),
           Expanded(
-              child: Text(data.author,
+              child: Text(_authorName,
                   style: const TextStyle(fontWeight: FontWeight.w600))),
           if (_authorLoading)
             const SizedBox.square(
@@ -780,7 +1052,7 @@ class _PixivOnlineDetailViewState extends State<PixivOnlineDetailView> {
           if (_authorError != null)
             IconButton(
                 tooltip: '重试作者信息',
-                onPressed: _loadAuthor,
+                onPressed: _authorLoading ? null : _retryAuthor,
                 icon: const Icon(Icons.refresh)),
         ]),
         if (works.isNotEmpty)
@@ -860,6 +1132,7 @@ class _PixivOnlineDetailViewState extends State<PixivOnlineDetailView> {
   @override
   Widget build(BuildContext context) {
     final active = _entryActive && TickerMode.valuesOf(context).enabled;
+    _queueMissingAvatar(active);
     final media = MediaQuery.of(context);
     return LayoutBuilder(builder: (context, constraints) {
       final contentHeight = constraints.maxHeight - media.padding.vertical;
@@ -874,10 +1147,86 @@ class _PixivOnlineDetailViewState extends State<PixivOnlineDetailView> {
     });
   }
 
+  Widget _loadingPreview(BuildContext context, PixivDetailPreview preview) {
+    Widget imageFor(ImageProvider<Object> provider,
+            {bool allowFallback = true}) =>
+        Image(
+          key: ValueKey(('pixiv-metadata-preview', provider)),
+          image: provider,
+          fit: BoxFit.contain,
+          alignment: Alignment.topCenter,
+          excludeFromSemantics: true,
+          frameBuilder: (_, child, frame, synchronous) =>
+              frame != null || synchronous
+                  ? child
+                  : const Center(child: CircularProgressIndicator()),
+          errorBuilder: (_, __, ___) {
+            final fallback = preview.fallbackProvider;
+            if (allowFallback && fallback != null && fallback != provider) {
+              return imageFor(fallback, allowFallback: false);
+            }
+            return const Center(
+                child: Icon(Icons.image_not_supported_outlined, size: 48));
+          },
+        );
+    final ratio = preview.aspectRatio.isFinite && preview.aspectRatio > 0
+        ? preview.aspectRatio
+        : .75;
+    return Scaffold(
+      body: SafeArea(
+        child: Stack(children: [
+          SingleChildScrollView(
+            child: Semantics(
+              image: true,
+              label: '作品封面预览',
+              child: AspectRatio(
+                  aspectRatio: ratio, child: imageFor(preview.provider)),
+            ),
+          ),
+          Positioned(
+            left: 0,
+            top: 0,
+            child: IconButton(
+              tooltip: '返回',
+              onPressed: () => Navigator.of(context).maybePop(),
+              icon: const Icon(Icons.arrow_back,
+                  color: Colors.white,
+                  shadows: [Shadow(color: Colors.black, blurRadius: 3)]),
+            ),
+          ),
+          Positioned(
+            right: 16,
+            bottom: 16,
+            child: Material(
+              borderRadius: BorderRadius.circular(12),
+              child: Padding(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                child: _error == null
+                    ? Semantics(liveRegion: true, child: const Text('正在加载作品详情'))
+                    : Row(mainAxisSize: MainAxisSize.min, children: [
+                        const Text('作品详情加载失败'),
+                        IconButton(
+                            tooltip: '重试详情',
+                            onPressed: _load,
+                            icon: const Icon(Icons.refresh)),
+                      ]),
+              ),
+            ),
+          ),
+        ]),
+      ),
+    );
+  }
+
   Widget _buildContent(BuildContext context, bool active) {
     final feedback = PixivBookmarkFeedbackHost.maybeOf(context);
     final feedbackCurrent = active && (feedback?.isCurrent ?? false);
     if (_loading || _data == null) {
+      final preview = _preview;
+      if (preview != null) {
+        return _loadingPreview(context, preview);
+      }
       return Scaffold(
           appBar: AppBar(),
           body: Center(
@@ -899,19 +1248,27 @@ class _PixivOnlineDetailViewState extends State<PixivOnlineDetailView> {
       key: ValueKey('pixiv-related-pull-${data.id}'),
       onNotification: _onRecommendationScroll,
       child: PixivDetailShell(
-        title: data.title,
-        author: data.author,
+        title: data.title.trim().isEmpty ? '作品 ${data.id}' : data.title,
+        author: _authorName,
         galleryCollapsible: data.pageCount > 1,
-        authorAvatarUrl: _author?.avatar ?? data.authorAvatar,
+        showDetailsForShortGallery: true,
+        deferHeaderUntilImageReady: true,
+        showSingleAuthorAvatar: true,
+        imageReadinessIdentity: (_account, data.id, _generation),
+        authorAvatarUrl: _authorAvatar,
+        authorAvatarFallbackUrl: data.authorAvatar.trim(),
+        authorAvatarLoading: _authorLoading && _authorAvatar.isEmpty,
+        authorAvatarError: _authorAvatar.isEmpty ? _authorError : null,
+        onRetryAuthorAvatar: _retryAuthor,
         onGalleryExpansionChanged: (expanded) {
           if (mounted && _galleryExpanded != expanded) {
             setState(() => _galleryExpanded = expanded);
           }
         },
-        images: _images,
+        images: _displayImages,
         imagesLoading: _imagesLoading,
         imageError: _imageError,
-        onRetryImages: _loadPages,
+        onRetryImages: _retryImages,
         actionLabel: downloading ? '下载中' : '下载',
         actionIcon: Icons.download_outlined,
         onAction: () => widget.onDownload(context, data),
@@ -968,7 +1325,7 @@ class _PixivOnlineDetailViewState extends State<PixivOnlineDetailView> {
                     child: Text(data.description)),
               if (_imageError != null)
                 TextButton.icon(
-                    onPressed: _loadPages,
+                    onPressed: _retryImages,
                     icon: const Icon(Icons.refresh),
                     label: Text(_imageError!)),
             ]),
@@ -979,9 +1336,28 @@ class _PixivOnlineDetailViewState extends State<PixivOnlineDetailView> {
             onVisible: active ? _loadVisibleAuthor : null,
           ),
           SliverToBoxAdapter(child: _authorCard(context, data)),
+          if (source != null && _discovery != null && !_discovery!.dismissed)
+            SliverToBoxAdapter(
+              key: ValueKey(('follow-discovery', _discovery)),
+              child: PixivFollowRecommendationsInline(
+                controller: _discovery!,
+                source: source,
+                bookmarks: _bookmarks,
+                active: active && feedbackCurrent,
+                writeBookmark: (id, {required isAdding}) => widget
+                    .writeBookmark(id, isAdding: isAdding, isPrivate: false),
+                accountIdentity: () => _account,
+                isLoggedIn:
+                    widget.isLoggedIn ?? () => PixivNetwork().isLoggedIn,
+                onAccountsChanged: _load,
+                onOpenWork: (work, works) =>
+                    unawaited(_openDiscoveryWork(_discovery!, work, works)),
+              ),
+            ),
           PixivCommentsSection(
             key: ValueKey('comments-${data.id}'),
             illustId: data.id,
+            commentsDisabled: data.commentsDisabled == true,
             autoLoad: true,
             previewLimit: 4,
             loadRoots: widget.loadCommentRoots,

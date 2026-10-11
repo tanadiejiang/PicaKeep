@@ -57,7 +57,8 @@ void main() {
             .getSize(find.byKey(const ValueKey('pixiv-image-image-1')))
             .height,
         750);
-    expect(find.byTooltip('展开详情'), findsOneWidget);
+    expect(find.byKey(const ValueKey('pixiv-author-header-cluster')),
+        findsOneWidget);
     await tester.tap(find.byKey(const ValueKey('pixiv-image-image-0')));
     expect(reads, 1);
   });
@@ -73,7 +74,8 @@ void main() {
         _shell(optIn: false, read: () => reads++, action: () => actions++));
     await tester.pumpAndSettle();
     expect(find.text('作品信息'), findsOneWidget);
-    expect(find.byTooltip('展开详情'), findsNothing);
+    expect(find.byKey(const ValueKey('pixiv-author-header-cluster')),
+        findsNothing);
     await tester.tap(find.byKey(const ValueKey('pixiv-image-image-1')));
     await tester.tap(find.byTooltip('下载'));
     expect(reads, 1);
@@ -91,7 +93,7 @@ void main() {
     await tester
         .pumpWidget(_shell(read: () {}, action: () => actions++, busy: true));
     await tester.pumpAndSettle();
-    await tester.tap(find.byTooltip('展开详情'));
+    await tester.tap(find.byKey(const ValueKey('pixiv-author-header-cluster')));
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('pixiv-detail-images')), findsOneWidget);
     expect(
@@ -101,7 +103,7 @@ void main() {
         375);
     await tester.tap(find.byTooltip('下载').last);
     expect(actions, 0);
-    await tester.tap(find.byTooltip('收起详情'));
+    await tester.tap(find.byKey(const ValueKey('pixiv-detail-panel-toggle')));
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('pixiv-detail-panel')), findsNothing);
     expect(tester.takeException(), isNull);

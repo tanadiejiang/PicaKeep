@@ -339,7 +339,13 @@ Future<List<String>> _buildArchiveEpisodeFilesForEp(
 ) async {
   final ArchiveIndex index;
   try {
-    index = await ArchiveReadingService.instance.getIndex(archivePath);
+    index = await ArchiveReadingService.instance
+        .getIndex(archivePath, readerInput: true);
+  } on ReaderImageLimit {
+    rethrow;
+  } on StateError {
+    // Reader cancellation is not an empty chapter and must not be cached as one.
+    rethrow;
   } catch (_) {
     // 打不开（损坏 / 无权限）就当没有内容：调用方渲染空白，而不是抛到阅读页。
     return const <String>[];

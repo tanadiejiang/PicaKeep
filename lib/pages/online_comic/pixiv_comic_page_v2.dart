@@ -6,6 +6,7 @@ import 'package:flutter/services.dart' show Clipboard, ClipboardData;
 import 'package:picakeep/comic_source/comic_source.dart';
 import 'package:picakeep/foundation/app_page_route.dart';
 import 'package:picakeep/foundation/history.dart';
+import 'package:picakeep/foundation/pixiv_detail_preview.dart';
 import 'package:picakeep/foundation/log.dart';
 import 'package:picakeep/foundation/state_controller.dart';
 import 'package:picakeep/network/pixiv_network/pixiv_network.dart';
@@ -31,9 +32,10 @@ import 'pixiv_online_detail_view.dart';
 /// 缩略图墙的排版对齐原项目 `comic_page.dart` 的 `buildThumbnails`。源站私有 UI
 /// 走基类的可选钩子扩展，不反过来侵入公共骨架的顺序与分支。
 class PixivComicPageV2 extends BaseOnlineComicPage<PixivComicInfo> {
-  const PixivComicPageV2(this.comicId, {super.key});
+  const PixivComicPageV2(this.comicId, {super.key, this.initialPreview});
 
   final String comicId;
+  final PixivDetailPreview? initialPreview;
 
   @override
   Widget build(BuildContext context) {
@@ -43,6 +45,7 @@ class PixivComicPageV2 extends BaseOnlineComicPage<PixivComicInfo> {
     if (runtimeType != PixivComicPageV2) return super.build(context);
     return PixivOnlineDetailView(
       comicId: comicId,
+      initialPreview: initialPreview,
       loadDetail: loadData,
       loadPages: loadImagePages,
       writeBookmark: (id, {required isAdding, required isPrivate}) => isPrivate

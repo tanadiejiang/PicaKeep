@@ -1,0 +1,110 @@
+[
+  {
+    "path": "LICENSE",
+    "upstreamSha256": "17b795359e5b64e99988629f0dba0f82cb1d82183afb98f2315949f4d38e75e2",
+    "localSha256": "17b795359e5b64e99988629f0dba0f82cb1d82183afb98f2315949f4d38e75e2",
+    "identical": true
+  },
+  {
+    "path": "lib\\photo_view.dart",
+    "upstreamSha256": "7f258c978f51d4943dc601d742d8c25f2814ff3e3795430e0d49388f27ba030d",
+    "localSha256": "7f258c978f51d4943dc601d742d8c25f2814ff3e3795430e0d49388f27ba030d",
+    "identical": true
+  },
+  {
+    "path": "lib\\photo_view_gallery.dart",
+    "upstreamSha256": "fe0728c433bda6deddb2d38cd94b433931cd87b9024f039c7c95d2d030b53da2",
+    "localSha256": "fe0728c433bda6deddb2d38cd94b433931cd87b9024f039c7c95d2d030b53da2",
+    "identical": true
+  },
+  {
+    "path": "lib\\src\\controller\\photo_view_controller.dart",
+    "upstreamSha256": "6c18e8d0337d11806fdcf0d49b1ce8eb4274126118b8259d43e26808024b71a6",
+    "localSha256": "6c18e8d0337d11806fdcf0d49b1ce8eb4274126118b8259d43e26808024b71a6",
+    "identical": true
+  },
+  {
+    "path": "lib\\src\\controller\\photo_view_controller_delegate.dart",
+    "upstreamSha256": "5973f31b2a9850d149cf2cd7c3a7937be4be80328e0c1935269386111c448a58",
+    "localSha256": "5973f31b2a9850d149cf2cd7c3a7937be4be80328e0c1935269386111c448a58",
+    "identical": true
+  },
+  {
+    "path": "lib\\src\\controller\\photo_view_scalestate_controller.dart",
+    "upstreamSha256": "11314f45ccfdb23c8860fa8f9bdb941b83d4d98d18dc5952b2c6785ed2c33746",
+    "localSha256": "11314f45ccfdb23c8860fa8f9bdb941b83d4d98d18dc5952b2c6785ed2c33746",
+    "identical": true
+  },
+  {
+    "path": "lib\\src\\core\\image.dart",
+    "upstreamSha256": "7d0ce1e7a25e0d8fc72868581907680d136dce8f505bcb500499e5f780a718c7",
+    "localSha256": "7d0ce1e7a25e0d8fc72868581907680d136dce8f505bcb500499e5f780a718c7",
+    "identical": true
+  },
+  {
+    "path": "lib\\src\\core\\photo_view_core.dart",
+    "upstreamSha256": "b5478e2cd45f99c3ae427621f4885e0062ac666ed9e25723fe723d7bcfc7f069",
+    "localSha256": "98adaedfce5a03595521a29d1be11d4f84d9450b1e4a229771ef75b862c30c86",
+    "identical": false
+  },
+  {
+    "path": "lib\\src\\core\\photo_view_gesture_detector.dart",
+    "upstreamSha256": "513622b358ed018279ed088cfeafa8fce313de735e17b7d8eff6c1549a900ab0",
+    "localSha256": "513622b358ed018279ed088cfeafa8fce313de735e17b7d8eff6c1549a900ab0",
+    "identical": true
+  },
+  {
+    "path": "lib\\src\\core\\photo_view_hit_corners.dart",
+    "upstreamSha256": "915d59717081e682e65a762ad3f0c57ea1f68704ef556d94e7897b627eb051a7",
+    "localSha256": "915d59717081e682e65a762ad3f0c57ea1f68704ef556d94e7897b627eb051a7",
+    "identical": true
+  },
+  {
+    "path": "lib\\src\\photo_view_computed_scale.dart",
+    "upstreamSha256": "0bb41bd9b65054fbfe9fe3208ebd5cc1087f0342bd971a4650132936c49f60ad",
+    "localSha256": "0bb41bd9b65054fbfe9fe3208ebd5cc1087f0342bd971a4650132936c49f60ad",
+    "identical": true
+  },
+  {
+    "path": "lib\\src\\photo_view_default_widgets.dart",
+    "upstreamSha256": "a195721087a908b1a21b9d8b903ca40d6460257cb5cf8b2c6f6827f7513b9490",
+    "localSha256": "a195721087a908b1a21b9d8b903ca40d6460257cb5cf8b2c6f6827f7513b9490",
+    "identical": true
+  },
+  {
+    "path": "lib\\src\\photo_view_scale_state.dart",
+    "upstreamSha256": "4a354b983b0f97a9ce0c90b6c84020b4640858e3d2baf37256f9cb451efcea18",
+    "localSha256": "4a354b983b0f97a9ce0c90b6c84020b4640858e3d2baf37256f9cb451efcea18",
+    "identical": true
+  },
+  {
+    "path": "lib\\src\\photo_view_wrappers.dart",
+    "upstreamSha256": "8db074be28d32656634427d1d27d1a2212de02368185876921d5eed48b22f728",
+    "localSha256": "8db074be28d32656634427d1d27d1a2212de02368185876921d5eed48b22f728",
+    "identical": true
+  },
+  {
+    "path": "lib\\src\\utils\\ignorable_change_notifier.dart",
+    "upstreamSha256": "6fee7ccb99a0c371ca06340bb00b40d5380d0138ad1968b258e62f975615d2bd",
+    "localSha256": "6fee7ccb99a0c371ca06340bb00b40d5380d0138ad1968b258e62f975615d2bd",
+    "identical": true
+  },
+  {
+    "path": "lib\\src\\utils\\photo_view_hero_attributes.dart",
+    "upstreamSha256": "89c86a542f81f1cc7e7e25d428ac456f9d66403a822d59894811131cce86e22e",
+    "localSha256": "89c86a542f81f1cc7e7e25d428ac456f9d66403a822d59894811131cce86e22e",
+    "identical": true
+  },
+  {
+    "path": "lib\\src\\utils\\photo_view_utils.dart",
+    "upstreamSha256": "0164830d8919965482001a6504869725d81edad5178ecea40569ceddad351831",
+    "localSha256": "0164830d8919965482001a6504869725d81edad5178ecea40569ceddad351831",
+    "identical": true
+  },
+  {
+    "path": "pubspec.yaml",
+    "upstreamSha256": "eb84de7a89c1025e7dfb82f173e3d9d8d2162dba2d5e8dc803360f3b25f3302f",
+    "localSha256": "eb84de7a89c1025e7dfb82f173e3d9d8d2162dba2d5e8dc803360f3b25f3302f",
+    "identical": true
+  }
+]

@@ -6,9 +6,22 @@ part of pica_reader;
 /// [PixivNetwork.getComicPages] 一次性返回全部页的多档 URL，故 [loadEpNetwork]
 /// 直接返回按画质档位挑选后的 URL 列表，[loadImageNetwork] 带 Referer 头直连下载。
 class PixivReadingData extends ReadingData {
-  PixivReadingData({required this.comic, this.originalQuality = true});
+  PixivReadingData(
+      {required this.comic,
+      this.originalQuality = true,
+      this.imageManager,
+      this.pagesLoader});
 
   final PixivComicInfo comic;
+  final OnlineImageManager? imageManager;
+
+  /// Optional metadata transport; production still uses PixivNetwork.
+  final Future<List<PixivPage>> Function()? pagesLoader;
+  OnlineImageManager get _images => imageManager ?? OnlineImageManager.instance;
+  static const _imageHeaders = {
+    'Referer': 'https://www.pixiv.net/',
+    'User-Agent': PixivNetwork.pixivWebUA,
+  };
 
   /// 是否为原图画质：true 取 `urls.original`，false 取 `urls.regular`。
   final bool originalQuality;
@@ -47,13 +60,18 @@ class PixivReadingData extends ReadingData {
   /// regular → small → thumbMini，并在资源上标记最高可用画质。
   @override
   Future<List<String>> loadEpNetwork(int ep) async {
-    final res = await PixivNetwork().getComicPages(comic.id);
-    if (res.error) {
-      throw Exception(res.errorMessageWithoutNull);
+    final loader = pagesLoader;
+    if (loader != null) {
+      _pages = List<PixivPage>.unmodifiable(await loader());
+    } else {
+      final res = await PixivNetwork().getComicPages(comic.id);
+      if (res.error) {
+        throw Exception(res.errorMessageWithoutNull);
+      }
+      _pages = List<PixivPage>.unmodifiable(res.data);
     }
-    _pages = List<PixivPage>.unmodifiable(res.data);
     return [
-      for (final page in res.data)
+      for (final page in _pages)
         _firstNonEmpty(
             [page.original, page.regular, page.small, page.thumbMini]),
     ];
@@ -101,10 +119,9 @@ class PixivReadingData extends ReadingData {
     if (target.isEmpty) throw StateError('Pixiv page has no available source');
     return networkPageSource(
       ep, page, target,
-      headers: const {
-        'Referer': 'https://www.pixiv.net/',
-        'User-Agent': PixivNetwork.pixivWebUA
-      },
+      headers: _imageHeaders,
+      imageManager: _images,
+      cacheIdentity: originalNetworkCacheIdentity(ep, page, target),
       isOriginal: original,
       // Original dimensions cannot describe the actual regular rendition.
       width: original && candidate.width > 0 ? candidate.width : null,
@@ -115,15 +132,35 @@ class PixivReadingData extends ReadingData {
 
   /// url 是 [loadEpNetwork] 返回的 CDN 直链，带 Referer 与统一 UA 规避防盗链。
   @override
+  Future<StreamImageLoadResult> loadOriginalNetworkWithProgress(
+          int ep, int page, String url,
+          {StreamImageAbortSignal? abortSignal}) =>
+      _images.getImage(url,
+          cacheIdentity: originalNetworkCacheIdentity(ep, page, url),
+          headers: _imageHeaders,
+          abortSignal: abortSignal);
+
+  @override
   Stream<List<int>> loadImageNetwork(int ep, int page, String url) async* {
-    final result = await OnlineImageManager.instance.getImage(
-      url,
-      cacheIdentity: originalNetworkCacheIdentity(ep, page, url),
-      headers: const {
-        'Referer': 'https://www.pixiv.net/',
-        'User-Agent': PixivNetwork.pixivWebUA,
-      },
-    );
+    final result = await loadOriginalNetworkWithProgress(ep, page, url);
     yield* result.stream;
+  }
+
+  @override
+  Future<void> invalidateImage(int ep, int page, String url) async {
+    if (downloaded && checkEpDownloaded(ep)) return;
+    final candidate = _pages.elementAtOrNull(page);
+    final target = candidate == null
+        ? url
+        : _firstNonEmpty([
+            candidate.original,
+            candidate.regular,
+            candidate.small,
+            candidate.thumbMini,
+          ]);
+    if (target.isEmpty) return;
+    await _images.invalidateImage(target,
+        headers: _imageHeaders,
+        cacheIdentity: originalNetworkCacheIdentity(ep, page, target));
   }
 }

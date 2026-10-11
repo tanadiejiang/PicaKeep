@@ -3,6 +3,39 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:picakeep/pages/illust_work_queue.dart';
 
 void main() {
+  // 052: the page keeps covers outside the queue. Clearing that table without
+  // resetting the queue leaves keys in `_done`, so they are never requeued and
+  // the card stays blank until a manual refresh.
+  testWidgets('completed keys need reset after the external cover table clears',
+      (tester) async {
+    final covers = <String, int>{};
+    final resolved = <String>[];
+    final queue = IllustWorkQueue<int>(
+        resolve: (key, _) async {
+          resolved.add(key);
+          return covers[key] ?? 1;
+        },
+        publish: covers.addAll,
+        isComplete: (_) => true);
+    queue.setVisible(['a', 'b']);
+    await tester.pump();
+    expect(resolved, ['a', 'b']);
+    expect(covers.keys, containsAll(['a', 'b']));
+
+    covers.clear();
+    queue.setVisible(['a', 'b']);
+    await tester.pump();
+    expect(resolved, ['a', 'b'],
+        reason: 'done keys are skipped; this is why the page must reset');
+
+    queue.reset();
+    queue.setVisible(['a', 'b']);
+    await tester.pump();
+    expect(resolved, ['a', 'b', 'a', 'b']);
+    expect(covers.keys, containsAll(['a', 'b']));
+    queue.dispose();
+  });
+
   testWidgets('visible work claim excludes metadata and releases on pause',
       (tester) async {
     final cover = Completer<int?>();

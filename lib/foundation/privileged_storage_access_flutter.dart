@@ -2,6 +2,10 @@ import 'dart:io';
 import 'dart:async';
 
 import 'package:flutter/services.dart';
+import 'package:flutter/foundation.dart' show visibleForTesting;
+import 'app.dart';
+import 'image_loader/reader_image_limits.dart';
+import 'image_pipeline/derived_image_store.dart';
 
 import '../base.dart';
 import 'package:picakeep/foundation/local_library_settings.dart';
@@ -48,13 +52,17 @@ class LocalDirectoryEntry {
 class PrivilegedStorageAccess {
   PrivilegedStorageAccess._();
 
+  @visibleForTesting
+  static bool? androidPlatformOverride;
+  static bool get _isAndroid => androidPlatformOverride ?? Platform.isAndroid;
+
   static const MethodChannel _storageAccessChannel =
       MethodChannel('lingxue.picakeep/storage_access');
 
   static Future<PrivilegedFileStat?> fileStat(String path) async {
     final method = _androidPrivilegedAccessMethod('statFile');
     // In privileged mode a visible mountpoint does not establish readability.
-    if (Platform.isAndroid && method != null) {
+    if (_isAndroid && method != null) {
       final result = await _storageAccessChannel
           .invokeMapMethod<String, Object>(method, {'path': path});
       if (result == null) return null;
@@ -92,7 +100,7 @@ class PrivilegedStorageAccess {
     }
     await destination.parent.create(recursive: true);
     final method = _androidPrivilegedAccessMethod('copyFileToManaged');
-    if (Platform.isAndroid && method != null) {
+    if (_isAndroid && method != null) {
       final requestId =
           '${DateTime.now().microsecondsSinceEpoch}-${destination.path.hashCode}';
       var finished = false;
@@ -201,6 +209,8 @@ class PrivilegedStorageAccess {
   /// Reads the full contents of [path]. Returns `null` when the file does
   /// not exist or neither `dart:io` nor the privileged channel can read it.
   static Future<Uint8List?> readFileBytes(String path) async {
+    final limits = ReaderImageReadLimits.current;
+    if (limits != null) return _readReaderFileBytes(path, limits);
     try {
       final file = File(path);
       if (await file.exists()) {
@@ -214,6 +224,65 @@ class PrivilegedStorageAccess {
       }
     } catch (_) {}
     return _readFileWithPrivilegedAccess(path);
+  }
+
+  static Future<Uint8List?> _readReaderFileBytes(
+      String path, ReaderImageReadLimits limits) async {
+    limits.check(0);
+    try {
+      final bytes = await readReaderImageFile(File(path));
+      if (bytes.isNotEmpty) return bytes;
+    } on FileSystemException {
+      // Retain restricted-file capability; do not fall through to readFile's
+      // unbounded MethodChannel byte aggregation.
+    }
+    limits.check(0);
+    if (!_isAndroid || _androidPrivilegedAccessMethod('copyFileToManaged') == null) {
+      throw FileSystemException('Reader original is unavailable', path);
+    }
+    final stat = await fileStat(path);
+    limits.check(0);
+    if (stat == null || stat.size <= 0) {
+      throw FileSystemException('Reader original has no reliable size', path);
+    }
+    limits.check(stat.size);
+    if (stat.size > (64 << 20)) {
+      throw const ReaderImageLimit('privileged-reader-staging');
+    }
+    final parent = Directory('${App.cachePath}/reader-privileged-input');
+    await parent.create(recursive: true);
+    final directory = await parent.createTemp('copy-');
+    final target = File('${directory.path}/original.bin');
+    ImageTemporaryReservation? reservation;
+    try {
+      reservation = await ImageTemporaryPool.shared.reserveOnDisk(stat.size,
+          purpose: 'reader-privileged-input', path: target.path);
+      limits.check(0);
+      // The native implementation counts 64-KiB chunks before writing and can
+      // destroy the actual copy process. Await its real completion even on exit.
+      await copyFileToManagedFile(path, target, maxBytes: stat.size,
+          isCancelled: () => limits.isCancelled, cancelled: limits.cancelled);
+      limits.check(0);
+      final after = await fileStat(path);
+      limits.check(0);
+      if (after == null || after.size != stat.size ||
+          after.modifiedMillis != stat.modifiedMillis ||
+          await target.length() != stat.size) {
+        throw StateError('Reader original changed during bounded copy');
+      }
+      final copiedLimits = ReaderImageReadLimits(maximumBytes: stat.size,
+          isCancelled: () => limits.isCancelled, cancelled: limits.cancelled);
+      return await runWithReaderImageReadLimits(copiedLimits,
+          () => readReaderImageFile(target));
+    } finally {
+      // The directory is owned by this call; source paths and any unexpected
+      // bridge-returned path are never candidates for cleanup.
+      try {
+        if (await directory.exists()) await directory.delete(recursive: true);
+      } finally {
+        reservation?.release();
+      }
+    }
   }
 
   /// Lists immediate children of [path] (files and directories), falling
@@ -251,7 +320,7 @@ class PrivilegedStorageAccess {
 
   static Future<List<LocalDirectoryEntry>>
       _listDirectoryEntriesWithPrivilegedAccess(String path) async {
-    if (!Platform.isAndroid) {
+    if (!_isAndroid) {
       return const <LocalDirectoryEntry>[];
     }
     final method = _androidPrivilegedAccessMethod('listDirectoryEntries');
@@ -285,7 +354,7 @@ class PrivilegedStorageAccess {
   }
 
   static Future<Uint8List?> _readFileWithPrivilegedAccess(String path) async {
-    if (!Platform.isAndroid) {
+    if (!_isAndroid) {
       return null;
     }
     final method = _androidPrivilegedAccessMethod('readFile');
@@ -311,7 +380,7 @@ class PrivilegedStorageAccess {
   }
 
   static Future<bool> _existsWithPrivilegedAccess(String path) async {
-    if (!Platform.isAndroid) {
+    if (!_isAndroid) {
       return false;
     }
     final method = _androidPrivilegedAccessMethod('exists');

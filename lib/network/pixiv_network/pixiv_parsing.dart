@@ -242,6 +242,7 @@ PixivComicInfo parsePixivComicInfo(Map<String, dynamic> body) {
       body['userImage'],
     ]),
     commentCount: _int(body['commentCount']),
+    commentsDisabled: _nullableBool(body['commentOff']),
     relatedWorks: parsePixivRelatedWorks(body, currentId: id),
   );
 }
@@ -682,6 +683,43 @@ String pixivProportionalThumbUrl(String url) {
   return result;
 }
 
+/// Safe, bounded preview candidates for a Pixiv waterfall cover.
+///
+/// [targetLongestEdge] is the physical display budget, not the decoded or CDN
+/// output size. Omitting it selects the existing 360 preview for a cold detail
+/// seed. A waterfall request selects 540, 720 or 1200 and falls back once each
+/// to the 360 rendition and then the original API URL.
+List<String> pixivWaterfallThumbUrls(String url, {double? targetLongestEdge}) {
+  final trimmed = url.trim();
+  if (trimmed.isEmpty) return const [];
+  final uri = Uri.tryParse(trimmed);
+  final path = uri?.path ?? '';
+  final recognized = uri != null &&
+      uri.scheme == 'https' &&
+      uri.userInfo.isEmpty &&
+      (!uri.hasPort || uri.port == 443) &&
+      const {'i.pximg.net', 'i-cf.pximg.net', 'i-f.pximg.net'}
+          .contains(uri.host.toLowerCase()) &&
+      RegExp(
+        r'^/c/\d+x\d+(?:_\d+(?:_[a-z]\d+)?)?/'
+        r'(?:img-master|custom-thumb)/img/'
+        r'\d{4}/\d{2}/\d{2}/\d{2}/\d{2}/\d{2}/'
+        r'\d+_p\d+_(?:square|custom|master)1200\.(?:jpg|jpeg|png|webp)$',
+      ).hasMatch(path);
+  if (!recognized) return [trimmed];
+  // Only transform the validated path; signed/query/fragment data is untouched.
+  final small = uri.replace(path: pixivProportionalThumbUrl(path)).toString();
+  if (targetLongestEdge == null) return {small, trimmed}.toList();
+  final edge = targetLongestEdge.isNaN || targetLongestEdge <= 540
+      ? 540
+      : targetLongestEdge <= 720
+          ? 720
+          : 1200;
+  final larger = small.replaceFirst(
+      '/c/$kPixivProportionalThumbFrame/', '/c/${edge}x${edge}_80/');
+  return {larger, small, trimmed}.toList();
+}
+
 /// 解析搜索结果。
 ///
 /// ## 键名在 2026-09 变过（实测）
@@ -1061,7 +1099,10 @@ String _normalizePlainComment(String raw) {
 /// **唯一抛 [FormatException] 的情况**：id 与 name 同时缺失（这条响应不可能是
 /// 有效用户）；其余字段一律兜底。
 PixivAuthor parsePixivAuthorInfo(Map<String, dynamic> body) {
-  final id = _firstNonEmpty(<dynamic>[body['userId'], body['id']]);
+  final id = _firstNonEmpty(<dynamic>[
+    _idStr(body['userId']),
+    _idStr(body['id']),
+  ]);
   final name = _firstNonEmpty(<dynamic>[body['name'], body['userName']]);
   if (id.isEmpty && name.isEmpty) {
     throw const FormatException('Pixiv user 响应缺少 userId 与 name');

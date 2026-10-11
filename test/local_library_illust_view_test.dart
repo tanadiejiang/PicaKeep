@@ -74,7 +74,8 @@ void main() {
         _item(id: 'pixiv-range-$i', sourceKey: 'pixiv'),
     ]);
 
-    Widget harness(ScrollController controller, List<(int, int)> ranges) =>
+    Widget harness(ScrollController controller, List<(int, int)> ranges,
+            {List<IllustLibraryEntry>? list}) =>
         MaterialApp(
           home: Scaffold(
             body: CustomScrollView(
@@ -83,7 +84,7 @@ void main() {
               slivers: [
                 LocalLibraryIllustSlivers(
                   allEntries: entries,
-                  entries: entries,
+                  entries: list ?? entries,
                   tags: const [],
                   selectedTags: const {},
                   loading: false,
@@ -182,6 +183,39 @@ void main() {
       expect(tester.renderObject(finder), same(previousRender),
           reason: '普通重建保留 59 号的相同条目布局');
       expect(ranges, [initial, initial], reason: '刷新清空工作队列后，相同范围也必须能重新调度');
+    });
+
+    // 54 号实测（临时探针 + 本用例）：条目身份换了但 **有序 id 不变** 时，
+    // `_IllustOrderKey` 相等 → `SliverMasonryGrid` 不重挂载；子卡片几何不变
+    // → 渲染层不重新 layout，`didFinishLayout` 不会被调用，也就没有新的
+    // `onLayoutRange`。**页面不能依赖"换了 new List 瀑布流就会再上报一次范围"**，
+    // 否则已滚动过的位置一旦清空可见集合就再也没人填回来（卡片不出封面）。
+    testWidgets('同 id 同序的新 List 实例 + 已滚动时，页面不能依赖瀑布流再上报范围', (tester) async {
+      setViewport(tester);
+      final controller = ScrollController();
+      addTearDown(controller.dispose);
+      final ranges = <(int, int)>[];
+      await tester.pumpWidget(harness(controller, ranges));
+      await tester.pumpAndSettle();
+      controller.jumpTo(2200);
+      await tester.pumpAndSettle();
+      expect(ranges, hasLength(2), reason: '先确认滚动到一屏以下确实会重发一次范围（用例前提）');
+      expect(controller.offset, 2200);
+
+      // 新的 List 实例、同样的 id、同样的顺序：页面 `_filteredIllustEntries`
+      // 每次重建都是这个形态（`filterIllustEntriesByTags(...).where(...).toList()`）。
+      final rebuilt = List<IllustLibraryEntry>.of(entries);
+      expect(rebuilt, isNot(same(entries)));
+      await tester.pumpWidget(harness(controller, ranges, list: rebuilt));
+      await tester.pumpAndSettle();
+      expect(ranges, hasLength(2), reason: '同 id 同序 + 非零滚动位置：瀑布流不会自己再上报一次可见范围');
+      expect(controller.offset, 2200, reason: '重建不改滚动位置');
+
+      // 反向确认：不是"这个 harness 永远不会再发"，而是"只有范围真的变了才发"。
+      controller.jumpTo(3000);
+      await tester.pumpAndSettle();
+      expect(ranges, hasLength(3));
+      expect(ranges.last, isNot(ranges[1]));
     });
   });
 

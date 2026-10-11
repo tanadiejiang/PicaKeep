@@ -38,20 +38,37 @@ enum ReaderDisplayMode {
       value == 'previewFirst' ? previewFirst : sharpFirst;
 }
 
+/// One global policy for sharpFirst only; previewFirst keeps its own pipeline.
+enum ReaderLargeImagePolicy {
+  safeWhole,
+  strictOriginal;
+
+  static ReaderLargeImagePolicy fromValue(Object? value) =>
+      value == 'strictOriginal' ? strictOriginal : safeWhole;
+}
+
 class ReaderImagePipelineSettings {
   const ReaderImagePipelineSettings({
     this.comic = ReaderDisplayMode.sharpFirst,
     this.illust = ReaderDisplayMode.sharpFirst,
+    this.largeImagePolicy = ReaderLargeImagePolicy.safeWhole,
     this.legacyComic = '0',
     this.legacyIllust = '1',
   });
 
   final ReaderDisplayMode comic;
   final ReaderDisplayMode illust;
+  final ReaderLargeImagePolicy largeImagePolicy;
   final String legacyComic;
   final String legacyIllust;
 
-  static ReaderImagePipelineSettings? tryParse(String? value) {
+  static ReaderImagePipelineSettings? tryParse(
+    String? value, {
+    // Only backup import supplies the current device's policy. Startup/save
+    // intentionally use safeWhole for a missing field.
+    ReaderLargeImagePolicy missingLargeImagePolicy =
+        ReaderLargeImagePolicy.safeWhole,
+  }) {
     try {
       final data = jsonDecode(value ?? '');
       if (data is! Map ||
@@ -70,6 +87,9 @@ class ReaderImagePipelineSettings {
       return ReaderImagePipelineSettings(
         comic: ReaderDisplayMode.fromValue(comicValue),
         illust: ReaderDisplayMode.fromValue(illustValue),
+        largeImagePolicy: data.containsKey('largeImagePolicy')
+            ? ReaderLargeImagePolicy.fromValue(data['largeImagePolicy'])
+            : missingLargeImagePolicy,
         legacyComic: legacy is Map ? legacy['comic']?.toString() ?? '0' : '0',
         legacyIllust: legacy is Map ? legacy['illust']?.toString() ?? '1' : '1',
       );
@@ -82,6 +102,18 @@ class ReaderImagePipelineSettings {
       ReaderImagePipelineSettings(
         comic: isComic ? mode : comic,
         illust: isComic ? illust : mode,
+        largeImagePolicy: largeImagePolicy,
+        legacyComic: legacyComic,
+        legacyIllust: legacyIllust,
+      );
+
+  ReaderImagePipelineSettings withLargeImagePolicy(
+    ReaderLargeImagePolicy policy,
+  ) =>
+      ReaderImagePipelineSettings(
+        comic: comic,
+        illust: illust,
+        largeImagePolicy: policy,
         legacyComic: legacyComic,
         legacyIllust: legacyIllust,
       );
@@ -90,6 +122,7 @@ class ReaderImagePipelineSettings {
         'schema': 2,
         'comic': {'displayMode': comic.name},
         'illust': {'displayMode': illust.name},
+        'largeImagePolicy': largeImagePolicy.name,
         'legacyQuality': {'comic': legacyComic, 'illust': legacyIllust},
         'legacyCaptured': true,
       });
@@ -99,8 +132,13 @@ String normalizeReaderImagePipelineSettings(
   String? value, {
   String? legacyComic,
   String? legacyIllust,
+  ReaderLargeImagePolicy missingLargeImagePolicy =
+      ReaderLargeImagePolicy.safeWhole,
 }) =>
-    (ReaderImagePipelineSettings.tryParse(value) ??
+    (ReaderImagePipelineSettings.tryParse(
+              value,
+              missingLargeImagePolicy: missingLargeImagePolicy,
+            ) ??
             ReaderImagePipelineSettings(
               legacyComic: legacyComic ?? '<missing>',
               legacyIllust: legacyIllust ?? '<missing>',
